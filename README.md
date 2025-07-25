@@ -1,10 +1,28 @@
-# run
+# DGN Client
 
-python3 dgn_client.py
+This is a DGN client that uses Docker to run a ComfyUI workflow in a containerized environment.
 
-The script will check for Docker and NVIDIA drivers.
-It will profile the hardware and print the profile.
-It will build the Docker image locally (since no registry is set up for Part 1).
-It will run the ComfyUI workflow in the container, producing an output video in the output/ directory.
-Output:
-The output video will be saved in the output/ directory with a filename like 2025-07-25/wanvid_XXXX.mp4 (based on the VHS_VideoCombine node's configuration).
+## Setup
+
+1.  Install Docker on your system.
+2.  Install Python 3 and pip.
+3.  Install the required Python packages:
+
+    ```
+    pip install -r requirements.txt
+    ```
+
+## Usage
+
+To run the DGN client, execute the following command:
+
+```
+python dgn_client.py
+```
+
+This will:
+
+1.  Build the Docker image with ComfyUI and the necessary dependencies.
+2.  Run the Docker container.
+3.  Trigger the ComfyUI workflow.
+4.  Stop the Docker container when the workflow is complete.
