@@ -28,7 +28,10 @@ def run_container():
             DOCKER_IMAGE_NAME,
             detach=True,
             ports={f"{COMFYUI_PORT}/tcp": COMFYUI_PORT},
-            volumes={os.path.join(ROOT_DIR, 'output'): {'bind': '/opt/ComfyUI/output', 'mode': 'rw'}},
+            volumes={
+                os.path.join(ROOT_DIR, 'output'): {'bind': '/opt/ComfyUI/output', 'mode': 'rw'},
+                os.path.join(ROOT_DIR, 'models'): {'bind': '/opt/ComfyUI/models', 'mode': 'rw'}
+            },
             device_requests=[
                 docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
             ]
