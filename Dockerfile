@@ -9,7 +9,7 @@ ENV NVIDIA_DRIVER_CAPABILITIES=all
 ENV NVIDIA_VISIBLE_DEVICES=all
 
 # Install dependencies
-RUN apt-get update && apt-get install -y     git     python3     python3-pip     wget     unzip     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y     git     python3     python3-pip     wget     unzip     libgl1-mesa-glx     ffmpeg     && rm -rf /var/lib/apt/lists/*
 
 # Clone ComfyUI repository
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
@@ -31,7 +31,7 @@ RUN set -e && \
     mv ComfyUI-VideoHelperSuite-temp/ComfyUI-VideoHelperSuite-main/* ComfyUI-VideoHelperSuite/ && \
     rm -rf ComfyUI-VideoHelperSuite-temp ComfyUI-VideoHelperSuite.zip && \
     mkdir -p ComfyUI-GGUF-Loader && \
-    wget https://github.com/city96/ComfyUI-GGUF/archive/refs/heads/main.zip -O ComfyUI-GGUF-Loader.zip &&     unzip ComfyUI-GGUF-Loader.zip -d ComfyUI-GGUF-Loader-temp &&     mv ComfyUI-GGUF-Loader-temp/ComfyUI-GGUF-main/* ComfyUI-GGUF-Loader/ &&     rm -rf ComfyUI-GGUF-Loader-temp ComfyUI-GGUF-Loader.zip
+    wget https://github.com/city96/ComfyUI-GGUF/archive/refs/heads/main.zip -O ComfyUI-GGUF-Loader.zip &&     unzip ComfyUI-GGUF-Loader.zip -d ComfyUI-GGUF-Loader-temp &&     mv ComfyUI-GGUF-Loader-temp/ComfyUI-GGUF-main/* ComfyUI-GGUF-Loader/ &&     rm -rf ComfyUI-GGUF-Loader-temp ComfyUI-GGUF-Loader.zip &&     pip install gguf opencv-python
 
 # Download models
 
