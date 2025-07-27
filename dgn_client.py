@@ -12,6 +12,42 @@ from supabase import create_client, Client
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+def download_assets(assets: list[str]):
+    """Download the assets required by the workflow from Supabase Storage."""
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+    for asset_id in assets:
+        try:
+            # Fetch asset metadata to get the storage_path
+            response = supabase.from_('assets').select('storage_path').eq('id', asset_id).single()
+            if response.error:
+                logging.error(f"Error fetching asset {asset_id} metadata: {response.error.message}")
+                continue
+            
+            storage_path = response.data['storage_path']
+            file_name = os.path.basename(storage_path)
+            asset_local_path = os.path.join(CACHE_DIR, file_name)
+
+            if not os.path.exists(asset_local_path):
+                logging.info(f"Downloading asset: {file_name} from {storage_path}")
+                # Download the file from Supabase Storage
+                download_response = supabase.storage.from_('dgn-assets').download(storage_path)
+                if download_response.error:
+                    logging.error(f"Error downloading asset {file_name}: {download_response.error.message}")
+                    continue
+                
+                with open(asset_local_path, 'wb') as f:
+                    f.write(download_response.data)
+                logging.info(f"Asset {file_name} downloaded to {asset_local_path}")
+            else:
+                logging.info(f"Asset {file_name} already exists in cache.")
+        except Exception as e:
+            logging.error(f"An error occurred during asset download for {asset_id}: {e}")
+
+
 def upload_output(file_path, job_id):
     """Upload the output file to Supabase Storage."""
     try:
@@ -84,6 +120,7 @@ def listen_for_jobs(provider_id):
                         time.sleep(10) # Wait for ComfyUI to start
 
                         workflow = job.get('workflow')
+                        required_assets = job.get('assets', [])
 
                         if not workflow:
                             logging.error("No workflow found in job.")
@@ -95,6 +132,9 @@ def listen_for_jobs(provider_id):
                             update_job_status(job['id'], 'failed')
                             container.stop()
                             continue
+
+                        if required_assets:
+                            download_assets(required_assets)
 
                         prompt_id = trigger_workflow(workflow)
                         if prompt_id:
