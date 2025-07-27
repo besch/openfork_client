@@ -16,8 +16,8 @@ COMFYUI_URL = f"http://localhost:{COMFYUI_PORT}"
 ORCHESTRATOR_URL = "http://localhost:3000"
 
 # Supabase-related configurations (placeholders - replace with actual values)
-SUPABASE_URL = "YOUR_SUPABASE_URL"
-SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
 
 # Cache directory for assets and outputs
 CACHE_DIR = os.path.join(ROOT_DIR, "cache")
