@@ -1,7 +1,7 @@
 
 
 # Use the official NVIDIA CUDA image as a base
-FROM nvidia/cuda:12.1.0-base-ubuntu22.04
+FROM nvidia/cuda:12.9.1-devel-ubuntu22.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -43,6 +43,14 @@ COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
 COPY models/unet/. /opt/ComfyUI/models/unet/
 COPY models/loras/. /opt/ComfyUI/models/loras/
 COPY models/vae/. /opt/ComfyUI/models/vae/
+
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+
+# Install custom libraries (SageAttention from source and Triton)
+RUN pip install triton
+RUN wget https://github.com/thu-ml/SageAttention/archive/refs/heads/main.zip -O /tmp/SageAttention.zip &&     unzip /tmp/SageAttention.zip -d /tmp/SageAttention &&     cd /tmp/SageAttention/SageAttention-main &&     EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 python3 setup.py install &&     cd / &&     rm -rf /tmp/SageAttention.zip /tmp/SageAttention
 
 # Set the working directory
 WORKDIR /opt/ComfyUI
