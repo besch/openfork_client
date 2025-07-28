@@ -36,7 +36,7 @@ RUN set -e && \
 # Download models
 
 # Copy workflow.json to ComfyUI's workflows directory
-COPY workflows/pusa.json /opt/ComfyUI/workflows/pusa.json
+COPY workflows/pusa.json /opt/ComfyUI/user/default/workflows/pusa.json
 
 # Copy models to ComfyUI's model directories
 COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
