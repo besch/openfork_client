@@ -35,6 +35,15 @@ RUN set -e && \
 
 # Download models
 
+# Copy workflow.json to ComfyUI's input directory
+COPY workflow.json /opt/ComfyUI/input/workflow.json
+
+# Copy models to ComfyUI's model directories
+COPY models/clip/. /opt/ComfyUI/models/clip/
+COPY models/gguf/. /opt/ComfyUI/models/unet/
+COPY models/loras/. /opt/ComfyUI/models/loras/
+COPY models/vae/. /opt/ComfyUI/models/vae/
+
 # Set the working directory
 WORKDIR /opt/ComfyUI
 
