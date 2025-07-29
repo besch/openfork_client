@@ -1,5 +1,3 @@
-
-
 # Use the official NVIDIA CUDA image as a base
 FROM nvidia/cuda:12.9.1-devel-ubuntu22.04
 
@@ -9,7 +7,14 @@ ENV NVIDIA_DRIVER_CAPABILITIES=all
 ENV NVIDIA_VISIBLE_DEVICES=all
 
 # Install dependencies
-RUN apt-get update && apt-get install -y     git     python3     python3-pip     wget     unzip     libgl1-mesa-glx     ffmpeg     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    git \
+    python3 \
+    python3-pip \
+    libgl1-mesa-glx \
+    ffmpeg \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 # Clone ComfyUI repository
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
@@ -20,37 +25,31 @@ RUN pip install --no-cache-dir -r /opt/ComfyUI/requirements.txt
 # Install custom nodes
 RUN set -e && \
     cd /opt/ComfyUI/custom_nodes && \
-    mkdir -p ComfyUI-KJNodes && \
-    wget https://github.com/kijai/ComfyUI-KJNodes/archive/refs/heads/main.zip -O ComfyUI-KJNodes.zip && \
-    unzip ComfyUI-KJNodes.zip -d ComfyUI-KJNodes-temp && \
-    mv ComfyUI-KJNodes-temp/ComfyUI-KJNodes-main/* ComfyUI-KJNodes/ && \
-    rm -rf ComfyUI-KJNodes-temp ComfyUI-KJNodes.zip && \
-    mkdir -p ComfyUI-VideoHelperSuite && \
-    wget https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite/archive/refs/heads/main.zip -O ComfyUI-VideoHelperSuite.zip && \
-    unzip ComfyUI-VideoHelperSuite.zip -d ComfyUI-VideoHelperSuite-temp && \
-    mv ComfyUI-VideoHelperSuite-temp/ComfyUI-VideoHelperSuite-main/* ComfyUI-VideoHelperSuite/ && \
-    rm -rf ComfyUI-VideoHelperSuite-temp ComfyUI-VideoHelperSuite.zip && \
-    mkdir -p ComfyUI-GGUF-Loader && \
-    wget https://github.com/city96/ComfyUI-GGUF/archive/refs/heads/main.zip -O ComfyUI-GGUF-Loader.zip &&     unzip ComfyUI-GGUF-Loader.zip -d ComfyUI-GGUF-Loader-temp &&     mv ComfyUI-GGUF-Loader-temp/ComfyUI-GGUF-main/* ComfyUI-GGUF-Loader/ &&     rm -rf ComfyUI-GGUF-Loader-temp ComfyUI-GGUF-Loader.zip &&     pip install gguf opencv-python
+    git clone https://github.com/kijai/ComfyUI-KJNodes.git && \
+    git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git && \
+    git clone https://github.com/city96/ComfyUI-GGUF.git ComfyUI-GGUF-Loader && \
+    pip install gguf opencv-python
 
-# Download models
-
-# Copy workflow.json to ComfyUI's workflows directory
-COPY workflows/pusa.json /opt/ComfyUI/user/default/workflows/pusa.json
+# Download models (commented out as in original)
+# COPY workflow.json to ComfyUI's workflows directory
+# COPY workflows/pusa.json /opt/ComfyUI/user/default/workflows/pusa.json
 
 # Copy models to ComfyUI's model directories
-COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
-COPY models/unet/. /opt/ComfyUI/models/unet/
-COPY models/loras/. /opt/ComfyUI/models/loras/
-COPY models/vae/. /opt/ComfyUI/models/vae/
-
+# COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
+# COPY models/unet/. /opt/ComfyUI/models/unet/
+# COPY models/loras/. /opt/ComfyUI/models/loras/
+# COPY models/vae/. /opt/ComfyUI/models/vae/
 
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 
 # Install custom libraries (SageAttention from source and Triton)
 RUN pip install triton
-RUN wget https://github.com/thu-ml/SageAttention/archive/refs/heads/main.zip -O /tmp/SageAttention.zip &&     unzip /tmp/SageAttention.zip -d /tmp/SageAttention &&     cd /tmp/SageAttention/SageAttention-main &&     EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 python3 setup.py install &&     cd / &&     rm -rf /tmp/SageAttention.zip /tmp/SageAttention
+
+# Install SageAttention
+RUN git clone https://github.com/thu-ml/SageAttention.git /opt/SageAttention/source && \
+    cd /opt/SageAttention/source && \
+    EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -e .
 
 # Set the working directory
 WORKDIR /opt/ComfyUI
