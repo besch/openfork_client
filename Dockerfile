@@ -30,15 +30,14 @@ RUN set -e && \
     git clone https://github.com/city96/ComfyUI-GGUF.git ComfyUI-GGUF-Loader && \
     pip install gguf opencv-python
 
-# Download models (commented out as in original)
 # COPY workflow.json to ComfyUI's workflows directory
-# COPY workflows/pusa.json /opt/ComfyUI/user/default/workflows/pusa.json
+COPY workflows/pusa.json /opt/ComfyUI/user/default/workflows/pusa.json
 
 # Copy models to ComfyUI's model directories
-# COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
-# COPY models/unet/. /opt/ComfyUI/models/unet/
-# COPY models/loras/. /opt/ComfyUI/models/loras/
-# COPY models/vae/. /opt/ComfyUI/models/vae/
+COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
+COPY models/unet/. /opt/ComfyUI/models/unet/
+COPY models/loras/. /opt/ComfyUI/models/loras/
+COPY models/vae/. /opt/ComfyUI/models/vae/
 
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
