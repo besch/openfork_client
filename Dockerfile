@@ -30,15 +30,6 @@ RUN set -e && \
     git clone https://github.com/city96/ComfyUI-GGUF.git ComfyUI-GGUF-Loader && \
     pip install gguf opencv-python
 
-# COPY workflow.json to ComfyUI's workflows directory
-COPY workflows/pusa.json /opt/ComfyUI/user/default/workflows/pusa.json
-
-# Copy models to ComfyUI's model directories
-COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
-COPY models/unet/. /opt/ComfyUI/models/unet/
-COPY models/loras/. /opt/ComfyUI/models/loras/
-COPY models/vae/. /opt/ComfyUI/models/vae/
-
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 
@@ -50,6 +41,15 @@ RUN git clone https://github.com/thu-ml/SageAttention.git /opt/SageAttention/sou
     sed -i '/compute_capabilities = set()/a compute_capabilities.add("8.0")' /opt/SageAttention/source/setup.py && \
     cd /opt/SageAttention/source && \
     EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -e .
+
+# COPY workflow.json to ComfyUI's workflows directory
+COPY workflows/pusa.json /opt/ComfyUI/user/default/workflows/pusa.json
+
+# Copy models to ComfyUI's model directories
+COPY models/text_encoders/. /opt/ComfyUI/models/text_encoders/
+COPY models/unet/. /opt/ComfyUI/models/unet/
+COPY models/loras/. /opt/ComfyUI/models/loras/
+COPY models/vae/. /opt/ComfyUI/models/vae/
 
 # Set the working directory
 WORKDIR /opt/ComfyUI
