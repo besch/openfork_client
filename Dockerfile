@@ -48,6 +48,7 @@ RUN pip install triton
 
 # Install SageAttention
 RUN git clone https://github.com/thu-ml/SageAttention.git /opt/SageAttention/source && \
+    sed -i '/compute_capabilities = set()/a compute_capabilities.add("8.0")' /opt/SageAttention/source/setup.py && \
     cd /opt/SageAttention/source && \
     EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 pip install -e .
 
