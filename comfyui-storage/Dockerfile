@@ -1,13 +1,10 @@
-# Use CUDA 12.8 base image
-FROM runpod/base:0.6.2-cuda12.6.2
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
-# Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
-# Install Python 3.11 and dependencies
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
@@ -17,27 +14,43 @@ RUN apt-get update && apt-get install -y \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install PyTorch & Triton with python3.11 pip
-RUN python -m pip install --upgrade pip \
- && python -m pip install torch>=2.3.0 triton>=3.0.0
+RUN python -m pip install --upgrade pip
 
-# Clone ComfyUI and install requirements + PyYAML
+# Install PyTorch with CUDA 12.8 wheels explicitly
+RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Install other dependencies as before, including gitpython to fix 'git' module error
+RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
+
+# SageAttention wheel for py3.11 with CUDA 12.8 - ensure it's a compatible build
+RUN python -m pip install https://huggingface.co/ModelsLab/Sage_2_plus_plus_build/resolve/main/sageattention-2.2.0-cp311-cp311-linux_x86_64.whl
+
+# Clone ComfyUI and custom nodes as before
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
 WORKDIR /opt/ComfyUI
-RUN python -m pip install -r requirements.txt \
- && python -m pip install PyYAML \
- && python -m pip install opencv-python \
- && python -m pip install imageio-ffmpeg
+RUN python -m pip install -r requirements.txt
 
-# Install SageAttention precompiled wheel for Python 3.11
-RUN python -m pip install \
-    https://huggingface.co/ModelsLab/Sage_2_plus_plus_build/resolve/main/sageattention-2.2.0-cp311-cp311-linux_x86_64.whl
+# Clone ComfyUI Manager into custom_nodes
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
+# Install ComfyUI Manager Python dependencies
+RUN python -m pip install GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub>0.20
 
-# Install custom nodes (example)
 RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
 RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
 RUN git clone https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF
 RUN python -m pip install --upgrade gguf
+
+# Install requirements for custom nodes
+RUN python -m pip install color-matcher matplotlib huggingface_hub mss toml rich
+
+# Install additional system dependencies for OpenCV
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for ComfyUI-Manager
+RUN python -m pip install uv
+
 
 # # Copy models to ComfyUI's model directories and workflows
 # COPY workflows/ /opt/ComfyUI/user/default/workflows/
@@ -49,4 +62,3 @@ RUN python -m pip install --upgrade gguf
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
-
