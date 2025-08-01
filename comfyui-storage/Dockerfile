@@ -22,12 +22,15 @@ RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-inde
 # Install other dependencies as before, including gitpython to fix 'git' module error
 RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
 
-# SageAttention wheel for py3.11 with CUDA 12.8 - ensure it's a compatible build
-RUN python -m pip install https://huggingface.co/ModelsLab/Sage_2_plus_plus_build/resolve/main/sageattention-2.2.0-cp311-cp311-linux_x86_64.whl
+# Clone SageAttention for installation at runtime (when GPU is available)
+RUN python -m pip install ninja
+RUN git clone https://github.com/thu-ml/SageAttention.git /opt/sageattention
+
+# Set working directory back to /opt/ComfyUI
+WORKDIR /opt/ComfyUI
 
 # Clone ComfyUI and custom nodes as before
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-WORKDIR /opt/ComfyUI
 RUN python -m pip install -r requirements.txt
 
 # Clone ComfyUI Manager into custom_nodes
@@ -61,4 +64,5 @@ RUN python -m pip install uv
 
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
-CMD ["python", "main.py", "--listen"]
+# Install SageAttention at runtime when GPU is available, then start ComfyUI
+CMD ["sh", "-c", "cd /opt/sageattention && python -m pip install -v . && cd /opt/ComfyUI && python main.py --listen"]
