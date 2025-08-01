@@ -1,0 +1,19 @@
+services:
+  comfyui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: comfyui-cu128
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./storage/ComfyUI:/opt/ComfyUI
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true
