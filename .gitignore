@@ -3,3 +3,8 @@ models
 comfyui-storage/models
 comfyui-storage/workflows
 comfyui-storage/storage
+
+
+__pycache__
+venv
+input
