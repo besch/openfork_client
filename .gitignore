@@ -8,3 +8,4 @@ comfyui-storage/storage
 __pycache__
 venv
 input
+cu128-slim
