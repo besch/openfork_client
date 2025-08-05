@@ -1,16 +1,23 @@
 services:
   comfyui:
+    init: true
     build:
       context: .
       dockerfile: Dockerfile
     container_name: comfyui-cu128
+    image: yanwk/comfyui-boot:cu128-slim
     ports:
       - "8188:8188"
+    # Option A: single mount (recommended) - mirrors upstream cu128-slim convention
+    # This maps host ./storage to /root in the container, so ComfyUI paths are /root/ComfyUI/...
     volumes:
-      - ./storage/ComfyUI/models:/opt/ComfyUI/models
-      - ./storage/ComfyUI/output:/opt/ComfyUI/output
-      - ./storage/ComfyUI/input:/opt/ComfyUI/input
-      - ./storage/ComfyUI/user:/opt/ComfyUI/user
+      - ./storage:/root
+    environment:
+      # This env var is read by your host-side DGN client process (not by the container).
+      # Keep this here as documentation and for docker compose export if needed.
+      - CLI_ARGS=
+    security_opt:
+      - "label=type:nvidia_container_t"
     deploy:
       resources:
         reservations:

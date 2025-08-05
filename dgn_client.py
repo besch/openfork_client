@@ -20,6 +20,10 @@ OUTPUT_DIR = os.path.join(ROOT_DIR, "output")
 MODELS_DIR = os.path.join(ROOT_DIR, "models")
 # CACHE_DIR is imported from config
 
+# Optional override so the client can write images into the ComfyUI container input mount.
+# If COMFY_INPUT_DIR is set, client will write start images there. Otherwise, it will fall back to INPUT_DIR.
+COMFY_INPUT_DIR = os.environ.get("COMFY_INPUT_DIR")
+
 def download_assets(assets: list[str]):
     """Download the assets required by the workflow from Supabase Storage."""
     if not os.path.exists(CACHE_DIR):
@@ -137,6 +141,12 @@ def _materialize_start_image(job: dict):
     Writes file into INPUT_DIR and returns filename used in workflow.
     """
     try:
+        # Decide target directory: prefer COMFY_INPUT_DIR (container mount) if provided and exists,
+        # otherwise fallback to local INPUT_DIR.
+        target_dir = COMFY_INPUT_DIR if (COMFY_INPUT_DIR and os.path.isdir(COMFY_INPUT_DIR)) else INPUT_DIR
+        if target_dir != INPUT_DIR:
+            logging.info(f"Using COMFY_INPUT_DIR for start image: {target_dir}")
+
         if 'start_image_base64' in job and job['start_image_base64']:
             data_url = job['start_image_base64']
             if "," in data_url:
@@ -145,15 +155,20 @@ def _materialize_start_image(job: dict):
                 b64 = data_url
             binary = base64.b64decode(b64)
             fname = job.get('start_image_name') or f"start_{job['id']}.png"
-            out_path = os.path.join(INPUT_DIR, fname)
+            os.makedirs(target_dir, exist_ok=True)
+            out_path = os.path.join(target_dir, fname)
             with open(out_path, "wb") as f:
                 f.write(binary)
             logging.info(f"Start image written to {out_path}")
             return fname
         if 'start_image_filename' in job and job['start_image_filename']:
-            # Assume orchestrator instructed a known file name that already exists in INPUT_DIR
+            # Use an existing file name that should be present in the mounted input directory
             fname = job['start_image_filename']
-            logging.info(f"Using existing start image from input mount: {fname}")
+            candidate_path = os.path.join(target_dir, fname)
+            if not os.path.exists(candidate_path):
+                logging.warning(f"Expected start image not found at {candidate_path}")
+            else:
+                logging.info(f"Using existing start image from input mount: {candidate_path}")
             return fname
     except Exception as e:
         logging.error(f"Failed to materialize start image: {e}")
