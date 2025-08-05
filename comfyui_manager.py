@@ -23,18 +23,27 @@ def trigger_workflow(workflow_json):
     """Trigger a workflow in ComfyUI by HTTP POST /prompt and return the prompt ID."""
     client_id = str(uuid.uuid4())
 
-    # Normalize payload to { "prompt": { "nodes": [...] }, "client_id": "..." }
+    # Expect DGN client to provide ComfyUI API graph dict under 'prompt'.
+    # Accept either {'prompt': {...}} or a bare API dict (ids -> node dicts).
     payload_prompt = None
     if isinstance(workflow_json, dict) and "prompt" in workflow_json and isinstance(workflow_json["prompt"], dict):
         payload_prompt = workflow_json["prompt"]
-    elif isinstance(workflow_json, dict) and "nodes" in workflow_json:
+    elif isinstance(workflow_json, dict) and all(isinstance(k, (str, int)) and isinstance(v, dict) for k, v in workflow_json.items()):
         payload_prompt = workflow_json
-    elif isinstance(workflow_json, dict) and "workflow_json" in workflow_json:
-        inner = workflow_json["workflow_json"]
-        if isinstance(inner, dict) and "nodes" in inner:
-            payload_prompt = inner
-    if not isinstance(payload_prompt, dict) or "nodes" not in payload_prompt:
-        raise ValueError("Invalid workflow payload; expected a graph with 'nodes' or an object containing 'prompt'.")
+    else:
+        raise ValueError("Invalid workflow payload; expected ComfyUI API graph dict under 'prompt' or a bare API graph dict.")
+
+    # Validate API graph structure: dict of nodes with class_type and inputs
+    if not isinstance(payload_prompt, dict) or not payload_prompt:
+        raise ValueError("Invalid workflow payload; 'prompt' must be a non-empty dict of nodes.")
+    for k, node in payload_prompt.items():
+        if not isinstance(node, dict):
+            raise ValueError(f"Invalid node for id {k}: expected dict.")
+        if not node.get("class_type"):
+            raise ValueError(f"Invalid node for id {k}: missing 'class_type'.")
+        # Normalize id keys to strings as ComfyUI typically uses string keys
+        # (No transform needed here; we just validate)
+
 
     # Resolve HTTP base once and cache
     global HTTP_BASE
