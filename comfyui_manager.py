@@ -85,8 +85,16 @@ def trigger_workflow(workflow_json):
 
     return prompt_id
 
-def get_workflow_output(prompt_id):
-    """Get the output of a completed workflow by listening on WS."""
+def get_workflow_output(prompt_id, terminal_node_ids=None, timeout_sec=7200):
+    """
+    Get the output of a completed workflow by listening on WS.
+
+    Improvements:
+    - Track all executed nodes for our prompt_id.
+    - If terminal_node_ids provided, only return after all of them executed.
+    - Otherwise, return the last executed output for our prompt_id.
+    - Long overall timeout with shorter per-recv timeout to avoid premature failure.
+    """
     if not prompt_id:
         return None
 
@@ -97,19 +105,69 @@ def get_workflow_output(prompt_id):
     except Exception as e:
         raise RuntimeError(f"Failed to connect to ComfyUI WebSocket at {COMFYUI_URL}: {e}")
 
-    # Allow longer job runtimes before timing out
-    ws.settimeout(300)
+    # Per receive timeout; we loop until wall clock timeout
+    ws.settimeout(60)
+
+    start_ts = time.time()
+    executed_nodes = set()
+    last_output = None
+
     try:
         while True:
-            out = ws.recv()
+            # Wall clock timeout guard
+            if (time.time() - start_ts) > timeout_sec:
+                # Return whatever we have to avoid hanging forever
+                return last_output
+
+            try:
+                out = ws.recv()
+            except Exception:
+                # On transient timeout, continue waiting within wall clock limit
+                continue
+
             if isinstance(out, str):
-                message = json.loads(out)
-                # ComfyUI streams multiple messages; wait for the one matching our prompt_id
-                if message.get("type") == "executed":
-                    data = message.get("data", {})
-                    if data.get("prompt_id") == prompt_id:
-                        # data.output contains node outputs
-                        return data.get("output")
+                try:
+                    message = json.loads(out)
+                except Exception:
+                    continue
+
+                mtype = message.get("type")
+                data = message.get("data", {}) if isinstance(message, dict) else {}
+                if not isinstance(data, dict):
+                    data = {}
+
+                # Track prompt-specific execution
+                if mtype == "executed" and data.get("prompt_id") == prompt_id:
+                    # Record node_id if provided
+                    node_id = data.get("node") or data.get("node_id") or data.get("node_id_name")
+                    if node_id is not None:
+                        executed_nodes.add(str(node_id))
+                    # Save last output seen
+                    last_output = data.get("output")
+
+                    # If we know the terminal nodes, check completion
+                    if terminal_node_ids:
+                        # Normalize to str for comparison
+                        need = {str(n) for n in terminal_node_ids}
+                        if need.issubset(executed_nodes):
+                            return last_output
+                    else:
+                        # If not specified, heuristic: Comfy often sends a 'status' done message later,
+                        # but if this is the only executed we get for this prompt for long time, we still return last_output.
+                        # Keep waiting for a 'status' event but also allow return if no terminal set and we receive another
+                        # executed with no new nodes for a while. That is handled by wall-clock timeout.
+                        pass
+
+                # Some ComfyUI builds also send a 'status' message with an overall status for the prompt
+                if mtype == "status":
+                    # Example: {"type":"status","data":{"status":{"exec_info":{"queue_remaining":0}},"sid":"..."}}
+                    # Not all payloads include prompt_id here; so we still rely on executed nodes above.
+                    # If queue_remaining is 0 and we have at least one executed for our prompt, return last output.
+                    status = data.get("status") if isinstance(data, dict) else None
+                    if isinstance(status, dict):
+                        exec_info = status.get("exec_info", {})
+                        if isinstance(exec_info, dict) and exec_info.get("queue_remaining") == 0 and last_output is not None:
+                            return last_output
     finally:
         try:
             ws.close()

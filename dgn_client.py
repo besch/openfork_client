@@ -15,9 +15,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Define local input/output/models directories used for client I/O.
 # These are used to materialize optional input image and read outputs if ComfyUI writes into a shared path.
-INPUT_DIR = os.path.join(ROOT_DIR, "input")
-OUTPUT_DIR = os.path.join(ROOT_DIR, "output")
-MODELS_DIR = os.path.join(ROOT_DIR, "models")
+# IMPORTANT: These paths must mirror the container mounts:
+#   Host ./storage/ComfyUI/input  -> /opt/ComfyUI/input
+#   Host ./storage/ComfyUI/output -> /opt/ComfyUI/output
+#   Host ./storage/ComfyUI/models -> /opt/ComfyUI/models
+#   Host ./storage/ComfyUI/user   -> /opt/ComfyUI/user
+# To ensure the API points ComfyUI to files it can see, we write inputs under the mounted host input dir.
+MOUNT_ROOT = os.path.join(ROOT_DIR, "comfyui-storage", "storage", "ComfyUI")
+INPUT_DIR = os.path.join(MOUNT_ROOT, "input")
+OUTPUT_DIR = os.path.join(MOUNT_ROOT, "output")
+MODELS_DIR = os.path.join(MOUNT_ROOT, "models")
 # CACHE_DIR is imported from config
 
 def download_assets(assets: list[str]):
@@ -131,29 +138,41 @@ def _ensure_dirs():
 
 def _materialize_start_image(job: dict):
     """
-    Accepts either:
-      - job['start_image_base64']: 'data:image/png;base64,...' or plain base64
+    Accepts:
+      - job['start_image_base64']: 'data:image/png;base64,...' or plain base64 (preferred from Supabase)
       - job['start_image_filename']: stored file already present in mounted input dir
-    Writes file into INPUT_DIR and returns filename used in workflow.
+
+    Writes file into INPUT_DIR (host path mounted to /opt/ComfyUI/input) and returns the filename to use in workflow.
+    Always prefers start_image_base64 when present.
     """
     try:
-        if 'start_image_base64' in job and job['start_image_base64']:
-            data_url = job['start_image_base64']
-            if "," in data_url:
-                _, b64 = data_url.split(",", 1)
-            else:
-                b64 = data_url
-            binary = base64.b64decode(b64)
-            fname = job.get('start_image_name') or f"start_{job['id']}.png"
+        # 1) Preferred path: Supabase provides base64 under 'start_image_base64'
+        data_url = job.get('start_image_base64')
+        if isinstance(data_url, str) and len(data_url) > 0:
+            # Extract base64 regardless of data URL or raw base64
+            b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+            try:
+                binary = base64.b64decode(b64, validate=True)
+            except Exception:
+                # Fallback to non-strict decode if upstream added whitespace/newlines
+                binary = base64.b64decode(b64)
+            # Filename deterministic by job id unless explicit name provided
+            fname = job.get('start_image_name') or f"start_{job.get('id', 'job')}.png"
             out_path = os.path.join(INPUT_DIR, fname)
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "wb") as f:
                 f.write(binary)
-            logging.info(f"Start image written to {out_path}")
+            logging.info(f"Start image (from base64) written to {out_path}")
             return fname
-        if 'start_image_filename' in job and job['start_image_filename']:
-            # Assume orchestrator instructed a known file name that already exists in INPUT_DIR
-            fname = job['start_image_filename']
-            logging.info(f"Using existing start image from input mount: {fname}")
+
+        # 2) Fallback: use provided filename that should already exist in mounted input
+        fname = job.get('start_image_filename')
+        if isinstance(fname, str) and len(fname) > 0:
+            host_path = os.path.join(INPUT_DIR, fname)
+            if not os.path.exists(host_path):
+                logging.warning(f"Expected start image not found in mounted input: {host_path}")
+            else:
+                logging.info(f"Using existing start image from input mount: {fname}")
             return fname
     except Exception as e:
         logging.error(f"Failed to materialize start image: {e}")
@@ -677,9 +696,46 @@ def listen_for_jobs(provider_id):
                             # Fallback to previous payload building if anything goes wrong
                             payload = {"prompt": wf_ready["prompt"]} if isinstance(wf_ready, dict) and "prompt" in wf_ready else {"prompt": wf_ready}
 
+                        # Compute terminal node ids to wait for (prefer VHS_VideoCombine if present)
+                        def _compute_terminal_nodes(api_graph: dict) -> list[str]:
+                            try:
+                                # Collect all node ids (as strings)
+                                node_ids = [str(k) for k in api_graph.keys()]
+                                # Find nodes referenced by others via inputs (these have incoming edges)
+                                referenced = set()
+                                for _, node in api_graph.items():
+                                    if not isinstance(node, dict):
+                                        continue
+                                    inputs = node.get("inputs", {})
+                                    if not isinstance(inputs, dict):
+                                        continue
+                                    for v in inputs.values():
+                                        # Single ref form: ["<node_id>", output_idx]
+                                        if isinstance(v, list) and len(v) >= 1 and isinstance(v[0], str):
+                                            referenced.add(v[0])
+                                        # List of refs form: [[nid, idx], [nid, idx], ...]
+                                        if isinstance(v, list) and v and all(isinstance(x, list) for x in v):
+                                            for item in v:
+                                                if isinstance(item, list) and item and isinstance(item[0], str):
+                                                    referenced.add(item[0])
+                                # Prefer VHS_VideoCombine as explicit terminal(s)
+                                vhs_ids = [str(k) for k, n in api_graph.items() if isinstance(n, dict) and n.get("class_type") == "VHS_VideoCombine"]
+                                if vhs_ids:
+                                    return vhs_ids
+                                # Otherwise nodes that are not referenced downstream (no outgoing edges when viewed reversed)
+                                terminals = [nid for nid in node_ids if nid not in referenced]
+                                return terminals or node_ids
+                            except Exception:
+                                return []
+
+                        graph_for_compute = payload.get("prompt") if isinstance(payload, dict) else None
+                        terminal_ids = []
+                        if isinstance(graph_for_compute, dict) and graph_for_compute and all(isinstance(v, dict) for v in graph_for_compute.values()):
+                            terminal_ids = _compute_terminal_nodes(graph_for_compute)
+
                         prompt_id = trigger_workflow(payload)
                         if prompt_id:
-                            outputs = get_workflow_output(prompt_id)
+                            outputs = get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
                             if outputs:
                                 process_workflow_output(outputs, job['id']) # Pass job_id for storage path
                                 update_job_status(job['id'], 'completed')
