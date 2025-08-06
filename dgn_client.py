@@ -341,8 +341,38 @@ def _inject_prompt_and_image_into_workflow(workflow: dict, prompt: str, negative
             if isinstance(n.get("widgets_values"), list) and n["widgets_values"]:
                 inputs["image"] = n["widgets_values"][0]
         elif ctype == "VHS_VideoCombine":
-            # Do not override VHS defaults; preserve workflow-provided values to match UI execution.
-            pass
+            # VHS requires explicit scalar inputs for API validation. Populate from widgets_values if present,
+            # otherwise fallback to the same defaults the UI workflow uses commonly.
+            wv = n.get("widgets_values") if isinstance(n.get("widgets_values"), (list, dict)) else None
+            # widgets_values for VHS in your workflow is an object with keys; handle both dict and list gracefully.
+            def _get_wv(key, idx=None, default=None):
+                if isinstance(wv, dict):
+                    return wv.get(key, default)
+                if isinstance(wv, list) and idx is not None and idx < len(wv):
+                    return wv[idx]
+                return default
+            # Required by VHS node schema
+            if "frame_rate" not in inputs:
+                inputs["frame_rate"] = _get_wv("frame_rate", default=16)
+            if "loop_count" not in inputs:
+                inputs["loop_count"] = _get_wv("loop_count", default=0)
+            if "filename_prefix" not in inputs:
+                inputs["filename_prefix"] = _get_wv("filename_prefix", default="%date:yyyy-MM-dd%/wan22_")
+            if "format" not in inputs:
+                inputs["format"] = _get_wv("format", default="video/h264-mp4")
+            if "pingpong" not in inputs:
+                inputs["pingpong"] = _get_wv("pingpong", default=False)
+            if "save_output" not in inputs:
+                inputs["save_output"] = _get_wv("save_output", default=True)
+            # Optional but present in workflow
+            if "pix_fmt" not in inputs:
+                inputs["pix_fmt"] = _get_wv("pix_fmt", default="yuv420p")
+            if "crf" not in inputs:
+                inputs["crf"] = _get_wv("crf", default=19)
+            if "save_metadata" not in inputs:
+                inputs["save_metadata"] = _get_wv("save_metadata", default=True)
+            if "trim_to_audio" not in inputs:
+                inputs["trim_to_audio"] = _get_wv("trim_to_audio", default=False)
         elif ctype == "WanImageToVideo":
             # Ensure Wan I2V node has mandatory scalar inputs and VAE/prompt wiring will be added via links
             # Pull width/height/length/batch_size from widgets if available; otherwise use sensible defaults
@@ -363,8 +393,99 @@ def _inject_prompt_and_image_into_workflow(workflow: dict, prompt: str, negative
                 else:
                     inputs["vae_name"] = "wan_2.1_vae.safetensors"
         elif ctype in ("KSampler", "KSamplerAdvanced"):
-            # Preserve sampler settings from the workflow; avoid injecting defaults that can change performance.
-            pass
+            # KSamplerAdvanced requires explicit scalar inputs to validate over HTTP API.
+            # Pull from widgets_values if present, otherwise fallback to the workflow's displayed values.
+            wv = n.get("widgets_values") if isinstance(n.get("widgets_values"), list) else []
+            # Map widgets_values by position exactly as in the litegraph export for KSamplerAdvanced:
+            # [add_noise, noise_seed, steps, cfg, sampler_name, scheduler, start_at_step, end_at_step, return_with_leftover_noise]
+            def _get(idx, default):
+                try:
+                    return wv[idx] if idx < len(wv) and wv[idx] is not None else default
+                except Exception:
+                    return default
+
+            # add_noise: enum ['enable','disable'] but widget can be 'enable'/'disable' or boolean
+            if "add_noise" not in inputs:
+                val = _get(0, "enable")
+                if isinstance(val, bool):
+                    val = "enable" if val else "disable"
+                inputs["add_noise"] = val
+
+            # noise_seed: int
+            if "noise_seed" not in inputs:
+                seed = _get(1, 0)
+                try:
+                    # if 'randomize' in workflow, set 0 to let server randomize
+                    if isinstance(seed, str) and seed.lower() == "randomize":
+                        seed = 0
+                    else:
+                        seed = int(seed)
+                except Exception:
+                    seed = 0
+                inputs["noise_seed"] = seed
+
+            # steps: int
+            if "steps" not in inputs:
+                s = _get(2, 20)
+                try:
+                    s = int(s)
+                except Exception:
+                    s = 20
+                inputs["steps"] = s
+
+            # cfg: float
+            if "cfg" not in inputs:
+                c = _get(3, 4.5)
+                try:
+                    c = float(c)
+                except Exception:
+                    c = 4.5
+                inputs["cfg"] = c
+
+            # sampler_name: enum (string). In your workflow it's "euler"
+            if "sampler_name" not in inputs:
+                sn = _get(4, "euler")
+                # Some exports accidentally shift strings; if numeric, fallback to 'euler'
+                if not isinstance(sn, str):
+                    sn = "euler"
+                inputs["sampler_name"] = sn
+
+            # scheduler: enum; enforce allowed set. Some exports may misplace sampler_name/scheduler.
+            if "scheduler" not in inputs:
+                sch = _get(5, "simple")
+                # If scheduler accidentally picked up the sampler name (e.g., 'euler'), correct to 'simple'
+                allowed_sched = {"simple", "sgm_uniform", "karras", "exponential", "ddim_uniform", "beta", "normal", "linear_quadratic", "kl_optimal"}
+                if not isinstance(sch, str) or sch not in allowed_sched:
+                    sch = "simple"
+                inputs["scheduler"] = sch
+
+            # start_at_step: int
+            if "start_at_step" not in inputs:
+                st = _get(6, 0)
+                try:
+                    st = int(st)
+                except Exception:
+                    st = 0
+                inputs["start_at_step"] = st
+
+            # end_at_step: int
+            if "end_at_step" not in inputs:
+                en = _get(7, inputs.get("steps", 20))
+                try:
+                    en = int(en)
+                except Exception:
+                    en = inputs.get("steps", 20)
+                inputs["end_at_step"] = en
+
+            # return_with_leftover_noise: enum ['disable','enable']
+            if "return_with_leftover_noise" not in inputs:
+                r = _get(8, "disable")
+                if isinstance(r, bool):
+                    r = "enable" if r else "disable"
+                # sanitize any numeric stray values
+                if not isinstance(r, str) or r not in ("disable", "enable"):
+                    r = "disable"
+                inputs["return_with_leftover_noise"] = r
         elif ctype in ("UnetLoaderGGUF", "UNETLoader"):
             # Ensure required UNet name is populated
             if "unet_name" not in inputs:
