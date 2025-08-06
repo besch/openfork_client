@@ -341,17 +341,8 @@ def _inject_prompt_and_image_into_workflow(workflow: dict, prompt: str, negative
             if isinstance(n.get("widgets_values"), list) and n["widgets_values"]:
                 inputs["image"] = n["widgets_values"][0]
         elif ctype == "VHS_VideoCombine":
-            # Populate required VHS fields with sensible defaults
-            inputs.setdefault("crf", 19)
-            inputs.setdefault("format", "video/h264-mp4")
-            inputs.setdefault("pix_fmt", "yuv420p")
-            inputs.setdefault("pingpong", False)
-            inputs.setdefault("frame_rate", 16)
-            inputs.setdefault("loop_count", 0)
-            inputs.setdefault("save_output", True)
-            inputs.setdefault("save_metadata", True)
-            inputs.setdefault("trim_to_audio", False)
-            inputs.setdefault("filename_prefix", "%date:yyyy-MM-dd%/generated_")
+            # Do not override VHS defaults; preserve workflow-provided values to match UI execution.
+            pass
         elif ctype == "WanImageToVideo":
             # Ensure Wan I2V node has mandatory scalar inputs and VAE/prompt wiring will be added via links
             # Pull width/height/length/batch_size from widgets if available; otherwise use sensible defaults
@@ -372,17 +363,8 @@ def _inject_prompt_and_image_into_workflow(workflow: dict, prompt: str, negative
                 else:
                     inputs["vae_name"] = "wan_2.1_vae.safetensors"
         elif ctype in ("KSampler", "KSamplerAdvanced"):
-            # Provide sensible defaults so validation passes; graph links will set model/positive/negative/latent_image
-            inputs.setdefault("steps", 20)
-            inputs.setdefault("cfg", 4.5)
-            inputs.setdefault("sampler_name", "euler")
-            inputs.setdefault("scheduler", "normal")
-            inputs.setdefault("start_at_step", 0)
-            inputs.setdefault("end_at_step", 20)
-            # ComfyUI expects specific string options for these toggles, not booleans
-            inputs.setdefault("add_noise", "enable")  # ['enable','disable']
-            inputs.setdefault("return_with_leftover_noise", "disable")  # ['disable','enable']
-            inputs.setdefault("noise_seed", 0)
+            # Preserve sampler settings from the workflow; avoid injecting defaults that can change performance.
+            pass
         elif ctype in ("UnetLoaderGGUF", "UNETLoader"):
             # Ensure required UNet name is populated
             if "unet_name" not in inputs:
