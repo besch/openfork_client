@@ -351,13 +351,29 @@ def _inject_prompt_and_image_into_workflow(workflow: dict, prompt: str, negative
                 if isinstance(wv, list) and idx is not None and idx < len(wv):
                     return wv[idx]
                 return default
+
+            # Helper: expand %date:yyyy-MM-dd% to actual date so filenames don't contain the literal placeholder
+            def _expand_filename_prefix(prefix: str) -> str:
+                try:
+                    if isinstance(prefix, str) and "%date" in prefix and "yyyy-MM-dd" in prefix:
+                        from datetime import datetime
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        return prefix.replace("%date:yyyy-MM-dd%", today)
+                except Exception:
+                    pass
+                return prefix
+
             # Required by VHS node schema
             if "frame_rate" not in inputs:
                 inputs["frame_rate"] = _get_wv("frame_rate", default=16)
             if "loop_count" not in inputs:
                 inputs["loop_count"] = _get_wv("loop_count", default=0)
             if "filename_prefix" not in inputs:
-                inputs["filename_prefix"] = _get_wv("filename_prefix", default="%date:yyyy-MM-dd%/wan22_")
+                raw_prefix = _get_wv("filename_prefix", default="%date:yyyy-MM-dd%/wan22_")
+                inputs["filename_prefix"] = _expand_filename_prefix(raw_prefix)
+            else:
+                # If provided by workflow inputs, still expand if it contains the placeholder
+                inputs["filename_prefix"] = _expand_filename_prefix(inputs["filename_prefix"])
             if "format" not in inputs:
                 inputs["format"] = _get_wv("format", default="video/h264-mp4")
             if "pingpong" not in inputs:
