@@ -6,6 +6,7 @@ import argparse
 import base64
 import copy
 import json
+from datetime import datetime
 
 from comfyui_manager import trigger_workflow, get_workflow_output
 from hardware_profiler import get_hardware_profile
@@ -198,6 +199,12 @@ def _inject_prompt_and_image_into_workflow(workflow_api_path: str, prompt: str, 
                 node["inputs"]["text"] = negative_prompt
         elif node["class_type"] == "LoadImage":
             node["inputs"]["image"] = start_image_filename
+        elif node["class_type"] == "VHS_VideoCombine":
+            # Replace date token in filename_prefix
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
 
     return {"prompt": api_graph}
 
