@@ -5,6 +5,7 @@ import logging
 import argparse
 import base64
 import copy
+import json
 
 from comfyui_manager import trigger_workflow, get_workflow_output
 from hardware_profiler import get_hardware_profile
@@ -178,403 +179,25 @@ def _materialize_start_image(job: dict):
         logging.error(f"Failed to materialize start image: {e}")
     return None
 
-def _inject_prompt_and_image_into_workflow(workflow: dict, prompt: str, negative_prompt, start_image_filename):
+def _inject_prompt_and_image_into_workflow(workflow_api_path: str, prompt: str, negative_prompt: str, start_image_filename: str):
     """
-    Convert incoming workflow to ComfyUI API graph format and inject prompt/image.
-    Guarantees returning {"prompt": { "<id>": { "class_type": "...", "inputs": {...} }, ... }}.
-    Rejects nodes missing class_type to avoid ComfyUI 400 errors.
+    Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
     """
-    raw = copy.deepcopy(workflow)
+    with open(workflow_api_path, 'r') as f:
+        workflow_api = json.load(f)
 
-    # 0) Unwrap common wrappers to get inner graph-like object
-    if isinstance(raw, dict) and "prompt" in raw and isinstance(raw["prompt"], (dict, list)):
-        inner = raw["prompt"]
-    else:
-        inner = raw
-    if isinstance(inner, dict) and "workflow" in inner and isinstance(inner["workflow"], dict):
-        inner = inner["workflow"]
-    if isinstance(inner, dict) and "graph" in inner and isinstance(inner["graph"], dict) and "nodes" in inner["graph"]:
-        # litegraph nested
-        inner = {"nodes": inner["graph"]["nodes"], "links": inner["graph"].get("links", [])}
+    # Deep copy to avoid modifying the cached workflow
+    api_graph = copy.deepcopy(workflow_api["prompt"])
 
-    # 1) If already API dict format (ids -> node dict with class_type), clone and modify fields
-    if isinstance(inner, dict) and inner and all(isinstance(k, (str, int)) and isinstance(v, dict) for k, v in inner.items()) and not isinstance(inner.get("nodes"), list):
-        api_graph = {}
-        for k, node in inner.items():
-            node_copy = copy.deepcopy(node)
-            ctype = (node_copy.get("class_type") or "").strip()
-            if not ctype:
-                raise ValueError(f"Workflow node {k} missing 'class_type'.")
-            # Inject prompts/image if fields exist (widgets_values is litegraph; API uses inputs usually)
-            if ctype == "CLIPTextEncode":
-                # Prefer API "text" input if present
-                inputs = node_copy.setdefault("inputs", {})
-                if isinstance(inputs, dict):
-                    title = node_copy.get("title", "")
-                    if "Negative" in title and negative_prompt is not None:
-                        inputs["text"] = negative_prompt
-                    elif "Positive" in title or not title:
-                        inputs["text"] = prompt
-            if ctype in ("LoadImage", "Load Image") and start_image_filename:
-                inputs = node_copy.setdefault("inputs", {})
-                if isinstance(inputs, dict):
-                    inputs["image"] = start_image_filename
-            api_graph[str(k)] = node_copy
-        return {"prompt": api_graph}
-
-    # 2) Handle litegraph array format: nodes/links arrays
-    nodes = []
-    links = []
-    if isinstance(inner, dict):
-        if isinstance(inner.get("nodes"), list):
-            nodes = copy.deepcopy(inner["nodes"])
-        if isinstance(inner.get("links"), list):
-            links = copy.deepcopy(inner["links"])
-
-    # Build id mapping to numeric ids and DROP non-executable/meta nodes (e.g., Note) to avoid server errors.
-    id_map = {}
-    filtered_nodes = []
-    meta_node_types = {"Note"}  # extendable set of UI-only nodes to strip
-    for idx, n in enumerate(nodes):
-        n_type = (n.get("class_type") or n.get("type") or "").strip()
-        # Skip meta/UI-only nodes (e.g., Note) entirely
-        if n_type in meta_node_types:
-            continue
-
-        orig_id = n.get("id", idx)
-        if isinstance(orig_id, str) and (orig_id.strip() == "#id" or not orig_id.strip().lstrip("-").isdigit()):
-            orig_id_key = f"auto_{idx}"
-        else:
-            orig_id_key = orig_id
-        try:
-            norm_id = int(orig_id)
-        except Exception:
-            norm_id = idx
-        n["id"] = norm_id
-        id_map[orig_id_key] = norm_id
-
-        # Ensure class_type
-        if not n.get("class_type"):
-            if isinstance(n.get("type"), str) and n["type"]:
-                n["class_type"] = n["type"]
-            else:
-                title = n.get("title") or ""
-                inferred = title.replace(" ", "")
-                if not inferred:
-                    raise ValueError(f"Workflow contains a node (idx {idx}) missing 'class_type' and 'type'.")
-                n["class_type"] = inferred
-
-        # Ensure widget arrays exist
-        if "widgets_values" not in n or not isinstance(n.get("widgets_values"), list):
-            n["widgets_values"] = []
-
-        filtered_nodes.append(n)
-
-    nodes = filtered_nodes
-
-    # Sanitize links (optional; not required for API dict format we will build)
-    sanitized_links = []
-    # Build set of kept node ids for link pruning after dropping meta nodes
-    kept_ids = {n["id"] for n in nodes if isinstance(n.get("id"), int)}
-    for link in links:
-        if not isinstance(link, list) or len(link) < 6:
-            continue
-        _, src_id, src_slot, dst_id, dst_slot, _ = link[:6]
-
-        def resolve(v):
-            if isinstance(v, str) and v.strip() == "#id":
-                return None
-            if v in id_map:
-                return id_map[v]
-            if isinstance(v, str) and v.strip().lstrip("-").isdigit():
-                iv = int(v)
-                return id_map.get(iv, iv)
-            if isinstance(v, int):
-                return id_map.get(v, v)
-            return None
-
-        s = resolve(src_id)
-        d = resolve(dst_id)
-        # Drop links if either endpoint is missing or pruned (e.g., Note)
-        if s is None or d is None or s not in kept_ids or d not in kept_ids:
-            continue
-        sanitized_links.append([s, src_slot, d, dst_slot])
-    # We won't attempt to map slots to named inputs; ComfyUI API allows direct value setting.
-
-    # 3) Inject prompts/image in litegraph nodes (widgets_values commonly used)
-    for n in nodes:
-        t = (n.get("class_type") or n.get("type") or "").strip()
-        if t == "CLIPTextEncode":
-            title = n.get("title", "")
-            if "Negative" in title and negative_prompt is not None:
-                if n.get("widgets_values") and len(n["widgets_values"]) > 0:
-                    n["widgets_values"][0] = negative_prompt
-            else:
-                if n.get("widgets_values") and len(n["widgets_values"]) > 0:
-                    n["widgets_values"][0] = prompt
-        if t in ("LoadImage", "Load Image") and start_image_filename:
-            if n.get("widgets_values") and len(n["widgets_values"]) > 0:
-                n["widgets_values"][0] = start_image_filename
-
-    # 4) Convert to ComfyUI API dict format: {"<id>": {"class_type": ..., "inputs": {...}}}
-    api_graph = {}
-
-    # Build a quick lookup by id for later link-to-input reconstruction
-    node_by_id = {n.get("id"): n for n in nodes if isinstance(n.get("id"), int)}
-
-    for n in nodes:
-        nid = n.get("id")
-        ctype = (n.get("class_type") or "").strip()
-        if not ctype:
-            raise ValueError(f"Workflow node {nid} missing 'class_type' after normalization.")
-
-        # Build inputs dict and preserve any existing API-like inputs
-        inputs = {}
-        if isinstance(n.get("inputs"), dict):
-            inputs.update({k: v for k, v in n["inputs"].items()})
-
-        # Known simple mappings
-        if ctype == "CLIPTextEncode":
-            if isinstance(n.get("widgets_values"), list) and n["widgets_values"]:
-                inputs["text"] = n["widgets_values"][0]
-        elif ctype in ("LoadImage", "Load Image"):
-            if isinstance(n.get("widgets_values"), list) and n["widgets_values"]:
-                inputs["image"] = n["widgets_values"][0]
-        elif ctype == "VHS_VideoCombine":
-            # Populate required VHS fields with sensible defaults
-            inputs.setdefault("crf", 19)
-            inputs.setdefault("format", "video/h264-mp4")
-            inputs.setdefault("pix_fmt", "yuv420p")
-            inputs.setdefault("pingpong", False)
-            inputs.setdefault("frame_rate", 16)
-            inputs.setdefault("loop_count", 0)
-            inputs.setdefault("save_output", True)
-            inputs.setdefault("save_metadata", True)
-            inputs.setdefault("trim_to_audio", False)
-            inputs.setdefault("filename_prefix", "%date:yyyy-MM-dd%/generated_")
-        elif ctype == "WanImageToVideo":
-            # Ensure Wan I2V node has mandatory scalar inputs and VAE/prompt wiring will be added via links
-            # Pull width/height/length/batch_size from widgets if available; otherwise use sensible defaults
-            wv = n.get("widgets_values") if isinstance(n.get("widgets_values"), list) else []
-            if "width" not in inputs:
-                inputs["width"] = wv[0] if len(wv) > 0 and isinstance(wv[0], int) else 832
-            if "height" not in inputs:
-                inputs["height"] = wv[1] if len(wv) > 1 and isinstance(wv[1], int) else 480
-            if "length" not in inputs:
-                inputs["length"] = wv[2] if len(wv) > 2 and isinstance(wv[2], int) else 81
-            if "batch_size" not in inputs:
-                inputs["batch_size"] = wv[3] if len(wv) > 3 and isinstance(wv[3], int) else 1
-        elif ctype == "VAELoader":
-            # Provide a default VAE selection if missing
-            if "vae_name" not in inputs:
-                if isinstance(n.get("widgets_values"), list) and n["widgets_values"]:
-                    inputs["vae_name"] = n["widgets_values"][0]
-                else:
-                    inputs["vae_name"] = "wan_2.1_vae.safetensors"
-        elif ctype in ("KSampler", "KSamplerAdvanced"):
-            # Provide sensible defaults so validation passes; graph links will set model/positive/negative/latent_image
-            inputs.setdefault("steps", 20)
-            inputs.setdefault("cfg", 4.5)
-            inputs.setdefault("sampler_name", "euler")
-            inputs.setdefault("scheduler", "normal")
-            inputs.setdefault("start_at_step", 0)
-            inputs.setdefault("end_at_step", 20)
-            # ComfyUI expects specific string options for these toggles, not booleans
-            inputs.setdefault("add_noise", "enable")  # ['enable','disable']
-            inputs.setdefault("return_with_leftover_noise", "disable")  # ['disable','enable']
-            inputs.setdefault("noise_seed", 0)
-        elif ctype in ("UnetLoaderGGUF", "UNETLoader"):
-            # Ensure required UNet name is populated
-            if "unet_name" not in inputs:
-                if isinstance(n.get("widgets_values"), list) and n["widgets_values"]:
-                    inputs["unet_name"] = n["widgets_values"][0]
-        elif ctype == "CLIPLoader":
-            # Normalize optional CLIPLoader params from widgets if not explicitly present
-            wv = n.get("widgets_values") if isinstance(n.get("widgets_values"), list) else []
-            if "clip_name" not in inputs and wv:
-                inputs["clip_name"] = wv[0]
-            if "type" not in inputs and len(wv) > 1:
-                inputs["type"] = wv[1]
-            if "device" not in inputs and len(wv) > 2:
-                inputs["device"] = wv[2]
-
-        api_graph[str(nid)] = {
-            "class_type": ctype,
-            "inputs": inputs
-        }
-
-    # 5) Reconstruct critical connections from sanitized_links into API inputs:
-    # Map upstream connections into API references: ["<node_id>", output_index]
-    # Handle:
-    #   - VAELoader -> VAEDecode.vae
-    #   - KSampler/KSamplerAdvanced -> VAEDecode.samples
-    #   - VAEDecode.IMAGE (or other IMAGE producers) -> VHS_VideoCombine.images
-    #   - CLIPTextEncode -> KSampler/KSamplerAdvanced.positive/negative
-    #   - MODEL producers (UnetLoaderGGUF/UNETLoader) -> KSampler/KSamplerAdvanced.model
-    #   - EmptyLatentImage (or latent producers) -> KSampler/KSamplerAdvanced.latent_image
-    #   - CLIPLoader -> KSampler/KSamplerAdvanced.clip (some templates wire it explicitly)
-    for link in sanitized_links:
-        try:
-            src_id, src_slot, dst_id, dst_slot = link
-            dst_node = node_by_id.get(dst_id)
-            src_node = node_by_id.get(src_id)
-            if not dst_node or not src_node:
-                continue
-            dst_type = (dst_node.get("class_type") or dst_node.get("type") or "").strip()
-            src_type = (src_node.get("class_type") or src_node.get("type") or "").strip()
-
-            # Bind VAELoader -> VAEDecode.vae
-            if dst_type == "VAEDecode" and src_type in ("VAELoader", "VAE", "VAELoaderNode"):
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "vae" not in api_inputs:
-                    api_inputs["vae"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind KSampler/KSamplerAdvanced (LATENT) -> VAEDecode.samples
-            if dst_type == "VAEDecode" and src_type in ("KSampler", "KSamplerAdvanced", "Latent", "LatentNode"):
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "samples" not in api_inputs:
-                    api_inputs["samples"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind IMAGE producer -> VHS_VideoCombine.images
-            if dst_type == "VHS_VideoCombine" and src_type in ("VAEDecode", "LoadImage", "Image", "ImageNode"):
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "images" not in api_inputs:
-                    api_inputs["images"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind VAELoader -> WanImageToVideo.vae
-            if dst_type == "WanImageToVideo" and src_type in ("VAELoader", "VAE", "VAELoaderNode"):
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "vae" not in api_inputs:
-                    api_inputs["vae"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind CLIPTextEncode -> WanImageToVideo positive/negative
-            if dst_type == "WanImageToVideo" and src_type == "CLIPTextEncode":
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                src_title = (node_by_id.get(src_id, {}) or {}).get("title", "") if isinstance(node_by_id.get(src_id, {}), dict) else ""
-                is_negative = ("Negative" in src_title) or (dst_slot == 1)
-                if is_negative:
-                    if "negative" not in api_inputs:
-                        api_inputs["negative"] = [str(src_id), 0]
-                else:
-                    if "positive" not in api_inputs:
-                        api_inputs["positive"] = [str(src_id), 0]
-                api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind ImageResizeKJv2 width/height -> WanImageToVideo.width/height
-            if dst_type == "WanImageToVideo" and src_type == "ImageResizeKJv2":
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                # According to the workflow, ImageResizeKJv2 outputs width at slot 1 and height at slot 2
-                if dst_slot == 5 and "width" not in api_inputs:
-                    api_inputs["width"] = [str(src_id), 1]
-                if dst_slot == 6 and "height" not in api_inputs:
-                    api_inputs["height"] = [str(src_id), 2]
-                api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind CLIP encoders to KSampler/KSamplerAdvanced positive/negative
-            if dst_type in ("KSampler", "KSamplerAdvanced") and src_type == "CLIPTextEncode":
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                # Some exported graphs don't preserve slot semantics; infer by node title/label if available.
-                src_title = (node_by_id.get(src_id, {}) or {}).get("title", "") if isinstance(node_by_id.get(src_id, {}), dict) else ""
-                is_negative = ("Negative" in src_title) or (dst_slot == 1)
-                if is_negative:
-                    if "negative" not in api_inputs:
-                        api_inputs["negative"] = [str(src_id), 0]
-                else:
-                    if "positive" not in api_inputs:
-                        api_inputs["positive"] = [str(src_id), 0]
-                api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind CLIPLoader to CLIPTextEncode.clip
-            if dst_type == "CLIPTextEncode" and src_type == "CLIPLoader":
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "clip" not in api_inputs:
-                    api_inputs["clip"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind model loaders to KSampler/KSamplerAdvanced.model
-            if dst_type in ("KSampler", "KSamplerAdvanced") and src_type in ("UnetLoaderGGUF", "UNETLoader"):
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "model" not in api_inputs:
-                    api_inputs["model"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind CLIPLoader to KSampler/KSamplerAdvanced.clip (if present in graph)
-            if dst_type in ("KSampler", "KSamplerAdvanced") and src_type == "CLIPLoader":
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "clip" not in api_inputs:
-                    api_inputs["clip"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-
-            # Bind latent providers to KSampler/KSamplerAdvanced.latent_image
-            if dst_type in ("KSampler", "KSamplerAdvanced") and src_type in ("EmptyLatentImage", "Latent", "LatentNode", "WanImageToVideo"):
-                dst_key = str(dst_id)
-                api_inputs = api_graph.get(dst_key, {}).get("inputs", {})
-                if "latent_image" not in api_inputs:
-                    # WanImageToVideo provides latent on slot index 2
-                    if src_type == "WanImageToVideo":
-                        api_inputs["latent_image"] = [str(src_id), 2]
-                    else:
-                        api_inputs["latent_image"] = [str(src_id), 0]
-                    api_graph[dst_key]["inputs"] = api_inputs
-        except Exception:
-            continue
-
-    # 6) Fallback wiring if required sampler inputs are still missing but producers exist without links.
-    # This covers cases where links are lost in transport (e.g., UI export glitches).
-    # Try to heuristically pick producers for model/positive/negative/latent_image.
-    try:
-        # Collect candidates by type
-        ks_ids = [nid for nid, n in ((int(k), v) for k, v in api_graph.items()) if isinstance(n, dict) and (n.get("class_type") in ("KSampler", "KSamplerAdvanced"))]
-        model_ids = [nid for nid, n in ((int(k), v) for k, v in api_graph.items()) if isinstance(n, dict) and (n.get("class_type") in ("UnetLoaderGGUF", "UNETLoader"))]
-        clip_ids = [nid for nid, n in ((int(k), v) for k, v in api_graph.items()) if isinstance(n, dict) and (n.get("class_type") == "CLIPTextEncode")]
-        latent_ids = [nid for nid, n in ((int(k), v) for k, v in api_graph.items()) if isinstance(n, dict) and (n.get("class_type") in ("EmptyLatentImage", "Latent", "LatentNode", "WanImageToVideo"))]
-
-        # Prefer the first of each type if present
-        model_src = str(model_ids[0]) if model_ids else None
-        # Split CLIPTextEncode into positive/negative by node title if possible, else assign first to positive
-        pos_src = None
-        neg_src = None
-        for cid in clip_ids:
-            n = node_by_id.get(cid)
-            title = (n.get("title") or "") if isinstance(n, dict) else ""
-            if "Negative" in title and not neg_src:
-                neg_src = str(cid)
-            elif not pos_src:
-                pos_src = str(cid)
-        latent_src = str(latent_ids[0]) if latent_ids else None
-
-        for ks in ks_ids:
-            inputs = api_graph[str(ks)].setdefault("inputs", {})
-            if model_src and "model" not in inputs:
-                inputs["model"] = [model_src, 0]
-            if pos_src and "positive" not in inputs:
-                inputs["positive"] = [pos_src, 0]
-            if neg_src and "negative" not in inputs and len(clip_ids) > 1:
-                inputs["negative"] = [neg_src, 0]
-            if latent_src and "latent_image" not in inputs:
-                # If the selected latent source is WanImageToVideo, its latent is output slot 2
-                src_node = node_by_id.get(int(latent_src)) if latent_src is not None and latent_src.lstrip("-").isdigit() else None
-                src_type = (src_node.get("class_type") or src_node.get("type") or "").strip() if isinstance(src_node, dict) else ""
-                if src_type == "WanImageToVideo":
-                    inputs["latent_image"] = [latent_src, 2]
-                else:
-                    inputs["latent_image"] = [latent_src, 0]
-    except Exception:
-        pass
+    # Inject prompts and image filename
+    for node in api_graph.values():
+        if node["class_type"] == "CLIPTextEncode":
+            if "Positive" in node.get("title", ""):
+                node["inputs"]["text"] = prompt
+            elif "Negative" in node.get("title", ""):
+                node["inputs"]["text"] = negative_prompt
+        elif node["class_type"] == "LoadImage":
+            node["inputs"]["image"] = start_image_filename
 
     return {"prompt": api_graph}
 
@@ -601,12 +224,9 @@ def listen_for_jobs(provider_id):
                         positive_prompt = job.get('prompt') or ""
                         negative_prompt = job.get('negative_prompt') or ""
 
-                        if not workflow:
-                            logging.error("No workflow found in job.")
-                            update_job_status(job['id'], 'failed')
-                            continue
-
-                        if not verify_workflow_nodes(workflow):
+                        workflow_api_path = os.path.join(ROOT_DIR, 'workflows', 'wan2.2-image-to-video.api.json')
+                        if not os.path.exists(workflow_api_path):
+                            logging.error(f"Workflow API file not found at {workflow_api_path}")
                             update_job_status(job['id'], 'failed')
                             continue
 
@@ -615,7 +235,7 @@ def listen_for_jobs(provider_id):
 
                         start_image_filename = _materialize_start_image(job)
                         wf_ready = _inject_prompt_and_image_into_workflow(
-                            workflow, positive_prompt, negative_prompt, start_image_filename
+                            workflow_api_path, positive_prompt, negative_prompt, start_image_filename
                         )
 
                         # Emit targeted debug to catch missing class_type before sending.

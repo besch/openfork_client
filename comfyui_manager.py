@@ -23,15 +23,9 @@ def trigger_workflow(workflow_json):
     """Trigger a workflow in ComfyUI by HTTP POST /prompt and return the prompt ID."""
     client_id = str(uuid.uuid4())
 
-    # Expect DGN client to provide ComfyUI API graph dict under 'prompt'.
-    # Accept either {'prompt': {...}} or a bare API dict (ids -> node dicts).
-    payload_prompt = None
-    if isinstance(workflow_json, dict) and "prompt" in workflow_json and isinstance(workflow_json["prompt"], dict):
-        payload_prompt = workflow_json["prompt"]
-    elif isinstance(workflow_json, dict) and all(isinstance(k, (str, int)) and isinstance(v, dict) for k, v in workflow_json.items()):
-        payload_prompt = workflow_json
-    else:
-        raise ValueError("Invalid workflow payload; expected ComfyUI API graph dict under 'prompt' or a bare API graph dict.")
+    if not (isinstance(workflow_json, dict) and "prompt" in workflow_json and isinstance(workflow_json["prompt"], dict)):
+        raise ValueError("Invalid workflow payload; expected a dict with a 'prompt' key containing the API graph.")
+    payload_prompt = workflow_json["prompt"]
 
     # Validate API graph structure: dict of nodes with class_type and inputs
     if not isinstance(payload_prompt, dict) or not payload_prompt:
