@@ -5,6 +5,8 @@ import os
 import time
 import urllib.request
 import urllib.error
+import threading
+from queue import Queue, Empty
 
 # Allow override by env var COMFYUI_WS_URL, default to local
 COMFYUI_URL = os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}")
@@ -35,21 +37,15 @@ def trigger_workflow(workflow_json):
             raise ValueError(f"Invalid node for id {k}: expected dict.")
         if not node.get("class_type"):
             raise ValueError(f"Invalid node for id {k}: missing 'class_type'.")
-        # Normalize id keys to strings as ComfyUI typically uses string keys
-        # (No transform needed here; we just validate)
 
-
-    # Resolve HTTP base once and cache
     global HTTP_BASE
     if not HTTP_BASE:
         HTTP_BASE = _http_base_from_ws(COMFYUI_URL)
     http_base = HTTP_BASE
 
-    # Quick connectivity probe to aid debugging
     try:
         probe_req = urllib.request.Request(f"{http_base}/object_info")
         with urllib.request.urlopen(probe_req, timeout=5) as resp:
-            # just ensure we can connect; content not strictly required
             pass
     except Exception as e:
         raise RuntimeError(f"Cannot reach ComfyUI at {http_base} (/object_info): {e}. "
@@ -68,7 +64,6 @@ def trigger_workflow(workflow_json):
                 resp_json = {}
             prompt_id = resp_json.get("prompt_id") or resp_json.get("data", {}).get("prompt_id")
     except urllib.error.HTTPError as e:
-        # Return HTTP body to help diagnose server-side errors
         try:
             detail = e.read().decode("utf-8")
         except Exception:
@@ -79,16 +74,17 @@ def trigger_workflow(workflow_json):
 
     return prompt_id
 
-def get_workflow_output(prompt_id, terminal_node_ids=None, timeout_sec=7200):
-    """
-    Get the output of a completed workflow by listening on WS.
+def _ws_reader_thread(ws, q):
+    while True:
+        try:
+            out = ws.recv()
+            q.put(out)
+        except Exception as e:
+            q.put(e) # Signal error to the main thread
+            break
 
-    Improvements:
-    - Track all executed nodes for our prompt_id.
-    - If terminal_node_ids provided, only return after all of them executed.
-    - Otherwise, return the last executed output for our prompt_id.
-    - Long overall timeout with shorter per-recv timeout to avoid premature failure.
-    """
+def get_workflow_output(prompt_id, terminal_node_ids=None, timeout_sec=7200):
+    """Get the output of a completed workflow by listening on WS in a separate thread."""
     if not prompt_id:
         return None
 
@@ -99,8 +95,9 @@ def get_workflow_output(prompt_id, terminal_node_ids=None, timeout_sec=7200):
     except Exception as e:
         raise RuntimeError(f"Failed to connect to ComfyUI WebSocket at {COMFYUI_URL}: {e}")
 
-    # Per receive timeout; we loop until wall clock timeout
-    ws.settimeout(60)
+    q = Queue()
+    reader_thread = threading.Thread(target=_ws_reader_thread, args=(ws, q), daemon=True)
+    reader_thread.start()
 
     start_ts = time.time()
     executed_nodes = set()
@@ -108,16 +105,15 @@ def get_workflow_output(prompt_id, terminal_node_ids=None, timeout_sec=7200):
 
     try:
         while True:
-            # Wall clock timeout guard
             if (time.time() - start_ts) > timeout_sec:
-                # Return whatever we have to avoid hanging forever
                 return last_output
 
             try:
-                out = ws.recv()
-            except Exception:
-                # On transient timeout, continue waiting within wall clock limit
-                continue
+                out = q.get(timeout=300) # Wait for messages for 5 minutes
+                if isinstance(out, Exception):
+                    raise out # Re-raise exception from reader thread
+            except Empty:
+                continue # Continue waiting
 
             if isinstance(out, str):
                 try:
@@ -130,33 +126,18 @@ def get_workflow_output(prompt_id, terminal_node_ids=None, timeout_sec=7200):
                 if not isinstance(data, dict):
                     data = {}
 
-                # Track prompt-specific execution
                 if mtype == "executed" and data.get("prompt_id") == prompt_id:
-                    # Record node_id if provided
                     node_id = data.get("node") or data.get("node_id") or data.get("node_id_name")
                     if node_id is not None:
                         executed_nodes.add(str(node_id))
-                    # Save last output seen
                     last_output = data.get("output")
 
-                    # If we know the terminal nodes, check completion
                     if terminal_node_ids:
-                        # Normalize to str for comparison
                         need = {str(n) for n in terminal_node_ids}
                         if need.issubset(executed_nodes):
                             return last_output
-                    else:
-                        # If not specified, heuristic: Comfy often sends a 'status' done message later,
-                        # but if this is the only executed we get for this prompt for long time, we still return last_output.
-                        # Keep waiting for a 'status' event but also allow return if no terminal set and we receive another
-                        # executed with no new nodes for a while. That is handled by wall-clock timeout.
-                        pass
 
-                # Some ComfyUI builds also send a 'status' message with an overall status for the prompt
                 if mtype == "status":
-                    # Example: {"type":"status","data":{"status":{"exec_info":{"queue_remaining":0}},"sid":"..."}}
-                    # Not all payloads include prompt_id here; so we still rely on executed nodes above.
-                    # If queue_remaining is 0 and we have at least one executed for our prompt, return last output.
                     status = data.get("status") if isinstance(data, dict) else None
                     if isinstance(status, dict):
                         exec_info = status.get("exec_info", {})

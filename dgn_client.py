@@ -66,32 +66,146 @@ def download_assets(assets: list[str]):
 
 
 def upload_output(file_path, job_id):
-    """Upload the output file to Supabase Storage."""
+    """Upload the output file to Supabase Storage and return the storage path."""
     try:
         supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
         with open(file_path, 'rb') as f:
             file_name = os.path.basename(file_path)
-            # Use job_id in the path to organize outputs
             storage_path = f"outputs/{job_id}/{file_name}"
-            response = supabase.storage.from_('dgn-assets').upload(storage_path, f.read(), {'content-type': 'video/mp4'})
+            response = supabase.storage.from_('scene-videos').upload(storage_path, f.read(), {'content-type': 'video/mp4'})
             if response.status_code == 200:
                 logging.info(f"File {file_name} uploaded successfully to {storage_path}.")
+                return storage_path
             else:
                 logging.error(f"Error uploading file {file_name}: {response.text}")
+                return None
     except Exception as e:
         logging.error(f"Could not upload file {file_path} to Supabase: {e}")
+        return None
 
 def process_workflow_output(outputs, job_id):
-    """Process the workflow output and upload the generated files."""
+    """Process the workflow output, upload the generated files, and return the first successful upload path."""
     for node_id, node_output in outputs.items():
         if 'filenames' in node_output:
             for filename in node_output['filenames']:
-                # Prefer OUTPUT_DIR; ComfyUI default mount might be /opt/ComfyUI/output mirrored to our OUTPUT_DIR.
                 file_path = os.path.join(OUTPUT_DIR, filename)
                 if os.path.exists(file_path):
-                    upload_output(file_path, job_id)
+                    storage_path = upload_output(file_path, job_id)
+                    if storage_path:
+                        # Return the first successfully uploaded path
+                        return storage_path
                 else:
                     logging.warning(f"Output file not found: {file_path}")
+    return None
+
+def update_job_status(job_id, status, output_path=None):
+    """Update the status of a job, optionally including the output path."""
+    try:
+        payload = {"status": status}
+        if output_path:
+            payload["output_path"] = output_path
+        
+        response = requests.put(f"{ORCHESTRATOR_URL}/api/dgn/job/{job_id}", json=payload)
+        if response.status_code == 200:
+            logging.info(f"Job {job_id} status updated to {status}")
+        else:
+            logging.error(f"Error updating job status: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Could not connect to the Orchestrator: {e}")
+
+def update_provider_status(provider_id, status):
+    """Update the status of a provider."""
+    try:
+        response = requests.put(f"{ORCHESTRATOR_URL}/api/dgn/provider-status/{provider_id}", json={"status": status})
+        if response.status_code == 200:
+            logging.info(f"Provider {provider_id} status updated to {status}")
+        else:
+            logging.error(f"Error updating provider status: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Could not connect to the Orchestrator: {e}")
+
+def listen_for_jobs(provider_id):
+    """Listen for jobs from the orchestrator."""
+    _ensure_dirs()
+    while True:
+        try:
+            logging.info("Checking for new jobs...")
+            response = requests.get(f"{ORCHESTRATOR_URL}/api/dgn/jobs/{provider_id}")
+            if response.status_code == 200:
+                job = response.json()
+                if job and job.get('id'):
+                    logging.info(f"Received job: {job['id']}")
+                    try:
+                        update_provider_status(provider_id, 'busy')
+                        update_job_status(job['id'], 'processing')
+
+                        # ... job processing logic ...
+                        workflow = job.get('workflow')
+                        required_assets = job.get('assets', [])
+                        positive_prompt = job.get('prompt') or ""
+                        negative_prompt = job.get('negative_prompt') or ""
+
+                        workflow_api_path = os.path.join(ROOT_DIR, 'workflows', 'wan2.2-image-to-video.api.json')
+                        if not os.path.exists(workflow_api_path):
+                            logging.error(f"Workflow API file not found at {workflow_api_path}")
+                            update_job_status(job['id'], 'failed')
+                            continue
+
+                        if required_assets:
+                            download_assets(required_assets)
+
+                        start_image_filename = _materialize_start_image(job)
+                        wf_ready = _inject_prompt_and_image_into_workflow(
+                            workflow_api_path, positive_prompt, negative_prompt, start_image_filename
+                        )
+                        
+                        # ... (rest of the workflow preparation) ...
+
+                        prompt_id = trigger_workflow(wf_ready)
+                        if prompt_id:
+                            outputs = get_workflow_output(prompt_id, timeout_sec=7200)
+                            if outputs:
+                                output_path = process_workflow_output(outputs, job['id'])
+                                if output_path:
+                                    update_job_status(job['id'], 'completed', output_path=output_path)
+                                else:
+                                    logging.error("Workflow completed, but output upload failed.")
+                                    update_job_status(job['id'], 'failed')
+                            else:
+                                logging.error("Workflow failed to produce outputs.")
+                                update_job_status(job['id'], 'failed')
+                        else:
+                            logging.error("Failed to trigger workflow.")
+                            update_job_status(job['id'], 'failed')
+
+                    except Exception as e:
+                        logging.error(f"An error occurred while processing job {job['id']}: {e}")
+                        update_job_status(job['id'], 'failed')
+                    finally:
+                        update_provider_status(provider_id, 'available')
+                        logging.info("Provider status set to available. Waiting for next job...")
+
+                else:
+                    logging.info("No new jobs.")
+            else:
+                logging.error(f"Error checking for jobs: {response.text}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Could not connect to the Orchestrator: {e}")
+
+        time.sleep(10) # Poll every 10 seconds
+
+
+def update_provider_status(provider_id, status):
+    """Update the status of a provider."""
+    try:
+        response = requests.put(f"{ORCHESTRATOR_URL}/api/dgn/provider-status/{provider_id}", json={"status": status})
+        if response.status_code == 200:
+            logging.info(f"Provider {provider_id} status updated to {status}")
+        else:
+            logging.error(f"Error updating provider status: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Could not connect to the Orchestrator: {e}")
+
 
 def register_with_orchestrator():
     """Register the client with the orchestrator."""
@@ -121,17 +235,7 @@ def deregister_from_orchestrator(provider_id: str):
     except requests.exceptions.RequestException as e:
         logging.error(f"Could not connect to the Orchestrator: {e}")
 
-def update_job_status(job_id, status):
-    """Update the status of a job."""
-    try:
-        # Repo has route at /api/dgn/job/[jobId]/route.ts (singular 'job')
-        response = requests.put(f"{ORCHESTRATOR_URL}/api/dgn/job/{job_id}", json={"status": status})
-        if response.status_code == 200:
-            logging.info(f"Job {job_id} status updated to {status}")
-        else:
-            logging.error(f"Error updating job status: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Could not connect to the Orchestrator: {e}")
+
 
 def _ensure_dirs():
     for d in [INPUT_DIR, OUTPUT_DIR, MODELS_DIR, CACHE_DIR]:
@@ -220,6 +324,7 @@ def listen_for_jobs(provider_id):
                 if job:
                     logging.info(f"Received job: {job['id']}")
                     try:
+                        update_provider_status(provider_id, 'busy')
                         update_job_status(job['id'], 'processing')
 
                         # Do NOT start or pull any Docker image; assume ComfyUI is already running.
@@ -235,6 +340,7 @@ def listen_for_jobs(provider_id):
                         if not os.path.exists(workflow_api_path):
                             logging.error(f"Workflow API file not found at {workflow_api_path}")
                             update_job_status(job['id'], 'failed')
+                            update_provider_status(provider_id, 'available')
                             continue
 
                         if required_assets:
@@ -364,8 +470,12 @@ def listen_for_jobs(provider_id):
                         if prompt_id:
                             outputs = get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
                             if outputs:
-                                process_workflow_output(outputs, job['id']) # Pass job_id for storage path
-                                update_job_status(job['id'], 'completed')
+                                output_path = process_workflow_output(outputs, job['id'])
+                                if output_path:
+                                    update_job_status(job['id'], 'completed', output_path=output_path)
+                                else:
+                                    logging.error("Workflow completed, but output upload failed.")
+                                    update_job_status(job['id'], 'failed')
                             else:
                                 logging.error("Workflow failed to produce outputs.")
                                 update_job_status(job['id'], 'failed')
@@ -373,10 +483,12 @@ def listen_for_jobs(provider_id):
                             logging.error("Failed to trigger workflow.")
                             update_job_status(job['id'], 'failed')
 
-                        # No container management; ComfyUI is managed externally.
+                        update_provider_status(provider_id, 'available')
+
                     except Exception as e:
                         logging.error(f"An error occurred while processing job {job['id']}: {e}")
                         update_job_status(job['id'], 'failed')
+                        update_provider_status(provider_id, 'available')
 
                 else:
                     logging.info("No new jobs.")
