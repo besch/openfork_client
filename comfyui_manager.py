@@ -134,7 +134,7 @@ def get_workflow_output(prompt_id, terminal_node_ids=None, timeout_sec=7200):
 
                     if terminal_node_ids:
                         need = {str(n) for n in terminal_node_ids}
-                        if need.issubset(executed_nodes):
+                        if need and need.issubset(executed_nodes):
                             return last_output
 
                 if mtype == "status":
