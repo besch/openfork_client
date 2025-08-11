@@ -1,17 +1,14 @@
-import time
-import requests
 import os
 import logging
 import argparse
-import base64
-import copy
-import json
-from datetime import datetime
-
-from comfyui_manager import trigger_workflow, get_workflow_output
-from hardware_profiler import get_hardware_profile
+import time
+import requests
 from config import ROOT_DIR, ORCHESTRATOR_URL, SUPABASE_URL, SUPABASE_ANON_KEY, CACHE_DIR
-from supabase import create_client, Client
+from services.supabase_service import SupabaseService
+from services.orchestrator_service import OrchestratorService
+from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
+from services.comfyui_service import ComfyUIClient
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -84,104 +81,11 @@ def upload_output(file_path, job_id):
         logging.error(f"Could not upload file {file_path} to Supabase: {e}")
         return None
 
-def process_workflow_output(outputs, job_id):
-    """Process the workflow output, upload the generated files, and return the first successful upload path."""
-    logging.info(f"Processing workflow outputs for job {job_id}. Outputs received: {json.dumps(outputs, indent=2)}")
 
-    for node_id, node_output in outputs.items():
-        logging.info(f"Checking node_id: {node_id}, node_output keys: {node_output.keys()}")
 
-        # Check for 'ui' key (from websocket 'executed' messages)
-        if 'ui' in node_output and isinstance(node_output['ui'], dict):
-            logging.info(f"Found 'ui' in node_output for node {node_id}. UI keys: {node_output['ui'].keys()}")
 
-            if 'images' in node_output['ui'] and isinstance(node_output['ui']['images'], list):
-                logging.info(f"Found 'images' in node_output['ui'] for node {node_id}. Number of images: {len(node_output['ui']['images'])}")
-                for img_info in node_output['ui']['images']:
-                    if 'filename' in img_info:
-                        filename = img_info['filename']
-                        file_path = os.path.join(OUTPUT_DIR, filename)
-                        logging.info(f"Checking image file: {file_path}")
-                        if os.path.exists(file_path):
-                            logging.info(f"Image file found: {file_path}. Attempting upload.")
-                            storage_path = upload_output(file_path, job_id)
-                            if storage_path:
-                                return storage_path
-                        else:
-                            logging.warning(f"Output image file not found: {file_path}")
-                    else:
-                        logging.warning(f"Image info missing 'filename' for node {node_id}: {img_info}")
-            else:
-                logging.info(f"No 'images' found or not a list in node_output['ui'] for node {node_id}.")
 
-            if 'videos' in node_output['ui'] and isinstance(node_output['ui']['videos'], list):
-                logging.info(f"Found 'videos' in node_output['ui'] for node {node_id}. Number of videos: {len(node_output['ui']['videos'])}")
-                for video_info in node_output['ui']['videos']:
-                    if 'filename' in video_info:
-                        filename = video_info['filename']
-                        file_path = os.path.join(OUTPUT_DIR, filename)
-                        logging.info(f"Checking video file: {file_path}")
-                        if os.path.exists(file_path):
-                            logging.info(f"Video file found: {file_path}. Attempting upload.")
-                            storage_path = upload_output(file_path, job_id)
-                            if storage_path:
-                                return storage_path
-                        else:
-                            logging.warning(f"Output video file not found: {file_path}")
-                    else:
-                        logging.warning(f"Video info missing 'filename' for node {node_id}: {video_info}")
-            else:
-                logging.info(f"No 'videos' found or not a list in node_output['ui'] for node {node_id}.")
-        
-        # New: Check for 'gifs' key (from history endpoint)
-        elif 'gifs' in node_output and isinstance(node_output['gifs'], list):
-            logging.info(f"Found 'gifs' in node_output for node {node_id}. Number of gifs: {len(node_output['gifs'])}")
-            for gif_info in node_output['gifs']:
-                if 'filename' in gif_info:
-                    filename = gif_info['filename']
-                    # The fullpath is also available, but let's stick to filename and OUTPUT_DIR for consistency
-                    file_path = os.path.join(OUTPUT_DIR, gif_info.get('subfolder', ''), filename)
-                    logging.info(f"Checking gif/video file from history: {file_path}")
-                    if os.path.exists(file_path):
-                        logging.info(f"Gif/video file found: {file_path}. Attempting upload.")
-                        storage_path = upload_output(file_path, job_id)
-                        if storage_path:
-                            return storage_path
-                    else:
-                        logging.warning(f"Output gif/video file not found: {file_path}")
-                else:
-                    logging.warning(f"Gif info missing 'filename' for node {node_id}: {gif_info}")
-        else:
-            logging.info(f"No 'ui' or 'gifs' found or not a dict/list in node_output for node {node_id}.")
-    
-    logging.error(f"Workflow failed to produce outputs for job {job_id}. No valid output files found after checking all nodes.")
-    return None
 
-def update_job_status(job_id, status, output_path=None):
-    """Update the status of a job, optionally including the output path."""
-    try:
-        payload = {"status": status}
-        if output_path:
-            payload["output_path"] = output_path
-        
-        response = requests.put(f"{ORCHESTRATOR_URL}/api/dgn/job/{job_id}", json=payload)
-        if response.status_code == 200:
-            logging.info(f"Job {job_id} status updated to {status}")
-        else:
-            logging.error(f"Error updating job status: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Could not connect to the Orchestrator: {e}")
-
-def update_provider_status(provider_id, status):
-    """Update the status of a provider."""
-    try:
-        response = requests.put(f"{ORCHESTRATOR_URL}/api/dgn/provider-status/{provider_id}", json={"status": status})
-        if response.status_code == 200:
-            logging.info(f"Provider {provider_id} status updated to {status}")
-        else:
-            logging.error(f"Error updating provider status: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Could not connect to the Orchestrator: {e}")
 
 def listen_for_jobs(provider_id):
     """Listen for jobs from the orchestrator."""
@@ -254,361 +158,204 @@ def listen_for_jobs(provider_id):
         time.sleep(10) # Poll every 10 seconds
 
 
-def update_provider_status(provider_id, status):
-    """Update the status of a provider."""
-    try:
-        response = requests.put(f"{ORCHESTRATOR_URL}/api/dgn/provider-status/{provider_id}", json={"status": status})
-        if response.status_code == 200:
-            logging.info(f"Provider {provider_id} status updated to {status}")
-        else:
-            logging.error(f"Error updating provider status: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Could not connect to the Orchestrator: {e}")
-
-
-def register_with_orchestrator():
-    """Register the client with the orchestrator."""
-    hardware_profile = get_hardware_profile()
-    logging.info(f"Hardware Profile: {hardware_profile}")
-
-    try:
-        response = requests.post(f"{ORCHESTRATOR_URL}/api/dgn/register", json=hardware_profile)
-        if response.status_code == 200:
-            logging.info("Successfully registered with the Orchestrator.")
-            return response.json().get('provider_id')
-        else:
-            logging.error(f"Error registering with the Orchestrator: {response.text}")
-            return None
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Could not connect to the Orchestrator: {e}")
-        return None
-
-def deregister_from_orchestrator(provider_id: str):
-    """Remove provider row when client stops."""
-    try:
-        response = requests.delete(f"{ORCHESTRATOR_URL}/api/dgn/register", params={"providerId": provider_id})
-        if response.status_code == 200:
-            logging.info("Provider deregistered.")
-        else:
-            logging.error(f"Error deregistering provider: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Could not connect to the Orchestrator: {e}")
 
 
 
-def _ensure_dirs():
-    for d in [INPUT_DIR, OUTPUT_DIR, MODELS_DIR, CACHE_DIR]:
-        if not os.path.exists(d):
-            os.makedirs(d, exist_ok=True)
 
-def _materialize_start_image(job: dict):
-    """
-    Accepts:
-      - job['start_image_base64']: 'data:image/png;base64,...' or plain base64 (preferred from Supabase)
-      - job['start_image_filename']: stored file already present in mounted input dir
 
-    Writes file into INPUT_DIR (host path mounted to /opt/ComfyUI/input) and returns the filename to use in workflow.
-    Always prefers start_image_base64 when present.
-    """
-    try:
-        # 1) Preferred path: Supabase provides base64 under 'start_image_base64'
-        data_url = job.get('start_image_base64')
-        if isinstance(data_url, str) and len(data_url) > 0:
-            # Extract base64 regardless of data URL or raw base64
-            b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+
+
+
+
+
+
+
+
+
+
+
+class DGNClient:
+    def __init__(self, orchestrator_url: str, supabase_url: str, supabase_anon_key: str, root_dir: str, cache_dir: str):
+        self.orchestrator_service = OrchestratorService(orchestrator_url)
+        self.supabase_service = SupabaseService(supabase_url, supabase_anon_key, cache_dir)
+        self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
+        self.root_dir = root_dir
+        self.input_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "input")
+        self.output_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "output")
+        self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
+        self._ensure_dirs()
+
+    def _ensure_dirs(self):
+        for d in [self.input_dir, self.output_dir, self.models_dir, self.supabase_service.cache_dir]:
+            if not os.path.exists(d):
+                os.makedirs(d, exist_ok=True)
+
+    def listen_for_jobs(self, provider_id: str):
+        """Listen for jobs from the orchestrator."""
+        while True:
             try:
-                binary = base64.b64decode(b64, validate=True)
-            except Exception:
-                # Fallback to non-strict decode if upstream added whitespace/newlines
-                binary = base64.b64decode(b64)
-            # Filename deterministic by job id unless explicit name provided
-            fname = job.get('start_image_name') or f"start_{job.get('id', 'job')}.png"
-            out_path = os.path.join(INPUT_DIR, fname)
-            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            with open(out_path, "wb") as f:
-                f.write(binary)
-            logging.info(f"Start image (from base64) written to {out_path}")
-            return fname
-
-        # 2) Fallback: use provided filename that should already exist in mounted input
-        fname = job.get('start_image_filename')
-        if isinstance(fname, str) and len(fname) > 0:
-            host_path = os.path.join(INPUT_DIR, fname)
-            if not os.path.exists(host_path):
-                logging.warning(f"Expected start image not found in mounted input: {host_path}")
-            else:
-                logging.info(f"Using existing start image from input mount: {fname}")
-            return fname
-    except Exception as e:
-        logging.error(f"Failed to materialize start image: {e}")
-    return None
-
-def _inject_prompt_and_image_into_workflow(workflow_api_path: str, prompt: str, negative_prompt: str, start_image_filename: str):
-    """
-    Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
-    """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
-
-    # Inject prompts and image filename
-    for node in api_graph.values():
-        if node["class_type"] == "CLIPTextEncode":
-            if "Positive" in node.get("title", ""):
-                node["inputs"]["text"] = prompt
-            elif "Negative" in node.get("title", ""):
-                node["inputs"]["text"] = negative_prompt
-        elif node["class_type"] == "LoadImage":
-            node["inputs"]["image"] = start_image_filename
-        elif node["class_type"] == "VHS_VideoCombine":
-            # Replace date token in filename_prefix
-            prefix = node["inputs"].get("filename_prefix", "")
-            if "%date:yyyy-MM-dd%" in prefix:
-                datestr = datetime.now().strftime("%Y-%m-%d")
-                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
-
-    return {"prompt": api_graph}
-
-def listen_for_jobs(provider_id):
-    """Listen for jobs from the orchestrator."""
-    _ensure_dirs()
-    while True:
-        try:
-            logging.info("Checking for new jobs...")
-            response = requests.get(f"{ORCHESTRATOR_URL}/api/dgn/jobs/{provider_id}")
-            if response.status_code == 200:
-                job = response.json()
-                if job:
-                    logging.info(f"Received job: {job['id']}")
-                    try:
-                        update_provider_status(provider_id, 'busy')
-                        update_job_status(job['id'], 'processing')
-
-                        # Do NOT start or pull any Docker image; assume ComfyUI is already running.
-                        # container = run_container()
-                        # time.sleep(10) # Wait for ComfyUI to start
-
-                        workflow = job.get('workflow')
-                        required_assets = job.get('assets', [])
-                        positive_prompt = job.get('prompt') or ""
-                        negative_prompt = job.get('negative_prompt') or ""
-
-                        workflow_api_path = os.path.join(ROOT_DIR, 'workflows', 'wan2.2-image-to-video.api.json')
-                        if not os.path.exists(workflow_api_path):
-                            logging.error(f"Workflow API file not found at {workflow_api_path}")
-                            update_job_status(job['id'], 'failed')
-                            update_provider_status(provider_id, 'available')
-                            continue
-
-                        if required_assets:
-                            download_assets(required_assets)
-
-                        start_image_filename = _materialize_start_image(job)
-                        wf_ready = _inject_prompt_and_image_into_workflow(
-                            workflow_api_path, positive_prompt, negative_prompt, start_image_filename
-                        )
-
-                        # Emit targeted debug to catch missing class_type before sending.
-                        # wf_ready is expected to be {"prompt": {...}}
-                        graph = wf_ready.get("prompt") if isinstance(wf_ready, dict) else None
-
-                        if isinstance(graph, dict):
-                            # Extract node IDs and class types directly from the API graph
-                            node_info = []
-                            for node_id, node_obj in graph.items():
-                                if isinstance(node_obj, dict):
-                                    class_type = node_obj.get("class_type")
-                                    if class_type:
-                                        node_info.append({"id": node_id, "class_type": class_type})
-                                    else:
-                                        logging.error(f"Node {node_id} missing 'class_type'.")
-                                else:
-                                    logging.error(f"Node {node_id} is not a dictionary.")
-
-                            if node_info:
-                                logging.info(f"First nodes after normalization: {node_info[:5]}")
-                                id_map = {info["id"]: info["class_type"] for info in node_info}
-                                logging.info(f"ID->class_type map (count={len(id_map)}): {list(id_map.items())[:10]} ...")
-                            else:
-                                logging.warning("No nodes found in the workflow graph for logging.")
-                        else:
-                            logging.error("Workflow graph is not a dictionary for logging.")
-
-                        # Normalize any accidental boolean enums in KSampler nodes just before sending
+                logging.info("Checking for new jobs...")
+                response = requests.get(f"{self.orchestrator_service.orchestrator_url}/api/dgn/jobs/{provider_id}")
+                if response.status_code == 200:
+                    job = response.json()
+                    if job and job.get('id'):
+                        logging.info(f"Received job: {job['id']}")
                         try:
-                            def normalize_sampler_enums(graph_obj):
-                                if isinstance(graph_obj, dict):
-                                    # API dict: iterate node dicts
-                                    for v in graph_obj.values():
-                                        if isinstance(v, dict):
-                                            ct = (v.get("class_type") or v.get("type") or "").strip()
+                            self.orchestrator_service.update_provider_status(provider_id, 'busy')
+                            self.orchestrator_service.update_job_status(job['id'], 'processing')
+
+                            workflow = job.get('workflow')
+                            required_assets = job.get('assets', [])
+                            positive_prompt = job.get('prompt') or ""
+                            negative_prompt = job.get('negative_prompt') or ""
+
+                            workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-image-to-video.api.json')
+                            if not os.path.exists(workflow_api_path):
+                                logging.error(f"Workflow API file not found at {workflow_api_path}")
+                                self.orchestrator_service.update_job_status(job['id'], 'failed')
+                                self.orchestrator_service.update_provider_status(provider_id, 'available')
+                                continue
+
+                            if required_assets:
+                                self.supabase_service.download_assets(required_assets)
+
+                            start_image_filename = materialize_start_image(job, self.input_dir)
+                            wf_ready = inject_prompt_and_image_into_workflow(
+                                workflow_api_path, positive_prompt, negative_prompt, start_image_filename
+                            )
+
+                            # Emit targeted debug to catch missing class_type before sending.
+                            # wf_ready is expected to be {"prompt": {...}}
+                            graph = wf_ready.get("prompt") if isinstance(wf_ready, dict) else None
+
+                            if isinstance(graph, dict):
+                                # Extract node IDs and class types directly from the API graph
+                                node_info = []
+                                for node_id, node_obj in graph.items():
+                                    if isinstance(node_obj, dict):
+                                        class_type = node_obj.get("class_type")
+                                        if class_type:
+                                            node_info.append({"id": node_id, "class_type": class_type})
+                                        else:
+                                            logging.error(f"Node {node_id} missing 'class_type'.")
+                                    else:
+                                        logging.error(f"Node {node_id} is not a dictionary.")
+
+                                if node_info:
+                                    logging.info(f"First nodes after normalization: {node_info[:5]}")
+                                    id_map = {info["id"]: info["class_type"] for info in node_info}
+                                    logging.info(f"ID->class_type map (count={len(id_map)}): {list(id_map.items())[:10]} ...")
+                                else:
+                                    logging.warning("No nodes found in the workflow graph for logging.")
+                            else:
+                                logging.error("Workflow graph is not a dictionary for logging.")
+
+                            # Normalize any accidental boolean enums in KSampler nodes just before sending
+                            try:
+                                def normalize_sampler_enums(graph_obj):
+                                    if isinstance(graph_obj, dict):
+                                        # API dict: iterate node dicts
+                                        for v in graph_obj.values():
+                                            if isinstance(v, dict):
+                                                ct = (v.get("class_type") or v.get("type") or "").strip()
+                                                if ct in ("KSampler", "KSamplerAdvanced"):
+                                                    ins = v.setdefault("inputs", {})
+                                                    if isinstance(ins, dict):
+                                                        if isinstance(ins.get("add_noise"), bool):
+                                                            ins["add_noise"] = "enable" if ins["add_noise"] else "disable"
+                                                    if isinstance(ins.get("return_with_leftover_noise"), bool):
+                                                        ins["return_with_leftover_noise"] = "enable" if ins["return_with_leftover_noise"] else "disable"
+                                    return graph_obj
+
+                                if isinstance(graph, dict) and all(isinstance(k, (str, int)) and isinstance(v, dict) for k, v in graph.items()):
+                                    graph = normalize_sampler_enums(graph)
+                                elif isinstance(graph, dict) and isinstance(graph.get("nodes"), list):
+                                    # litegraph list: try to fix in-place before conversion (defensive)
+                                    for n in graph.get("nodes", []):
+                                        if isinstance(n, dict):
+                                            ct = (n.get("class_type") or n.get("type") or "").strip()
                                             if ct in ("KSampler", "KSamplerAdvanced"):
-                                                ins = v.setdefault("inputs", {})
+                                                ins = n.setdefault("inputs", {})
                                                 if isinstance(ins, dict):
                                                     if isinstance(ins.get("add_noise"), bool):
                                                         ins["add_noise"] = "enable" if ins["add_noise"] else "disable"
                                                     if isinstance(ins.get("return_with_leftover_noise"), bool):
                                                         ins["return_with_leftover_noise"] = "enable" if ins["return_with_leftover_noise"] else "disable"
-                                return graph_obj
-
-                            if isinstance(graph, dict) and all(isinstance(k, (str, int)) and isinstance(v, dict) for k, v in graph.items()):
-                                graph = normalize_sampler_enums(graph)
-                            elif isinstance(graph, dict) and isinstance(graph.get("nodes"), list):
-                                # litegraph list: try to fix in-place before conversion (defensive)
-                                for n in graph.get("nodes", []):
-                                    if isinstance(n, dict):
-                                        ct = (n.get("class_type") or n.get("type") or "").strip()
-                                        if ct in ("KSampler", "KSamplerAdvanced"):
-                                            ins = n.setdefault("inputs", {})
-                                            if isinstance(ins, dict):
-                                                if isinstance(ins.get("add_noise"), bool):
-                                                    ins["add_noise"] = "enable" if ins["add_noise"] else "disable"
-                                                if isinstance(ins.get("return_with_leftover_noise"), bool):
-                                                    ins["return_with_leftover_noise"] = "enable" if ins["return_with_leftover_noise"] else "disable"
-                            # Rebuild payload from possibly normalized graph
-                            payload = {"prompt": graph} if not (isinstance(wf_ready, dict) and "prompt" in wf_ready) else {"prompt": graph}
-                        except Exception:
-                            # Fallback to previous payload building if anything goes wrong
-                            payload = {"prompt": wf_ready["prompt"]} if isinstance(wf_ready, dict) and "prompt" in wf_ready else {"prompt": wf_ready}
-
-                        # Compute terminal node ids to wait for (prefer VHS_VideoCombine if present)
-                        def _compute_terminal_nodes(api_graph: dict) -> list[str]:
-                            try:
-                                # Collect all node ids (as strings)
-                                node_ids = [str(k) for k in api_graph.keys()]
-                                # Find nodes referenced by others via inputs (these have incoming edges)
-                                referenced = set()
-                                for _, node in api_graph.items():
-                                    if not isinstance(node, dict):
-                                        continue
-                                    inputs = node.get("inputs", {})
-                                    if not isinstance(inputs, dict):
-                                        continue
-                                    for v in inputs.values():
-                                        # Single ref form: ["<node_id>", output_idx]
-                                        if isinstance(v, list) and len(v) >= 1 and isinstance(v[0], str):
-                                            referenced.add(v[0])
-                                        # List of refs form: [[nid, idx], [nid, idx], ...]
-                                        if isinstance(v, list) and v and all(isinstance(x, list) for x in v):
-                                            for item in v:
-                                                if isinstance(item, list) and item and isinstance(item[0], str):
-                                                    referenced.add(item[0])
-                                # Prefer VHS_VideoCombine as explicit terminal(s)
-                                vhs_ids = [str(k) for k, n in api_graph.items() if isinstance(n, dict) and n.get("class_type") == "VHS_VideoCombine"]
-                                if vhs_ids:
-                                    return vhs_ids
-                                # Otherwise nodes that are not referenced downstream (no outgoing edges when viewed reversed)
-                                terminals = [nid for nid in node_ids if nid not in referenced]
-                                return terminals or node_ids
+                                # Rebuild payload from possibly normalized graph
+                                payload = {"prompt": graph} if not (isinstance(wf_ready, dict) and "prompt" in wf_ready) else {"prompt": graph}
                             except Exception:
-                                return []
+                                # Fallback to previous payload building if anything goes wrong
+                                payload = {"prompt": wf_ready["prompt"]} if isinstance(wf_ready, dict) and "prompt" in wf_ready else {"prompt": wf_ready}
 
-                        graph_for_compute = payload.get("prompt") if isinstance(payload, dict) else None
-                        terminal_ids = []
-                        if isinstance(graph_for_compute, dict) and graph_for_compute and all(isinstance(v, dict) for v in graph_for_compute.values()):
-                            terminal_ids = _compute_terminal_nodes(graph_for_compute)
+                            # Compute terminal node ids to wait for (prefer VHS_VideoCombine if present)
+                            def _compute_terminal_nodes(api_graph: dict) -> list[str]:
+                                try:
+                                    # Collect all node ids (as strings)
+                                    node_ids = [str(k) for k in api_graph.keys()]
+                                    # Find nodes referenced by others via inputs (these have incoming edges)
+                                    referenced = set()
+                                    for _, node in api_graph.items():
+                                        if not isinstance(node, dict):
+                                            continue
+                                        inputs = node.get("inputs", {})
+                                        if not isinstance(inputs, dict):
+                                            continue
+                                        for v in inputs.values():
+                                            # Single ref form: ["<node_id>", output_idx]
+                                            if isinstance(v, list) and len(v) >= 1 and isinstance(v[0], str):
+                                                referenced.add(v[0])
+                                            # List of refs form: [[nid, idx], [nid, idx], ...]|
+                                            if isinstance(v, list) and v and all(isinstance(x, list) for x in v):
+                                                for item in v:
+                                                    if isinstance(item, list) and item and isinstance(item[0], str):
+                                                        referenced.add(item[0])
+                                    # Prefer VHS_VideoCombine as explicit terminal(s)
+                                    vhs_ids = [str(k) for k, n in api_graph.items() if isinstance(n, dict) and n.get("class_type") == "VHS_VideoCombine"]
+                                    if vhs_ids:
+                                        return vhs_ids
+                                    # Otherwise nodes that are not referenced downstream (no outgoing edges when viewed reversed)
+                                    terminals = [nid for nid in node_ids if nid not in referenced]
+                                    return terminals or node_ids
+                                except Exception:
+                                    return []
 
-                        prompt_id = trigger_workflow(payload)
-                        if prompt_id:
-                            outputs = get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
-                            if outputs:
-                                output_path = process_workflow_output(outputs, job['id'])
-                                if output_path:
-                                    update_job_status(job['id'], 'completed', output_path=output_path)
+                            graph_for_compute = payload.get("prompt") if isinstance(payload, dict) else None
+                            terminal_ids = []
+                            if isinstance(graph_for_compute, dict) and graph_for_compute and all(isinstance(v, dict) for v in graph_for_compute.values()):
+                                terminal_ids = _compute_terminal_nodes(graph_for_compute)
+
+                            prompt_id = self.comfyui_client.trigger_workflow(payload)
+                            if prompt_id:
+                                outputs = self.comfyui_client.get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
+                                if outputs:
+                                    output_path = process_workflow_output(outputs, job['id'], self.output_dir, self.supabase_service.upload_output)
+                                    if output_path:
+                                        self.orchestrator_service.update_job_status(job['id'], 'completed', output_path=output_path)
+                                    else:
+                                        logging.error("Workflow completed, but output upload failed.")
+                                        self.orchestrator_service.update_job_status(job['id'], 'failed')
                                 else:
-                                    logging.error("Workflow completed, but output upload failed.")
-                                    update_job_status(job['id'], 'failed')
+                                    logging.error("Workflow failed to produce outputs.")
+                                    self.orchestrator_service.update_job_status(job['id'], 'failed')
                             else:
-                                logging.error("Workflow failed to produce outputs.")
-                                update_job_status(job['id'], 'failed')
-                        else:
-                            logging.error("Failed to trigger workflow.")
-                            update_job_status(job['id'], 'failed')
+                                logging.error("Failed to trigger workflow.")
+                                self.orchestrator_service.update_job_status(job['id'], 'failed')
 
-                        update_provider_status(provider_id, 'available')
+                        except Exception as e:
+                            logging.error(f"An error occurred while processing job {job['id']}: {e}")
+                            self.orchestrator_service.update_job_status(job['id'], 'failed')
+                        finally:
+                            self.orchestrator_service.update_provider_status(provider_id, 'available')
+                            logging.info("Provider status set to available. Waiting for next job...")
 
-                    except Exception as e:
-                        logging.error(f"An error occurred while processing job {job['id']}: {e}")
-                        update_job_status(job['id'], 'failed')
-                        update_provider_status(provider_id, 'available')
-
+                    else:
+                        logging.info("No new jobs.")
                 else:
-                    logging.info("No new jobs.")
-            else:
-                logging.error(f"Error checking for jobs: {response.text}")
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Could not connect to the Orchestrator: {e}")
+                    logging.error(f"Error checking for jobs: {response.text}")
+            except requests.exceptions.RequestException as e:
+                logging.error(f"Could not connect to the Orchestrator: {e}")
 
-        time.sleep(10) # Poll every 10 seconds
-
-def verify_workflow_nodes(workflow):
-    """Verify nodes are approved regardless of workflow shape and prefer class_type over type."""
-    APPROVED_NODES = [
-        # Core samplers/loaders
-        'KSampler',
-        'KSamplerAdvanced',
-        'VAELoader',
-        'VAEDecode',
-        'CLIPLoader',
-        'CLIPTextEncode',
-        'EmptyLatentImage',
-        'Empty Latent Image',
-        'LoraLoaderModelOnly',
-        'ModelSamplingSD3',
-        'LoadImage',
-        'PreviewImage',
-        # GGUF and UNet variants found in templates
-        'UnetLoaderGGUF',
-        'UNETLoader',  # allow standard UNet loader used by many templates
-        # KJNodes / Video helpers
-        'ImageResizeKJv2',
-        'VHS_VideoCombine',
-        'WanVideoNAG',
-        'PathchSageAttentionKJ',
-        'ModelPatchTorchSettings',
-        'WanImageToVideo',
-        # Misc / meta
-        'Note',
-    ]
-
-    # Iterate nodes from multiple possible shapes: API dict, wrapped {"prompt": {...}}, or litegraph arrays.
-    def iter_nodes(obj):
-        # Wrapped API format
-        if isinstance(obj, dict) and isinstance(obj.get("prompt"), dict):
-            for n in obj["prompt"].values():
-                if isinstance(n, dict):
-                    yield n
-            return
-        # API dict format
-        if isinstance(obj, dict) and all(isinstance(k, (str, int)) and isinstance(v, dict) for k, v in obj.items()):
-            for n in obj.values():
-                yield n
-            return
-        # Litegraph arrays
-        if isinstance(obj, dict) and isinstance(obj.get("nodes"), list):
-            for n in obj["nodes"]:
-                if isinstance(n, dict):
-                    yield n
-            return
-        if isinstance(obj, dict) and isinstance(obj.get("graph"), dict) and isinstance(obj["graph"].get("nodes"), list):
-            for n in obj["graph"]["nodes"]:
-                if isinstance(n, dict):
-                    yield n
-            return
-
-    ok = True
-    for node in iter_nodes(workflow):
-        node_type = (node.get("class_type") or node.get("type") or "").strip()
-        if not node_type:
-            logging.error("Security/Validation: node missing both 'class_type' and 'type'.")
-            ok = False
-            continue
-        if node_type not in APPROVED_NODES:
-            logging.error(f"Security Alert: Workflow contains a non-approved node: {node_type}")
-            ok = False
-    return ok
+            time.sleep(10) # Poll every 10 seconds
 
 def main():
     """Main function to run the DGN client."""
@@ -619,15 +366,23 @@ def main():
     global ORCHESTRATOR_URL
     ORCHESTRATOR_URL = args.orchestrator_url
 
-    provider_id = register_with_orchestrator()
+    client = DGNClient(
+        orchestrator_url=ORCHESTRATOR_URL,
+        supabase_url=SUPABASE_URL,
+        supabase_anon_key=SUPABASE_ANON_KEY,
+        root_dir=ROOT_DIR,
+        cache_dir=CACHE_DIR
+    )
+
+    provider_id = client.orchestrator_service.register_with_orchestrator()
 
     if not provider_id:
         return
 
     try:
-        listen_for_jobs(provider_id)
+        client.listen_for_jobs(provider_id)
     finally:
-        deregister_from_orchestrator(provider_id)
+        client.orchestrator_service.deregister_from_orchestrator(provider_id)
 
 if __name__ == "__main__":
     main()
