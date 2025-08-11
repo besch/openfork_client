@@ -9,7 +9,8 @@ load_dotenv()
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Orchestrator-related configurations
-ORCHESTRATOR_URL = "http://localhost:3000"
+PRIMARY_ORCHESTRATOR_URL = "https://crowdmovie.vercel.app/"
+FALLBACK_ORCHESTRATOR_URL = "http://localhost:3000"
 
 # Supabase-related configurations (placeholders - replace with actual values)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")

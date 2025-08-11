@@ -3,7 +3,7 @@ import logging
 import argparse
 import time
 import requests
-from config import ROOT_DIR, ORCHESTRATOR_URL, SUPABASE_URL, SUPABASE_ANON_KEY, CACHE_DIR
+from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, SUPABASE_URL, SUPABASE_ANON_KEY, CACHE_DIR
 from services.supabase_service import SupabaseService
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
@@ -360,14 +360,26 @@ class DGNClient:
 def main():
     """Main function to run the DGN client."""
     parser = argparse.ArgumentParser(description="CrowdMovie DGN Client")
-    parser.add_argument("--orchestrator-url", default="http://localhost:3000", help="The URL of the orchestrator")
-    args = parser.parse_args()
 
-    global ORCHESTRATOR_URL
-    ORCHESTRATOR_URL = args.orchestrator_url
+    # Determine ORCHESTRATOR_URL dynamically
+    primary_url = PRIMARY_ORCHESTRATOR_URL
+    fallback_url = FALLBACK_ORCHESTRATOR_URL
+    determined_orchestrator_url = fallback_url # Default to fallback
+
+    try:
+        # Attempt to connect to the primary URL
+        logging.info(f"Attempting to connect to primary orchestrator URL: {primary_url}")
+        response = requests.get(f"{primary_url}/api/dgn/provider-status/health", timeout=5) # Use a health check endpoint
+        if response.status_code == 200:
+            determined_orchestrator_url = primary_url
+            logging.info(f"Successfully connected to primary orchestrator URL: {determined_orchestrator_url}")
+        else:
+            logging.warning(f"Primary orchestrator URL {primary_url} returned status {response.status_code}. Falling back to {fallback_url}")
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"Could not connect to primary orchestrator URL {primary_url}: {e}. Falling back to {fallback_url}")
 
     client = DGNClient(
-        orchestrator_url=ORCHESTRATOR_URL,
+        orchestrator_url=determined_orchestrator_url,
         supabase_url=SUPABASE_URL,
         supabase_anon_key=SUPABASE_ANON_KEY,
         root_dir=ROOT_DIR,
