@@ -47,7 +47,6 @@ class SupabaseService:
                 file_name = os.path.basename(file_path)
                 storage_path = f"{job_id}/{file_name}"
                 response = self.supabase.storage.from_('scene-videos').upload(storage_path, f.read(), {'content-type': 'video/mp4'})
-                logging.info(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {response}")
                 if response.path:
                     logging.info(f"File {file_name} uploaded successfully to {response.path}.")
                     return response.path
