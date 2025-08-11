@@ -64,5 +64,7 @@ RUN python -m pip install uv
 
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
-# Install SageAttention at runtime when GPU is available, then start ComfyUI
-CMD ["sh", "-c", "cd /opt/sageattention && python -m pip install -v . && cd /opt/ComfyUI && python main.py --listen"]
+# On start, check if SageAttention is installed in the persistent user volume.
+# If not, install it there. Then, start ComfyUI.
+CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]
+

@@ -1,5 +1,9 @@
 
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Get the absolute path of the project's root directory
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))

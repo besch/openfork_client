@@ -85,17 +85,75 @@ def upload_output(file_path, job_id):
 
 def process_workflow_output(outputs, job_id):
     """Process the workflow output, upload the generated files, and return the first successful upload path."""
+    logging.info(f"Processing workflow outputs for job {job_id}. Outputs received: {json.dumps(outputs, indent=2)}")
+
     for node_id, node_output in outputs.items():
-        if 'filenames' in node_output:
-            for filename in node_output['filenames']:
-                file_path = os.path.join(OUTPUT_DIR, filename)
-                if os.path.exists(file_path):
-                    storage_path = upload_output(file_path, job_id)
-                    if storage_path:
-                        # Return the first successfully uploaded path
-                        return storage_path
+        logging.info(f"Checking node_id: {node_id}, node_output keys: {node_output.keys()}")
+
+        # Check for 'ui' key (from websocket 'executed' messages)
+        if 'ui' in node_output and isinstance(node_output['ui'], dict):
+            logging.info(f"Found 'ui' in node_output for node {node_id}. UI keys: {node_output['ui'].keys()}")
+
+            if 'images' in node_output['ui'] and isinstance(node_output['ui']['images'], list):
+                logging.info(f"Found 'images' in node_output['ui'] for node {node_id}. Number of images: {len(node_output['ui']['images'])}")
+                for img_info in node_output['ui']['images']:
+                    if 'filename' in img_info:
+                        filename = img_info['filename']
+                        file_path = os.path.join(OUTPUT_DIR, filename)
+                        logging.info(f"Checking image file: {file_path}")
+                        if os.path.exists(file_path):
+                            logging.info(f"Image file found: {file_path}. Attempting upload.")
+                            storage_path = upload_output(file_path, job_id)
+                            if storage_path:
+                                return storage_path
+                        else:
+                            logging.warning(f"Output image file not found: {file_path}")
+                    else:
+                        logging.warning(f"Image info missing 'filename' for node {node_id}: {img_info}")
+            else:
+                logging.info(f"No 'images' found or not a list in node_output['ui'] for node {node_id}.")
+
+            if 'videos' in node_output['ui'] and isinstance(node_output['ui']['videos'], list):
+                logging.info(f"Found 'videos' in node_output['ui'] for node {node_id}. Number of videos: {len(node_output['ui']['videos'])}")
+                for video_info in node_output['ui']['videos']:
+                    if 'filename' in video_info:
+                        filename = video_info['filename']
+                        file_path = os.path.join(OUTPUT_DIR, filename)
+                        logging.info(f"Checking video file: {file_path}")
+                        if os.path.exists(file_path):
+                            logging.info(f"Video file found: {file_path}. Attempting upload.")
+                            storage_path = upload_output(file_path, job_id)
+                            if storage_path:
+                                return storage_path
+                        else:
+                            logging.warning(f"Output video file not found: {file_path}")
+                    else:
+                        logging.warning(f"Video info missing 'filename' for node {node_id}: {video_info}")
+            else:
+                logging.info(f"No 'videos' found or not a list in node_output['ui'] for node {node_id}.")
+        
+        # New: Check for 'gifs' key (from history endpoint)
+        elif 'gifs' in node_output and isinstance(node_output['gifs'], list):
+            logging.info(f"Found 'gifs' in node_output for node {node_id}. Number of gifs: {len(node_output['gifs'])}")
+            for gif_info in node_output['gifs']:
+                if 'filename' in gif_info:
+                    filename = gif_info['filename']
+                    # The fullpath is also available, but let's stick to filename and OUTPUT_DIR for consistency
+                    file_path = os.path.join(OUTPUT_DIR, gif_info.get('subfolder', ''), filename)
+                    logging.info(f"Checking gif/video file from history: {file_path}")
+                    if os.path.exists(file_path):
+                        logging.info(f"Gif/video file found: {file_path}. Attempting upload.")
+                        storage_path = upload_output(file_path, job_id)
+                        if storage_path:
+                            return storage_path
+                    else:
+                        logging.warning(f"Output gif/video file not found: {file_path}")
                 else:
-                    logging.warning(f"Output file not found: {file_path}")
+                    logging.warning(f"Gif info missing 'filename' for node {node_id}: {gif_info}")
+        else:
+            logging.info(f"No 'ui' or 'gifs' found or not a dict/list in node_output for node {node_id}.")
+    
+    logging.error(f"Workflow failed to produce outputs for job {job_id}. No valid output files found after checking all nodes.")
     return None
 
 def update_job_status(job_id, status, output_path=None):
@@ -352,45 +410,30 @@ def listen_for_jobs(provider_id):
                         )
 
                         # Emit targeted debug to catch missing class_type before sending.
-                        # wf_ready may be either {"prompt": {...}} or a bare graph.
-                        graph = None
-                        if isinstance(wf_ready, dict) and "prompt" in wf_ready and isinstance(wf_ready["prompt"], dict):
-                            graph = wf_ready["prompt"]
-                        else:
-                            graph = wf_ready
+                        # wf_ready is expected to be {"prompt": {...}}
+                        graph = wf_ready.get("prompt") if isinstance(wf_ready, dict) else None
 
-                        # Determine nodes list if this is litegraph format; otherwise try API dict values.
-                        nodes_ready = []
-                        if isinstance(graph, dict) and isinstance(graph.get("nodes"), list):
-                            nodes_ready = graph.get("nodes", [])
-                        elif isinstance(graph, dict) and all(isinstance(k, (str, int)) and isinstance(v, dict) for k, v in graph.items()):
-                            nodes_ready = list(graph.values())
+                        if isinstance(graph, dict):
+                            # Extract node IDs and class types directly from the API graph
+                            node_info = []
+                            for node_id, node_obj in graph.items():
+                                if isinstance(node_obj, dict):
+                                    class_type = node_obj.get("class_type")
+                                    if class_type:
+                                        node_info.append({"id": node_id, "class_type": class_type})
+                                    else:
+                                        logging.error(f"Node {node_id} missing 'class_type'.")
+                                else:
+                                    logging.error(f"Node {node_id} is not a dictionary.")
 
-                        missing = [getattr(n, "get", lambda k, d=None: None)("id") for n in nodes_ready if isinstance(n, dict) and not n.get("class_type")]
-                        if missing:
-                            logging.error(f"Normalization failed to assign class_type on nodes: {missing}")
-                        else:
-                            sample = []
-                            for n in nodes_ready[:5]:
-                                if isinstance(n, dict):
-                                    sample.append({"id": n.get("id"), "class_type": n.get("class_type")})
-                            logging.info(f"First nodes after normalization: {sample}")
-
-                        try:
-                            if nodes_ready:
-                                id_map = {}
-                                for n in nodes_ready:
-                                    if isinstance(n, dict):
-                                        nid = n.get('id')
-                                        if not isinstance(nid, int):
-                                            try:
-                                                nid = int(str(nid)) if nid is not None else None
-                                            except Exception:
-                                                pass
-                                        id_map[str(nid)] = (n.get('class_type') or '')
+                            if node_info:
+                                logging.info(f"First nodes after normalization: {node_info[:5]}")
+                                id_map = {info["id"]: info["class_type"] for info in node_info}
                                 logging.info(f"ID->class_type map (count={len(id_map)}): {list(id_map.items())[:10]} ...")
-                        except Exception:
-                            pass
+                            else:
+                                logging.warning("No nodes found in the workflow graph for logging.")
+                        else:
+                            logging.error("Workflow graph is not a dictionary for logging.")
 
                         # Normalize any accidental boolean enums in KSampler nodes just before sending
                         try:
