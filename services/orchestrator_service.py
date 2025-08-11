@@ -1,7 +1,7 @@
 import requests
 import logging
 from typing import Union
-from hardware_profiler import get_hardware_profile # Assuming this will be moved or imported from a common utils
+from services.hardware_profiler import get_hardware_profile
 
 class OrchestratorService:
     def __init__(self, orchestrator_url: str):
