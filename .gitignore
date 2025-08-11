@@ -9,3 +9,5 @@ __pycache__
 venv
 input
 cu128-slim
+build
+dist
