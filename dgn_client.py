@@ -73,11 +73,12 @@ def upload_output(file_path, job_id):
             file_name = os.path.basename(file_path)
             storage_path = f"outputs/{job_id}/{file_name}"
             response = supabase.storage.from_('scene-videos').upload(storage_path, f.read(), {'content-type': 'video/mp4'})
-            if response.status_code == 200:
-                logging.info(f"File {file_name} uploaded successfully to {storage_path}.")
-                return storage_path
+            logging.info(f"!!!!!!!!!!!!!!!!!!!!!!!!!!!!! {response}")
+            if response.path:
+                logging.info(f"File {file_name} uploaded successfully to {response.path}.")
+                return response.path # Return the full path from the response
             else:
-                logging.error(f"Error uploading file {file_name}: {response.text}")
+                logging.error(f"Unexpected response from Supabase upload for file {file_name}: {response}")
                 return None
     except Exception as e:
         logging.error(f"Could not upload file {file_path} to Supabase: {e}")
