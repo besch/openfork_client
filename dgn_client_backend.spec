@@ -5,7 +5,7 @@ a = Analysis(
     ['dgn_client.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('.env', '.')],
         hiddenimports=['websockets.asyncio', 'supabase', 'realtime', 'gotrue', 'httpx'],
     hookspath=[],
     hooksconfig={},
