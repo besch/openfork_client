@@ -233,4 +233,13 @@ def main():
         client.orchestrator_service.deregister_from_orchestrator(provider_id)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.error(f"An unhandled exception occurred: {e}", exc_info=True)
+        print("\nAn error occurred. See logs for details.")
+    except KeyboardInterrupt:
+        print("\nProcess interrupted by user.")
+    finally:
+        print("Press Enter to exit.")
+        input()
