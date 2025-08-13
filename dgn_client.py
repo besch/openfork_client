@@ -3,8 +3,7 @@ import logging
 import argparse
 import time
 import requests
-from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, SUPABASE_URL, SUPABASE_ANON_KEY, CACHE_DIR
-from services.supabase_service import SupabaseService
+from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
 from services.comfyui_service import ComfyUIClient
@@ -16,11 +15,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 
 class DGNClient:
-    def __init__(self, orchestrator_url: str, supabase_url: str, supabase_anon_key: str, root_dir: str, cache_dir: str):
+    def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str):
         self.orchestrator_service = OrchestratorService(orchestrator_url)
-        self.supabase_service = SupabaseService(supabase_url, supabase_anon_key, cache_dir)
         self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
         self.root_dir = root_dir
+        self.cache_dir = cache_dir
         self.input_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "input")
         self.output_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "output")
         self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
@@ -53,7 +52,8 @@ class DGNClient:
                                 continue
 
                             if required_assets:
-                                self.supabase_service.download_assets(required_assets)
+                                for asset_id in required_assets:
+                                    self.orchestrator_service.download_asset(asset_id, self.cache_dir)
 
                             start_image_filename = materialize_start_image(job, self.input_dir)
                             wf_ready = inject_prompt_and_image_into_workflow(
@@ -164,7 +164,7 @@ class DGNClient:
                             if prompt_id:
                                 outputs = self.comfyui_client.get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
                                 if outputs:
-                                    output_path = process_workflow_output(outputs, job['id'], self.output_dir, self.supabase_service.upload_output)
+                                    output_path = process_workflow_output(outputs, job['id'], self.output_dir, self.orchestrator_service.upload_output)
                                     if output_path:
                                         self.orchestrator_service.update_job_status(job['id'], 'completed', output_path=output_path)
                                     else:
@@ -216,8 +216,6 @@ def main():
 
     client = DGNClient(
         orchestrator_url=determined_orchestrator_url,
-        supabase_url=SUPABASE_URL,
-        supabase_anon_key=SUPABASE_ANON_KEY,
         root_dir=ROOT_DIR,
         cache_dir=CACHE_DIR
     )
