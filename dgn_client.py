@@ -1,4 +1,5 @@
 import os
+import multiprocessing
 import logging
 import argparse
 import time
@@ -231,6 +232,7 @@ def main():
         client.orchestrator_service.deregister_from_orchestrator(provider_id)
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     try:
         main()
     except Exception as e:
