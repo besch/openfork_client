@@ -6,6 +6,7 @@ import time
 import requests
 import subprocess
 import atexit
+import threading
 from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
@@ -69,6 +70,21 @@ class DGNClient:
         self.output_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "output")
         self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
         
+
+    def start_heartbeat(self, provider_id: str):
+        """Starts a background thread to send heartbeats."""
+        heartbeat_thread = threading.Thread(target=self._heartbeat_loop, args=(provider_id,), daemon=True)
+        heartbeat_thread.start()
+        logging.info("Heartbeat thread started.")
+
+    def _heartbeat_loop(self, provider_id: str):
+        """The loop that sends heartbeats periodically."""
+        while True:
+            try:
+                self.orchestrator_service.send_heartbeat(provider_id)
+            except Exception as e:
+                logging.error(f"An error occurred in the heartbeat loop: {e}")
+            time.sleep(60) # Send heartbeat every 60 seconds
 
     def listen_for_jobs(self, provider_id: str):
         """Listen for jobs from the orchestrator."""
@@ -275,6 +291,9 @@ def main():
 
     if not provider_id:
         return
+
+    # Start heartbeat thread
+    client.start_heartbeat(provider_id)
 
     try:
         client.listen_for_jobs(provider_id)

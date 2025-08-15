@@ -69,6 +69,16 @@ class OrchestratorService:
             logging.error(f"An error occurred during output upload for {file_path}: {e}")
             return None
 
+    def send_heartbeat(self, provider_id: str):
+        """Sends a heartbeat to the orchestrator."""
+        try:
+            logging.info(f"Sending heartbeat for provider {provider_id}...")
+            response = requests.post(f"{self.orchestrator_url}/api/dgn/heartbeat", json={"providerId": provider_id})
+            response.raise_for_status()
+            logging.info("Heartbeat sent successfully.")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Could not send heartbeat: {e}")
+
 
     def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None):
         """Update the status of a job, optionally including the output path."""
