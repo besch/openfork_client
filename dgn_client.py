@@ -304,11 +304,8 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     try:
         main()
+    except KeyboardInterrupt:
+        logging.info("Process interrupted by user.")
     except Exception as e:
         logging.error(f"An unhandled exception occurred: {e}", exc_info=True)
-        print("\nAn error occurred. See logs for details.")
-    except KeyboardInterrupt:
-        print("\nProcess interrupted by user.")
-    finally:
-        print("Press Enter to exit.")
-        input()
+    logging.info("DGN Client shutting down.")
