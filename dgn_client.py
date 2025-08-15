@@ -4,6 +4,8 @@ import logging
 import argparse
 import time
 import requests
+import subprocess
+import atexit
 from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
@@ -13,6 +15,48 @@ from services.comfyui_service import ComfyUIClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # CACHE_DIR is imported from config
+
+# --- Docker Management ---
+DOCKER_COMPOSE_DIR = os.path.join(ROOT_DIR, "comfyui-storage")
+
+def manage_docker(action: str):
+    """Starts or stops the ComfyUI Docker container using docker-compose."""
+    compose_file_path = os.path.join(DOCKER_COMPOSE_DIR, 'docker-compose.yaml')
+    if not os.path.exists(compose_file_path):
+        logging.error(f"docker-compose.yaml not found in {DOCKER_COMPOSE_DIR}")
+        return
+
+    # Using -f to be explicit about the file, even with cwd set.
+    command = ["docker-compose", "-f", compose_file_path, action]
+    if action == "up":
+        command.append("-d")  # Detached mode for starting
+    
+    logging.info(f"Running '{' '.join(command)}'...")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=DOCKER_COMPOSE_DIR, # Running in the correct directory is still good practice
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode == 0:
+            logging.info(f"Docker command '{action}' executed successfully.")
+            if result.stdout.strip():
+                logging.info(f"stdout:\n{result.stdout.strip()}")
+        else:
+            logging.error(f"Docker command '{action}' failed with exit code {result.returncode}.")
+            if result.stderr.strip():
+                logging.error(f"stderr:\n{result.stderr.strip()}")
+            if result.stdout.strip():
+                logging.info(f"stdout:\n{result.stdout.strip()}")
+
+    except FileNotFoundError:
+        logging.error("'docker-compose' not found. Please ensure Docker Desktop is installed and running.")
+    except Exception as e:
+        logging.error(f"An exception occurred while running docker-compose: {e}")
+
+# --- End Docker Management ---
 
 
 class DGNClient:
@@ -141,7 +185,7 @@ class DGNClient:
                                             # Single ref form: ["<node_id>", output_idx]
                                             if isinstance(v, list) and len(v) >= 1 and isinstance(v[0], str):
                                                 referenced.add(v[0])
-                                            # List of refs form: [[nid, idx], [nid, idx], ...]|
+                                            # List of refs form: [[nid, idx], [nid, idx], ...]| 
                                             if isinstance(v, list) and v and all(isinstance(x, list) for x in v):
                                                 for item in v:
                                                     if isinstance(item, list) and item and isinstance(item[0], str):
@@ -196,6 +240,12 @@ class DGNClient:
 
 def main():
     """Main function to run the DGN client."""
+    # Start Docker container
+    manage_docker("up")
+
+    # Register the cleanup function to stop the container on exit
+    atexit.register(manage_docker, "down")
+    
     parser = argparse.ArgumentParser(description="CrowdMovie DGN Client")
 
     # Determine ORCHESTRATOR_URL dynamically
