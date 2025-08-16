@@ -1,12 +1,12 @@
 import os
 import multiprocessing
 import logging
-import argparse
 import time
 import requests
 import subprocess
-import atexit
 import threading
+import http.server
+import socketserver
 from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
@@ -16,6 +16,47 @@ from services.comfyui_service import ComfyUIClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # CACHE_DIR is imported from config
+
+# Global flag for graceful shutdown
+SHUTDOWN_FLAG = False
+SHUTDOWN_SERVER_PORT = 8000 # TODO: Make configurable
+httpd_server = None # Global reference to the HTTP server
+
+class ShutdownHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/shutdown':
+            logging.info("Received shutdown request via HTTP.")
+            global SHUTDOWN_FLAG
+            SHUTDOWN_FLAG = True
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b"DGN Client shutting down.")
+            # Explicitly shut down the HTTP server
+            if httpd_server:
+                threading.Thread(target=httpd_server.shutdown, daemon=True).start() # Call shutdown in a new daemon thread to avoid deadlock
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def start_shutdown_server():
+    """Starts a simple HTTP server in a new thread to listen for shutdown requests."""
+    handler = ShutdownHandler
+    global httpd_server # Assign to global variable
+    with socketserver.TCPServer(("", SHUTDOWN_SERVER_PORT), handler, bind_and_activate=False) as httpd:
+        httpd.allow_reuse_address = True
+        httpd_server = httpd # Store reference
+        try:
+            httpd.server_bind()
+            httpd.server_activate()
+            logging.info(f"Shutdown server started on port {SHUTDOWN_SERVER_PORT}")
+            httpd.serve_forever()
+        except Exception as e:
+            logging.error(f"Failed to start shutdown server: {e}")
+        finally:
+            httpd.server_close()
+            logging.info("Shutdown server stopped.")
+            httpd_server = None # Clear reference
 
 # --- Docker Management ---
 DOCKER_COMPOSE_DIR = os.path.join(ROOT_DIR, "comfyui-storage")
@@ -39,23 +80,35 @@ def manage_docker(action: str):
             cwd=DOCKER_COMPOSE_DIR, # Running in the correct directory is still good practice
             capture_output=True,
             text=True,
-            check=False
+            check=False,
+            timeout=30 # Add a 30-second timeout
         )
         if result.returncode == 0:
             logging.info(f"Docker command '{action}' executed successfully.")
             if result.stdout.strip():
-                logging.info(f"stdout:\n{result.stdout.strip()}")
+                logging.info(f"Docker stdout:\n{result.stdout.strip()}") # More explicit logging
+            if result.stderr.strip():
+                logging.warning(f"Docker stderr (even on success):\n{result.stderr.strip()}") # Log stderr even on success
         else:
             logging.error(f"Docker command '{action}' failed with exit code {result.returncode}.")
-            if result.stderr.strip():
-                logging.error(f"stderr:\n{result.stderr.strip()}")
             if result.stdout.strip():
-                logging.info(f"stdout:\n{result.stdout.strip()}")
+                logging.error(f"Docker stdout on failure:\n{result.stdout.strip()}")
+            if result.stderr.strip():
+                logging.error(f"Docker stderr on failure:\n{result.stderr.strip()}")
 
+    except subprocess.TimeoutExpired:
+        logging.error(f"Docker command '{action}' timed out after 30 seconds.")
+        # If it timed out, try to kill the process group
+        if result.returncode is None: # Process might still be running
+            logging.error("Attempting to terminate hanging docker-compose process.")
+            result.kill()
+            result.wait() # Wait for it to actually terminate
+            logging.error("Hanging docker-compose process terminated.")
     except FileNotFoundError:
         logging.error("'docker-compose' not found. Please ensure Docker Desktop is installed and running.")
     except Exception as e:
         logging.error(f"An exception occurred while running docker-compose: {e}")
+
 
 # --- End Docker Management ---
 
@@ -89,6 +142,9 @@ class DGNClient:
     def listen_for_jobs(self, provider_id: str):
         """Listen for jobs from the orchestrator."""
         while True:
+            if SHUTDOWN_FLAG:
+                logging.info("Shutdown flag received. Exiting job listening loop.")
+                break
             try:
                 logging.info("Checking for new jobs...")
                 response = requests.get(f"{self.orchestrator_service.orchestrator_url}/api/dgn/jobs/{provider_id}")
@@ -259,10 +315,9 @@ def main():
     # Start Docker container
     manage_docker("up")
 
-    # Register the cleanup function to stop the container on exit
-    atexit.register(manage_docker, "down")
-    
-    parser = argparse.ArgumentParser(description="CrowdMovie DGN Client")
+    # Start the shutdown server in a separate thread
+    shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
+    shutdown_thread.start()
 
     # Determine ORCHESTRATOR_URL dynamically
     primary_url = PRIMARY_ORCHESTRATOR_URL
@@ -290,22 +345,42 @@ def main():
     provider_id = client.orchestrator_service.register_with_orchestrator()
 
     if not provider_id:
-        return
+        logging.error("Failed to register with orchestrator. Exiting.")
+        return # Exit main function, which should lead to normal program exit
 
     # Start heartbeat thread
     client.start_heartbeat(provider_id)
 
     try:
         client.listen_for_jobs(provider_id)
+    except Exception as e:
+        logging.error(f"An error occurred in job listening loop: {e}", exc_info=True)
     finally:
-        client.orchestrator_service.deregister_from_orchestrator(provider_id)
+        logging.info("Attempting to deregister from orchestrator.")
+        try:
+            client.orchestrator_service.deregister_from_orchestrator(provider_id)
+            logging.info("Successfully deregistered from orchestrator.")
+        except Exception as e:
+            logging.error(f"Failed to deregister from orchestrator: {e}", exc_info=True)
+
+        # ADD THIS LINE:
+        logging.info("--- ABOUT TO CALL MANAGE_DOCKER('down') ---")
+        # Explicitly stop Docker here
+        logging.info("Explicitly stopping Docker container.")
+        manage_docker("down")
+
+    logging.info("Main function completed. Preparing for program exit.")
 
 if __name__ == "__main__":
+    import sys # Import sys
     multiprocessing.freeze_support()
     try:
         main()
+        logging.info("Program exiting normally.")
+        sys.exit(0) # Explicitly exit with code 0
     except KeyboardInterrupt:
         logging.info("Process interrupted by user.")
+        sys.exit(0) # Exit with 0 on KeyboardInterrupt
     except Exception as e:
-        logging.error(f"An unhandled exception occurred: {e}", exc_info=True)
-    logging.info("DGN Client shutting down.")
+        logging.error(f"An unhandled exception occurred during program execution: {e}", exc_info=True)
+        sys.exit(1) # Exit with 1 on unhandled exception
