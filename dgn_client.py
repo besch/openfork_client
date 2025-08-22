@@ -7,6 +7,7 @@ import subprocess
 import threading
 import http.server
 import socketserver
+import ffmpeg
 from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
@@ -21,6 +22,35 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 SHUTDOWN_FLAG = False
 SHUTDOWN_SERVER_PORT = 8000 # TODO: Make configurable
 httpd_server = None # Global reference to the HTTP server
+
+def generate_thumbnail(video_path: str, thumbnail_path: str, timestamp: str = "00:00:01.000"):
+    """Generates a thumbnail from a video file using ffmpeg-python."""
+    try:
+        (
+            ffmpeg
+            .input(video_path, ss=timestamp)
+            .output(thumbnail_path, vframes=1)
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+        logging.info(f"Thumbnail generated for {video_path} at {thumbnail_path}")
+        return True
+    except ffmpeg.Error as e:
+        logging.error(f"ffmpeg failed to generate thumbnail for {video_path}: {e.stderr.decode()}")
+        return False
+
+def find_video_in_output(outputs: dict):
+    """Parses ComfyUI workflow output to find the first video file."""
+    if not isinstance(outputs, dict):
+        return None
+    for node_id, node_output in outputs.items():
+        if isinstance(node_output, dict) and 'files' in node_output:
+            for file_info in node_output['files']:
+                if isinstance(file_info, dict) and file_info.get('type') == 'output' and \
+                   isinstance(file_info.get('filename'), str) and \
+                   file_info.get('filename', '').lower().endswith(('.mp4', '.webm', '.gif')):
+                    return file_info['filename']
+    return None
 
 class ShutdownHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -43,7 +73,7 @@ def start_shutdown_server():
     """Starts a simple HTTP server in a new thread to listen for shutdown requests."""
     handler = ShutdownHandler
     global httpd_server # Assign to global variable
-    with socketserver.TCPServer(("", SHUTDOWN_SERVER_PORT), handler, bind_and_activate=False) as httpd:
+    with socketserver.TCPServer(('', SHUTDOWN_SERVER_PORT), handler, bind_and_activate=False) as httpd:
         httpd.allow_reuse_address = True
         httpd_server = httpd # Store reference
         try:
@@ -281,17 +311,37 @@ class DGNClient:
                             if prompt_id:
                                 outputs = self.comfyui_client.get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
                                 if outputs:
-                                    output_path = process_workflow_output(outputs, job['id'], self.output_dir, self.orchestrator_service.upload_output)
-                                    if output_path:
-                                        self.orchestrator_service.update_job_status(job['id'], 'completed', output_path=output_path)
+                                    video_filename = find_video_in_output(outputs)
+                                    if video_filename:
+                                        local_video_path = os.path.join(self.output_dir, video_filename)
+                                        
+                                        video_storage_path = self.orchestrator_service.upload_output(local_video_path, job['id'])
+                                        
+                                        if not video_storage_path:
+                                            logging.error(f"Failed to upload video output for job {job['id']}.")
+                                            self.orchestrator_service.update_job_status(job['id'], 'failed')
+                                        else:
+                                            thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
+                                            thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                                            thumbnail_storage_path = None
+                                            
+                                            if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                                thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
+                                            
+                                            self.orchestrator_service.update_job_status(
+                                                job['id'], 
+                                                'completed', 
+                                                output_path=video_storage_path,
+                                                thumbnail_path=thumbnail_storage_path
+                                            )
                                     else:
-                                        logging.error("Workflow completed, but output upload failed.")
+                                        logging.error(f"Workflow for job {job['id']} completed, but no video file found in output.")
                                         self.orchestrator_service.update_job_status(job['id'], 'failed')
                                 else:
-                                    logging.error("Workflow failed to produce outputs.")
+                                    logging.error(f"Workflow for job {job['id']} failed to produce outputs.")
                                     self.orchestrator_service.update_job_status(job['id'], 'failed')
                             else:
-                                logging.error("Failed to trigger workflow.")
+                                logging.error(f"Failed to trigger workflow for job {job['id']}.")
                                 self.orchestrator_service.update_job_status(job['id'], 'failed')
 
                         except Exception as e:

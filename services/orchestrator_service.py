@@ -69,6 +69,31 @@ class OrchestratorService:
             logging.error(f"An error occurred during output upload for {file_path}: {e}")
             return None
 
+    def upload_thumbnail(self, file_path: str, job_id: str) -> Union[str, None]:
+        """Upload the thumbnail file to the orchestrator and return the storage path."""
+        try:
+            with open(file_path, 'rb') as f:
+                file_name = os.path.basename(file_path)
+                files = {'file': (file_name, f.read(), 'image/jpeg')}
+                data = {'jobId': job_id}
+
+                response = requests.post(f"{self.orchestrator_url}/api/dgn/upload-thumbnail", files=files, data=data)
+                response.raise_for_status()
+                
+                upload_result = response.json()
+                if upload_result.get('success') and upload_result.get('storagePath'):
+                    logging.info(f"File {file_name} uploaded successfully to {upload_result['storagePath']}.")
+                    return upload_result['storagePath']
+                else:
+                    logging.error(f"Unexpected response from Orchestrator upload for file {file_name}: {upload_result}")
+                    return None
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Could not upload file {file_path} to Orchestrator: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"An error occurred during thumbnail upload for {file_path}: {e}")
+            return None
+
     def send_heartbeat(self, provider_id: str):
         """Sends a heartbeat to the orchestrator."""
         try:
@@ -80,12 +105,14 @@ class OrchestratorService:
             logging.error(f"Could not send heartbeat: {e}")
 
 
-    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None):
-        """Update the status of a job, optionally including the output path."""
+    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None):
+        """Update the status of a job, optionally including the output and thumbnail paths."""
         try:
             payload = {"status": status}
             if output_path:
                 payload["output_path"] = output_path
+            if thumbnail_path:
+                payload["thumbnail_path"] = thumbnail_path
 
             response = requests.put(f"{self.orchestrator_url}/api/dgn/job/{job_id}", json=payload)
             if response.status_code == 200:
