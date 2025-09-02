@@ -63,6 +63,7 @@ class ShutdownHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"DGN Client shutting down.")
             if httpd_server:
+                logging.info("ShutdownHandler: Attempting to shut down HTTP server.")
                 threading.Thread(target=httpd_server.shutdown, daemon=True).start()
         else:
             self.send_response(404)
@@ -79,6 +80,7 @@ def start_shutdown_server():
             httpd.server_bind()
             httpd.server_activate()
             logging.info(f"Shutdown server started on port {SHUTDOWN_SERVER_PORT}")
+            logging.info("Shutdown server: Now serving forever...")
             httpd.serve_forever()
         except Exception as e:
             logging.error(f"Failed to start shutdown server: {e}")
@@ -377,14 +379,20 @@ def main(args):
     except Exception as e:
         logging.error(f"An error occurred in job listening loop: {e}", exc_info=True)
     finally:
-        logging.info("Attempting to deregister from orchestrator.")
+        logging.info("DGN Client: Initiating shutdown sequence.")
+        logging.info("DGN Client: Attempting to deregister from orchestrator.")
         try:
             client.orchestrator_service.deregister_from_orchestrator(provider_id)
+            logging.info("DGN Client: Successfully deregistered from orchestrator.")
         except Exception as e:
-            logging.error(f"Failed to deregister from orchestrator: {e}", exc_info=True)
+            logging.error(f"DGN Client: Failed to deregister from orchestrator: {e}", exc_info=True)
         
-        logging.info("Stopping Docker container.")
-        manage_docker("down")
+        logging.info("DGN Client: Stopping Docker container.")
+        try:
+            manage_docker("down")
+            logging.info("DGN Client: Docker container stopped successfully.")
+        except Exception as e:
+            logging.error(f"DGN Client: Failed to stop Docker container: {e}", exc_info=True)
 
     logging.info("Main function completed.")
 

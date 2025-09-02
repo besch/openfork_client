@@ -171,6 +171,7 @@ class OrchestratorService:
 
     def deregister_from_orchestrator(self, provider_id: str) -> None:
         """Remove provider row when client stops."""
+        logging.info(f"OrchestratorService: Attempting to deregister provider {provider_id}.")
         try:
             response = requests.delete(
                 f"{self.orchestrator_url}/api/dgn/register",
@@ -178,6 +179,8 @@ class OrchestratorService:
                 headers=self._get_auth_headers()
             )
             response.raise_for_status()
-            logging.info("Provider deregistered.")
+            logging.info(f"OrchestratorService: Provider {provider_id} deregistered successfully. Status: {response.status_code}")
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error deregistering provider: {e}")
+            logging.error(f"OrchestratorService: Error deregistering provider {provider_id}: {e}")
+            if e.response:
+                logging.error(f"OrchestratorService: Response content: {e.response.text}")
