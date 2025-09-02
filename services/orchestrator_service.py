@@ -1,5 +1,7 @@
 import requests
 import logging
+import base64
+import json
 from typing import Union, Dict
 from services.hardware_profiler import get_hardware_profile
 import os
@@ -130,14 +132,34 @@ class OrchestratorService:
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not update provider status: {e}")
 
+    def _get_user_id_from_token(self) -> Union[str, None]:
+        """Decodes the user ID (sub) from the JWT access token."""
+        try:
+            _, payload_b64, _ = self.access_token.split('.')
+            payload_b64 += '=' * (-len(payload_b64) % 4)
+            payload_json = base64.urlsafe_b64decode(payload_b64)
+            payload = json.loads(payload_json)
+            return payload.get('sub')
+        except Exception as e:
+            logging.error(f"Error decoding JWT to get user ID: {e}")
+            return None
+
     def register_with_orchestrator(self) -> Union[str, None]:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
-        logging.info(f"Hardware Profile: {hardware_profile}")
+        
+        user_id = self._get_user_id_from_token()
+        if not user_id:
+            logging.error("Could not extract user_id from token. Cannot register.")
+            return None
+        
+        payload = {**hardware_profile, "user_id": user_id}
+
+        logging.info(f"Registering with profile: {payload}")
         try:
             response = requests.post(
                 f"{self.orchestrator_url}/api/dgn/register",
-                json=hardware_profile,
+                json=payload,
                 headers=self._get_auth_headers()
             )
             response.raise_for_status()

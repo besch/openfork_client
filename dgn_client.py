@@ -9,13 +9,14 @@ import http.server
 import socketserver
 import ffmpeg
 import argparse
+import sys
 from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
 from services.comfyui_service import ComfyUIClient
 
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
 
 # Global flag for graceful shutdown
 SHUTDOWN_FLAG = False
@@ -367,6 +368,9 @@ def main(args):
         return
 
     client.start_heartbeat(provider_id)
+
+    print("DGN_CLIENT_RUNNING", flush=True)
+    logging.info("DGN Client is running and listening for jobs.")
 
     try:
         client.listen_for_jobs(provider_id)
