@@ -161,9 +161,9 @@ class DGNClient:
                 if job and job.get('id'):
                     logging.info(f"Received job: {job['id']}")
                     try:
-                        self.orchestrator_service.update_provider_status(provider_id, 'busy')
-                        self.orchestrator_service.update_job_status(job['id'], 'processing')
-
+                        # The get_and_assign_next_dgn_job RPC is now responsible for setting the
+                        # provider to 'busy' and the job to 'processing' atomically.
+                        # These client-side calls were redundant and often failed due to RLS policies.
                         workflow = job.get('workflow')
                         required_assets = job.get('assets', [])
                         positive_prompt = job.get('prompt') or ""

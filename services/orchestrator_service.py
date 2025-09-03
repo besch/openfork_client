@@ -61,11 +61,18 @@ class OrchestratorService:
                     files=files, data=data, headers=headers
                 )
                 response.raise_for_status()
-                # ... (rest of the logic is the same)
+                response_data = response.json()
+                storage_path = response_data.get('storagePath')
+                if not storage_path:
+                    logging.error(f"Upload response missing 'storagePath': {response_data}")
+                    return None
+                return storage_path
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not upload file {file_path}: {e}")
             return None
-        return None # Add a return statement here
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from upload response: {response.text}")
+            return None
 
     def upload_thumbnail(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the thumbnail file to the orchestrator."""
@@ -81,11 +88,18 @@ class OrchestratorService:
                     files=files, data=data, headers=headers
                 )
                 response.raise_for_status()
-                # ... (rest of the logic is the same)
+                response_data = response.json()
+                storage_path = response_data.get('storagePath')
+                if not storage_path:
+                    logging.error(f"Upload response missing 'storagePath': {response_data}")
+                    return None
+                return storage_path
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not upload file {file_path}: {e}")
             return None
-        return None # Add a return statement here
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from upload response: {response.text}")
+            return None
 
     def send_heartbeat(self, provider_id: str):
         """Sends a heartbeat to the orchestrator."""
