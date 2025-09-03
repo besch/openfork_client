@@ -27,3 +27,6 @@ FALLBACK_ORCHESTRATOR_URL = "http://localhost:3000"
 
 # Cache directory for assets and outputs
 CACHE_DIR = os.path.join(ROOT_DIR, "cache")
+
+# Development mode switch
+DEV_MODE = False # Set to True to use placeholder video instead of ComfyUI

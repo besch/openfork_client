@@ -10,7 +10,7 @@ import socketserver
 import ffmpeg
 import argparse
 import sys
-from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR
+from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR, DEV_MODE
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
 from services.comfyui_service import ComfyUIClient
@@ -52,7 +52,28 @@ def find_video_in_output(outputs: dict):
                     return file_info['filename']
     return None
 
+def generate_placeholder_video(output_dir: str, job_id: str) -> str:
+    """Generates a placeholder video using ffmpeg."""
+    placeholder_filename = f"placeholder_{job_id}.mp4"
+    placeholder_path = os.path.join(output_dir, placeholder_filename)
+    
+    # Create a simple 1-second black video with a timestamp
+    try:
+        (
+            ffmpeg
+            .input('color=c=black:s=1280x720:r=30', f='lavfi', t=1)
+            .output(placeholder_path, vcodec='libx264', pix_fmt='yuv420p')
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+        logging.info(f"Generated placeholder video at {placeholder_path}")
+        return placeholder_filename
+    except ffmpeg.Error as e:
+        logging.error(f"ffmpeg failed to generate placeholder video: {e.stderr.decode()}")
+        return None
+
 class ShutdownHandler(http.server.BaseHTTPRequestHandler):
+
     def do_GET(self):
         if self.path == '/shutdown':
             logging.info("Received shutdown request via HTTP.")
@@ -280,47 +301,72 @@ class DGNClient:
                             except Exception:
                                 return []
 
-                        graph_for_compute = payload.get("prompt") if isinstance(payload, dict) else None
-                        terminal_ids = []
-                        if isinstance(graph_for_compute, dict) and graph_for_compute and all(isinstance(v, dict) for v in graph_for_compute.values()):
-                            terminal_ids = _compute_terminal_nodes(graph_for_compute)
-
-                        prompt_id = self.comfyui_client.trigger_workflow(payload)
-                        if prompt_id:
-                            outputs = self.comfyui_client.get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
-                            if outputs:
-                                video_filename = find_video_in_output(outputs)
-                                if video_filename:
-                                    local_video_path = os.path.join(self.output_dir, video_filename)
-                                    
-                                    video_storage_path = self.orchestrator_service.upload_output(local_video_path, job['id'])
-                                    
-                                    if not video_storage_path:
-                                        logging.error(f"Failed to upload video output for job {job['id']}.")
-                                        self.orchestrator_service.update_job_status(job['id'], 'failed')
-                                    else:
-                                        thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
-                                        thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
-                                        thumbnail_storage_path = None
-                                        
-                                        if generate_thumbnail(local_video_path, thumbnail_local_path):
-                                            thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
-                                        
-                                        self.orchestrator_service.update_job_status(
-                                            job['id'], 
-                                            'completed', 
-                                            output_path=video_storage_path,
-                                            thumbnail_path=thumbnail_storage_path
-                                        )
-                                else:
-                                    logging.error(f"Workflow for job {job['id']} completed, but no video file found in output.")
+                        if DEV_MODE:
+                            logging.info("DEV_MODE is enabled. Generating placeholder video.")
+                            video_filename = generate_placeholder_video(self.output_dir, job['id'])
+                            if video_filename:
+                                local_video_path = os.path.join(self.output_dir, video_filename)
+                                video_storage_path = self.orchestrator_service.upload_output(local_video_path, job['id'])
+                                if not video_storage_path:
+                                    logging.error(f"Failed to upload video output for job {job['id']}.")
                                     self.orchestrator_service.update_job_status(job['id'], 'failed')
+                                else:
+                                    thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
+                                    thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                                    thumbnail_storage_path = None
+                                    if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                        thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
+                                    self.orchestrator_service.update_job_status(
+                                        job['id'], 
+                                        'completed', 
+                                        output_path=video_storage_path,
+                                        thumbnail_path=thumbnail_storage_path
+                                    )
                             else:
-                                logging.error(f"Workflow for job {job['id']} failed to produce outputs.")
+                                logging.error(f"Failed to generate placeholder video for job {job['id']}.")
                                 self.orchestrator_service.update_job_status(job['id'], 'failed')
                         else:
-                            logging.error(f"Failed to trigger workflow for job {job['id']}.")
-                            self.orchestrator_service.update_job_status(job['id'], 'failed')
+                            graph_for_compute = payload.get("prompt") if isinstance(payload, dict) else None
+                            terminal_ids = []
+                            if isinstance(graph_for_compute, dict) and graph_for_compute and all(isinstance(v, dict) for v in graph_for_compute.values()):
+                                terminal_ids = _compute_terminal_nodes(graph_for_compute)
+    
+                            prompt_id = self.comfyui_client.trigger_workflow(payload)
+                            if prompt_id:
+                                outputs = self.comfyui_client.get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
+                                if outputs:
+                                    video_filename = find_video_in_output(outputs)
+                                    if video_filename:
+                                        local_video_path = os.path.join(self.output_dir, video_filename)
+                                        
+                                        video_storage_path = self.orchestrator_service.upload_output(local_video_path, job['id'])
+                                        
+                                        if not video_storage_path:
+                                            logging.error(f"Failed to upload video output for job {job['id']}.")
+                                            self.orchestrator_service.update_job_status(job['id'], 'failed')
+                                        else:
+                                            thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
+                                            thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                                            thumbnail_storage_path = None
+                                            
+                                            if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                                thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
+                                            
+                                            self.orchestrator_service.update_job_status(
+                                                job['id'], 
+                                                'completed', 
+                                                output_path=video_storage_path,
+                                                thumbnail_path=thumbnail_storage_path
+                                            )
+                                    else:
+                                        logging.error(f"Workflow for job {job['id']} completed, but no video file found in output.")
+                                        self.orchestrator_service.update_job_status(job['id'], 'failed')
+                                else:
+                                    logging.error(f"Workflow for job {job['id']} failed to produce outputs.")
+                                    self.orchestrator_service.update_job_status(job['id'], 'failed')
+                            else:
+                                logging.error(f"Failed to trigger workflow for job {job['id']}.")
+                                self.orchestrator_service.update_job_status(job['id'], 'failed')
 
                     except Exception as e:
                         logging.error(f"An error occurred while processing job {job['id']}: {e}")
