@@ -7,7 +7,6 @@ import subprocess
 import threading
 import http.server
 import socketserver
-import ffmpeg
 import argparse
 import sys
 from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR
