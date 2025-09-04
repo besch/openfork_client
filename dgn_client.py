@@ -10,10 +10,11 @@ import socketserver
 import ffmpeg
 import argparse
 import sys
-from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR, DEV_MODE
+from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
 from services.comfyui_service import ComfyUIClient
+from utils.video_utils import generate_thumbnail, find_video_in_output, generate_placeholder_video
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
@@ -22,55 +23,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 SHUTDOWN_FLAG = False
 SHUTDOWN_SERVER_PORT = 8000 # TODO: Make configurable
 httpd_server = None # Global reference to the HTTP server
-
-def generate_thumbnail(video_path: str, thumbnail_path: str, timestamp: str = "00:00:01.000"):
-    """Generates a thumbnail from a video file using ffmpeg-python."""
-    try:
-        (
-            ffmpeg
-            .input(video_path, ss=timestamp)
-            .output(thumbnail_path, vframes=1)
-            .overwrite_output()
-            .run(capture_stdout=True, capture_stderr=True)
-        )
-        logging.info(f"Thumbnail generated for {video_path} at {thumbnail_path}")
-        return True
-    except ffmpeg.Error as e:
-        logging.error(f"ffmpeg failed to generate thumbnail for {video_path}: {e.stderr.decode()}")
-        return False
-
-def find_video_in_output(outputs: dict):
-    """Parses ComfyUI workflow output to find the first video file."""
-    if not isinstance(outputs, dict):
-        return None
-    for node_id, node_output in outputs.items():
-        if isinstance(node_output, dict) and 'files' in node_output:
-            for file_info in node_output['files']:
-                if isinstance(file_info, dict) and file_info.get('type') == 'output' and \
-                   isinstance(file_info.get('filename'), str) and \
-                   file_info.get('filename', '').lower().endswith(('.mp4', '.webm', '.gif')):
-                    return file_info['filename']
-    return None
-
-def generate_placeholder_video(output_dir: str, job_id: str) -> str:
-    """Generates a placeholder video using ffmpeg."""
-    placeholder_filename = f"placeholder_{job_id}.mp4"
-    placeholder_path = os.path.join(output_dir, placeholder_filename)
-    
-    # Create a simple 1-second black video with a timestamp
-    try:
-        (
-            ffmpeg
-            .input('color=c=black:s=1280x720:r=30', f='lavfi', t=1)
-            .output(placeholder_path, vcodec='libx264', pix_fmt='yuv420p')
-            .overwrite_output()
-            .run(capture_stdout=True, capture_stderr=True)
-        )
-        logging.info(f"Generated placeholder video at {placeholder_path}")
-        return placeholder_filename
-    except ffmpeg.Error as e:
-        logging.error(f"ffmpeg failed to generate placeholder video: {e.stderr.decode()}")
-        return None
 
 class ShutdownHandler(http.server.BaseHTTPRequestHandler):
 
@@ -111,7 +63,6 @@ def start_shutdown_server():
             httpd_server = None
 
 # --- Docker Management ---
-DOCKER_COMPOSE_DIR = os.path.join(ROOT_DIR, "comfyui-storage")
 
 def manage_docker(action: str):
     """Starts or stops the ComfyUI Docker container using docker-compose."""
@@ -315,7 +266,13 @@ class DGNClient:
                                     thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
                                     thumbnail_storage_path = None
                                     if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                        # Trusting generate_thumbnail, proceeding with upload.
                                         thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
+                                        if not thumbnail_storage_path:
+                                            logging.warning(f"Thumbnail upload failed for job {job['id']}. The file may not have been found or there was a server error.")
+                                    else:
+                                        logging.error(f"Thumbnail generation failed for job {job['id']}.")
+                                    
                                     self.orchestrator_service.update_job_status(
                                         job['id'], 
                                         'completed', 
@@ -350,7 +307,12 @@ class DGNClient:
                                             thumbnail_storage_path = None
                                             
                                             if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                                # Trusting generate_thumbnail, proceeding with upload.
                                                 thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
+                                                if not thumbnail_storage_path:
+                                                    logging.warning(f"Thumbnail upload failed for job {job['id']}. The file may not have been found or there was a server error.")
+                                            else:
+                                                logging.error(f"Thumbnail generation failed for job {job['id']}.")
                                             
                                             self.orchestrator_service.update_job_status(
                                                 job['id'], 

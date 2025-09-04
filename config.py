@@ -29,4 +29,7 @@ FALLBACK_ORCHESTRATOR_URL = "http://localhost:3000"
 CACHE_DIR = os.path.join(ROOT_DIR, "cache")
 
 # Development mode switch
-DEV_MODE = False # Set to True to use placeholder video instead of ComfyUI
+DEV_MODE = True # Set to True to use placeholder video instead of ComfyUI
+
+# Docker-related configurations
+DOCKER_COMPOSE_DIR = os.path.join(ROOT_DIR, "comfyui-storage")
