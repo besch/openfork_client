@@ -9,6 +9,7 @@ import http.server
 import socketserver
 import argparse
 import sys
+import shutil
 from config import ROOT_DIR, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
@@ -252,35 +253,52 @@ class DGNClient:
                                 return []
 
                         if DEV_MODE:
-                            logging.info("DEV_MODE is enabled. Generating placeholder video.")
-                            video_filename = generate_placeholder_video(self.output_dir, job['id'])
-                            if video_filename:
-                                local_video_path = os.path.join(self.output_dir, video_filename)
-                                video_storage_path = self.orchestrator_service.upload_output(local_video_path, job['id'])
-                                if not video_storage_path:
-                                    logging.error(f"Failed to upload video output for job {job['id']}.")
-                                    self.orchestrator_service.update_job_status(job['id'], 'failed')
-                                else:
-                                    thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
-                                    thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
-                                    thumbnail_storage_path = None
-                                    if generate_thumbnail(local_video_path, thumbnail_local_path):
-                                        # Trusting generate_thumbnail, proceeding with upload.
-                                        thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
-                                        if not thumbnail_storage_path:
-                                            logging.warning(f"Thumbnail upload failed for job {job['id']}. The file may not have been found or there was a server error.")
-                                    else:
-                                        logging.error(f"Thumbnail generation failed for job {job['id']}.")
-                                    
-                                    self.orchestrator_service.update_job_status(
-                                        job['id'], 
-                                        'completed', 
-                                        output_path=video_storage_path,
-                                        thumbnail_path=thumbnail_storage_path
-                                    )
+                            logging.info("DEV_MODE is enabled. Using sample video.")
+                            
+                            # Accommodate frozen executable path which is in dgn_client_desktop/bin
+                            if 'dgn_client_desktop' in self.root_dir:
+                                base_path = os.path.abspath(os.path.join(self.root_dir, '..', '..', 'dgn-client'))
                             else:
-                                logging.error(f"Failed to generate placeholder video for job {job['id']}.")
+                                base_path = self.root_dir
+                            
+                            sample_video_path = os.path.join(base_path, 'assets', 'sample.mp4')
+                            if not os.path.exists(sample_video_path):
+                                logging.error(f"Sample video not found at {sample_video_path}")
                                 self.orchestrator_service.update_job_status(job['id'], 'failed')
+                                continue
+
+                            video_filename = f"dev_mode_job_{job['id']}.mp4"
+                            local_video_path = os.path.join(self.output_dir, video_filename)
+                            
+                            try:
+                                shutil.copy(sample_video_path, local_video_path)
+                            except Exception as e:
+                                logging.error(f"Failed to copy sample video: {e}")
+                                self.orchestrator_service.update_job_status(job['id'], 'failed')
+                                continue
+                            
+                            video_storage_path = self.orchestrator_service.upload_output(local_video_path, job['id'])
+                            if not video_storage_path:
+                                logging.error(f"Failed to upload video output for job {job['id']}.")
+                                self.orchestrator_service.update_job_status(job['id'], 'failed')
+                            else:
+                                thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
+                                thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                                thumbnail_storage_path = None
+                                if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                    # Trusting generate_thumbnail, proceeding with upload.
+                                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job['id'])
+                                    if not thumbnail_storage_path:
+                                        logging.warning(f"Thumbnail upload failed for job {job['id']}. The file may not have been found or there was a server error.")
+                                else:
+                                    logging.error(f"Thumbnail generation failed for job {job['id']}.")
+                                
+                                self.orchestrator_service.update_job_status(
+                                    job['id'], 
+                                    'completed', 
+                                    output_path=video_storage_path,
+                                    thumbnail_path=thumbnail_storage_path
+                                )
                         else:
                             graph_for_compute = payload.get("prompt") if isinstance(payload, dict) else None
                             terminal_ids = []
