@@ -50,12 +50,21 @@ def find_video_in_output(outputs: dict):
     if not isinstance(outputs, dict):
         return None
     for node_id, node_output in outputs.items():
-        if isinstance(node_output, dict) and 'files' in node_output:
-            for file_info in node_output['files']:
+        if isinstance(node_output, dict):
+            # Check for 'files' key (standard ComfyUI output)
+            if 'files' in node_output:
+                file_list = node_output['files']
+            # Check for 'gifs' key (observed in some video workflows)
+            elif 'gifs' in node_output:
+                file_list = node_output['gifs']
+            else:
+                continue # No relevant file list found in this node output
+
+            for file_info in file_list:
                 if isinstance(file_info, dict) and file_info.get('type') == 'output' and \
                    isinstance(file_info.get('filename'), str) and \
                    file_info.get('filename', '').lower().endswith(('.mp4', '.webm', '.gif')):
-                    return file_info['filename']
+                    return file_info['filename'], file_info.get('subfolder', '')
     return None
 
 def generate_placeholder_video(output_dir: str, job_id: str) -> str:

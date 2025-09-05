@@ -311,9 +311,10 @@ class DGNClient:
                             if prompt_id:
                                 outputs = self.comfyui_client.get_workflow_output(prompt_id, terminal_node_ids=terminal_ids, timeout_sec=7200)
                                 if outputs:
-                                    video_filename = find_video_in_output(outputs)
-                                    if video_filename:
-                                        local_video_path = os.path.join(self.output_dir, video_filename)
+                                    video_info = find_video_in_output(outputs)
+                                    if video_info:
+                                        video_filename, subfolder = video_info
+                                        local_video_path = os.path.join(self.output_dir, subfolder, video_filename)
                                         
                                         video_storage_path = self.orchestrator_service.upload_output(local_video_path, job['id'])
                                         
