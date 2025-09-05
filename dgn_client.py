@@ -9,7 +9,7 @@ import http.server
 import socketserver
 import argparse
 import sys
-from config import ROOT_DIR, PRIMARY_ORCHESTRATOR_URL, FALLBACK_ORCHESTRATOR_URL, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR
+from config import ROOT_DIR, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
 from services.comfyui_service import ComfyUIClient
@@ -348,20 +348,20 @@ def main(args):
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()
 
-    primary_url = PRIMARY_ORCHESTRATOR_URL
-    fallback_url = FALLBACK_ORCHESTRATOR_URL
-    determined_orchestrator_url = fallback_url
+    if DEV_MODE:
+        determined_orchestrator_url = ORCHESTRATOR_URL_DEV
+    else:
+        determined_orchestrator_url = ORCHESTRATOR_URL_PROD
 
     try:
-        logging.info(f"Attempting to connect to primary orchestrator URL: {primary_url}")
-        response = requests.get(f"{primary_url}/api/dgn/provider-status/health", timeout=5)
+        logging.info(f"Attempting to connect to orchestrator URL: {determined_orchestrator_url}")
+        response = requests.get(f"{determined_orchestrator_url}/api/dgn/provider-status/health", timeout=5)
         if response.status_code == 200:
-            determined_orchestrator_url = primary_url
-            logging.info(f"Successfully connected to primary orchestrator URL: {determined_orchestrator_url}")
+            logging.info(f"Successfully connected to orchestrator URL: {determined_orchestrator_url}")
         else:
-            logging.warning(f"Primary orchestrator URL {primary_url} returned status {response.status_code}. Falling back.")
+            logging.warning(f"Orchestrator URL {determined_orchestrator_url} returned status {response.status_code}.")
     except requests.exceptions.RequestException as e:
-        logging.warning(f"Could not connect to primary orchestrator URL {primary_url}: {e}. Falling back.")
+        logging.warning(f"Could not connect to orchestrator URL {determined_orchestrator_url}: {e}.")
 
     client = DGNClient(
         orchestrator_url=determined_orchestrator_url,
