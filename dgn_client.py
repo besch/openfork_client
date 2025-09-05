@@ -14,7 +14,7 @@ from config import ROOT_DIR, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR, ORCHESTRAT
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes
 from services.comfyui_service import ComfyUIClient
-from utils.video_utils import generate_thumbnail, find_video_in_output, generate_placeholder_video
+from utils.video_utils import generate_thumbnail, find_video_in_output, generate_placeholder_video, get_video_duration
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
@@ -293,11 +293,13 @@ class DGNClient:
                                 else:
                                     logging.error(f"Thumbnail generation failed for job {job['id']}.")
                                 
+                                duration = get_video_duration(local_video_path)
                                 self.orchestrator_service.update_job_status(
                                     job['id'], 
                                     'completed', 
                                     output_path=video_storage_path,
-                                    thumbnail_path=thumbnail_storage_path
+                                    thumbnail_path=thumbnail_storage_path,
+                                    duration_seconds=duration
                                 )
                         else:
                             graph_for_compute = payload.get("prompt") if isinstance(payload, dict) else None
@@ -331,11 +333,13 @@ class DGNClient:
                                             else:
                                                 logging.error(f"Thumbnail generation failed for job {job['id']}.")
                                             
+                                            duration = get_video_duration(local_video_path)
                                             self.orchestrator_service.update_job_status(
                                                 job['id'], 
                                                 'completed', 
                                                 output_path=video_storage_path,
-                                                thumbnail_path=thumbnail_storage_path
+                                                thumbnail_path=thumbnail_storage_path,
+                                                duration_seconds=duration
                                             )
                                     else:
                                         logging.error(f"Workflow for job {job['id']} completed, but no video file found in output.")

@@ -32,6 +32,19 @@ def generate_thumbnail(video_path: str, thumbnail_path: str, timestamp: str = "0
         logging.error(f"An unexpected error occurred during thumbnail generation for {video_path}: {e}")
         return False
 
+def get_video_duration(video_path: str) -> float:
+    """Gets the duration of a video file in seconds using ffmpeg.probe."""
+    try:
+        probe = ffmpeg.probe(video_path)
+        duration = float(probe['format']['duration'])
+        return duration
+    except ffmpeg.Error as e:
+        logging.error(f"ffmpeg error during duration probe for {video_path}: {e.stderr.decode() if e.stderr else 'Unknown ffmpeg error'}")
+        return 0.0
+    except (KeyError, ValueError) as e:
+        logging.error(f"Could not parse duration for {video_path}: {e}")
+        return 0.0
+
 def find_video_in_output(outputs: dict):
     """Parses ComfyUI workflow output to find the first video file."""
     if not isinstance(outputs, dict):

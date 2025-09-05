@@ -114,14 +114,16 @@ class OrchestratorService:
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
 
-    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None):
+    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None, duration_seconds: float = None):
         """Update the status of a job."""
         try:
             payload = {"status": status}
             if output_path:
-                payload["output_path"] = output_path
+                payload["storage_path"] = output_path
             if thumbnail_path:
-                payload["thumbnail_path"] = thumbnail_path
+                payload["thumbnail_storage_path"] = thumbnail_path
+            if duration_seconds:
+                payload["duration_seconds"] = duration_seconds
 
             response = requests.put(
                 f"{self.orchestrator_url}/api/dgn/job/{job_id}",
