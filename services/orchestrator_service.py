@@ -119,9 +119,9 @@ class OrchestratorService:
         try:
             payload = {"status": status}
             if output_path:
-                payload["output_path"] = output_path
+                payload["storage_path"] = output_path
             if thumbnail_path:
-                payload["thumbnail_path"] = thumbnail_path
+                payload["thumbnail_storage_path"] = thumbnail_path
 
             response = requests.put(
                 f"{self.orchestrator_url}/api/dgn/job/{job_id}",
