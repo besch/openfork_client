@@ -74,6 +74,34 @@ class OrchestratorService:
             logging.error(f"Failed to decode JSON from upload response: {response.text}")
             return None
 
+    def upload_audio_output(self, file_path: str, job_id: str) -> Union[str, None]:
+        """Upload the audio output file to the orchestrator."""
+        try:
+            with open(file_path, 'rb') as f:
+                file_name = os.path.basename(file_path)
+                headers = {'Authorization': f'Bearer {self.access_token}'}
+                # Assuming the generated foley is in mp3 format
+                files = {'file': (file_name, f.read(), 'audio/mpeg')}
+                data = {'jobId': job_id}
+
+                response = requests.post(
+                    f"{self.orchestrator_url}/api/dgn/upload-output",
+                    files=files, data=data, headers=headers
+                )
+                response.raise_for_status()
+                response_data = response.json()
+                storage_path = response_data.get('storagePath')
+                if not storage_path:
+                    logging.error(f"Upload response missing 'storagePath': {response_data}")
+                    return None
+                return storage_path
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Could not upload file {file_path}: {e}")
+            return None
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from upload response: {response.text}")
+            return None
+
     def upload_thumbnail(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the thumbnail file to the orchestrator."""
         try:
@@ -160,7 +188,7 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self) -> Union[str, None]:
+    def register_with_orchestrator(self, service_type: str = 'default') -> Union[str, None]:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
         
@@ -169,7 +197,7 @@ class OrchestratorService:
             logging.error("Could not extract user_id from token. Cannot register.")
             return None
         
-        payload = {**hardware_profile, "user_id": user_id}
+        payload = {**hardware_profile, "user_id": user_id, "service_type": service_type}
 
         logging.info(f"Registering with profile: {payload}")
         try:
