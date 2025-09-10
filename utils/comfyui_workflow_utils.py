@@ -77,7 +77,26 @@ def inject_prompt_and_image_into_workflow(workflow_api_path: str, prompt: str, n
                 datestr = datetime.now().strftime("%Y-%m-%d")
                 node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
 
-    return {"prompt": api_graph}
+    return api_graph
+
+def inject_video_and_prompt_into_foley_workflow(workflow_api_path: str, video_filename: str, prompt: str, negative_prompt: str):
+    """
+    Loads the Foley ComfyUI API-formatted workflow, injects video filename and prompts.
+    """
+    with open(workflow_api_path, 'r') as f:
+        workflow_api = json.load(f)
+
+    # Deep copy to avoid modifying the cached workflow
+    api_graph = copy.deepcopy(workflow_api)
+
+    # Inject video filename and prompts
+    for node in api_graph.values():
+        if node["class_type"] == "HunyuanVideoFoleyGeneratorAdvanced":
+            node["inputs"]["video"] = video_filename
+            node["inputs"]["text_prompt"] = prompt
+            node["inputs"]["negative_prompt"] = negative_prompt
+
+    return api_graph
 
 def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_output_func) -> Union[str, None]:
     """Process the workflow output, upload the generated files, and return the first successful upload path."""

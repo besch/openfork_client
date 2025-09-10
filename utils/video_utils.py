@@ -67,6 +67,32 @@ def find_video_in_output(outputs: dict):
                     return file_info['filename'], file_info.get('subfolder', '')
     return None
 
+def find_audio_in_output(outputs: dict):
+    """Parses ComfyUI workflow output to find the first audio file."""
+    if not isinstance(outputs, dict):
+        return None
+    for node_id, node_output in outputs.items():
+        if isinstance(node_output, dict) and 'files' in node_output:
+            for file_info in node_output['files']:
+                if isinstance(file_info, dict) and file_info.get('type') == 'output' and \
+                   isinstance(file_info.get('filename'), str) and \
+                   file_info.get('filename', '').lower().endswith(('.wav', '.mp3')):
+                    return file_info['filename'], file_info.get('subfolder', '')
+    return None
+
+def get_audio_duration(audio_path: str) -> float:
+    """Gets the duration of an audio file in seconds using ffmpeg.probe."""
+    try:
+        probe = ffmpeg.probe(audio_path)
+        duration = float(probe['format']['duration'])
+        return duration
+    except ffmpeg.Error as e:
+        logging.error(f"ffmpeg error during duration probe for {audio_path}: {e.stderr.decode() if e.stderr else 'Unknown ffmpeg error'}")
+        return 0.0
+    except (KeyError, ValueError) as e:
+        logging.error(f"Could not parse duration for {audio_path}: {e}")
+        return 0.0
+
 def generate_placeholder_video(output_dir: str, job_id: str) -> str:
     """Generates a placeholder video using ffmpeg."""
     placeholder_filename = f"placeholder_{job_id}.mp4"

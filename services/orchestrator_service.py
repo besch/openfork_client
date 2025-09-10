@@ -46,6 +46,25 @@ class OrchestratorService:
             return None
         return None # Add a return statement here
 
+    def download_asset_by_url(self, asset_url: str, download_dir: str) -> Union[str, None]:
+        """Download an asset from a given URL."""
+        try:
+            response = requests.get(asset_url, stream=True)
+            response.raise_for_status()
+            
+            file_name = asset_url.split('/')[-1].split('?')[0]
+            file_path = os.path.join(download_dir, file_name)
+
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            logging.info(f"Asset downloaded to {file_path}")
+            return file_path
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error downloading asset from {asset_url}: {e}")
+            return None
+
     def upload_output(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the output file to the orchestrator."""
         try:
@@ -142,7 +161,7 @@ class OrchestratorService:
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
 
-    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None, duration_seconds: float = None):
+    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None):
         """Update the status of a job."""
         try:
             payload = {"status": status}
@@ -152,6 +171,8 @@ class OrchestratorService:
                 payload["thumbnail_storage_path"] = thumbnail_path
             if duration_seconds:
                 payload["duration_seconds"] = duration_seconds
+            if completion_metadata:
+                payload["completion_metadata"] = completion_metadata
 
             response = requests.put(
                 f"{self.orchestrator_url}/api/dgn/job/{job_id}",
