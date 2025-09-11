@@ -22,30 +22,36 @@ RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-inde
 # Install other dependencies as before, including gitpython to fix 'git' module error
 RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
 
-# SageAttention is not required for the Foley workflow.
-
 # Set working directory back to /opt/ComfyUI
 WORKDIR /opt/ComfyUI
 
 # Clone ComfyUI and custom nodes as before
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-RUN python -m pip install -r requirements.txt
 
 # Clone ComfyUI Manager into custom_nodes
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
-# Install ComfyUI Manager Python dependencies
-RUN python -m pip install GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub>0.20
 
-
-# Clone and install HunyuanVideoFoley
+# Clone HunyuanVideoFoley
 RUN git clone https://github.com/if-ai/ComfyUI_HunyuanVideoFoley.git /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley
-WORKDIR /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley
-RUN python -m pip install -r requirements.txt
-RUN python install.py
-WORKDIR /opt/ComfyUI
 
-# Install requirements for custom nodes
-RUN python -m pip install huggingface_hub toml rich
+# Clone VideoHelperSuite
+RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
+
+# Install dependencies for custom nodes
+RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
+RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/requirements.txt
+RUN python -m pip install timm decord
+RUN python -m pip install -U av
+
+# Install main requirements
+RUN python -m pip install -r requirements.txt
+
+# Force reinstall correct torch version
+RUN python -m pip install --force-reinstall torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Run install script for foley
+# This is now run at container startup via CMD to ensure models are in the mounted volume
+# RUN python /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/install.py
 
 # Install additional system dependencies for OpenCV
 RUN apt-get update && apt-get install -y \
@@ -55,16 +61,6 @@ RUN apt-get update && apt-get install -y \
 # Install uv for ComfyUI-Manager
 RUN python -m pip install uv
 
-
-# # Copy models to ComfyUI's model directories and workflows
-# COPY workflows/ /opt/ComfyUI/user/default/workflows/
-# COPY models/text_encoders/ /opt/ComfyUI/models/text_encoders/
-# COPY models/unet/ /opt/ComfyUI/models/unet/
-# COPY models/loras/ /opt/ComfyUI/models/loras/
-# COPY models/vae/ /opt/ComfyUI/models/vae/
-
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
-# On start, check if SageAttention is installed in the persistent user volume.
-# If not, install it there. Then, start ComfyUI.
-CMD ["python", "main.py", "--listen"]
+CMD ["sh", "-c", "python /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/install.py && python /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/install.py --quantization fp8 && (mv /opt/ComfyUI/models/foley/hunyuanvideo-foley-xxl/hunyuanvideo_foley.fp8.pth /opt/ComfyUI/models/foley/hunyuanvideo-foley-xxl/hunyuanvideo_foley.fp8_e5m2.pth || true) && python main.py --listen"]

@@ -9,7 +9,11 @@ def get_root_dir():
     """Determines the root directory for the application, handling both script and frozen exe."""
     if getattr(sys, 'frozen', False):
         # Running as a PyInstaller bundle
-        return os.path.dirname(sys.executable)
+        executable_path = os.path.dirname(sys.executable)
+        # Check if we are in the electron app's bin directory
+        if 'dgn_client_desktop' in executable_path:
+            return os.path.abspath(os.path.join(executable_path, '..', '..', 'dgn-client'))
+        return executable_path
     else:
         # Running as a normal script
         return os.path.dirname(os.path.abspath(__file__))

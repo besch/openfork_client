@@ -87,7 +87,7 @@ def inject_video_and_prompt_into_foley_workflow(workflow_api_path: str, video_fi
         workflow_api = json.load(f)
 
     # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api)
+    api_graph = copy.deepcopy(workflow_api["prompt"])
 
     # Inject video filename and prompts
     for node in api_graph.values():

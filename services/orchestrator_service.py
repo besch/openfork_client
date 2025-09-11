@@ -53,6 +53,11 @@ class OrchestratorService:
             response.raise_for_status()
             
             file_name = asset_url.split('/')[-1].split('?')[0]
+
+            # If the file name has no extension, add .mp4
+            if '.' not in file_name:
+                file_name += '.mp4'
+
             file_path = os.path.join(download_dir, file_name)
 
             with open(file_path, 'wb') as f:

@@ -143,7 +143,7 @@ class DGNClient:
                         positive_prompt = job.get('prompt') or ""
                         negative_prompt = job.get('negative_prompt') or ""
 
-                        if workflow_type == 'video_foley':
+                        if workflow_type == 'hunyuan_video_foley':
                             # --- FOLEY WORKFLOW ---
                             workflow_api_path = os.path.join(self.root_dir, 'workflows', 'hunyuan-video-foley.api.json')
                             input_video_url = job.get('input_video_url')
