@@ -126,6 +126,33 @@ class OrchestratorService:
             logging.error(f"Failed to decode JSON from upload response: {response.text}")
             return None
 
+    def upload_image_output(self, file_path: str, job_id: str) -> Union[str, None]:
+        """Upload the image output file to the orchestrator."""
+        try:
+            with open(file_path, 'rb') as f:
+                file_name = os.path.basename(file_path)
+                headers = {'Authorization': f'Bearer {self.access_token}'}
+                files = {'file': (file_name, f.read(), 'image/png')}
+                data = {'jobId': job_id}
+
+                response = requests.post(
+                    f"{self.orchestrator_url}/api/dgn/upload-output",
+                    files=files, data=data, headers=headers
+                )
+                response.raise_for_status()
+                response_data = response.json()
+                storage_path = response_data.get('storagePath')
+                if not storage_path:
+                    logging.error(f"Upload response missing 'storagePath': {response_data}")
+                    return None
+                return storage_path
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Could not upload file {file_path}: {e}")
+            return None
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from upload response: {response.text}")
+            return None
+
     def upload_thumbnail(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the thumbnail file to the orchestrator."""
         try:

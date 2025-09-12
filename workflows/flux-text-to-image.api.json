@@ -1,0 +1,114 @@
+
+{
+  "prompt": {
+    "3": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 156,
+        "steps": 10,
+        "cfg": 2.0,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "denoise": 1,
+        "model": [
+          "17",
+          0
+        ],
+        "positive": [
+          "18",
+          0
+        ],
+        "negative": [
+          "6",
+          0
+        ],
+        "latent_image": [
+          "5",
+          0
+        ]
+      }
+    },
+    "4": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "3",
+          0
+        ],
+        "vae": [
+          "16",
+          0
+        ]
+      }
+    },
+    "5": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "blurry, ugly, watermark",
+        "clip": [
+          "15",
+          0
+        ]
+      }
+    },
+    "7": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "a photograph of an astronaut riding a horse",
+        "clip": [
+          "15",
+          0
+        ]
+      }
+    },
+    "8": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "flux-image",
+        "images": [
+          "4",
+          0
+        ]
+      }
+    },
+    "15": {
+      "class_type": "DualCLIPLoader",
+      "inputs": {
+        "clip_name1": "clip_l.safetensors",
+        "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
+        "type": "flux"
+      }
+    },
+    "16": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "ae.safetensors"
+      }
+    },
+    "17": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "flux1-schnell.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    "18": {
+      "class_type": "FluxGuidance",
+      "inputs": {
+        "guidance": 8,
+        "conditioning": [
+          "7",
+          0
+        ]
+      }
+    }
+  }
+}

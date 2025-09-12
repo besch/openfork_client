@@ -79,6 +79,42 @@ def inject_prompt_and_image_into_workflow(workflow_api_path: str, prompt: str, n
 
     return api_graph
 
+def find_image_in_output(outputs: dict) -> Union[tuple[str, str], None]:
+    """Finds the output image details from the ComfyUI workflow output."""
+    for node_id, node_output in outputs.items():
+        if 'images' in node_output:
+            for image in node_output['images']:
+                filename = image.get('filename')
+                subfolder = image.get('subfolder')
+                if filename:
+                    return filename, subfolder
+    return None
+
+def inject_prompt_into_flux_workflow(workflow_api_path: str, prompt: str, negative_prompt: str):
+    """
+    Loads a ComfyUI API-formatted workflow, injects prompts for FLUX.
+    """
+    with open(workflow_api_path, 'r') as f:
+        workflow_api = json.load(f)
+
+    # Deep copy to avoid modifying the cached workflow
+    api_graph = copy.deepcopy(workflow_api["prompt"])
+
+    # In the new flux-text-to-image.api.json:
+    # Node 7 is positive prompt
+    # Node 6 is negative prompt
+    if '7' in api_graph and 'inputs' in api_graph['7'] and 'text' in api_graph['7']['inputs']:
+        api_graph['7']['inputs']['text'] = prompt
+    else:
+        logging.warning("Could not find positive prompt node 7 in FLUX workflow")
+
+    if '6' in api_graph and 'inputs' in api_graph['6'] and 'text' in api_graph['6']['inputs']:
+        api_graph['6']['inputs']['text'] = negative_prompt
+    else:
+        logging.warning("Could not find negative prompt node 6 in FLUX workflow")
+
+    return api_graph
+
 def inject_video_and_prompt_into_foley_workflow(workflow_api_path: str, video_filename: str, prompt: str, negative_prompt: str):
     """
     Loads the Foley ComfyUI API-formatted workflow, injects video filename and prompts.

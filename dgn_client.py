@@ -12,7 +12,7 @@ import sys
 import shutil
 from config import ROOT_DIR, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from services.orchestrator_service import OrchestratorService
-from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes, inject_video_and_prompt_into_foley_workflow
+from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes, inject_video_and_prompt_into_foley_workflow, inject_prompt_into_flux_workflow, find_image_in_output
 from services.comfyui_service import ComfyUIClient
 from utils.video_utils import generate_thumbnail, find_video_in_output, find_audio_in_output, generate_placeholder_video, get_video_duration
 
@@ -68,6 +68,8 @@ def manage_docker(action: str, service_type: str = 'default'):
     """Starts or stops the ComfyUI Docker container using docker-compose."""
     if service_type == 'foley':
         compose_file = 'docker-compose.foley.yaml'
+    elif service_type == 'text_to_image':
+        compose_file = 'docker-compose.flux.yaml'
     else:
         compose_file = 'docker-compose.yaml'
     
@@ -199,6 +201,50 @@ class DGNClient:
                                 self.orchestrator_service.update_job_status(job_id, 'failed')
 
                         else:
+                            # --- TEXT TO IMAGE WORKFLOW (FLUX) ---
+                            if workflow_type == 'text_to_image':
+                                workflow_api_path = os.path.join(self.root_dir, 'workflows', 'flux-text-to-image.api.json')
+                                
+                                if not os.path.exists(workflow_api_path):
+                                    logging.error(f"Workflow API file not found at {workflow_api_path}")
+                                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                                    continue
+
+                                wf_ready = inject_prompt_into_flux_workflow(
+                                    workflow_api_path, positive_prompt, negative_prompt
+                                )
+                                
+                                payload = {"prompt": wf_ready}
+                                prompt_id = self.comfyui_client.trigger_workflow(payload)
+
+                                if prompt_id:
+                                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                                    if outputs:
+                                        image_info = find_image_in_output(outputs)
+                                        if image_info:
+                                            image_filename, subfolder = image_info
+                                            local_image_path = os.path.join(self.output_dir, subfolder, image_filename)
+                                            
+                                            image_storage_path = self.orchestrator_service.upload_image_output(local_image_path, job_id)
+                                            
+                                            if image_storage_path:
+                                                self.orchestrator_service.update_job_status(
+                                                    job_id, 
+                                                    'completed', 
+                                                    output_path=image_storage_path
+                                                )
+                                            else:
+                                                logging.error(f"Image upload failed for job {job_id}.")
+                                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                                        else:
+                                            logging.error(f"Workflow for job {job_id} completed, but no image file found.")
+                                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                                    else:
+                                        logging.error(f"Workflow for job {job_id} failed to produce outputs.")
+                                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                                else:
+                                    logging.error(f"Failed to trigger workflow for job {job_id}.")
+                                    self.orchestrator_service.update_job_status(job_id, 'failed')
                             # --- IMAGE TO VIDEO WORKFLOW (EXISTING LOGIC) ---
                             workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-image-to-video.api.json')
                             
@@ -334,7 +380,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='DGN Client')
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
-    parser.add_argument('--service', type=str, default='default', help='Service to run (default or foley)')
+    parser.add_argument('--service', type=str, default='default', help='Service to run (default, foley, or text_to_image)')
     args = parser.parse_args()
 
     try:
