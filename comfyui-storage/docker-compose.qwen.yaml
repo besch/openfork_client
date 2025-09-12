@@ -1,9 +1,9 @@
 services:
-  comfyui-flux:
+  comfyui-qwen:
     build:
       context: .
-      dockerfile: Dockerfile.flux
-    container_name: comfyui-flux-cu128
+      dockerfile: Dockerfile.qwen
+    container_name: comfyui-qwen-cu128
     ports:
       - "8188:8188"
     volumes:
