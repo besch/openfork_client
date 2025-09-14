@@ -135,10 +135,15 @@ class OrchestratorService:
                 files = {'file': (file_name, f.read(), 'image/png')}
                 data = {'jobId': job_id}
 
+                logging.info(f"--- Uploading to: {self.orchestrator_url}/api/dgn/upload-output ---")
                 response = requests.post(
                     f"{self.orchestrator_url}/api/dgn/upload-output",
                     files=files, data=data, headers=headers
                 )
+                logging.info(f"--- Upload API Response Status: {response.status_code} ---")
+                logging.info(f"--- Upload API Response Headers: {response.headers} ---")
+                logging.info(f"--- Upload API Response Body: {response.text} ---")
+
                 response.raise_for_status()
                 response_data = response.json()
                 storage_path = response_data.get('storagePath')
@@ -193,7 +198,7 @@ class OrchestratorService:
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
 
-    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None):
+    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None):
         """Update the status of a job."""
         try:
             payload = {"status": status}
@@ -205,6 +210,8 @@ class OrchestratorService:
                 payload["duration_seconds"] = duration_seconds
             if completion_metadata:
                 payload["completion_metadata"] = completion_metadata
+            if prompt:
+                payload["prompt"] = prompt
 
             response = requests.put(
                 f"{self.orchestrator_url}/api/dgn/job/{job_id}",

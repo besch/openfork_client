@@ -229,9 +229,11 @@ class DGNClient:
                                         
                                         if image_storage_path:
                                             self.orchestrator_service.update_job_status(
-                                                job_id, 
-                                                'completed', 
-                                                output_path=image_storage_path
+                                                job_id,
+                                                'completed',
+                                                output_path=image_storage_path,
+                                                thumbnail_path=image_storage_path,
+                                                prompt=positive_prompt
                                             )
                                         else:
                                             logging.error(f"Image upload failed for job {job_id}.")
