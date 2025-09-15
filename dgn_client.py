@@ -17,21 +17,7 @@ from services.comfyui_service import ComfyUIClient
 from utils.video_utils import generate_thumbnail, find_video_in_output, find_audio_in_output, generate_placeholder_video, get_video_duration
 
 
-# Custom handler to ensure logs are flushed immediately for real-time IPC with the Electron app.
-class FlushingStreamHandler(logging.StreamHandler):
-    def emit(self, record):
-        super().emit(record)
-        self.flush()
-
-# Configure logging with the flushing handler to ensure real-time updates in the client UI
-root_logger = logging.getLogger()
-if root_logger.hasHandlers():
-    root_logger.handlers.clear()
-root_logger.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-handler = FlushingStreamHandler(sys.stdout)
-handler.setFormatter(formatter)
-root_logger.addHandler(handler)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
 
 # Global flag for graceful shutdown
 SHUTDOWN_FLAG = False
@@ -321,7 +307,6 @@ class DGNClient:
 
                 if job and job.get('id'):
                     logging.info(f"Received job: {job['id']}")
-                    self.orchestrator_service.update_job_status(job['id'], 'processing')
                     self._process_job(job)
                     self.orchestrator_service.update_provider_status(provider_id, 'available')
                     logging.info("Provider status set to available. Waiting for next job...")
@@ -343,7 +328,6 @@ class DGNClient:
                 if job and job.get('id'):
                     job_id = job['id']
                     logging.info(f"Received job: {job_id}")
-                    self.orchestrator_service.update_job_status(job_id, 'processing')
 
                     workflow_type = job.get('workflow_type', 'image_to_video')
                     service_type = self.get_service_type_for_workflow(workflow_type)
