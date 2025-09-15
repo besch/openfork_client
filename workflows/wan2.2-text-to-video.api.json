@@ -83,16 +83,16 @@
           0
         ],
         "positive": [
-          "6",
+          "50",
           0
         ],
         "negative": [
-          "7",
-          0
+          "50",
+          1
         ],
         "latent_image": [
-          "99",
-          0
+          "50",
+          2
         ]
       },
       "class_type": "KSamplerAdvanced"
@@ -113,12 +113,12 @@
           0
         ],
         "positive": [
-          "6",
+          "50",
           0
         ],
         "negative": [
-          "7",
-          0
+          "50",
+          1
         ],
         "latent_image": [
           "57",
@@ -220,13 +220,26 @@
       },
       "class_type": "LoraLoaderModelOnly"
     },
-    "99": {
+    "50": {
       "inputs": {
         "width": 832,
         "height": 480,
-        "batch_size": 1
+        "length": 81,
+        "batch_size": 1,
+        "positive": [
+          "6",
+          0
+        ],
+        "negative": [
+          "7",
+          0
+        ],
+        "vae": [
+          "39",
+          0
+        ]
       },
-      "class_type": "EmptyLatentImage"
+      "class_type": "WanImageToVideo"
     }
   }
 }
