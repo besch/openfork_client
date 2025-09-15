@@ -2,6 +2,7 @@ import requests
 import logging
 import base64
 import json
+import time
 from typing import Union, Dict
 from services.hardware_profiler import get_hardware_profile
 import os
@@ -21,14 +22,22 @@ class OrchestratorService:
     def get_next_job(self, provider_id: str) -> Union[Dict, None]:
         """Get the next available job for a provider."""
         try:
+            # Add a cache-busting parameter to prevent Next.js from caching GET requests
+            url = f"{self.orchestrator_url}/api/dgn/jobs/{provider_id}?ts={int(time.time())}"
             response = requests.get(
-                f"{self.orchestrator_url}/api/dgn/jobs/{provider_id}",
+                url,
                 headers=self._get_auth_headers()
             )
             response.raise_for_status()
+            # Handle cases where the response is successful but empty (e.g. no job)
+            if not response.content:
+                return None
             return response.json()
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching next job: {e}")
+            return None
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from get_next_job response: {response.text}")
             return None
 
     def download_asset(self, asset_id: str, cache_dir: str) -> Union[str, None]:

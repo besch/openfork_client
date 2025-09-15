@@ -112,6 +112,7 @@ class DGNClient:
         self.input_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "input")
         self.output_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "output")
         self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
+        self.active_service_type = None
         
     def start_heartbeat(self, provider_id: str):
         """Starts a background thread to send heartbeats."""
@@ -122,211 +123,248 @@ class DGNClient:
     def _heartbeat_loop(self, provider_id: str):
         """The loop that sends heartbeats periodically."""
         while True:
+            if SHUTDOWN_FLAG:
+                break
             try:
                 self.orchestrator_service.send_heartbeat(provider_id)
             except Exception as e:
                 logging.error(f"An error occurred in the heartbeat loop: {e}")
             time.sleep(60)
 
-    def listen_for_jobs(self, provider_id: str):
-        """Listen for jobs from the orchestrator."""
-        while True:
+    def wait_for_comfyui(self, timeout=180):
+        """Waits for the ComfyUI server to be available."""
+        logging.info("Waiting for ComfyUI server to be ready...")
+        start_time = time.time()
+        url = "http://127.0.0.1:8188/queue"
+        while time.time() - start_time < timeout:
             if SHUTDOWN_FLAG:
-                logging.info("Shutdown flag received. Exiting job listening loop.")
-                break
+                logging.warning("Shutdown requested while waiting for ComfyUI.")
+                return False
             try:
-                logging.info("Checking for new jobs...")
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    logging.info("ComfyUI server is ready.")
+                    return True
+            except requests.exceptions.RequestException:
+                time.sleep(5)
+        logging.error(f"ComfyUI server did not become ready in {timeout} seconds.")
+        return False
+
+    def get_service_type_for_workflow(self, workflow_type: str) -> str:
+        """Maps a workflow type to a docker-compose service type."""
+        if workflow_type == 'hunyuan_video_foley':
+            return 'foley'
+        elif workflow_type == 'text_to_image':
+            return 'text_to_image'
+        else:
+            return 'default'
+
+    def _process_job(self, job):
+        """Processes a single DGN job."""
+        try:
+            job_id = job['id']
+            workflow_type = job.get('workflow_type', 'image_to_video')
+            positive_prompt = job.get('prompt') or ""
+            negative_prompt = job.get('negative_prompt') or ""
+
+            if workflow_type == 'hunyuan_video_foley':
+                # --- FOLEY WORKFLOW ---
+                workflow_api_path = os.path.join(self.root_dir, 'workflows', 'hunyuan-video-foley.api.json')
+                input_video_url = job.get('input_video_url')
+
+                if not input_video_url:
+                    logging.error(f"Foley job {job_id} missing 'input_video_url'.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+
+                video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
+                if not video_path:
+                    logging.error(f"Failed to download input video for foley job {job_id}.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+                
+                video_filename = os.path.basename(video_path)
+                wf_ready = inject_video_and_prompt_into_foley_workflow(workflow_api_path, video_filename, positive_prompt, negative_prompt)
+                
+                payload = {"prompt": wf_ready}
+                prompt_id = self.comfyui_client.trigger_workflow(payload)
+
+                if prompt_id:
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    if outputs:
+                        audio_info = find_audio_in_output(outputs)
+                        if audio_info:
+                            audio_filename, subfolder = audio_info
+                            local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
+                            audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
+                            if audio_storage_path:
+                                self.orchestrator_service.update_job_status(job_id, 'completed', completion_metadata={'audio_storage_path': audio_storage_path})
+                            else:
+                                logging.error(f"Foley job {job_id} completed, but audio upload failed.")
+                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                        else:
+                            logging.error(f"Foley workflow for job {job_id} completed, but no audio file found.")
+                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                    else:
+                        logging.error(f"Foley workflow for job {job_id} failed to produce outputs.")
+                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                else:
+                    logging.error(f"Failed to trigger foley workflow for job {job_id}.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+
+            elif workflow_type == 'text_to_image':
+                # --- TEXT TO IMAGE WORKFLOW (Qwen) ---
+                workflow_api_path = os.path.join(self.root_dir, 'workflows', 'qwen.api.json')
+                if not os.path.exists(workflow_api_path):
+                    logging.error(f"Workflow API file not found at {workflow_api_path}")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+
+                wf_ready = inject_prompt_into_qwen_workflow(workflow_api_path, positive_prompt, negative_prompt)
+                payload = {"prompt": wf_ready}
+                prompt_id = self.comfyui_client.trigger_workflow(payload)
+
+                if prompt_id:
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    if outputs:
+                        image_info = find_image_in_output(outputs)
+                        if image_info:
+                            image_filename, subfolder = image_info
+                            local_image_path = os.path.join(self.output_dir, subfolder, image_filename)
+                            image_storage_path = self.orchestrator_service.upload_image_output(local_image_path, job_id)
+                            if image_storage_path:
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=image_storage_path, thumbnail_path=image_storage_path, prompt=positive_prompt)
+                            else:
+                                logging.error(f"Image upload failed for job {job_id}.")
+                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                        else:
+                            logging.error(f"Workflow for job {job_id} completed, but no image file found.")
+                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                    else:
+                        logging.error(f"Workflow for job {job_id} failed to produce outputs.")
+                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                else:
+                    logging.error(f"Failed to trigger workflow for job {job_id}.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+            
+            else: # Default to image_to_video
+                # --- IMAGE TO VIDEO WORKFLOW (EXISTING LOGIC) ---
+                workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-image-to-video.api.json')
+                if not os.path.exists(workflow_api_path):
+                    logging.error(f"Workflow API file not found at {workflow_api_path}")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+
+                start_image_filename = materialize_start_image(job, self.input_dir)
+                wf_ready = inject_prompt_and_image_into_workflow(workflow_api_path, positive_prompt, negative_prompt, start_image_filename)
+                
+                payload = {"prompt": wf_ready}
+                prompt_id = self.comfyui_client.trigger_workflow(payload)
+
+                if prompt_id:
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    if outputs:
+                        video_info = find_video_in_output(outputs)
+                        if video_info:
+                            video_filename, subfolder = video_info
+                            local_video_path = os.path.join(self.output_dir, subfolder, video_filename)
+                            video_storage_path = self.orchestrator_service.upload_output(local_video_path, job_id)
+                            
+                            if video_storage_path:
+                                thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
+                                thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                                thumbnail_storage_path = None
+                                
+                                if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job_id)
+                                
+                                duration = get_video_duration(local_video_path)
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+                            else:
+                                logging.error(f"Video upload failed for job {job_id}.")
+                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                        else:
+                            logging.error(f"Workflow for job {job_id} completed, but no video file found.")
+                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                    else:
+                        logging.error(f"Workflow for job {job_id} failed to produce outputs.")
+                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                else:
+                    logging.error(f"Failed to trigger workflow for job {job_id}.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+
+        except Exception as e:
+            logging.error(f"An error occurred while processing job {job.get('id')}: {e}", exc_info=True)
+            if job and job.get('id'):
+                self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+
+    def listen_for_jobs(self, provider_id: str):
+        """Listen for jobs from the orchestrator (for dedicated providers)."""
+        while not SHUTDOWN_FLAG:
+            try:
+                logging.info(f"Checking for new jobs for provider {provider_id}...")
                 job = self.orchestrator_service.get_next_job(provider_id)
 
                 if job and job.get('id'):
                     logging.info(f"Received job: {job['id']}")
-                    try:
-                        job_id = job['id']
-                        workflow_type = job.get('workflow_type', 'image_to_video')
-                        positive_prompt = job.get('prompt') or ""
-                        negative_prompt = job.get('negative_prompt') or ""
-
-                        if workflow_type == 'hunyuan_video_foley':
-                            # --- FOLEY WORKFLOW ---
-                            workflow_api_path = os.path.join(self.root_dir, 'workflows', 'hunyuan-video-foley.api.json')
-                            input_video_url = job.get('input_video_url')
-
-                            if not input_video_url:
-                                logging.error(f"Foley job {job_id} missing 'input_video_url'.")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
-                                continue
-
-                            # Download the video to be processed
-                            video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
-                            if not video_path:
-                                logging.error(f"Failed to download input video for foley job {job_id}.")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
-                                continue
-                            
-                            video_filename = os.path.basename(video_path)
-
-                            wf_ready = inject_video_and_prompt_into_foley_workflow(
-                                workflow_api_path, video_filename, positive_prompt, negative_prompt
-                            )
-                            
-                            payload = {"prompt": wf_ready}
-                            prompt_id = self.comfyui_client.trigger_workflow(payload)
-
-                            if prompt_id:
-                                outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
-                                if outputs:
-                                    audio_info = find_audio_in_output(outputs)
-                                    if audio_info:
-                                        audio_filename, subfolder = audio_info
-                                        local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
-                                        
-                                        audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
-                                        
-                                        if audio_storage_path:
-                                            self.orchestrator_service.update_job_status(
-                                                job_id, 
-                                                'completed',
-                                                completion_metadata={'audio_storage_path': audio_storage_path}
-                                            )
-                                        else:
-                                            logging.error(f"Foley job {job_id} completed, but audio upload failed.")
-                                            self.orchestrator_service.update_job_status(job_id, 'failed')
-                                    else:
-                                        logging.error(f"Foley workflow for job {job_id} completed, but no audio file found.")
-                                        self.orchestrator_service.update_job_status(job_id, 'failed')
-                                else:
-                                    logging.error(f"Foley workflow for job {job_id} failed to produce outputs.")
-                                    self.orchestrator_service.update_job_status(job_id, 'failed')
-                            else:
-                                logging.error(f"Failed to trigger foley workflow for job {job_id}.")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
-
-                        elif workflow_type == 'text_to_image':
-                                                        # --- TEXT TO IMAGE WORKFLOW (Qwen) ---
-                            workflow_api_path = os.path.join(self.root_dir, 'workflows', 'qwen.api.json')
-                            
-                            if not os.path.exists(workflow_api_path):
-                                logging.error(f"Workflow API file not found at {workflow_api_path}")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
-                                continue
-
-                            wf_ready = inject_prompt_into_qwen_workflow(
-                                workflow_api_path, positive_prompt, negative_prompt
-                            )
-                            
-                            payload = {"prompt": wf_ready}
-                            prompt_id = self.comfyui_client.trigger_workflow(payload)
-
-                            if prompt_id:
-                                outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
-                                if outputs:
-                                    image_info = find_image_in_output(outputs)
-                                    if image_info:
-                                        image_filename, subfolder = image_info
-                                        local_image_path = os.path.join(self.output_dir, subfolder, image_filename)
-                                        
-                                        image_storage_path = self.orchestrator_service.upload_image_output(local_image_path, job_id)
-                                        
-                                        if image_storage_path:
-                                            self.orchestrator_service.update_job_status(
-                                                job_id,
-                                                'completed',
-                                                output_path=image_storage_path,
-                                                thumbnail_path=image_storage_path,
-                                                prompt=positive_prompt
-                                            )
-                                        else:
-                                            logging.error(f"Image upload failed for job {job_id}.")
-                                            self.orchestrator_service.update_job_status(job_id, 'failed')
-                                    else:
-                                        logging.error(f"Workflow for job {job_id} completed, but no image file found.")
-                                        self.orchestrator_service.update_job_status(job_id, 'failed')
-                                else:
-                                    logging.error(f"Workflow for job {job_id} failed to produce outputs.")
-                                    self.orchestrator_service.update_job_status(job_id, 'failed')
-                            else:
-                                logging.error(f"Failed to trigger workflow for job {job_id}.")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
-                        
-                        else: # Default to image_to_video
-                            # --- IMAGE TO VIDEO WORKFLOW (EXISTING LOGIC) ---
-                            workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-image-to-video.api.json')
-                            
-                            if not os.path.exists(workflow_api_path):
-                                logging.error(f"Workflow API file not found at {workflow_api_path}")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
-                                continue
-
-                            start_image_filename = materialize_start_image(job, self.input_dir)
-                            wf_ready = inject_prompt_and_image_into_workflow(
-                                workflow_api_path, positive_prompt, negative_prompt, start_image_filename
-                            )
-                            
-                            payload = {"prompt": wf_ready}
-                            prompt_id = self.comfyui_client.trigger_workflow(payload)
-
-                            if prompt_id:
-                                outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
-                                if outputs:
-                                    video_info = find_video_in_output(outputs)
-                                    if video_info:
-                                        video_filename, subfolder = video_info
-                                        local_video_path = os.path.join(self.output_dir, subfolder, video_filename)
-                                        
-                                        video_storage_path = self.orchestrator_service.upload_output(local_video_path, job_id)
-                                        
-                                        if video_storage_path:
-                                            thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
-                                            thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
-                                            thumbnail_storage_path = None
-                                            
-                                            if generate_thumbnail(local_video_path, thumbnail_local_path):
-                                                thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job_id)
-                                            
-                                            duration = get_video_duration(local_video_path)
-                                            self.orchestrator_service.update_job_status(
-                                                job_id, 
-                                                'completed', 
-                                                output_path=video_storage_path,
-                                                thumbnail_path=thumbnail_storage_path,
-                                                duration_seconds=duration
-                                            )
-                                        else:
-                                            logging.error(f"Video upload failed for job {job_id}.")
-                                            self.orchestrator_service.update_job_status(job_id, 'failed')
-                                    else:
-                                        logging.error(f"Workflow for job {job_id} completed, but no video file found.")
-                                        self.orchestrator_service.update_job_status(job_id, 'failed')
-                                else:
-                                    logging.error(f"Workflow for job {job_id} failed to produce outputs.")
-                                    self.orchestrator_service.update_job_status(job_id, 'failed')
-                            else:
-                                logging.error(f"Failed to trigger workflow for job {job_id}.")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
-
-                    except Exception as e:
-                        logging.error(f"An error occurred while processing job {job.get('id')}: {e}", exc_info=True)
-                        self.orchestrator_service.update_job_status(job.get('id'), 'failed')
-                    finally:
-                        self.orchestrator_service.update_provider_status(provider_id, 'available')
-                        logging.info("Provider status set to available. Waiting for next job...")
+                    self._process_job(job)
+                    self.orchestrator_service.update_provider_status(provider_id, 'available')
+                    logging.info("Provider status set to available. Waiting for next job...")
                 else:
                     logging.info("No new jobs.")
             except Exception as e:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
             time.sleep(10)
+        logging.info("Shutdown flag received. Exiting job listening loop.")
+
+    def listen_for_jobs_auto(self, provider_id: str):
+        """Listen for jobs and dynamically start/stop containers."""
+        while not SHUTDOWN_FLAG:
+            try:
+                logging.info("Auto mode: Checking for new jobs...")
+                job = self.orchestrator_service.get_next_job(provider_id)
+
+                if job and job.get('id'):
+                    logging.info(f"Received job: {job['id']}")
+                    workflow_type = job.get('workflow_type', 'image_to_video')
+                    service_type = self.get_service_type_for_workflow(workflow_type)
+                    self.active_service_type = service_type
+                    
+                    logging.info(f"Job requires service '{service_type}'. Starting container...")
+                    manage_docker("up", service_type=service_type)
+                    
+                    if self.wait_for_comfyui():
+                        self._process_job(job)
+                    else:
+                        logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
+                        self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+
+                    logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
+                    manage_docker("down", service_type=service_type)
+                    self.active_service_type = None
+                    
+                    self.orchestrator_service.update_provider_status(provider_id, 'available')
+                    logging.info("Provider status set to available. Waiting for next job...")
+                else:
+                    logging.info("No new jobs.")
+            except Exception as e:
+                logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
+
+            if not (job and job.get('id')):
+                time.sleep(10)
+        logging.info("Shutdown flag received. Exiting auto job listening loop.")
+
 
 def main(args):
     """Main function to run the DGN client."""
-    manage_docker("up", service_type=args.service)
+    if args.service != 'auto':
+        manage_docker("up", service_type=args.service)
+    
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()
 
-    if DEV_MODE:
-        determined_orchestrator_url = ORCHESTRATOR_URL_DEV
-    else:
-        determined_orchestrator_url = ORCHESTRATOR_URL_PROD
+    determined_orchestrator_url = ORCHESTRATOR_URL_DEV if DEV_MODE else ORCHESTRATOR_URL_PROD
 
     try:
         logging.info(f"Attempting to connect to orchestrator URL: {determined_orchestrator_url}")
@@ -349,30 +387,44 @@ def main(args):
 
     if not provider_id:
         logging.error("Failed to register with orchestrator. Exiting.")
+        if args.service != 'auto':
+            manage_docker("down", service_type=args.service)
         return
 
     client.start_heartbeat(provider_id)
 
     print("DGN_CLIENT_RUNNING", flush=True)
-    logging.info("DGN Client is running and listening for jobs.")
+    logging.info(f"DGN Client is running in '{args.service}' mode and listening for jobs.")
 
     try:
-        client.listen_for_jobs(provider_id)
+        if args.service == 'auto':
+            client.listen_for_jobs_auto(provider_id)
+        else:
+            client.listen_for_jobs(provider_id)
     except Exception as e:
         logging.error(f"An error occurred in job listening loop: {e}", exc_info=True)
     finally:
         logging.info("DGN Client: Initiating shutdown sequence.")
-        logging.info("DGN Client: Attempting to deregister from orchestrator.")
-        try:
-            client.orchestrator_service.deregister_from_orchestrator(provider_id)
-            logging.info("DGN Client: Successfully deregistered from orchestrator.")
-        except Exception as e:
-            logging.error(f"DGN Client: Failed to deregister from orchestrator: {e}", exc_info=True)
+        if provider_id:
+            logging.info("DGN Client: Attempting to deregister from orchestrator.")
+            try:
+                client.orchestrator_service.deregister_from_orchestrator(provider_id)
+                logging.info("DGN Client: Successfully deregistered from orchestrator.")
+            except Exception as e:
+                logging.error(f"DGN Client: Failed to deregister from orchestrator: {e}", exc_info=True)
         
         logging.info("DGN Client: Stopping Docker container.")
         try:
-            manage_docker("down", service_type=args.service)
-            logging.info("DGN Client: Docker container stopped successfully.")
+            service_to_shutdown = args.service
+            if args.service == 'auto':
+                service_to_shutdown = client.active_service_type
+            
+            if service_to_shutdown and service_to_shutdown != 'auto':
+                manage_docker("down", service_type=service_to_shutdown)
+                logging.info(f"DGN Client: Docker container for service '{service_to_shutdown}' stopped successfully.")
+            else:
+                logging.info("DGN Client: No active container to stop.")
+
         except Exception as e:
             logging.error(f"DGN Client: Failed to stop Docker container: {e}", exc_info=True)
 
@@ -384,7 +436,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='DGN Client')
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
-    parser.add_argument('--service', type=str, default='default', help='Service to run (default, foley, or text_to_image)')
+    parser.add_argument('--service', type=str, default='auto', help='Service to run (default, foley, text_to_image, or auto)')
     args = parser.parse_args()
 
     try:
