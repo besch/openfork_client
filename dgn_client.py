@@ -12,7 +12,7 @@ import sys
 import shutil
 from config import ROOT_DIR, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from services.orchestrator_service import OrchestratorService
-from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes, inject_video_and_prompt_into_foley_workflow, inject_prompt_into_qwen_workflow, find_image_in_output
+from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes, inject_video_and_prompt_into_foley_workflow, inject_prompt_into_qwen_workflow, find_image_in_output, inject_prompt_into_text_to_video_workflow
 from services.comfyui_service import ComfyUIClient
 from utils.video_utils import generate_thumbnail, find_video_in_output, find_audio_in_output, generate_placeholder_video, get_video_duration
 
@@ -239,6 +239,51 @@ class DGNClient:
                                 self.orchestrator_service.update_job_status(job_id, 'failed')
                         else:
                             logging.error(f"Workflow for job {job_id} completed, but no image file found.")
+                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                    else:
+                        logging.error(f"Workflow for job {job_id} failed to produce outputs.")
+                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                else:
+                    logging.error(f"Failed to trigger workflow for job {job_id}.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+
+            elif workflow_type == 'wan-2.2-text-to-video':
+                # --- TEXT TO VIDEO WORKFLOW (WAN 2.2) ---
+                workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-text-to-video.api.json')
+                if not os.path.exists(workflow_api_path):
+                    logging.error(f"Workflow API file not found at {workflow_api_path}")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+
+                wf_ready = inject_prompt_into_text_to_video_workflow(workflow_api_path, positive_prompt, negative_prompt)
+                
+                payload = {"prompt": wf_ready}
+                prompt_id = self.comfyui_client.trigger_workflow(payload)
+
+                if prompt_id:
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    if outputs:
+                        video_info = find_video_in_output(outputs)
+                        if video_info:
+                            video_filename, subfolder = video_info
+                            local_video_path = os.path.join(self.output_dir, subfolder, video_filename)
+                            video_storage_path = self.orchestrator_service.upload_output(local_video_path, job_id)
+                            
+                            if video_storage_path:
+                                thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
+                                thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                                thumbnail_storage_path = None
+                                
+                                if generate_thumbnail(local_video_path, thumbnail_local_path):
+                                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, job_id)
+                                
+                                duration = get_video_duration(local_video_path)
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+                            else:
+                                logging.error(f"Video upload failed for job {job_id}.")
+                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                        else:
+                            logging.error(f"Workflow for job {job_id} completed, but no video file found.")
                             self.orchestrator_service.update_job_status(job_id, 'failed')
                     else:
                         logging.error(f"Workflow for job {job_id} failed to produce outputs.")
