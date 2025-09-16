@@ -15,6 +15,22 @@ from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_
 from services.comfyui_service import ComfyUIClient
 from utils.video_utils import generate_thumbnail, find_video_in_output, find_audio_in_output, generate_placeholder_video, get_video_duration
 
+def get_audio_duration(file_path: str) -> float:
+    """Gets the duration of an audio file using ffprobe."""
+    command = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        file_path
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        return float(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
+        logging.error(f"Error getting audio duration for {file_path}: {e}")
+        return 0.0
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
 
@@ -210,7 +226,8 @@ class DGNClient:
                             local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
                             audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
                             if audio_storage_path:
-                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, completion_metadata=job.get('completion_metadata'))
+                                duration = get_audio_duration(local_audio_path)
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=job.get('completion_metadata'))
                             else:
                                 logging.error(f"Foley job {job_id} completed, but audio upload failed.")
                                 self.orchestrator_service.update_job_status(job_id, 'failed')
@@ -300,7 +317,8 @@ class DGNClient:
                             local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
                             audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
                             if audio_storage_path:
-                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, completion_metadata=job.get('completion_metadata'))
+                                duration = get_audio_duration(local_audio_path)
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=job.get('completion_metadata'))
                             else:
                                 logging.error(f"VibeVoice job {job_id} completed, but audio upload failed.")
                                 self.orchestrator_service.update_job_status(job_id, 'failed')
@@ -352,7 +370,8 @@ class DGNClient:
                             local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
                             audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
                             if audio_storage_path:
-                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, completion_metadata=job.get('completion_metadata'))
+                                duration = get_audio_duration(local_audio_path)
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=job.get('completion_metadata'))
                             else:
                                 logging.error(f"VibeVoice multi-clone job {job_id} completed, but audio upload failed.")
                                 self.orchestrator_service.update_job_status(job_id, 'failed')
