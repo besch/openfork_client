@@ -114,7 +114,7 @@ class OrchestratorService:
                 file_name = os.path.basename(file_path)
                 headers = {'Authorization': f'Bearer {self.access_token}'}
                 # Assuming the generated foley is in mp3 format
-                files = {'file': (file_name, f.read(), 'audio/mpeg')}
+                files = {'file': (file_name, f.read(), 'audio/flac')}
                 data = {'jobId': job_id}
 
                 response = requests.post(

@@ -11,7 +11,7 @@ import argparse
 import sys
 from config import ROOT_DIR, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from services.orchestrator_service import OrchestratorService
-from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes, inject_video_and_prompt_into_foley_workflow, inject_prompt_into_qwen_workflow, find_image_in_output, inject_prompt_into_text_to_video_workflow
+from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes, inject_video_and_prompt_into_foley_workflow, inject_prompt_into_qwen_workflow, find_image_in_output, inject_prompt_into_text_to_video_workflow, inject_prompt_into_vibevoice_workflow, inject_script_and_clones_into_vibevoice_workflow
 from services.comfyui_service import ComfyUIClient
 from utils.video_utils import generate_thumbnail, find_video_in_output, find_audio_in_output, generate_placeholder_video, get_video_duration
 
@@ -68,6 +68,8 @@ def manage_docker(action: str, service_type: str = 'default'):
         compose_file = 'docker-compose.foley.yaml'
     elif service_type == 'text_to_image':
         compose_file = 'docker-compose.qwen.yaml'
+    elif service_type == 'vibevoice':
+        compose_file = 'docker-compose.vibevoice.yaml'
     else:
         compose_file = 'docker-compose.yaml'
     
@@ -154,6 +156,10 @@ class DGNClient:
             return 'foley'
         elif workflow_type == 'text_to_image':
             return 'text_to_image'
+        elif workflow_type == 'vibevoice':
+            return 'vibevoice'
+        elif workflow_type == 'vibevoice_multi_clone':
+            return 'vibevoice'
         else:
             return 'default'
 
@@ -204,7 +210,7 @@ class DGNClient:
                             local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
                             audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
                             if audio_storage_path:
-                                self.orchestrator_service.update_job_status(job_id, 'completed', completion_metadata={'audio_storage_path': audio_storage_path})
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, completion_metadata=job.get('completion_metadata'))
                             else:
                                 logging.error(f"Foley job {job_id} completed, but audio upload failed.")
                                 self.orchestrator_service.update_job_status(job_id, 'failed')
@@ -253,6 +259,111 @@ class DGNClient:
                         self.orchestrator_service.update_job_status(job_id, 'failed')
                 else:
                     logging.error(f"Failed to trigger workflow for job {job_id}.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+
+            elif workflow_type == 'vibevoice':
+                # --- TEXT TO SPEECH WORKFLOW (VibeVoice) ---
+                workflow_api_path = os.path.join(self.root_dir, 'workflows', 'vibevoice.api.json')
+                if not os.path.exists(workflow_api_path):
+                    logging.error(f"Workflow API file not found at {workflow_api_path}")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+
+                wf_ready = inject_prompt_into_vibevoice_workflow(workflow_api_path, positive_prompt)
+                payload = {"prompt": wf_ready}
+                prompt_id = self.comfyui_client.trigger_workflow(payload)
+
+                if prompt_id:
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200, shutdown_event=shutdown_event)
+                    if check_interruption(outputs): return
+
+                    if outputs:
+                        audio_info = find_audio_in_output(outputs)
+
+                        # The raw output log has shown the structure is {'audio': [...]}, not {'ui': {'audio': [...]}}
+                        # Let's parse that structure directly if the original function fails.
+                        if not audio_info:
+                            logging.warning("find_audio_in_output failed. Looking for {'audio': [...]} pattern based on logs.")
+                            for node_id, node_output in outputs.items():
+                                if 'audio' in node_output and isinstance(node_output.get('audio'), list):
+                                    for item in node_output['audio']:
+                                        if isinstance(item, dict):
+                                            filename = item.get('filename')
+                                            if filename:
+                                                audio_info = (filename, item.get('subfolder', ''))
+                                                break
+                                if audio_info:
+                                    break
+                        
+                        if audio_info:
+                            audio_filename, subfolder = audio_info
+                            local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
+                            audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
+                            if audio_storage_path:
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, completion_metadata=job.get('completion_metadata'))
+                            else:
+                                logging.error(f"VibeVoice job {job_id} completed, but audio upload failed.")
+                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                        else:
+                            logging.error(f"VibeVoice workflow for job {job_id} completed, but no audio file found.")
+                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                    else:
+                        logging.error(f"VibeVoice workflow for job {job_id} failed to produce outputs.")
+                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                else:
+                    logging.error(f"Failed to trigger VibeVoice workflow for job {job_id}.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+
+            elif workflow_type == 'vibevoice_multi_clone':
+                # --- TEXT TO SPEECH MULTI-SPEAKER CLONE WORKFLOW (VibeVoice) ---
+                workflow_api_path = os.path.join(self.root_dir, 'workflows', 'vibevoice-multi-speaker-clone.api.json')
+                if not os.path.exists(workflow_api_path):
+                    logging.error(f"Workflow API file not found at {workflow_api_path}")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+
+                voice_clone_urls = job.get('voice_clone_urls', [])
+                if not voice_clone_urls:
+                    logging.error(f"VibeVoice multi-clone job {job_id} missing 'voice_clone_urls'.")
+                    self.orchestrator_service.update_job_status(job_id, 'failed')
+                    return
+
+                clone_paths = []
+                for url in voice_clone_urls:
+                    clone_path = self.orchestrator_service.download_asset_by_url(url, self.input_dir)
+                    if not clone_path:
+                        logging.error(f"Failed to download voice clone from {url} for job {job_id}.")
+                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                        return
+                    clone_paths.append(os.path.basename(clone_path))
+
+                wf_ready = inject_script_and_clones_into_vibevoice_workflow(workflow_api_path, positive_prompt, clone_paths)
+                payload = {"prompt": wf_ready}
+                prompt_id = self.comfyui_client.trigger_workflow(payload)
+
+                if prompt_id:
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200, shutdown_event=shutdown_event)
+                    if check_interruption(outputs): return
+
+                    if outputs:
+                        audio_info = find_audio_in_output(outputs)
+                        if audio_info:
+                            audio_filename, subfolder = audio_info
+                            local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
+                            audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, job_id)
+                            if audio_storage_path:
+                                self.orchestrator_service.update_job_status(job_id, 'completed', output_path=audio_storage_path, completion_metadata=job.get('completion_metadata'))
+                            else:
+                                logging.error(f"VibeVoice multi-clone job {job_id} completed, but audio upload failed.")
+                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                        else:
+                            logging.error(f"VibeVoice multi-clone workflow for job {job_id} completed, but no audio file found.")
+                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                    else:
+                        logging.error(f"VibeVoice multi-clone workflow for job {job_id} failed to produce outputs.")
+                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                else:
+                    logging.error(f"Failed to trigger VibeVoice multi-clone workflow for job {job_id}.")
                     self.orchestrator_service.update_job_status(job_id, 'failed')
 
             elif workflow_type == 'wan-2.2-text-to-video':

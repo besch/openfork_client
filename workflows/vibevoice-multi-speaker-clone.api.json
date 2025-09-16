@@ -1,0 +1,29 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "VibeVoiceMultipleSpeakers",
+      "inputs": {
+        "text": "[1]: Hello, this is a test.\n[2]: And this is another test.",
+        "model_name": "VibeVoice-Large-Quant-4Bit",
+        "generation_mode": "fast",
+        "diffusion_steps": 10,
+        "temperature": 0.8,
+        "guidance_scale": 3.5,
+        "top_p": 0.95,
+        "seed": 0,
+        "voice_1_clone_path": "clone1.wav",
+        "voice_2_clone_path": "clone2.wav"
+      }
+    },
+    "2": {
+      "class_type": "SaveAudio",
+      "inputs": {
+        "audio": [
+          "1",
+          0
+        ],
+        "filename_prefix": "vibevoice_multi_clone_output"
+      }
+    }
+  }
+}

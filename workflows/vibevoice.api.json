@@ -1,0 +1,30 @@
+
+{
+  "prompt": {
+    "1": {
+      "class_type": "VibeVoiceSingleSpeakerNode",
+      "inputs": {
+        "text": "Hello, this is a test.",
+        "model": "VibeVoice-Large-Quant-4Bit",
+        "attention_type": "auto",
+        "free_memory_after_generate": true,
+        "diffusion_steps": 10,
+        "seed": 0,
+        "cfg_scale": 3.5,
+        "use_sampling": false,
+        "temperature": 0.8,
+        "top_p": 0.95
+      }
+    },
+    "2": {
+      "class_type": "SaveAudio",
+      "inputs": {
+        "audio": [
+          "1",
+          0
+        ],
+        "filename_prefix": "vibevoice_output"
+      }
+    }
+  }
+}

@@ -189,6 +189,42 @@ def inject_video_and_prompt_into_foley_workflow(workflow_api_path: str, video_fi
 
     return api_graph
 
+def inject_prompt_into_vibevoice_workflow(workflow_api_path: str, prompt: str):
+    """
+    Loads the VibeVoice ComfyUI API-formatted workflow, injects the prompt.
+    """
+    with open(workflow_api_path, 'r') as f:
+        workflow_api = json.load(f)
+
+    # Deep copy to avoid modifying the cached workflow
+    api_graph = copy.deepcopy(workflow_api["prompt"])
+
+    # Inject prompt
+    for node in api_graph.values():
+        if node["class_type"] == "VibeVoiceSingleSpeakerNode":
+            node["inputs"]["text"] = prompt
+
+    return api_graph
+
+def inject_script_and_clones_into_vibevoice_workflow(workflow_api_path: str, script: str, clone_paths: list[str]):
+    """
+    Loads the VibeVoice ComfyUI API-formatted workflow, injects the script and clone paths.
+    """
+    with open(workflow_api_path, 'r') as f:
+        workflow_api = json.load(f)
+
+    # Deep copy to avoid modifying the cached workflow
+    api_graph = copy.deepcopy(workflow_api["prompt"])
+
+    # Inject script and clone paths
+    for node in api_graph.values():
+        if node["class_type"] == "VibeVoiceMultipleSpeakers":
+            node["inputs"]["text"] = script
+            for i, clone_path in enumerate(clone_paths):
+                node["inputs"][f"voice_{i+1}_clone_path"] = clone_path
+
+    return api_graph
+
 def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_output_func) -> Union[str, None]:
     """Process the workflow output, upload the generated files, and return the first successful upload path."""
     logging.info(f"Processing workflow outputs for job {job_id}. Outputs received: {json.dumps(outputs, indent=2)}")
