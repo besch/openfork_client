@@ -80,11 +80,11 @@ class ComfyUIClient:
                 q.put(e) # Signal error to the main thread
                 break
 
-    def get_workflow_output(self, prompt_id: str, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200) -> Union[dict, None]:
+    def get_workflow_output(self, prompt_id: str, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200, shutdown_event: threading.Event = None) -> Union[dict, None, str]:
         """Get the output of a completed workflow by listening on WS in a separate thread."""
         if not prompt_id:
             logging.warning("get_workflow_output called with empty prompt_id.")
-            return None # type: ignore
+            return None
 
         client_id = str(uuid.uuid4())
         ws = websocket.WebSocket()
@@ -106,6 +106,10 @@ class ComfyUIClient:
 
         try:
             while True:
+                if shutdown_event and shutdown_event.is_set():
+                    logging.warning("Shutdown event received, interrupting workflow output wait.")
+                    return "interrupted"
+
                 if (time.time() - start_ts) > timeout_sec:
                     logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Fetching history for outputs.")
                     history_outputs = self.fetch_history_outputs(prompt_id)
@@ -116,7 +120,7 @@ class ComfyUIClient:
                         return all_node_outputs
 
                 try:
-                    out = q.get(timeout=7200)
+                    out = q.get(timeout=2) # Use a short timeout to allow checking the shutdown event
                     logging.debug(f"Received raw WebSocket message: {out}")
                     if isinstance(out, Exception):
                         logging.error(f"Exception in WebSocket reader thread: {out}")

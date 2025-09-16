@@ -9,7 +9,6 @@ import http.server
 import socketserver
 import argparse
 import sys
-import shutil
 from config import ROOT_DIR, CACHE_DIR, DEV_MODE, DOCKER_COMPOSE_DIR, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from services.orchestrator_service import OrchestratorService
 from utils.comfyui_workflow_utils import materialize_start_image, inject_prompt_and_image_into_workflow, process_workflow_output, verify_workflow_nodes, inject_video_and_prompt_into_foley_workflow, inject_prompt_into_qwen_workflow, find_image_in_output, inject_prompt_into_text_to_video_workflow
@@ -19,8 +18,8 @@ from utils.video_utils import generate_thumbnail, find_video_in_output, find_aud
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
 
-# Global flag for graceful shutdown
-SHUTDOWN_FLAG = False
+# Global event for graceful shutdown
+SHUTDOWN_EVENT = threading.Event()
 SHUTDOWN_SERVER_PORT = 8000 # TODO: Make configurable
 httpd_server = None # Global reference to the HTTP server
 
@@ -29,8 +28,7 @@ class ShutdownHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/shutdown':
             logging.info("Received shutdown request via HTTP.")
-            global SHUTDOWN_FLAG
-            SHUTDOWN_FLAG = True
+            SHUTDOWN_EVENT.set()
             self.send_response(200)
             self.send_header('Content-type', 'text/html')
             self.end_headers()
@@ -53,10 +51,10 @@ def start_shutdown_server():
             httpd.server_bind()
             httpd.server_activate()
             logging.info(f"Shutdown server started on port {SHUTDOWN_SERVER_PORT}")
-            logging.info("Shutdown server: Now serving forever...")
             httpd.serve_forever()
         except Exception as e:
-            logging.error(f"Failed to start shutdown server: {e}")
+            if not SHUTDOWN_EVENT.is_set():
+                logging.error(f"Failed to start shutdown server: {e}")
         finally:
             httpd.server_close()
             logging.info("Shutdown server stopped.")
@@ -113,6 +111,7 @@ class DGNClient:
         self.output_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "output")
         self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
         self.active_service_type = None
+        self.current_job = None
         
     def start_heartbeat(self, provider_id: str):
         """Starts a background thread to send heartbeats."""
@@ -122,14 +121,13 @@ class DGNClient:
 
     def _heartbeat_loop(self, provider_id: str):
         """The loop that sends heartbeats periodically."""
-        while True:
-            if SHUTDOWN_FLAG:
-                break
+        while not SHUTDOWN_EVENT.is_set():
             try:
                 self.orchestrator_service.send_heartbeat(provider_id)
             except Exception as e:
                 logging.error(f"An error occurred in the heartbeat loop: {e}")
-            time.sleep(60)
+            # Wait for 60 seconds or until shutdown event is set
+            SHUTDOWN_EVENT.wait(60)
 
     def wait_for_comfyui(self, timeout=180):
         """Waits for the ComfyUI server to be available."""
@@ -137,7 +135,7 @@ class DGNClient:
         start_time = time.time()
         url = "http://127.0.0.1:8188/queue"
         while time.time() - start_time < timeout:
-            if SHUTDOWN_FLAG:
+            if SHUTDOWN_EVENT.is_set():
                 logging.warning("Shutdown requested while waiting for ComfyUI.")
                 return False
             try:
@@ -146,7 +144,7 @@ class DGNClient:
                     logging.info("ComfyUI server is ready.")
                     return True
             except requests.exceptions.RequestException:
-                time.sleep(5)
+                SHUTDOWN_EVENT.wait(5)
         logging.error(f"ComfyUI server did not become ready in {timeout} seconds.")
         return False
 
@@ -159,13 +157,19 @@ class DGNClient:
         else:
             return 'default'
 
-    def _process_job(self, job):
+    def _process_job(self, job, shutdown_event: threading.Event):
         """Processes a single DGN job."""
         try:
             job_id = job['id']
             workflow_type = job.get('workflow_type', 'image_to_video')
             positive_prompt = job.get('prompt') or ""
             negative_prompt = job.get('negative_prompt') or ""
+
+            def check_interruption(outputs):
+                if outputs == "interrupted":
+                    logging.warning(f"Processing of job {job_id} was interrupted by shutdown.")
+                    return True
+                return False
 
             if workflow_type == 'hunyuan_video_foley':
                 # --- FOLEY WORKFLOW ---
@@ -190,7 +194,9 @@ class DGNClient:
                 prompt_id = self.comfyui_client.trigger_workflow(payload)
 
                 if prompt_id:
-                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200, shutdown_event=shutdown_event)
+                    if check_interruption(outputs): return
+
                     if outputs:
                         audio_info = find_audio_in_output(outputs)
                         if audio_info:
@@ -225,7 +231,9 @@ class DGNClient:
                 prompt_id = self.comfyui_client.trigger_workflow(payload)
 
                 if prompt_id:
-                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200, shutdown_event=shutdown_event)
+                    if check_interruption(outputs): return
+
                     if outputs:
                         image_info = find_image_in_output(outputs)
                         if image_info:
@@ -261,7 +269,9 @@ class DGNClient:
                 prompt_id = self.comfyui_client.trigger_workflow(payload)
 
                 if prompt_id:
-                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200, shutdown_event=shutdown_event)
+                    if check_interruption(outputs): return
+
                     if outputs:
                         video_info = find_video_in_output(outputs)
                         if video_info:
@@ -307,7 +317,9 @@ class DGNClient:
                 prompt_id = self.comfyui_client.trigger_workflow(payload)
 
                 if prompt_id:
-                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200)
+                    outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200, shutdown_event=shutdown_event)
+                    if check_interruption(outputs): return
+
                     if outputs:
                         video_info = find_video_in_output(outputs)
                         if video_info:
@@ -345,32 +357,40 @@ class DGNClient:
 
     def listen_for_jobs(self, provider_id: str):
         """Listen for jobs from the orchestrator (for dedicated providers)."""
-        while not SHUTDOWN_FLAG:
+        while not SHUTDOWN_EVENT.is_set():
+            job = None
             try:
                 logging.info(f"Checking for new jobs for provider {provider_id}...")
                 job = self.orchestrator_service.get_next_job(provider_id)
 
                 if job and job.get('id'):
+                    self.current_job = job
                     logging.info(f"Received job: {job['id']}")
-                    self._process_job(job)
-                    self.orchestrator_service.update_provider_status(provider_id, 'available')
-                    logging.info("Provider status set to available. Waiting for next job...")
+                    self._process_job(job, SHUTDOWN_EVENT)
+                    
+                    if not SHUTDOWN_EVENT.is_set():
+                        self.orchestrator_service.update_provider_status(provider_id, 'available')
+                        logging.info("Provider status set to available. Waiting for next job...")
+                        self.current_job = None
                 else:
                     logging.info("No new jobs.")
             except Exception as e:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
-            time.sleep(10)
-        logging.info("Shutdown flag received. Exiting job listening loop.")
+            if not (job and job.get('id')):
+                SHUTDOWN_EVENT.wait(10)
+        logging.info("Shutdown event received. Exiting job listening loop.")
 
     def listen_for_jobs_auto(self, provider_id: str):
         """Listen for jobs and dynamically start/stop containers."""
-        while not SHUTDOWN_FLAG:
+        while not SHUTDOWN_EVENT.is_set():
+            job = None
             try:
                 logging.info("Auto mode: Checking for new jobs...")
                 job = self.orchestrator_service.get_next_job(provider_id)
 
                 if job and job.get('id'):
+                    self.current_job = job
                     job_id = job['id']
                     logging.info(f"Received job: {job_id}")
 
@@ -382,77 +402,91 @@ class DGNClient:
                     manage_docker("up", service_type=service_type)
                     
                     if self.wait_for_comfyui():
-                        self._process_job(job)
+                        self._process_job(job, SHUTDOWN_EVENT)
                     else:
-                        logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
-                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                        if not SHUTDOWN_EVENT.is_set():
+                            logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
+                            self.orchestrator_service.update_job_status(job_id, 'failed')
 
-                    logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
-                    manage_docker("down", service_type=service_type)
-                    self.active_service_type = None
-                    
-                    self.orchestrator_service.update_provider_status(provider_id, 'available')
-                    logging.info("Provider status set to available. Waiting for next job...")
+                    # If a shutdown was not requested, proceed with normal cleanup
+                    if not SHUTDOWN_EVENT.is_set():
+                        logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
+                        manage_docker("down", service_type=service_type)
+                        self.active_service_type = None
+                        self.orchestrator_service.update_provider_status(provider_id, 'available')
+                        logging.info("Provider status set to available. Waiting for next job...")
+                        self.current_job = None # Clear current job
                 else:
                     logging.info("No new jobs.")
             except Exception as e:
                 logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 
             if not (job and job.get('id')):
-                time.sleep(10)
-        logging.info("Shutdown flag received. Exiting auto job listening loop.")
+                SHUTDOWN_EVENT.wait(10) # Wait for 10s or until shutdown
+        logging.info("Shutdown event received. Exiting auto job listening loop.")
 
 
 def main(args):
     """Main function to run the DGN client."""
+    # Start docker container for non-auto services
     if args.service != 'auto':
         manage_docker("up", service_type=args.service)
     
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()
 
-    determined_orchestrator_url = ORCHESTRATOR_URL_DEV if DEV_MODE else ORCHESTRATOR_URL_PROD
-
+    client = None
+    provider_id = None
     try:
+        determined_orchestrator_url = ORCHESTRATOR_URL_DEV if DEV_MODE else ORCHESTRATOR_URL_PROD
+        
         logging.info(f"Attempting to connect to orchestrator URL: {determined_orchestrator_url}")
-        response = requests.get(f"{determined_orchestrator_url}/api/dgn/provider-status/health", timeout=5)
-        if response.status_code == 200:
-            logging.info(f"Successfully connected to orchestrator URL: {determined_orchestrator_url}")
-        else:
-            logging.warning(f"Orchestrator URL {determined_orchestrator_url} returned status {response.status_code}.")
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"Could not connect to orchestrator URL {determined_orchestrator_url}: {e}.")
+        try:
+            response = requests.get(f"{determined_orchestrator_url}/api/dgn/provider-status/health", timeout=5)
+            if response.status_code == 200:
+                logging.info(f"Successfully connected to orchestrator URL: {determined_orchestrator_url}")
+            else:
+                logging.warning(f"Orchestrator URL {determined_orchestrator_url} returned status {response.status_code}.")
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"Could not connect to orchestrator URL {determined_orchestrator_url}: {e}.")
 
-    client = DGNClient(
-        orchestrator_url=determined_orchestrator_url,
-        root_dir=ROOT_DIR,
-        cache_dir=CACHE_DIR,
-        access_token=args.access_token
-    )
+        client = DGNClient(
+            orchestrator_url=determined_orchestrator_url,
+            root_dir=ROOT_DIR,
+            cache_dir=CACHE_DIR,
+            access_token=args.access_token
+        )
 
-    provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
+        provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
 
-    if not provider_id:
-        logging.error("Failed to register with orchestrator. Exiting.")
-        if args.service != 'auto':
-            manage_docker("down", service_type=args.service)
-        return
+        if not provider_id:
+            raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
 
-    client.start_heartbeat(provider_id)
+        client.start_heartbeat(provider_id)
 
-    print("DGN_CLIENT_RUNNING", flush=True)
-    logging.info(f"DGN Client is running in '{args.service}' mode and listening for jobs.")
+        print("DGN_CLIENT_RUNNING", flush=True)
+        logging.info(f"DGN Client is running in '{args.service}' mode and listening for jobs.")
 
-    try:
         if args.service == 'auto':
             client.listen_for_jobs_auto(provider_id)
         else:
             client.listen_for_jobs(provider_id)
+
     except Exception as e:
-        logging.error(f"An error occurred in job listening loop: {e}", exc_info=True)
+        logging.error(f"A critical error occurred during client operation: {e}", exc_info=True)
     finally:
         logging.info("DGN Client: Initiating shutdown sequence.")
-        if provider_id:
+        
+        if client and client.current_job:
+            job_id = client.current_job.get('id')
+            if job_id:
+                logging.info(f"A job ({job_id}) was in progress. Attempting to reset its status to 'pending'.")
+                try:
+                    client.orchestrator_service.reset_interrupted_job(job_id)
+                except Exception as e:
+                    logging.error(f"Failed to reset job {job_id}: {e}", exc_info=True)
+
+        if provider_id and client:
             logging.info("DGN Client: Attempting to deregister from orchestrator.")
             try:
                 client.orchestrator_service.deregister_from_orchestrator(provider_id)
@@ -460,18 +494,16 @@ def main(args):
             except Exception as e:
                 logging.error(f"DGN Client: Failed to deregister from orchestrator: {e}", exc_info=True)
         
-        logging.info("DGN Client: Stopping Docker container.")
+        logging.info("DGN Client: Stopping Docker container(s).")
         try:
-            service_to_shutdown = args.service
-            if args.service == 'auto':
-                service_to_shutdown = client.active_service_type
-            
-            if service_to_shutdown and service_to_shutdown != 'auto':
-                manage_docker("down", service_type=service_to_shutdown)
-                logging.info(f"DGN Client: Docker container for service '{service_to_shutdown}' stopped successfully.")
+            if args.service != 'auto':
+                # If we started a service statically, we always try to shut it down.
+                manage_docker("down", service_type=args.service)
+            elif client and client.active_service_type:
+                # In auto mode, only shut down a container if one was made active during an interrupted job.
+                manage_docker("down", service_type=client.active_service_type)
             else:
                 logging.info("DGN Client: No active container to stop.")
-
         except Exception as e:
             logging.error(f"DGN Client: Failed to stop Docker container: {e}", exc_info=True)
 
@@ -491,6 +523,7 @@ if __name__ == "__main__":
         logging.info("Program exiting normally.")
         sys.exit(0)
     except KeyboardInterrupt:
+        SHUTDOWN_EVENT.set()
         logging.info("Process interrupted by user.")
         sys.exit(0)
     except Exception as e:

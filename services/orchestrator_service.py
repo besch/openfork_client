@@ -297,3 +297,20 @@ class OrchestratorService:
             logging.error(f"OrchestratorService: Error deregistering provider {provider_id}: {e}")
             if e.response:
                 logging.error(f"OrchestratorService: Response content: {e.response.text}")
+
+    def reset_interrupted_job(self, job_id: str):
+        """Resets a job's status to 'pending' and clears its provider via a specific API endpoint."""
+        try:
+            logging.info(f"Requesting reset for job {job_id}")
+            # Use a specific 'reset' action on the job endpoint
+            response = requests.put(
+                f"{self.orchestrator_url}/api/dgn/job/{job_id}?action=reset",
+                headers=self._get_auth_headers()
+            )
+            response.raise_for_status()
+            logging.info(f"Job {job_id} status reset successfully via API.")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Could not reset job status for {job_id}: {e}")
+            if e.response:
+                logging.error(f"Reset API response: {e.response.text}")
+            raise
