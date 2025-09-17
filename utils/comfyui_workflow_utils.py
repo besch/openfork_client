@@ -109,16 +109,7 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_path: str, prompt: st
 
     return api_graph
 
-def find_image_in_output(outputs: dict) -> Union[tuple[str, str], None]:
-    """Finds the output image details from the ComfyUI workflow output."""
-    for node_id, node_output in outputs.items():
-        if 'images' in node_output:
-            for image in node_output['images']:
-                filename = image.get('filename')
-                subfolder = image.get('subfolder')
-                if filename:
-                    return filename, subfolder
-    return None
+
 
 def inject_prompt_into_qwen_workflow(workflow_api_path: str, prompt: str, negative_prompt: str):
     """

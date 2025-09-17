@@ -9,6 +9,7 @@ import threading
 from queue import Queue, Empty
 import logging
 from typing import Union
+import requests
 
 class ComfyUIClient:
     def __init__(self, comfyui_ws_url: str):
@@ -22,6 +23,25 @@ class ComfyUIClient:
         if base.startswith("wss://"):
             return base.replace("wss://", "https://")
         return base.replace("ws://", "http://")
+
+    def wait_for_ready(self, shutdown_event: threading.Event, timeout=180):
+        """Waits for the ComfyUI server to be available."""
+        logging.info("Waiting for ComfyUI server to be ready...")
+        start_time = time.time()
+        url = f"{self.http_base}/queue"
+        while time.time() - start_time < timeout:
+            if shutdown_event.is_set():
+                logging.warning("Shutdown requested while waiting for ComfyUI.")
+                return False
+            try:
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    logging.info("ComfyUI server is ready.")
+                    return True
+            except requests.exceptions.RequestException:
+                shutdown_event.wait(5)
+        logging.error(f"ComfyUI server did not become ready in {timeout} seconds.")
+        return False
 
     def trigger_workflow(self, workflow_json: dict) -> str:
         """Trigger a workflow in ComfyUI by HTTP POST /prompt and return the prompt ID."""
