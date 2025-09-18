@@ -1,6 +1,7 @@
 import os
 import logging
 from abc import ABC, abstractmethod
+from config import DEV_MODE
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration
 from utils.comfyui_workflow_utils import (
     inject_prompt_and_image_into_workflow,
@@ -209,6 +210,30 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
 
 class TextToVideoJobProcessor(BaseJobProcessor):
     def process(self):
+        if DEV_MODE:
+            logging.info(f"DEV_MODE is True. Using sample video for job {self.job_id}.")
+            
+            sample_dir_path = os.path.join(self.output_dir, "2025-08-15")
+            local_video_path = os.path.join(sample_dir_path, "wan22__00001.mp4")
+            thumbnail_local_path = os.path.join(sample_dir_path, "wan22__00001.png")
+
+            if not os.path.exists(local_video_path) or not os.path.exists(thumbnail_local_path):
+                logging.error(f"Sample files not found for DEV_MODE in {sample_dir_path}. Looked for wan22__00001.mp4 and wan22__00001.png.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
+
+            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id)
+            
+            if video_storage_path:
+                thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                
+                duration = get_video_duration(local_video_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+            else:
+                logging.error(f"DEV_MODE: Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+            
         workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-text-to-video.api.json')
         if not os.path.exists(workflow_api_path):
             logging.error(f"Workflow API file not found at {workflow_api_path}")
@@ -247,6 +272,30 @@ class TextToVideoJobProcessor(BaseJobProcessor):
 
 class ImageToVideoJobProcessor(BaseJobProcessor):
     def process(self):
+        if DEV_MODE:
+            logging.info(f"DEV_MODE is True. Using sample video for job {self.job_id}.")
+            
+            sample_dir_path = os.path.join(self.output_dir, "2025-08-15")
+            local_video_path = os.path.join(sample_dir_path, "wan22__00001.mp4")
+            thumbnail_local_path = os.path.join(sample_dir_path, "wan22__00001.png")
+
+            if not os.path.exists(local_video_path) or not os.path.exists(thumbnail_local_path):
+                logging.error(f"Sample files not found for DEV_MODE in {sample_dir_path}. Looked for wan22__00001.mp4 and wan22__00001.png.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
+
+            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id)
+            
+            if video_storage_path:
+                thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                
+                duration = get_video_duration(local_video_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+            else:
+                logging.error(f"DEV_MODE: Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-image-to-video.api.json')
         if not os.path.exists(workflow_api_path):
             logging.error(f"Workflow API file not found at {workflow_api_path}")
