@@ -24,7 +24,7 @@ ROOT_DIR = get_root_dir()
 load_dotenv(os.path.join(ROOT_DIR, '.env'))
 
 # Orchestrator-related configurations
-ORCHESTRATOR_URL_PROD = "https://crowdmovie.vercel.app/"
+ORCHESTRATOR_URL_PROD = "https://crowdmovie.vercel.app"
 ORCHESTRATOR_URL_DEV = "http://localhost:3000"
 
 
