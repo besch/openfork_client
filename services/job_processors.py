@@ -255,7 +255,7 @@ class TextToVideoJobProcessor(BaseJobProcessor):
             
             if video_storage_path:
                 thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
-                thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                thumbnail_local_path = os.path.join(self.output_dir, subfolder, thumbnail_filename)
                 thumbnail_storage_path = None
                 
                 if generate_thumbnail(local_video_path, thumbnail_local_path):
@@ -318,7 +318,7 @@ class ImageToVideoJobProcessor(BaseJobProcessor):
             
             if video_storage_path:
                 thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
-                thumbnail_local_path = os.path.join(self.output_dir, thumbnail_filename)
+                thumbnail_local_path = os.path.join(self.output_dir, subfolder, thumbnail_filename)
                 thumbnail_storage_path = None
                 
                 if generate_thumbnail(local_video_path, thumbnail_local_path):
