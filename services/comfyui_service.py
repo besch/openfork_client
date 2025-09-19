@@ -131,16 +131,11 @@ class ComfyUIClient:
                     return "interrupted"
 
                 if (time.time() - start_ts) > timeout_sec:
-                    logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Fetching history for outputs.")
-                    history_outputs = self.fetch_history_outputs(prompt_id)
-                    if history_outputs:
-                        return history_outputs
-                    else:
-                        logging.warning(f"Failed to fetch history outputs for prompt_id {prompt_id} after timeout. Returning accumulated outputs (which might be empty).")
-                        return all_node_outputs
+                    logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Breaking loop to fetch history.")
+                    break
 
                 try:
-                    out = q.get(timeout=2) # Use a short timeout to allow checking the shutdown event
+                    out = q.get(timeout=2)  # Use a short timeout to allow checking the shutdown event
                     logging.debug(f"Received raw WebSocket message: {out}")
                     if isinstance(out, Exception):
                         logging.error(f"Exception in WebSocket reader thread: {out}")
@@ -175,21 +170,16 @@ class ComfyUIClient:
                         if terminal_node_ids:
                             need = {str(n) for n in terminal_node_ids}
                             if need and need.issubset(executed_nodes):
-                                logging.info(f"All terminal nodes {terminal_node_ids} executed for prompt_id {prompt_id}. Returning accumulated outputs.")
-                                return all_node_outputs
+                                logging.info(f"All terminal nodes {terminal_node_ids} executed for prompt_id {prompt_id}. Breaking loop to fetch history.")
+                                break
 
                     elif mtype == "status":
                         status = data.get("status") if isinstance(data, dict) else None
                         if isinstance(status, dict):
                             exec_info = status.get("exec_info", {})
                             if isinstance(exec_info, dict) and exec_info.get("queue_remaining") == 0:
-                                logging.info(f"ComfyUI queue is empty for prompt_id {prompt_id}. Fetching history for outputs.")
-                                history_outputs = self.fetch_history_outputs(prompt_id)
-                                if history_outputs:
-                                    return history_outputs
-                                else:
-                                    logging.warning(f"Failed to fetch history outputs for prompt_id {prompt_id} after timeout. Returning accumulated outputs (which might be empty).")
-                                    return all_node_outputs
+                                logging.info(f"ComfyUI queue is empty for prompt_id {prompt_id}. Breaking loop to fetch history.")
+                                break
                     else:
                         logging.info(f"Received WebSocket message of type: {mtype}. Data keys: {data.keys()}")
         finally:
