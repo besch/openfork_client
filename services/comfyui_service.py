@@ -28,7 +28,7 @@ class ComfyUIClient:
         """Waits for the ComfyUI server to be available."""
         logging.info("Waiting for ComfyUI server to be ready...")
         start_time = time.time()
-        url = f"{self.http_base}/queue"
+        url = f"{self.http_base}/object_info"
         while time.time() - start_time < timeout:
             if shutdown_event.is_set():
                 logging.warning("Shutdown requested while waiting for ComfyUI.")
@@ -38,8 +38,12 @@ class ComfyUIClient:
                 if response.status_code == 200:
                     logging.info("ComfyUI server is ready.")
                     return True
-            except requests.exceptions.RequestException:
-                shutdown_event.wait(5)
+                else:
+                    logging.debug(f"ComfyUI not ready yet (status {response.status_code}). Retrying...")
+            except requests.exceptions.RequestException as e:
+                logging.debug(f"ComfyUI not ready yet (connection error: {e}). Retrying...")
+
+            shutdown_event.wait(5)
         logging.error(f"ComfyUI server did not become ready in {timeout} seconds.")
         return False
 
@@ -60,13 +64,24 @@ class ComfyUIClient:
             if not node.get("class_type"):
                 raise ValueError(f"Invalid node for id {k}: missing 'class_type'.")
 
-        try:
-            probe_req = urllib.request.Request(f"{self.http_base}/object_info")
-            with urllib.request.urlopen(probe_req, timeout=5) as resp:
-                pass
-        except Exception as e:
-            raise RuntimeError(f"Cannot reach ComfyUI at {self.http_base} (/object_info): {e}. "
-                               f"Check COMFYUI_WS_URL and that ComfyUI is running and port 8188 is published.")
+        # Probe with retry to ensure ComfyUI is fully ready. This acts as a mini
+        # "wait_for_ready" for modes where the full wait is not performed.
+        max_retries = 60
+        retry_delay = 5 # seconds
+        for i in range(max_retries):
+            try:
+                probe_req = urllib.request.Request(f"{self.http_base}/object_info")
+                with urllib.request.urlopen(probe_req, timeout=5):
+                    pass # Success
+                break # Exit loop
+            except Exception as e:
+                if i < max_retries - 1:
+                    logging.warning(f"ComfyUI probe failed (attempt {i+1}/{max_retries}). Retrying in {retry_delay}s... Error: {e}")
+                    time.sleep(retry_delay)
+                else:
+                    logging.error(f"ComfyUI probe failed after {max_retries} attempts.")
+                    raise RuntimeError(f"Cannot reach ComfyUI at {self.http_base} (/object_info): {e}. "
+                                       f"Check COMFYUI_WS_URL and that ComfyUI is running and port 8188 is published.")
 
         body = json.dumps({"prompt": payload_prompt, "client_id": client_id}).encode("utf-8")
         req = urllib.request.Request(f"{self.http_base}/prompt", data=body, headers={"Content-Type": "application/json"})
