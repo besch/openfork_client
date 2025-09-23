@@ -6,30 +6,70 @@ import time
 from typing import Union, Dict
 from services.hardware_profiler import get_hardware_profile
 import os
+from supabase_auth import SyncGoTrueClient, AuthResponse
+from config import SUPABASE_URL, SUPABASE_ANON_KEY
 
 class OrchestratorService:
-    def __init__(self, orchestrator_url: str, access_token: str):
+    def __init__(self, orchestrator_url: str, access_token: str, refresh_token: str):
         self.orchestrator_url = orchestrator_url
         self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.gotrue_client = SyncGoTrueClient(
+            url=f"{SUPABASE_URL}/auth/v1",
+            headers={"apiKey": SUPABASE_ANON_KEY},
+            auto_refresh_token=False # We will handle refresh manually
+        )
 
-    def _get_auth_headers(self) -> Dict[str, str]:
-        """Returns the authorization headers for API requests."""
-        return {
-            'Authorization': f'Bearer {self.access_token}',
-            'Content-Type': 'application/json'
-        }
+    def _refresh_access_token(self) -> bool:
+        """
+        Refreshes the access token using the refresh token.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            logging.info("Access token expired or invalid. Attempting to refresh...")
+            response = self.gotrue_client.refresh_session(self.refresh_token)
+            if isinstance(response, AuthResponse) and response.session and response.session.access_token:
+                self.access_token = response.session.access_token
+                if response.session.refresh_token:
+                    self.refresh_token = response.session.refresh_token
+                logging.info("Successfully refreshed access token.")
+                return True
+            else:
+                logging.error(f"Failed to refresh access token. Response: {response}")
+                return False
+        except Exception as e:
+            logging.error(f"An exception occurred during token refresh: {e}")
+            return False
+
+    def _make_request(self, method, url, retry_on_401=True, **kwargs) -> requests.Response:
+        """
+        Makes an HTTP request, handling token refresh and retry on 401 Unauthorized.
+        """
+        # Use a copy of the headers to avoid modifying the original kwargs dict outside this scope
+        request_headers = kwargs.pop("headers", {}).copy()
+        request_headers['Authorization'] = f'Bearer {self.access_token}'
+        if 'Content-Type' not in request_headers and 'files' not in kwargs and 'data' not in kwargs and 'json' not in kwargs:
+             request_headers['Content-Type'] = 'application/json'
+        
+        response = requests.request(method, url, headers=request_headers, **kwargs)
+
+        if response.status_code == 401 and retry_on_401:
+            logging.warning("Received 401 Unauthorized. Attempting to refresh token and retry.")
+            if self._refresh_access_token():
+                # Create a new header for the retry
+                retry_headers = request_headers.copy()
+                retry_headers['Authorization'] = f'Bearer {self.access_token}'
+                logging.info("Retrying the request with the new access token.")
+                response = requests.request(method, url, headers=retry_headers, **kwargs)
+        
+        return response
 
     def get_next_job(self, provider_id: str) -> Union[Dict, None]:
         """Get the next available job for a provider."""
         try:
-            # Add a cache-busting parameter to prevent Next.js from caching GET requests
             url = f"{self.orchestrator_url}/api/dgn/jobs/{provider_id}?ts={int(time.time())}"
-            response = requests.get(
-                url,
-                headers=self._get_auth_headers()
-            )
+            response = self._make_request('get', url)
             response.raise_for_status()
-            # Handle cases where the response is successful but empty (e.g. no job)
             if not response.content:
                 return None
             return response.json()
@@ -40,21 +80,6 @@ class OrchestratorService:
             logging.error(f"Failed to decode JSON from get_next_job response: {response.text}")
             return None
 
-    def download_asset(self, asset_id: str, cache_dir: str) -> Union[str, None]:
-        """Download a specific asset from the orchestrator."""
-        try:
-            response = requests.get(
-                f"{self.orchestrator_url}/api/dgn/assets/{asset_id}/download",
-                headers=self._get_auth_headers()
-            )
-            response.raise_for_status()
-            asset_info = response.json()
-            # ... (rest of the logic is the same)
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error downloading asset {asset_id}: {e}")
-            return None
-        return None # Add a return statement here
-
     def download_asset_by_url(self, asset_url: str, download_dir: str) -> Union[str, None]:
         """Download an asset from a given URL."""
         try:
@@ -63,7 +88,6 @@ class OrchestratorService:
             
             file_name = asset_url.split('/')[-1].split('?')[0]
 
-            # If the file name has no extension, add .mp4
             if '.' not in file_name:
                 file_name += '.mp4'
 
@@ -79,128 +103,75 @@ class OrchestratorService:
             logging.error(f"Error downloading asset from {asset_url}: {e}")
             return None
 
-    def upload_output(self, file_path: str, job_id: str) -> Union[str, None]:
-        """Upload the output file to the orchestrator."""
+    def _get_signed_upload_url(self, job_id: str, file_name: str) -> Union[Dict, None]:
+        """Get a presigned URL for uploading a file directly to storage."""
         try:
-            with open(file_path, 'rb') as f:
-                file_name = os.path.basename(file_path)
-                # Note: requests will set the multipart/form-data header, so we don't set Content-Type here
-                headers = {'Authorization': f'Bearer {self.access_token}'}
-                files = {'file': (file_name, f.read(), 'video/mp4')}
-                data = {'jobId': job_id}
-
-                response = requests.post(
-                    f"{self.orchestrator_url}/api/dgn/upload-output",
-                    files=files, data=data, headers=headers
-                )
-                response.raise_for_status()
-                response_data = response.json()
-                storage_path = response_data.get('storagePath')
-                if not storage_path:
-                    logging.error(f"Upload response missing 'storagePath': {response_data}")
-                    return None
-                return storage_path
+            response = self._make_request(
+                'post',
+                f"{self.orchestrator_url}/api/dgn/upload-url",
+                json={"jobId": job_id, "fileName": file_name}
+            )
+            response.raise_for_status()
+            return response.json()
         except requests.exceptions.RequestException as e:
-            logging.error(f"Could not upload file {file_path}: {e}")
+            logging.error(f"Could not get signed upload URL: {e}")
+            if e.response:
+                logging.error(f"Response content: {e.response.text}")
             return None
         except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON from upload response: {response.text}")
+            logging.error(f"Failed to decode JSON from get_signed_upload_url response: {response.text}")
+            return None
+
+    def upload_output(self, file_path: str, job_id: str, content_type: str) -> Union[str, None]:
+        """Uploads a file directly to storage using a presigned URL."""
+        file_name = os.path.basename(file_path)
+        
+        upload_info = self._get_signed_upload_url(job_id, file_name)
+        if not upload_info or not upload_info.get('success'):
+            logging.error(f"Failed to get a presigned URL for job {job_id}")
+            return None
+        
+        upload_url = upload_info['uploadUrl']
+        storage_path = upload_info['storagePath']
+
+        try:
+            with open(file_path, 'rb') as f:
+                response = self._make_request(
+                    'put',
+                    upload_url,
+                    retry_on_401=False,
+                    data=f,
+                    headers={'Content-Type': content_type}
+                )
+                response.raise_for_status()
+            
+            logging.info(f"Successfully uploaded {file_name} for job {job_id}. Storage path: {storage_path}")
+            return storage_path
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Could not upload file to presigned URL: {e}")
+            if e.response:
+                logging.error(f"Response content: {e.response.text}")
             return None
 
     def upload_audio_output(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the audio output file to the orchestrator."""
-        try:
-            with open(file_path, 'rb') as f:
-                file_name = os.path.basename(file_path)
-                headers = {'Authorization': f'Bearer {self.access_token}'}
-                # Assuming the generated foley is in mp3 format
-                files = {'file': (file_name, f.read(), 'audio/flac')}
-                data = {'jobId': job_id}
-
-                response = requests.post(
-                    f"{self.orchestrator_url}/api/dgn/upload-output",
-                    files=files, data=data, headers=headers
-                )
-                response.raise_for_status()
-                response_data = response.json()
-                storage_path = response_data.get('storagePath')
-                if not storage_path:
-                    logging.error(f"Upload response missing 'storagePath': {response_data}")
-                    return None
-                return storage_path
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Could not upload file {file_path}: {e}")
-            return None
-        except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON from upload response: {response.text}")
-            return None
+        return self.upload_output(file_path, job_id, 'audio/flac')
 
     def upload_image_output(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the image output file to the orchestrator."""
-        try:
-            with open(file_path, 'rb') as f:
-                file_name = os.path.basename(file_path)
-                headers = {'Authorization': f'Bearer {self.access_token}'}
-                files = {'file': (file_name, f.read(), 'image/png')}
-                data = {'jobId': job_id}
-
-                logging.info(f"--- Uploading to: {self.orchestrator_url}/api/dgn/upload-output ---")
-                response = requests.post(
-                    f"{self.orchestrator_url}/api/dgn/upload-output",
-                    files=files, data=data, headers=headers
-                )
-                logging.info(f"--- Upload API Response Status: {response.status_code} ---")
-                logging.info(f"--- Upload API Response Headers: {response.headers} ---")
-                logging.info(f"--- Upload API Response Body: {response.text} ---")
-
-                response.raise_for_status()
-                response_data = response.json()
-                storage_path = response_data.get('storagePath')
-                if not storage_path:
-                    logging.error(f"Upload response missing 'storagePath': {response_data}")
-                    return None
-                return storage_path
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Could not upload file {file_path}: {e}")
-            return None
-        except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON from upload response: {response.text}")
-            return None
+        return self.upload_output(file_path, job_id, 'image/png')
 
     def upload_thumbnail(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the thumbnail file to the orchestrator."""
-        try:
-            with open(file_path, 'rb') as f:
-                file_name = os.path.basename(file_path)
-                headers = {'Authorization': f'Bearer {self.access_token}'}
-                files = {'file': (file_name, f.read(), 'image/jpeg')}
-                data = {'jobId': job_id}
-
-                response = requests.post(
-                    f"{self.orchestrator_url}/api/dgn/upload-thumbnail",
-                    files=files, data=data, headers=headers
-                )
-                response.raise_for_status()
-                response_data = response.json()
-                storage_path = response_data.get('storagePath')
-                if not storage_path:
-                    logging.error(f"Upload response missing 'storagePath': {response_data}")
-                    return None
-                return storage_path
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Could not upload file {file_path}: {e}")
-            return None
-        except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON from upload response: {response.text}")
-            return None
+        return self.upload_output(file_path, job_id, 'image/jpeg')
 
     def send_heartbeat(self, provider_id: str):
         """Sends a heartbeat to the orchestrator."""
         try:
-            response = requests.post(
+            response = self._make_request(
+                'post',
                 f"{self.orchestrator_url}/api/dgn/heartbeat",
-                json={"providerId": provider_id},
-                headers=self._get_auth_headers()
+                json={"providerId": provider_id}
             )
             response.raise_for_status()
             logging.info("Heartbeat sent successfully.")
@@ -222,10 +193,10 @@ class OrchestratorService:
             if prompt:
                 payload["prompt"] = prompt
 
-            response = requests.put(
+            response = self._make_request(
+                'put',
                 f"{self.orchestrator_url}/api/dgn/job/{job_id}",
-                json=payload,
-                headers=self._get_auth_headers()
+                json=payload
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status updated to {status}")
@@ -235,10 +206,10 @@ class OrchestratorService:
     def update_provider_status(self, provider_id: str, status: str):
         """Update the status of a provider."""
         try:
-            response = requests.put(
+            response = self._make_request(
+                'put',
                 f"{self.orchestrator_url}/api/dgn/provider-status/{provider_id}",
-                json={"status": status},
-                headers=self._get_auth_headers()
+                json={"status": status}
             )
             response.raise_for_status()
             logging.info(f"Provider {provider_id} status updated to {status}")
@@ -270,10 +241,10 @@ class OrchestratorService:
 
         logging.info(f"Registering with profile: {payload}")
         try:
-            response = requests.post(
+            response = self._make_request(
+                'post',
                 f"{self.orchestrator_url}/api/dgn/register",
-                json=payload,
-                headers=self._get_auth_headers()
+                json=payload
             )
             response.raise_for_status()
             logging.info("Successfully registered with the Orchestrator.")
@@ -286,10 +257,10 @@ class OrchestratorService:
         """Remove provider row when client stops."""
         logging.info(f"OrchestratorService: Attempting to deregister provider {provider_id}.")
         try:
-            response = requests.delete(
+            response = self._make_request(
+                'delete',
                 f"{self.orchestrator_url}/api/dgn/register",
-                params={"providerId": provider_id},
-                headers=self._get_auth_headers()
+                params={"providerId": provider_id}
             )
             response.raise_for_status()
             logging.info(f"OrchestratorService: Provider {provider_id} deregistered successfully. Status: {response.status_code}")
@@ -302,10 +273,9 @@ class OrchestratorService:
         """Resets a job's status to 'pending' and clears its provider via a specific API endpoint."""
         try:
             logging.info(f"Requesting reset for job {job_id}")
-            # Use a specific 'reset' action on the job endpoint
-            response = requests.put(
-                f"{self.orchestrator_url}/api/dgn/job/{job_id}?action=reset",
-                headers=self._get_auth_headers()
+            response = self._make_request(
+                'put',
+                f"{self.orchestrator_url}/api/dgn/job/{job_id}?action=reset"
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status reset successfully via API.")

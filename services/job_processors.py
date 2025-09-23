@@ -252,7 +252,7 @@ class TextToVideoJobProcessor(BaseJobProcessor):
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
-            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id)
+            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id, 'video/mp4')
             
             if video_storage_path:
                 thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
@@ -281,7 +281,7 @@ class TextToVideoJobProcessor(BaseJobProcessor):
         if video_info:
             video_filename, subfolder = video_info
             local_video_path = os.path.join(self.output_dir, subfolder, video_filename)
-            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id)
+            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id, 'video/mp4')
             
             if video_storage_path:
                 thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"
@@ -314,7 +314,7 @@ class ImageToVideoJobProcessor(BaseJobProcessor):
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
-            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id)
+            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id, 'video/mp4')
             
             if video_storage_path:
                 thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
@@ -344,7 +344,7 @@ class ImageToVideoJobProcessor(BaseJobProcessor):
         if video_info:
             video_filename, subfolder = video_info
             local_video_path = os.path.join(self.output_dir, subfolder, video_filename)
-            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id)
+            video_storage_path = self.orchestrator_service.upload_output(local_video_path, self.job_id, 'video/mp4')
             
             if video_storage_path:
                 thumbnail_filename = os.path.splitext(video_filename)[0] + ".jpg"

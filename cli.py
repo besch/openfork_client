@@ -31,7 +31,8 @@ def setup_client(args):
         orchestrator_url=determined_orchestrator_url,
         root_dir=ROOT_DIR,
         cache_dir=CACHE_DIR,
-        access_token=args.access_token
+        access_token=args.access_token,
+        refresh_token=args.refresh_token
     )
 
     provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
@@ -90,6 +91,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='DGN Client')
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
+    parser.add_argument('--refresh-token', type=str, required=True, help='Supabase Auth Refresh Token')
     parser.add_argument('--service', type=str, default='auto', help='Service to run (default, foley, text_to_image, or auto)')
     args = parser.parse_args()
 

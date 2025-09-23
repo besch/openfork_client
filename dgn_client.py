@@ -15,8 +15,8 @@ from services.job_processors import (
 )
 
 class DGNClient:
-    def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str, access_token: str):
-        self.orchestrator_service = OrchestratorService(orchestrator_url, access_token)
+    def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str, access_token: str, refresh_token: str):
+        self.orchestrator_service = OrchestratorService(orchestrator_url, access_token, refresh_token)
         self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
         self.root_dir = root_dir
         self.cache_dir = cache_dir
