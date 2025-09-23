@@ -1,11 +1,10 @@
-
 {
   "prompt": {
     "1": {
       "class_type": "VibeVoiceSingleSpeakerNode",
       "inputs": {
         "text": "Hello, this is a test.",
-        "model": "VibeVoice-Large-Quant-4Bit",
+        "model": "VibeVoice-1.5B",
         "attention_type": "auto",
         "free_memory_after_generate": true,
         "diffusion_steps": 10,
