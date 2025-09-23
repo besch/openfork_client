@@ -39,7 +39,7 @@ RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requireme
 
 # Install DiffRhythm custom node
 RUN git clone https://github.com/billwuhao/ComfyUI_DiffRhythm.git /opt/ComfyUI/custom_nodes/ComfyUI_DiffRhythm
-RUN sed -i 's/transformers>=4.49.0/transformers==4.36.0/' /opt/ComfyUI/custom_nodes/ComfyUI_DiffRhythm/requirements.txt
+RUN sed -i 's/transformers>=4.49.0/transformers==4.49.0/' /opt/ComfyUI/custom_nodes/ComfyUI_DiffRhythm/requirements.txt
 RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI_DiffRhythm/requirements.txt
 
 # Install additional system dependencies for OpenCV

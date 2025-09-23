@@ -13,10 +13,7 @@
     "2": {
       "class_type": "SaveAudio",
       "inputs": {
-        "audio": [
-          "1",
-          0
-        ],
+        "audio": ["1", 0],
         "filename_prefix": "diffrhythm_output"
       }
     }
