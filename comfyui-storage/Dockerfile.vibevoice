@@ -48,6 +48,10 @@ RUN git clone https://github.com/Enemyx-net/VibeVoice-ComfyUI.git /opt/ComfyUI/c
 RUN python -m pip install transformers==4.51.3
 RUN python -m pip install -r /opt/ComfyUI/custom_nodes/VibeVoice-ComfyUI/requirements.txt
 
+# Install audio separation node
+RUN git clone https://github.com/christian-byrne/audio-separation-nodes-comfyui.git /opt/ComfyUI/custom_nodes/audio-separation-nodes-comfyui
+RUN python -m pip install librosa==0.10.2 moviepy
+
 # Install additional system dependencies for OpenCV
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx libgl1-mesa-dri \
