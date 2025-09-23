@@ -1,0 +1,22 @@
+services:
+  comfyui-diffrhythm:
+    build:
+      context: .
+      dockerfile: Dockerfile.diffrhythm
+    container_name: comfyui-diffrhythm-cu128
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./storage/ComfyUI/output:/opt/ComfyUI/output
+      - ./storage/ComfyUI/input:/opt/ComfyUI/input
+      - ./storage/ComfyUI/user:/opt/ComfyUI/user
+      - ./storage/ComfyUI/models/TTS/DiffRhythm:/opt/ComfyUI/models/TTS/DiffRhythm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true

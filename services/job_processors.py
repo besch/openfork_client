@@ -10,6 +10,7 @@ from utils.comfyui_workflow_utils import (
     inject_prompt_into_text_to_video_workflow,
     inject_prompt_into_vibevoice_workflow,
     inject_script_and_clones_into_vibevoice_workflow,
+    inject_prompt_into_diffrhythm_workflow,
     materialize_start_image
 )
 
@@ -206,6 +207,35 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
         else:
             logging.error(f"VibeVoice multi-clone workflow for job {self.job_id} completed, but no audio file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+
+class DiffRhythmJobProcessor(BaseJobProcessor):
+    def process(self):
+        workflow_api_path = os.path.join(self.root_dir, 'workflows', 'diffrhythm.api.json')
+        if not os.path.exists(workflow_api_path):
+            logging.error(f"Workflow API file not found at {workflow_api_path}")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        wf_ready = inject_prompt_into_diffrhythm_workflow(workflow_api_path, self.positive_prompt)
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        audio_info = find_audio_in_output(outputs)
+        if audio_info:
+            audio_filename, subfolder = audio_info
+            local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
+            audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, self.job_id)
+            if audio_storage_path:
+                duration = get_audio_duration(local_audio_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
+            else:
+                logging.error(f"DiffRhythm job {self.job_id} completed, but audio upload failed.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        else:
+            logging.error(f"DiffRhythm workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
 
 class TextToVideoJobProcessor(BaseJobProcessor):

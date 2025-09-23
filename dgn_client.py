@@ -11,6 +11,7 @@ from services.job_processors import (
     VibeVoiceMultiCloneJobProcessor,
     TextToVideoJobProcessor,
     ImageToVideoJobProcessor,
+    DiffRhythmJobProcessor
 )
 
 class DGNClient:
@@ -35,6 +36,8 @@ class DGNClient:
             return 'vibevoice'
         elif workflow_type == 'vibevoice_multi_clone':
             return 'vibevoice'
+        elif workflow_type == 'diffrhythm_music_generation':
+            return 'diffrhythm'
         else:
             return 'default'
 
@@ -46,6 +49,7 @@ class DGNClient:
             'text_to_image': TextToImageJobProcessor,
             'vibevoice': VibeVoiceJobProcessor,
             'vibevoice_multi_clone': VibeVoiceMultiCloneJobProcessor,
+            'diffrhythm_music_generation': DiffRhythmJobProcessor,
             'wan-2.2-text-to-video': TextToVideoJobProcessor,
             'image_to_video': ImageToVideoJobProcessor,
         }

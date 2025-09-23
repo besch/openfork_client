@@ -11,6 +11,8 @@ def manage_docker(action: str, service_type: str = 'default'):
         compose_file = 'docker-compose.qwen.yaml'
     elif service_type == 'vibevoice':
         compose_file = 'docker-compose.vibevoice.yaml'
+    elif service_type == 'diffrhythm':
+        compose_file = 'docker-compose.diffrhythm.yaml'
     else:
         compose_file = 'docker-compose.yaml'
     

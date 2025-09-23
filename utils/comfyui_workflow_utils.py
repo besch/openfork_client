@@ -197,6 +197,24 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_path: str, prompt: str):
 
     return api_graph
 
+def inject_prompt_into_diffrhythm_workflow(workflow_api_path: str, prompt: str):
+    """
+    Loads the DiffRhythm ComfyUI API-formatted workflow, injects the prompt.
+    """
+    with open(workflow_api_path, 'r') as f:
+        workflow_api = json.load(f)
+
+    # Deep copy to avoid modifying the cached workflow
+    api_graph = copy.deepcopy(workflow_api["prompt"])
+
+    # Inject prompt
+    for node in api_graph.values():
+        if node["class_type"] == "DiffRhythmRun":
+            node["inputs"]["lyrics_or_edit_lyrics"] = prompt
+            node["inputs"]["edit"] = False
+
+    return api_graph
+
 def inject_script_and_clones_into_vibevoice_workflow(workflow_api_path: str, script: str, clone_paths: list[str]):
     """
     Loads the VibeVoice ComfyUI API-formatted workflow, injects the script and clone paths.
