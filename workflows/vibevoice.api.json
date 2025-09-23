@@ -15,20 +15,17 @@
         "top_p": 0.95
       }
     },
-    "3": {
-      "class_type": "AudioSeparator",
+    "2": {
+      "class_type": "AudioSeparation",
       "inputs": {
         "audio": ["1", 0],
         "stem": "vocals"
       }
     },
-    "2": {
+    "3": {
       "class_type": "SaveAudio",
       "inputs": {
-        "audio": [
-          "3",
-          0
-        ],
+        "audio": ["2", 0],
         "filename_prefix": "vibevoice_output_vocals"
       }
     }

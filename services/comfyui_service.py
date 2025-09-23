@@ -86,8 +86,11 @@ class ComfyUIClient:
             except Exception:
                 detail = str(e)
             raise RuntimeError(f"ComfyUI /prompt returned HTTP {e.code}: {detail}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to enqueue workflow via {self.http_base}/prompt: {e}")
+        except (urllib.error.URLError, http.client.RemoteDisconnected) as e:
+            reason = e.reason if hasattr(e, 'reason') else str(e)
+            error_message = f"Cannot reach ComfyUI at {self.server_address} (/prompt): {reason}. Check COMFYUI_WS_URL and that ComfyUI is running and the port is published."
+            logging.error(error_message)
+            raise RuntimeError(error_message)
 
         return prompt_id
 
