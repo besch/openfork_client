@@ -13,6 +13,7 @@ from services.job_processors import (
     ImageToVideoJobProcessor,
     DiffRhythmJobProcessor
 )
+from services.token_update_service import start_token_update_server
 
 class DGNClient:
     def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str, access_token: str, refresh_token: str):
@@ -25,6 +26,13 @@ class DGNClient:
         self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
         self.active_service_type = None
         self.current_job = None
+        self.httpd = None
+        self.token_server_port = None
+
+        # Start the token update server and notify Electron of the port
+        self.httpd, self.token_server_port = start_token_update_server(self.orchestrator_service)
+        if self.token_server_port:
+            print(f"DGN_CLIENT_TOKEN_SERVER_PORT: {self.token_server_port}", flush=True)
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
         """Maps a workflow type to a docker-compose service type."""
