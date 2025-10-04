@@ -4,7 +4,6 @@ Configuration for the DGN Client
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 # --- General Configuration ---
@@ -13,23 +12,21 @@ CACHE_DIR = os.path.join(ROOT_DIR, '.cache')
 DEV_MODE = os.getenv('DEV_MODE', 'False').lower() in ('true', '1', 't')
 
 # --- Supabase Configuration ---
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_URL = "https://vmuylzvwqravkmdmcpgv.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZtdXlsenZ3cXJhdmttZG1jcGd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIxNDM3MjAsImV4cCI6MjA2NzcxOTcyMH0.f2USQOkuKhPksSLSXhTlyl5zTstyCyYvzdiHV9HQUKw"
 
 # --- Orchestrator Configuration ---
-ORCHESTRATOR_URL_PROD = os.getenv("ORCHESTRATOR_URL_PROD", "https://your-prod-url.com")
+ORCHESTRATOR_URL_PROD = os.getenv("ORCHESTRATOR_URL_PROD", "https://www.openfork.video")
 ORCHESTRATOR_URL_DEV = os.getenv("ORCHESTRATOR_URL_DEV", "http://localhost:3000")
 
 # --- Docker Image Configuration ---
 # Maps a service type to a full Docker Hub image name.
-# Replace 'yourusername' with your actual Docker Hub username.
-DOCKER_HUB_USERNAME = os.getenv("DOCKER_HUB_USERNAME", "yourusername")
+DOCKER_HUB_USERNAME = "beschiak"
 
 DOCKER_IMAGE_MAP = {
-    "default": f"{DOCKER_HUB_USERNAME}/crowdmovie-default:latest",
-    "foley": f"{DOCKER_HUB_USERNAME}/crowdmovie-foley:latest",
-    "text_to_image": f"{DOCKER_HUB_USERNAME}/crowdmovie-qwen:latest", # Corresponds to qwen workflow
-    "vibevoice": f"{DOCKER_HUB_USERNAME}/crowdmovie-vibevoice:latest",
-    "diffrhythm": f"{DOCKER_HUB_USERNAME}/crowdmovie-diffrhythm:latest",
-    # Add other mappings here as you create more images
+    "default": f"{DOCKER_HUB_USERNAME}/openfork-wan22-rtx4060:latest",
+    "foley": f"{DOCKER_HUB_USERNAME}/openfork-foley-rtx4060:latest",
+    "text_to_image": f"{DOCKER_HUB_USERNAME}/openfork-qwen-rtx4060:latest",
+    "vibevoice": f"{DOCKER_HUB_USERNAME}/openfork-vibevoice-rtx4060:latest",
+    "diffrhythm": f"{DOCKER_HUB_USERNAME}/openfork-diffrhythm-rtx4060:latest",
 }
