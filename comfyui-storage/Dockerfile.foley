@@ -61,6 +61,20 @@ RUN apt-get update && apt-get install -y \
 # Install uv for ComfyUI-Manager
 RUN python -m pip install uv
 
+# --- Copy Models for Foley Workflow ---
+# Copy user configurations and custom nodes
+COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
+
+# Copy Foley-specific models
+# Note: These paths assume the standard locations for models downloaded by the install script.
+COPY --chown=user:user ./storage/ComfyUI/models/foley/hunyuanvideo-foley-xxl/hunyuanvideo_foley.fp8_e5m2.pth /opt/ComfyUI/models/foley/hunyuanvideo-foley-xxl/
+COPY --chown=user:user ./storage/ComfyUI/models/checkpoints/Hunyuan-DiT-v1.2-fp16.safetensors /opt/ComfyUI/models/checkpoints/
+COPY --chown=user:user ./storage/ComfyUI/models/checkpoints/t2v_checkpoint.pt /opt/ComfyUI/models/checkpoints/
+COPY --chown=user:user ./storage/ComfyUI/models/vae/sd-v1-5-vae-ft-mse.safetensors /opt/ComfyUI/models/vae/
+COPY --chown=user:user ./storage/ComfyUI/models/clip_vision/clip_vit_l_14.safetensors /opt/ComfyUI/models/clip_vision/
+COPY --chown=user:user ./storage/ComfyUI/models/t5/t5-v1_1-xxl /opt/ComfyUI/models/t5/
+
+
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
-CMD ["sh", "-c", "python /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/install.py && python /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/install.py --quantization fp8 && (mv /opt/ComfyUI/models/foley/hunyuanvideo-foley-xxl/hunyuanvideo_foley.fp8.pth /opt/ComfyUI/models/foley/hunyuanvideo-foley-xxl/hunyuanvideo_foley.fp8_e5m2.pth || true) && python main.py --listen"]
+CMD ["python", "main.py", "--listen"]

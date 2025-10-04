@@ -1,5 +1,5 @@
 import logging
-from services.docker_service import manage_docker
+from services.docker_manager import docker_manager
 
 class JobListener:
     def __init__(self, client, provider_id, shutdown_event):
@@ -52,7 +52,7 @@ class JobListener:
                     self.client.active_service_type = service_type
                     
                     logging.info(f"Job requires service '{service_type}'. Starting container...")
-                    manage_docker("up", service_type=service_type)
+                    docker_manager.run_container(service_type=service_type)
                     
                     if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
                         self.client._process_job(job, self.shutdown_event)
@@ -63,7 +63,7 @@ class JobListener:
 
                     if not self.shutdown_event.is_set():
                         logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
-                        manage_docker("down", service_type=service_type)
+                        docker_manager.stop_container(service_type=service_type)
                         self.client.active_service_type = None
                         self.orchestrator_service.update_provider_status(self.provider_id, 'available')
                         logging.info("Provider status set to available. Waiting for next job...")

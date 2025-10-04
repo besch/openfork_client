@@ -62,6 +62,15 @@ RUN apt-get update && apt-get install -y \
 # Install uv for ComfyUI-Manager
 RUN python -m pip install uv
 
+# --- Copy Models for VibeVoice Workflow ---
+# Copy user configurations and custom nodes
+COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
+
+# Copy VibeVoice-specific models
+COPY --chown=user:user ./storage/ComfyUI/models/vibevoice/VibeVoice-1.5B /opt/ComfyUI/models/vibevoice/VibeVoice-1.5B
+COPY --chown=user:user ./storage/ComfyUI/models/vibevoice/VibeVoice-Large-Quant-4Bit /opt/ComfyUI/models/vibevoice/VibeVoice-Large-Quant-4Bit
+
+
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]

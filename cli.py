@@ -7,7 +7,7 @@ import requests
 
 from config import ROOT_DIR, CACHE_DIR, DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from dgn_client import DGNClient
-from services.docker_service import manage_docker
+from services.docker_manager import docker_manager
 from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
 from services.heartbeat_manager import HeartbeatManager
 from services.job_listener import JobListener
@@ -78,9 +78,9 @@ def cleanup(client, provider_id, service_mode):
     logging.info("DGN Client: Stopping Docker container(s).")
     try:
         if service_mode != 'auto':
-            manage_docker("down", service_type=service_mode)
+            docker_manager.stop_container(service_type=service_mode)
         elif client and client.active_service_type:
-            manage_docker("down", service_type=client.active_service_type)
+            docker_manager.stop_container(service_type=client.active_service_type)
         else:
             logging.info("DGN Client: No active container to stop.")
     except Exception as e:
@@ -96,7 +96,7 @@ def main():
     args = parser.parse_args()
 
     if args.service != 'auto':
-        manage_docker("up", service_type=args.service)
+        docker_manager.run_container(service_type=args.service)
     
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()

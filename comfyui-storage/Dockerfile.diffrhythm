@@ -50,6 +50,14 @@ RUN apt-get update && apt-get install -y \
 # Install uv for ComfyUI-Manager
 RUN python -m pip install uv
 
+# --- Copy Models for DiffRhythm Workflow ---
+# Copy user configurations and custom nodes
+COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
+
+# Copy DiffRhythm-specific models
+COPY --chown=user:user ./storage/ComfyUI/models/checkpoints/cfm_model_v1_2.pt /opt/ComfyUI/models/checkpoints/
+
+
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
