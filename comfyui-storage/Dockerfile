@@ -61,14 +61,12 @@ COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 # --- WAN 2.2 & Flux Models ---
 # VAEs
 COPY --chown=user:user ./storage/ComfyUI/models/vae/wan_2.1_vae.safetensors /opt/ComfyUI/models/vae/
-COPY --chown=user:user ./storage/ComfyUI/models/vae/ae.safetensors /opt/ComfyUI/models/vae/
 
 # UNETs
 COPY --chown=user:user ./storage/ComfyUI/models/unet/wan2.2_i2v_low_noise_14B_Q4_K_S.gguf /opt/ComfyUI/models/unet/
 COPY --chown=user:user ./storage/ComfyUI/models/unet/wan2.2_i2v_high_noise_14B_Q4_K_S.gguf /opt/ComfyUI/models/unet/
 COPY --chown=user:user ./storage/ComfyUI/models/unet/wan2.2_t2v_high_noise_14B_Q4_K_S.gguf /opt/ComfyUI/models/unet/
 COPY --chown=user:user ./storage/ComfyUI/models/unet/wan2.2_t2v_low_noise_14B_Q4_K_S.gguf /opt/ComfyUI/models/unet/
-COPY --chown=user:user ./storage/ComfyUI/models/unet/flux1-schnell.safetensors /opt/ComfyUI/models/unet/
 
 # LoRAs
 COPY --chown=user:user ./storage/ComfyUI/models/loras/Wan21_lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors /opt/ComfyUI/models/loras/
@@ -76,9 +74,6 @@ COPY --chown=user:user ./storage/ComfyUI/models/loras/Wan21_T2V_14B_lightx2v_cfg
 
 # Text Encoders (CLIP/T5)
 COPY --chown=user:user ./storage/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors /opt/ComfyUI/models/text_encoders/
-COPY --chown=user:user ./storage/ComfyUI/models/clip/clip_l.safetensors /opt/ComfyUI/models/clip/
-COPY --chown=user:user ./storage/ComfyUI/models/t5/t5xxl_fp8_e4m3fn.safetensors /opt/ComfyUI/models/t5/
-
 
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
