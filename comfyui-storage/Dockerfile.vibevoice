@@ -68,8 +68,6 @@ COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
 # Copy VibeVoice-specific models
 COPY --chown=user:user ./storage/ComfyUI/models/vibevoice/VibeVoice-1.5B /opt/ComfyUI/models/vibevoice/VibeVoice-1.5B
-COPY --chown=user:user ./storage/ComfyUI/models/vibevoice/VibeVoice-Large-Quant-4Bit /opt/ComfyUI/models/vibevoice/VibeVoice-Large-Quant-4Bit
-
 
 # Set final working directory and command
 WORKDIR /opt/ComfyUI

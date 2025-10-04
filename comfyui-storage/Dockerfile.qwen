@@ -49,7 +49,6 @@ RUN python -m pip install -r /opt/ComfyUI/custom_nodes/was-node-suite-comfyui/re
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
 # --- Copy Models for Qwen Workflow ---
-COPY --chown=user:user ./storage/ComfyUI/models/loras/Qwen-Image-Lightning-8steps-V1.0.safetensors /opt/ComfyUI/models/loras/
 COPY --chown=user:user ./storage/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors /opt/ComfyUI/models/text_encoders/
 COPY --chown=user:user ./storage/ComfyUI/models/unet/Qwen_Image_Distill-Q4_K_S.gguf /opt/ComfyUI/models/unet/
 COPY --chown=user:user ./storage/ComfyUI/models/vae/qwen_image_vae.safetensors /opt/ComfyUI/models/vae/
