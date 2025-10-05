@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='dgn_client_backend',
+    name='openfork_client',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
