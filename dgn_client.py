@@ -14,6 +14,7 @@ from services.job_processors import (
     DiffRhythmJobProcessor
 )
 from services.token_update_service import start_token_update_server
+from shared_types import *
 
 class DGNClient:
     def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str, access_token: str, refresh_token: str):
@@ -36,33 +37,35 @@ class DGNClient:
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
         """Maps a workflow type to a docker-compose service type."""
-        if workflow_type == 'hunyuan_video_foley':
-            return 'foley'
-        elif workflow_type == 'text_to_image':
-            return 'text_to_image'
-        elif workflow_type == 'vibevoice':
-            return 'vibevoice'
-        elif workflow_type == 'vibevoice_multi_clone':
-            return 'vibevoice'
-        elif workflow_type == 'diffrhythm_music_generation':
-            return 'diffrhythm'
+        if workflow_type == WORKFLOW_TYPE_VIDEO_FOLEY:
+            return SERVICE_TYPE_FOLEY
+        elif workflow_type == WORKFLOW_TYPE_TEXT_TO_IMAGE:
+            return SERVICE_TYPE_QWEN
+        elif workflow_type in [WORKFLOW_TYPE_TTS, WORKFLOW_TYPE_TTS_MULTI_CLONE]:
+            return SERVICE_TYPE_VIBEVOICE
+        elif workflow_type == WORKFLOW_TYPE_MUSIC_GENERATION:
+            return SERVICE_TYPE_DIFFRHYTHM
+        elif workflow_type in [WORKFLOW_TYPE_TEXT_TO_VIDEO, WORKFLOW_TYPE_IMAGE_TO_VIDEO]:
+            return SERVICE_TYPE_WAN22
         else:
-            return 'default'
+            raise ValueError(f"Unknown workflow type, cannot determine service: {workflow_type}")
 
     def _get_job_processor(self, job, shutdown_event):
-        workflow_type = job.get('workflow_type', 'image_to_video')
-        
+        workflow_type = job.get('workflow_type')
+
         processor_map = {
-            'hunyuan_video_foley': FoleyJobProcessor,
-            'text_to_image': TextToImageJobProcessor,
-            'vibevoice': VibeVoiceJobProcessor,
-            'vibevoice_multi_clone': VibeVoiceMultiCloneJobProcessor,
-            'diffrhythm_music_generation': DiffRhythmJobProcessor,
-            'wan-2.2-text-to-video': TextToVideoJobProcessor,
-            'image_to_video': ImageToVideoJobProcessor,
+            WORKFLOW_TYPE_VIDEO_FOLEY: FoleyJobProcessor,
+            WORKFLOW_TYPE_TEXT_TO_IMAGE: TextToImageJobProcessor,
+            WORKFLOW_TYPE_TTS: VibeVoiceJobProcessor,
+            WORKFLOW_TYPE_TTS_MULTI_CLONE: VibeVoiceMultiCloneJobProcessor,
+            WORKFLOW_TYPE_MUSIC_GENERATION: DiffRhythmJobProcessor,
+            WORKFLOW_TYPE_TEXT_TO_VIDEO: TextToVideoJobProcessor,
+            WORKFLOW_TYPE_IMAGE_TO_VIDEO: ImageToVideoJobProcessor,
         }
 
-        ProcessorClass = processor_map.get(workflow_type, ImageToVideoJobProcessor)
+        ProcessorClass = processor_map.get(workflow_type)
+        if not ProcessorClass:
+            raise ValueError(f"No job processor found for workflow type: {workflow_type}")
         return ProcessorClass(self, job, shutdown_event)
 
     def _process_job(self, job, shutdown_event: threading.Event):

@@ -12,11 +12,7 @@ class DockerDevManager:
         self.compose_dir = os.path.join(ROOT_DIR, 'comfyui-storage')
 
     def _get_compose_file(self, service_type: str) -> str:
-        # The 'default' service uses the base docker-compose.yaml
-        if service_type == 'default':
-            return os.path.join(self.compose_dir, 'docker-compose.yaml')
-        
-        # Other services use a specific override file, e.g., docker-compose.foley.yaml
+        # Services use a specific compose file, e.g., docker-compose.foley.yaml
         compose_file = os.path.join(self.compose_dir, f'docker-compose.{service_type}.yaml')
         if not os.path.exists(compose_file):
             raise FileNotFoundError(f"Docker compose file not found for service '{service_type}' at {compose_file}")

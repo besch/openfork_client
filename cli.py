@@ -92,7 +92,7 @@ def main():
     parser = argparse.ArgumentParser(description='DGN Client')
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
     parser.add_argument('--refresh-token', type=str, required=True, help='Supabase Auth Refresh Token')
-    parser.add_argument('--service', type=str, default='auto', help='Service to run (default, foley, text_to_image, or auto)')
+    parser.add_argument('--service', type=str, default='auto', help='Service to run (wan22, foley, text_to_image, vibevoice, diffrhythm, or auto)')
     args = parser.parse_args()
 
     if args.service != 'auto':
