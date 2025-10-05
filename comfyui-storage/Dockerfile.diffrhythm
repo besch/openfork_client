@@ -54,8 +54,7 @@ RUN python -m pip install uv
 # Copy user configurations and custom nodes
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
-# Copy DiffRhythm-specific models
-COPY --chown=user:user ./storage/ComfyUI/models/checkpoints/cfm_model_v1_2.pt /opt/ComfyUI/models/checkpoints/
+COPY --chown=user:user ./storage/ComfyUI/models/TTS/DiffRhythm /opt/ComfyUI/models/TTS/DiffRhythm
 
 
 # Set final working directory and command
