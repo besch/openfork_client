@@ -2,13 +2,22 @@
 Configuration for the DGN Client
 '''
 import os
+import sys
 from dotenv import load_dotenv
 from shared_types import *
 
 load_dotenv()
 
 # --- General Configuration ---
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    # If the application is run as a bundle (e.g., by PyInstaller)
+    ROOT_DIR = os.path.dirname(sys.executable)
+else:
+    # If running as a script in a normal Python environment
+    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+os.chdir(ROOT_DIR)
+
 CACHE_DIR = os.path.join(ROOT_DIR, '.cache')
 DEV_MODE = True
 
@@ -25,9 +34,9 @@ ORCHESTRATOR_URL_DEV = os.getenv("ORCHESTRATOR_URL_DEV", "http://localhost:3000"
 DOCKER_HUB_USERNAME = "beschiak"
 
 DOCKER_IMAGE_MAP = {
-    SERVICE_TYPE_WAN22: f"{DOCKER_HUB_USERNAME}/openfork-wan22-rtx4060:latest",
-    SERVICE_TYPE_FOLEY: f"{DOCKER_HUB_USERNAME}/openfork-foley-rtx4060:latest",
-    SERVICE_TYPE_QWEN: f"{DOCKER_HUB_USERNAME}/openfork-qwen-rtx4060:latest",
-    SERVICE_TYPE_VIBEVOICE: f"{DOCKER_HUB_USERNAME}/openfork-vibevoice-rtx4060:latest",
-    SERVICE_TYPE_DIFFRHYTHM: f"{DOCKER_HUB_USERNAME}/openfork-diffrhythm-rtx4060:latest",
+    SERVICE_TYPE_WAN22: f"{DOCKER_HUB_USERNAME}/openfork-wan22-rtx4060",
+    SERVICE_TYPE_FOLEY: f"{DOCKER_HUB_USERNAME}/openfork-foley-rtx4060",
+    SERVICE_TYPE_QWEN: f"{DOCKER_HUB_USERNAME}/openfork-qwen-rtx4060",
+    SERVICE_TYPE_VIBEVOICE: f"{DOCKER_HUB_USERNAME}/openfork-vibevoice-rtx4060",
+    SERVICE_TYPE_DIFFRHYTHM: f"{DOCKER_HUB_USERNAME}/openfork-diffrhythm-rtx4060",
 }
