@@ -23,9 +23,7 @@ RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-inde
 # Install base dependencies
 RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
 
-# Install SageAttention dependencies
-RUN python -m pip install ninja
-RUN git clone https://github.com/thu-ml/SageAttention.git /opt/sageattention
+
 
 # Set working directory
 WORKDIR /opt/ComfyUI
@@ -71,4 +69,4 @@ COPY --chown=user:user ./storage/ComfyUI/models/vibevoice/VibeVoice-1.5B /opt/Co
 
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
-CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]
+CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]
