@@ -4,6 +4,7 @@ images from a Docker registry (e.g., Docker Hub).
 '''
 import docker
 import logging
+import subprocess
 from config import DOCKER_IMAGE_MAP
 
 class DockerProdManager:
@@ -69,6 +70,20 @@ class DockerProdManager:
             logging.info(f"Container '{container_name}' started successfully.")
         except docker.errors.APIError as e:
             logging.error(f"Failed to start container '{container_name}': {e}")
+            raise
+
+    def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str):
+        container_name = self.get_container_name(service_type)
+        source_path = f"{container_name}:{source_in_container}"
+        command = ['docker', 'cp', source_path, dest_on_host]
+        logging.info(f"Copying file from container: {' '.join(command)}")
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            logging.info(f"Successfully ran command: {' '.join(command)}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Error running command: {' '.join(command)}")
+            logging.error(f"Stderr: {e.stderr}")
+            logging.error(f"Stdout: {e.stdout}")
             raise
 
     def stop_container(self, service_type: str):

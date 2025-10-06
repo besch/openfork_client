@@ -36,7 +36,9 @@ class JobListener:
 
     def listen_for_jobs_auto(self):
         """Listen for jobs and dynamically start/stop containers."""
+        logging.info("Entering auto job listening loop.")
         while not self.shutdown_event.is_set():
+            logging.info("Top of auto-mode loop iteration.")
             job = None
             try:
                 logging.info("Auto mode: Checking for new jobs...")
@@ -69,7 +71,7 @@ class JobListener:
                         logging.info("Provider status set to available. Waiting for next job...")
                         self.client.current_job = None
                 else:
-                    logging.info("No new jobs.")
+                    logging.info("No new jobs found in this check.")
             except Exception as e:
                 logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 

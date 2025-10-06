@@ -5,7 +5,9 @@ import sys
 import threading
 import requests
 
-from config import ROOT_DIR, CACHE_DIR, DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
+import os
+
+from config import CACHE_DIR, DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from dgn_client import DGNClient
 from services.docker_manager import docker_manager
 from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
@@ -27,9 +29,12 @@ def setup_client(args):
     except requests.exceptions.RequestException as e:
         logging.warning(f"Could not connect to orchestrator URL {determined_orchestrator_url}: {e}.")
 
+    root_dir = args.root_dir if args.root_dir else os.getcwd()
+    logging.info(f"Using root directory: {root_dir}")
+
     client = DGNClient(
         orchestrator_url=determined_orchestrator_url,
-        root_dir=ROOT_DIR,
+        root_dir=root_dir,
         cache_dir=CACHE_DIR,
         access_token=args.access_token,
         refresh_token=args.refresh_token
@@ -93,6 +98,7 @@ def main():
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
     parser.add_argument('--refresh-token', type=str, required=True, help='Supabase Auth Refresh Token')
     parser.add_argument('--service', type=str, default='auto', help='Service to run (wan22, foley, text_to_image, vibevoice, diffrhythm, or auto)')
+    parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
     args = parser.parse_args()
 
     if args.service != 'auto':
@@ -105,6 +111,11 @@ def main():
     provider_id = None
     try:
         client, provider_id = setup_client(args)
+
+        # If we are running a dedicated service, set it as active on the client.
+        if args.service != 'auto':
+            client.active_service_type = args.service
+
         run_client(client, provider_id, args.service)
     except Exception as e:
         logging.error(f"A critical error occurred during client operation: {e}", exc_info=True)
