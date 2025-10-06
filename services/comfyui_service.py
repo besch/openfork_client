@@ -209,7 +209,7 @@ class ComfyUIClient:
 
         logging.info(f"Exiting get_workflow_output for prompt_id {prompt_id} due to loop completion. Fetching history for outputs.")
         history_outputs = self.fetch_history_outputs(prompt_id)
-        if history_outputs:
+        if history_outputs is not None:
             return history_outputs
         else:
             logging.warning(f"Failed to fetch history outputs for prompt_id {prompt_id}. Returning accumulated outputs (which might be empty).")

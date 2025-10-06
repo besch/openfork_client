@@ -182,7 +182,8 @@ def inject_video_and_prompt_into_foley_workflow(workflow_api_path: str, video_fi
 
 def inject_prompt_into_vibevoice_workflow(workflow_api_path: str, prompt: str):
     """
-    Loads the VibeVoice ComfyUI API-formatted workflow, injects the prompt.
+    Loads the VibeVoice ComfyUI API-formatted workflow, injects the prompt
+    and ensures all required inputs for VibeVoiceSingleSpeakerNode are present.
     """
     with open(workflow_api_path, 'r') as f:
         workflow_api = json.load(f)
@@ -190,10 +191,24 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_path: str, prompt: str):
     # Deep copy to avoid modifying the cached workflow
     api_graph = copy.deepcopy(workflow_api["prompt"])
 
-    # Inject prompt
+    # Find the VibeVoice node and explicitly set its inputs
     for node in api_graph.values():
         if node["class_type"] == "VibeVoiceSingleSpeakerNode":
-            node["inputs"]["text"] = prompt
+            # Overwrite the entire 'inputs' dictionary to ensure correctness
+            node["inputs"] = {
+                "text": prompt,
+                "model": "VibeVoice-1.5B",
+                "attention_type": "auto",
+                "free_memory_after_generate": True,
+                "diffusion_steps": 10,
+                "seed": 0,
+                "cfg_scale": 3.5,
+                "use_sampling": False,
+                "temperature": 0.8,
+                "top_p": 0.95,
+                "quantize_llm": "full precision"
+            }
+            break  # Assuming only one such node
 
     return api_graph
 

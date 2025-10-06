@@ -83,7 +83,21 @@ class FoleyJobProcessor(BaseJobProcessor):
         audio_info = find_audio_in_output(outputs)
         if audio_info:
             audio_filename, subfolder = audio_info
+            logging.info(f"Found audio file: filename='{audio_filename}', subfolder='{subfolder}'")
+            logging.info(f"output_dir: {self.output_dir}")
             local_audio_path = os.path.join(self.output_dir, subfolder, audio_filename)
+            logging.info(f"local_audio_path: {local_audio_path}")
+            if os.path.exists(local_audio_path):
+                logging.info(f"File exists at path")
+            else:
+                logging.error(f"File NOT found at path")
+                # List directory contents for debugging
+                import glob
+                try:
+                    files = glob.glob(os.path.join(self.output_dir, "**"), recursive=True)
+                    logging.info(f"Files found in output_dir: {[f for f in files if os.path.isfile(f)]}")
+                except Exception as e:
+                    logging.error(f"Error listing files: {e}")
             audio_storage_path = self.orchestrator_service.upload_audio_output(local_audio_path, self.job_id)
             if audio_storage_path:
                 duration = get_audio_duration(local_audio_path)

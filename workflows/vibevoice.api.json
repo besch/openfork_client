@@ -12,7 +12,8 @@
         "cfg_scale": 3.5,
         "use_sampling": false,
         "temperature": 0.8,
-        "top_p": 0.95
+        "top_p": 0.95,
+        "quantize_llm": "full precision"
       }
     },
     "2": {
