@@ -2,7 +2,7 @@ services:
   comfyui:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.wan22
     container_name: comfyui-cu128
     ports:
       - "8188:8188"
