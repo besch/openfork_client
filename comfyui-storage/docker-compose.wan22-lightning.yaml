@@ -1,0 +1,23 @@
+services:
+  comfyui:
+    build:
+      context: .
+      dockerfile: Dockerfile.wan22-lightning
+    image: beschiak/openfork-wan22-lightning-rtx4060:latest
+    container_name: openfork-comfyui-wan22-lightning
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./storage/ComfyUI/user:/opt/ComfyUI/user
+      - ./storage/ComfyUI/input:/opt/ComfyUI/input
+      - ./storage/ComfyUI/output:/opt/ComfyUI/output
+      - ./storage/ComfyUI/models:/opt/ComfyUI/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true

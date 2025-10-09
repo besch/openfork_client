@@ -425,3 +425,100 @@ class ImageToVideoJobProcessor(BaseJobProcessor):
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
+
+class TextToVideoLightningJobProcessor(TextToVideoJobProcessor):
+    def process(self):
+        # This processor is for the lightning workflow, which is a text-to-video workflow.
+        # It reuses the logic from TextToVideoJobProcessor but points to a different workflow file.
+        
+        # DEV_MODE is not applicable here as it points to a specific sample file.
+        # We will directly use the lightning workflow.
+
+        workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-text-to-video-lightning.api.json')
+        wf_ready = inject_prompt_into_text_to_video_workflow(workflow_api_path, self.positive_prompt, self.negative_prompt)
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        video_info = find_video_in_output(outputs)
+        if not video_info:
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_filename, subfolder = video_info
+        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+            if video_storage_path:
+                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                thumbnail_storage_path = None
+                
+                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                    os.remove(thumbnail_local_path)
+                
+                duration = get_video_duration(temp_host_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+            else:
+                logging.error(f"Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)
+
+class ImageToVideoLightningJobProcessor(ImageToVideoJobProcessor):
+    def process(self):
+        # This processor is for the lightning workflow, which is an image-to-video workflow.
+        # It reuses the logic from ImageToVideoJobProcessor but points to a different workflow file.
+
+        workflow_api_path = os.path.join(self.root_dir, 'workflows', 'wan2.2-image-to-video-lightning.api.json')
+        if not os.path.exists(workflow_api_path):
+            logging.error(f"Workflow API file not found at {workflow_api_path}")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        start_image_filename = materialize_start_image(self.job, self.input_dir)
+        wf_ready = inject_prompt_and_image_into_workflow(workflow_api_path, self.positive_prompt, self.negative_prompt, start_image_filename)
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        video_info = find_video_in_output(outputs)
+        if not video_info:
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_filename, subfolder = video_info
+        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+            if video_storage_path:
+                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                thumbnail_storage_path = None
+                
+                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                    os.remove(thumbnail_local_path)
+                
+                duration = get_video_duration(temp_host_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+            else:
+                logging.error(f"Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)

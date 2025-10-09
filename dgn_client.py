@@ -11,7 +11,9 @@ from services.job_processors import (
     VibeVoiceMultiCloneJobProcessor,
     TextToVideoJobProcessor,
     ImageToVideoJobProcessor,
-    DiffRhythmJobProcessor
+    DiffRhythmJobProcessor,
+    TextToVideoLightningJobProcessor,
+    ImageToVideoLightningJobProcessor
 )
 from services.token_update_service import start_token_update_server
 from shared_types import *
@@ -47,6 +49,8 @@ class DGNClient:
             return SERVICE_TYPE_DIFFRHYTHM
         elif workflow_type in [WORKFLOW_TYPE_TEXT_TO_VIDEO, WORKFLOW_TYPE_IMAGE_TO_VIDEO]:
             return SERVICE_TYPE_WAN22
+        elif workflow_type in [WORKFLOW_TYPE_TEXT_TO_VIDEO_LIGHTNING, WORKFLOW_TYPE_IMAGE_TO_VIDEO_LIGHTNING]:
+            return SERVICE_TYPE_WAN22_LIGHTNING
         else:
             raise ValueError(f"Unknown workflow type, cannot determine service: {workflow_type}")
 
@@ -61,6 +65,8 @@ class DGNClient:
             WORKFLOW_TYPE_MUSIC_GENERATION: DiffRhythmJobProcessor,
             WORKFLOW_TYPE_TEXT_TO_VIDEO: TextToVideoJobProcessor,
             WORKFLOW_TYPE_IMAGE_TO_VIDEO: ImageToVideoJobProcessor,
+            WORKFLOW_TYPE_TEXT_TO_VIDEO_LIGHTNING: TextToVideoLightningJobProcessor,
+            WORKFLOW_TYPE_IMAGE_TO_VIDEO_LIGHTNING: ImageToVideoLightningJobProcessor,
         }
 
         ProcessorClass = processor_map.get(workflow_type)
