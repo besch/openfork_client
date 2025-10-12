@@ -98,3 +98,17 @@ class DockerProdManager:
             logging.warning(f"Attempted to stop container '{container_name}', but it was not found.")
         except docker.errors.APIError as e:
             logging.error(f"Failed to stop or remove container '{container_name}': {e}")
+
+    def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str):
+        container_name = self.get_container_name(service_type)
+        dest_path = f"{container_name}:{dest_in_container}"
+        command = ['docker', 'cp', source_on_host, dest_path]
+        logging.info(f"Copying file to container: {' '.join(command)}")
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            logging.info(f"Successfully ran command: {' '.join(command)}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Error running command: {' '.join(command)}")
+            logging.error(f"Stderr: {e.stderr}")
+            logging.error(f"Stdout: {e.stdout}")
+            raise

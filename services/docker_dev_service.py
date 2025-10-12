@@ -72,3 +72,17 @@ class DockerDevManager:
         # The 'down' command stops and removes containers, networks, etc.
         command = ['docker-compose', '-f', compose_file, 'down']
         self._run_command(command)
+
+    def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str):
+        container_id = self.get_container_id(service_type)
+        dest_path = f"{container_id}:{dest_in_container}"
+        command = ['docker', 'cp', source_on_host, dest_path]
+        logging.info(f"Copying file to container: {' '.join(command)}")
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            logging.info(f"Successfully ran command: {' '.join(command)}")
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Error running command: {' '.join(command)}")
+            logging.error(f"Stderr: {e.stderr}")
+            logging.error(f"Stdout: {e.stdout}")
+            raise
