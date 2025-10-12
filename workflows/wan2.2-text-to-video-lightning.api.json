@@ -53,7 +53,7 @@
       "inputs": {
         "add_noise": "enable",
         "noise_seed": 191156116025741,
-        "steps": 4,
+        "steps": 6,
         "cfg": 1,
         "sampler_name": "euler",
         "scheduler": "simple",

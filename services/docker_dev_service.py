@@ -6,6 +6,7 @@ import logging
 import subprocess
 import os
 from config import ROOT_DIR
+from .docker_utils import docker_cp
 
 class DockerDevManager:
     def __init__(self):
@@ -47,17 +48,7 @@ class DockerDevManager:
     def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str):
         container_id = self.get_container_id(service_type)
         source_path = f"{container_id}:{source_in_container}"
-        command = ['docker', 'cp', source_path, dest_on_host]
-        logging.info(f"Copying file from container: {' '.join(command)}")
-        # We don't use self._run_command here because the cwd for docker-compose is not needed for docker cp.
-        try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
-            logging.info(f"Successfully ran command: {' '.join(command)}")
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Error running command: {' '.join(command)}")
-            logging.error(f"Stderr: {e.stderr}")
-            logging.error(f"Stdout: {e.stdout}")
-            raise
+        docker_cp(source_path, dest_on_host)
 
     def run_container(self, service_type: str):
         compose_file = self._get_compose_file(service_type)

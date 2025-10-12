@@ -34,7 +34,7 @@ ORCHESTRATOR_URL_DEV = os.getenv("ORCHESTRATOR_URL_DEV", "http://localhost:3000"
 DOCKER_HUB_USERNAME = "beschiak"
 
 DOCKER_IMAGE_MAP = {
-    SERVICE_TYPE_WAN22: f"{DOCKER_HUB_USERNAME}/openfork-wan22-rtx4060:latest",
+    SERVICE_TYPE_WAN22: f"{DOCKER_HUB_USERNAME}/openfork-wan22-lightning-rtx4060:latest",
     SERVICE_TYPE_FOLEY: f"{DOCKER_HUB_USERNAME}/openfork-foley-rtx4060:latest",
     SERVICE_TYPE_QWEN: f"{DOCKER_HUB_USERNAME}/openfork-qwen-rtx4060:latest",
     SERVICE_TYPE_VIBEVOICE: f"{DOCKER_HUB_USERNAME}/openfork-vibevoice-rtx4060:latest",
