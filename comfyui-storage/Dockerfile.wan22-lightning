@@ -2,5 +2,7 @@ FROM beschiak/openfork-wan22-rtx4060:latest
 
 # --- WAN 2.2 Lightning Models ---
 # Copy the new LoRA models for Wan2.2-Lightning
-COPY --chown=user:user ./storage/ComfyUI/models/loras/high_noise_model.safetensors /opt/ComfyUI/models/loras/
-COPY --chown=user:user ./storage/ComfyUI/models/loras/low_noise_model.safetensors /opt/ComfyUI/models/loras/
+COPY --chown=user:user ./storage/ComfyUI/models/loras/lightx2vWan2.2-Lightning-low_noise_model-T2V.safetensors /opt/ComfyUI/models/loras/
+COPY --chown=user:user ./storage/ComfyUI/models/loras/lightx2vWan2.2-Lightning-high_noise_model-T2V.safetensors /opt/ComfyUI/models/loras/
+COPY --chown=user:user ./storage/ComfyUI/models/loras/lightx2vWan2.2-Lightning-low_noise_model-I2V.safetensors /opt/ComfyUI/models/loras/
+COPY --chown=user:user ./storage/ComfyUI/models/loras/lightx2vWan2.2-Lightning-high_noise_model-I2V.safetensors /opt/ComfyUI/models/loras/

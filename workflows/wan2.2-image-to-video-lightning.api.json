@@ -3,23 +3,14 @@
     "7": {
       "inputs": {
         "text": "Negative prompt text here",
-        "clip": [
-          "38",
-          0
-        ]
+        "clip": ["38", 0]
       },
       "class_type": "CLIPTextEncode"
     },
     "8": {
       "inputs": {
-        "samples": [
-          "58",
-          0
-        ],
-        "vae": [
-          "39",
-          0
-        ]
+        "samples": ["58", 0],
+        "vae": ["39", 0]
       },
       "class_type": "VAEDecode"
     },
@@ -41,10 +32,7 @@
         "trim_to_audio": false,
         "pingpong": false,
         "save_output": true,
-        "images": [
-          "8",
-          0
-        ]
+        "images": ["8", 0]
       },
       "class_type": "VHS_VideoCombine"
     },
@@ -70,92 +58,65 @@
     "6": {
       "inputs": {
         "text": "Positive prompt text here",
-        "clip": [
-          "38",
-          0
-        ]
+        "clip": ["38", 0]
       },
       "class_type": "CLIPTextEncode"
     },
     "66": {
       "inputs": {
         "enable_fp16_accumulation": true,
-        "model": [
-          "65",
-          0
-        ]
+        "model": ["65", 0]
       },
       "class_type": "ModelPatchTorchSettings"
     },
     "65": {
       "inputs": {
         "sage_attention": "sageattn_qk_int8_pv_fp8_cuda++",
-        "model": [
-          "61",
-          0
-        ]
+        "model": ["61", 0]
       },
       "class_type": "PathchSageAttentionKJ"
     },
     "67": {
       "inputs": {
         "sage_attention": "sageattn_qk_int8_pv_fp8_cuda++",
-        "model": [
-          "62",
-          0
-        ]
+        "model": ["62", 0]
       },
       "class_type": "PathchSageAttentionKJ"
     },
     "68": {
       "inputs": {
         "enable_fp16_accumulation": true,
-        "model": [
-          "67",
-          0
-        ]
+        "model": ["67", 0]
       },
       "class_type": "ModelPatchTorchSettings"
     },
     "69": {
       "inputs": {
         "strength_model": 1.0,
-        "lora_name": "high_noise_model.safetensors",
-        "model": [
-          "66",
-          0
-        ]
+        "lora_name": "lightx2vWan2.2-Lightning-high_noise_model-I2V.safetensors",
+        "model": ["66", 0]
       },
       "class_type": "LoraLoaderModelOnly"
     },
     "70": {
       "inputs": {
         "strength_model": 1.0,
-        "lora_name": "low_noise_model.safetensors",
-        "model": [
-          "68",
-          0
-        ]
+        "lora_name": "lightx2vWan2.2-Lightning-low_noise_model-I2V.safetensors",
+        "model": ["68", 0]
       },
       "class_type": "LoraLoaderModelOnly"
     },
     "54": {
       "inputs": {
         "shift": 8,
-        "model": [
-          "69",
-          0
-        ]
+        "model": ["69", 0]
       },
       "class_type": "ModelSamplingSD3"
     },
     "55": {
       "inputs": {
         "shift": 8,
-        "model": [
-          "70",
-          0
-        ]
+        "model": ["70", 0]
       },
       "class_type": "ModelSamplingSD3"
     },
@@ -170,22 +131,10 @@
         "start_at_step": 2,
         "end_at_step": 10000,
         "return_with_leftover_noise": "disable",
-        "model": [
-          "55",
-          0
-        ],
-        "positive": [
-          "50",
-          0
-        ],
-        "negative": [
-          "50",
-          1
-        ],
-        "latent_image": [
-          "57",
-          0
-        ]
+        "model": ["55", 0],
+        "positive": ["50", 0],
+        "negative": ["50", 1],
+        "latent_image": ["57", 0]
       },
       "class_type": "KSamplerAdvanced"
     },
@@ -203,22 +152,10 @@
         "height": 480,
         "length": 81,
         "batch_size": 1,
-        "positive": [
-          "6",
-          0
-        ],
-        "negative": [
-          "7",
-          0
-        ],
-        "vae": [
-          "39",
-          0
-        ],
-        "start_image": [
-          "64",
-          0
-        ]
+        "positive": ["6", 0],
+        "negative": ["7", 0],
+        "vae": ["39", 0],
+        "start_image": ["64", 0]
       },
       "class_type": "WanImageToVideo"
     },
@@ -232,10 +169,7 @@
         "crop_position": "center",
         "divisible_by": 16,
         "device": "cpu",
-        "image": [
-          "52",
-          0
-        ]
+        "image": ["52", 0]
       },
       "class_type": "ImageResizeKJv2"
     },
@@ -250,22 +184,10 @@
         "start_at_step": 0,
         "end_at_step": 2,
         "return_with_leftover_noise": "enable",
-        "model": [
-          "54",
-          0
-        ],
-        "positive": [
-          "50",
-          0
-        ],
-        "negative": [
-          "50",
-          1
-        ],
-        "latent_image": [
-          "50",
-          2
-        ]
+        "model": ["54", 0],
+        "positive": ["50", 0],
+        "negative": ["50", 1],
+        "latent_image": ["50", 2]
       },
       "class_type": "KSamplerAdvanced"
     }
