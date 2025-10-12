@@ -109,6 +109,18 @@ class ComfyUIClient:
 
         return prompt_id
 
+    def interrupt_workflow(self):
+        """Interrupts the currently running workflow in ComfyUI."""
+        try:
+            req = urllib.request.Request(f"{self.http_base}/interrupt", method='POST', data=b'')
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    logging.info("Successfully sent interrupt request to ComfyUI.")
+                else:
+                    logging.warning(f"ComfyUI interrupt request returned status {resp.status}")
+        except Exception as e:
+            logging.error(f"Failed to send interrupt request to ComfyUI: {e}")
+
     def _ws_reader_thread(self, ws, q):
         while True:
             try:
@@ -118,7 +130,7 @@ class ComfyUIClient:
                 q.put(e) # Signal error to the main thread
                 break
 
-    def get_workflow_output(self, prompt_id: str, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200, shutdown_event: threading.Event = None) -> Union[dict, None, str]:
+    def get_workflow_output(self, prompt_id: str, job_id: str, orchestrator_service, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200, shutdown_event: threading.Event = None) -> Union[dict, None, str]:
         """Get the output of a completed workflow by listening on WS in a separate thread."""
         if not prompt_id:
             logging.warning("get_workflow_output called with empty prompt_id.")
@@ -139,6 +151,7 @@ class ComfyUIClient:
         logging.info("WebSocket reader thread started.")
 
         start_ts = time.time()
+        last_cancel_check_ts = start_ts
         all_node_outputs = {}
         executed_nodes = set()
 
@@ -151,6 +164,18 @@ class ComfyUIClient:
                 if (time.time() - start_ts) > timeout_sec:
                     logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Breaking loop to fetch history.")
                     break
+
+                # Check for cancellation every 5 seconds
+                if time.time() - last_cancel_check_ts > 5:
+                    last_cancel_check_ts = time.time()
+                    try:
+                        job_details = orchestrator_service.get_job(job_id)
+                        if job_details and job_details.get('status') == 'cancelled':
+                            logging.warning(f"Cancellation requested for job {job_id}. Interrupting workflow.")
+                            self.interrupt_workflow()
+                            return "interrupted"
+                    except Exception as e:
+                        logging.error(f"Error checking for job cancellation: {e}")
 
                 try:
                     out = q.get(timeout=2)  # Use a short timeout to allow checking the shutdown event

@@ -34,7 +34,7 @@ class BaseJobProcessor(ABC):
 
     def _check_interruption(self, outputs):
         if outputs == "interrupted":
-            logging.warning(f"Processing of job {self.job_id} was interrupted by shutdown.")
+            logging.warning(f"Processing of job {self.job_id} was interrupted.")
             return True
         return False
 
@@ -75,7 +75,13 @@ class BaseJobProcessor(ABC):
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return None
 
-        outputs = self.comfyui_client.get_workflow_output(prompt_id, timeout_sec=7200, shutdown_event=self.shutdown_event)
+        outputs = self.comfyui_client.get_workflow_output(
+            prompt_id,
+            job_id=self.job_id,
+            orchestrator_service=self.orchestrator_service,
+            timeout_sec=7200,
+            shutdown_event=self.shutdown_event
+        )
         if self._check_interruption(outputs):
             return None
         

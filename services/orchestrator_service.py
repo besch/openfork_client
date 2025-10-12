@@ -120,6 +120,28 @@ class OrchestratorService:
             logging.error(f"Failed to decode JSON from get_next_job response: {response.text}")
             return None
 
+    def get_job(self, job_id: str) -> Union[Dict, None]:
+        """Get a job by its ID. Returns a fabricated 'cancelled' status if the job is not found (404)."""
+        try:
+            # This endpoint needs to be created in the Next.js app: GET /api/dgn/job/{job_id}
+            url = f"{self.orchestrator_url}/api/dgn/job/{job_id}"
+            response = self._make_request('get', url)
+
+            if response.status_code == 404:
+                logging.warning(f"Job {job_id} not found (404). Assuming it was cancelled and deleted.")
+                return {'status': 'cancelled'}
+
+            response.raise_for_status()
+            if not response.content:
+                return None
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error fetching job {job_id}: {e}")
+            return None
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from get_job response: {response.text}")
+            return None
+
     def download_asset_by_url(self, asset_url: str, download_dir: str) -> Union[str, None]:
         """Download an asset from a given URL."""
         try:
