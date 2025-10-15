@@ -7,7 +7,7 @@ import requests
 
 import os
 
-from config import CACHE_DIR, DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
+from config import CACHE_DIR, DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV, DOCKER_IMAGE_MAP
 from dgn_client import DGNClient
 from services.docker_manager import docker_manager
 from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
@@ -39,6 +39,16 @@ def setup_client(args):
         access_token=args.access_token,
         refresh_token=args.refresh_token
     )
+
+    client.load_config() # Fetch config from orchestrator
+
+    # Validate service argument against available services from config
+    available_services = [s['value'] for s in client.config.get('ui_services', [])]
+    if args.service not in available_services:
+        logging.error(f"Invalid service '{args.service}'. Available services: {', '.join(s for s in available_services if s != 'auto')}")
+        sys.exit(1)
+
+    docker_manager.set_docker_image_map(client.config.get('docker_image_map', {}))
 
     provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
     if not provider_id:
@@ -97,7 +107,11 @@ def main():
     parser = argparse.ArgumentParser(description='DGN Client')
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
     parser.add_argument('--refresh-token', type=str, required=True, help='Supabase Auth Refresh Token')
-    parser.add_argument('--service', type=str, default='auto', help='Service to run (wan22, foley, text_to_image, vibevoice, diffrhythm, or auto)')
+    
+    service_choices = list(DOCKER_IMAGE_MAP.keys()) + ['AUTO']
+    help_string = f'Service to run ({ ", ".join(service_choices)})'
+    parser.add_argument('--service', type=str, default='AUTO', help=help_string)
+
     parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
     args = parser.parse_args()
 

@@ -12,12 +12,20 @@ class DockerProdManager:
     def __init__(self):
         try:
             self.client = docker.from_env()
+            self.docker_image_map = DOCKER_IMAGE_MAP # Fallback to static config
         except docker.errors.DockerException:
             logging.error("Docker is not running. Please start Docker Desktop.")
             raise
 
+    def set_docker_image_map(self, image_map: dict):
+        if image_map:
+            logging.info("Setting dynamic Docker image map.")
+            self.docker_image_map = image_map
+        else:
+            logging.warning("Dynamic Docker image map is empty. Using fallback static map.")
+
     def get_image_name(self, service_type: str) -> str:
-        image = DOCKER_IMAGE_MAP.get(service_type)
+        image = self.docker_image_map.get(service_type)
         if not image:
             raise ValueError(f"No Docker image configured for service type '{service_type}'")
         return image
@@ -72,6 +80,25 @@ class DockerProdManager:
         except docker.errors.APIError as e:
             logging.error(f"Failed to start container '{container_name}': {e}")
             raise
+
+    def stop_container(self, service_type: str):
+        container_name = self.get_container_name(service_type)
+        logging.info(f"Attempting to stop and remove container '{container_name}'...")
+        try:
+            container = self.client.containers.get(container_name)
+            if container.status == 'running':
+                logging.info(f"Container '{container_name}' is running. Stopping it now.")
+                container.stop()
+                logging.info(f"Container '{container_name}' stopped.")
+            
+            logging.info(f"Removing container '{container_name}'.")
+            container.remove()
+            logging.info(f"Container '{container_name}' removed.")
+
+        except docker.errors.NotFound:
+            logging.info(f"Container '{container_name}' not found. Nothing to stop.")
+        except docker.errors.APIError as e:
+            logging.error(f"Failed to stop or remove container '{container_name}': {e}")
 
     def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str):
         container_name = self.get_container_name(service_type)

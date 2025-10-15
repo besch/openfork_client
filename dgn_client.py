@@ -16,7 +16,7 @@ from services.job_processors import (
     ImageToVideoLightningJobProcessor
 )
 from services.token_update_service import start_token_update_server
-from shared_types import *
+
 
 class DGNClient:
     def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str, access_token: str, refresh_token: str):
@@ -31,45 +31,50 @@ class DGNClient:
         self.current_job = None
         self.httpd = None
         self.token_server_port = None
+        self.config = None
 
         # Start the token update server and notify Electron of the port
         self.httpd, self.token_server_port = start_token_update_server(self.orchestrator_service)
         if self.token_server_port:
             print(f"DGN_CLIENT_TOKEN_SERVER_PORT: {self.token_server_port}", flush=True)
 
+    def load_config(self):
+        """Loads the configuration from the orchestrator."""
+        self.config = self.orchestrator_service.get_dgn_config()
+        if not self.config:
+            raise RuntimeError("Failed to load DGN configuration from orchestrator.")
+
+        wt = self.config.get('workflow_types', {})
+        self.processor_map = {
+            wt.get('HUNYUAN_VIDEO_FOLEY'): FoleyJobProcessor,
+            wt.get('QWEN_TEXT_TO_IMAGE'): TextToImageJobProcessor,
+            wt.get('VIBEVOICE_TTS'): VibeVoiceJobProcessor,
+            wt.get('VIBEVOICE_TTS_MULTI_CLONE'): VibeVoiceMultiCloneJobProcessor,
+            wt.get('DIFFRHYTHM_MUSIC_GENERATION'): DiffRhythmJobProcessor,
+            wt.get('WAN22_TEXT_TO_VIDEO'): TextToVideoJobProcessor,
+            wt.get('WAN22_IMAGE_TO_VIDEO'): ImageToVideoJobProcessor,
+            wt.get('WAN22_LIGHTNING_TEXT_TO_VIDEO'): TextToVideoLightningJobProcessor,
+            wt.get('WAN22_LIGHTNING_IMAGE_TO_VIDEO'): ImageToVideoLightningJobProcessor,
+        }
+        # Filter out None keys in case a workflow type is missing from config
+        self.processor_map = {k: v for k, v in self.processor_map.items() if k}
+
+        # TODO: Pass self.config['docker_image_map'] to docker_manager
+
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
-        """Maps a workflow type to a docker-compose service type."""
-        if workflow_type == WORKFLOW_TYPE_VIDEO_FOLEY:
-            return SERVICE_TYPE_FOLEY
-        elif workflow_type == WORKFLOW_TYPE_TEXT_TO_IMAGE:
-            return SERVICE_TYPE_QWEN
-        elif workflow_type in [WORKFLOW_TYPE_TTS, WORKFLOW_TYPE_TTS_MULTI_CLONE]:
-            return SERVICE_TYPE_VIBEVOICE
-        elif workflow_type == WORKFLOW_TYPE_MUSIC_GENERATION:
-            return SERVICE_TYPE_DIFFRHYTHM
-        elif workflow_type in [WORKFLOW_TYPE_TEXT_TO_VIDEO, WORKFLOW_TYPE_IMAGE_TO_VIDEO]:
-            return SERVICE_TYPE_WAN22
-        elif workflow_type in [WORKFLOW_TYPE_TEXT_TO_VIDEO_LIGHTNING, WORKFLOW_TYPE_IMAGE_TO_VIDEO_LIGHTNING]:
-            return SERVICE_TYPE_WAN22_LIGHTNING
-        else:
+        """Maps a workflow type to a service type using the dynamic config."""
+        if not self.config or 'workflow_to_service_map' not in self.config:
+            raise ValueError("DGN configuration is not loaded or is invalid.")
+        
+        service_type = self.config['workflow_to_service_map'].get(workflow_type)
+        if not service_type:
             raise ValueError(f"Unknown workflow type, cannot determine service: {workflow_type}")
+        return service_type
 
     def _get_job_processor(self, job, shutdown_event):
         workflow_type = job.get('workflow_type')
 
-        processor_map = {
-            WORKFLOW_TYPE_VIDEO_FOLEY: FoleyJobProcessor,
-            WORKFLOW_TYPE_TEXT_TO_IMAGE: TextToImageJobProcessor,
-            WORKFLOW_TYPE_TTS: VibeVoiceJobProcessor,
-            WORKFLOW_TYPE_TTS_MULTI_CLONE: VibeVoiceMultiCloneJobProcessor,
-            WORKFLOW_TYPE_MUSIC_GENERATION: DiffRhythmJobProcessor,
-            WORKFLOW_TYPE_TEXT_TO_VIDEO: TextToVideoJobProcessor,
-            WORKFLOW_TYPE_IMAGE_TO_VIDEO: ImageToVideoJobProcessor,
-            WORKFLOW_TYPE_TEXT_TO_VIDEO_LIGHTNING: TextToVideoLightningJobProcessor,
-            WORKFLOW_TYPE_IMAGE_TO_VIDEO_LIGHTNING: ImageToVideoLightningJobProcessor,
-        }
-
-        ProcessorClass = processor_map.get(workflow_type)
+        ProcessorClass = self.processor_map.get(workflow_type)
         if not ProcessorClass:
             raise ValueError(f"No job processor found for workflow type: {workflow_type}")
         return ProcessorClass(self, job, shutdown_event)

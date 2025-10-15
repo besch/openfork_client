@@ -346,3 +346,68 @@ class OrchestratorService:
             if e.response:
                 logging.error(f"Reset API response: {e.response.text}")
             raise
+
+    def get_workflow(self, workflow_name: str, cache_dir: str) -> Union[Dict, None]:
+        """
+        Fetches a workflow definition, using a local cache to avoid re-downloads.
+        The workflow is assumed to be a JSON file.
+        """
+        workflow_cache_dir = os.path.join(cache_dir, 'workflows')
+        os.makedirs(workflow_cache_dir, exist_ok=True)
+        cached_workflow_path = os.path.join(workflow_cache_dir, workflow_name)
+
+        # For now, we prioritize the cached version if it exists.
+        # A more advanced implementation could involve version checking.
+        if os.path.exists(cached_workflow_path):
+            logging.info(f"Loading workflow '{workflow_name}' from cache.")
+            try:
+                with open(cached_workflow_path, 'r') as f:
+                    return json.load(f)
+            except (IOError, json.JSONDecodeError) as e:
+                logging.error(f"Error reading cached workflow {workflow_name}: {e}. Will attempt to re-download.")
+
+        # If not in cache or reading failed, download it
+        logging.info(f"Downloading workflow '{workflow_name}' from orchestrator.")
+        try:
+            # Note: This API endpoint needs to be created in the Next.js backend.
+            # It should serve the contents of the corresponding file from `dgn-client/workflows`.
+            url = f"{self.orchestrator_url}/api/dgn/workflows/{workflow_name}"
+            response = self._make_request('get', url)
+            response.raise_for_status()
+            
+            workflow_data = response.json()
+
+            # Save the newly downloaded workflow to the cache
+            with open(cached_workflow_path, 'w') as f:
+                json.dump(workflow_data, f)
+            
+            logging.info(f"Successfully downloaded and cached workflow '{workflow_name}'.")
+            return workflow_data
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error downloading workflow {workflow_name}: {e}")
+            return None
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from workflow response for {workflow_name}: {response.text}")
+            return None
+        except IOError as e:
+            logging.error(f"Error saving downloaded workflow {workflow_name} to cache: {e}")
+            # We can still return the data even if caching fails
+            return workflow_data
+
+    def get_dgn_config(self) -> Union[Dict, None]:
+        """Fetches the DGN client configuration from the orchestrator."""
+        logging.info("Fetching DGN configuration from orchestrator...")
+        try:
+            url = f"{self.orchestrator_url}/api/dgn/config"
+            response = self._make_request('get', url)
+            response.raise_for_status()
+            config_data = response.json()
+            logging.info("Successfully fetched DGN configuration.")
+            return config_data
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error downloading DGN config: {e}")
+            return None
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from DGN config response: {response.text}")
+            return None

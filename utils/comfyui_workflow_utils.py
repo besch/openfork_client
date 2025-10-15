@@ -4,7 +4,7 @@ import base64
 import copy
 import logging
 from datetime import datetime
-from typing import Union
+from typing import Union, Dict
 
 # Assuming OUTPUT_DIR, INPUT_DIR are passed or imported from config
 # from config import OUTPUT_DIR, INPUT_DIR
@@ -51,15 +51,11 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
         logging.error(f"Failed to materialize start image: {e}")
     return None
 
-def inject_prompt_and_image_into_workflow(workflow_api_path: str, prompt: str, negative_prompt: str, start_image_filename: str):
+def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, start_image_filename: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # Inject prompts and image filename
     for node in api_graph.values():
@@ -79,14 +75,11 @@ def inject_prompt_and_image_into_workflow(workflow_api_path: str, prompt: str, n
 
     return api_graph
 
-def inject_prompt_into_text_to_video_workflow(workflow_api_path: str, prompt: str, negative_prompt: str):
+def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # Node 6 is positive, Node 7 is negative
     if '6' in api_graph and 'inputs' in api_graph['6'] and 'text' in api_graph['6']['inputs']:
@@ -109,17 +102,11 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_path: str, prompt: st
 
     return api_graph
 
-
-
-def inject_prompt_into_qwen_workflow(workflow_api_path: str, prompt: str, negative_prompt: str):
+def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for Qwen.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # In the qwen-text-to-image.api.json:
     # Node 6 is positive prompt
@@ -136,15 +123,11 @@ def inject_prompt_into_qwen_workflow(workflow_api_path: str, prompt: str, negati
 
     return api_graph
 
-def inject_prompt_into_flux_workflow(workflow_api_path: str, prompt: str, negative_prompt: str):
+def inject_prompt_into_flux_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for FLUX.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # In the new flux-text-to-image.api.json:
     # Node 7 is positive prompt
@@ -161,15 +144,11 @@ def inject_prompt_into_flux_workflow(workflow_api_path: str, prompt: str, negati
 
     return api_graph
 
-def inject_video_and_prompt_into_foley_workflow(workflow_api_path: str, video_filename: str, prompt: str, negative_prompt: str):
+def inject_video_and_prompt_into_foley_workflow(workflow_api_data: Dict, video_filename: str, prompt: str, negative_prompt: str):
     """
     Loads the Foley ComfyUI API-formatted workflow, injects video filename and prompts.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # Inject video filename and prompts
     for node in api_graph.values():
@@ -180,16 +159,12 @@ def inject_video_and_prompt_into_foley_workflow(workflow_api_path: str, video_fi
 
     return api_graph
 
-def inject_prompt_into_vibevoice_workflow(workflow_api_path: str, prompt: str):
+def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
     """
     Loads the VibeVoice ComfyUI API-formatted workflow, injects the prompt
     and ensures all required inputs for VibeVoiceSingleSpeakerNode are present.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # Find the VibeVoice node and explicitly set its inputs
     for node in api_graph.values():
@@ -212,15 +187,11 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_path: str, prompt: str):
 
     return api_graph
 
-def inject_prompt_into_diffrhythm_workflow(workflow_api_path: str, prompt: str):
+def inject_prompt_into_diffrhythm_workflow(workflow_api_data: Dict, prompt: str):
     """
     Loads the DiffRhythm ComfyUI API-formatted workflow, injects the prompt.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # Inject prompt
     for node in api_graph.values():
@@ -230,15 +201,11 @@ def inject_prompt_into_diffrhythm_workflow(workflow_api_path: str, prompt: str):
 
     return api_graph
 
-def inject_script_and_clones_into_vibevoice_workflow(workflow_api_path: str, script: str, clone_paths: list[str]):
+def inject_script_and_clones_into_vibevoice_workflow(workflow_api_data: Dict, script: str, clone_paths: list[str]):
     """
     Loads the VibeVoice ComfyUI API-formatted workflow, injects the script and clone paths.
     """
-    with open(workflow_api_path, 'r') as f:
-        workflow_api = json.load(f)
-
-    # Deep copy to avoid modifying the cached workflow
-    api_graph = copy.deepcopy(workflow_api["prompt"])
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # Inject script and clone paths
     for node in api_graph.values():

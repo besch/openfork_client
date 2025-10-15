@@ -5,18 +5,45 @@ to manage local containers for testing and iteration.
 import logging
 import subprocess
 import os
+import json
 from config import ROOT_DIR
 from .docker_utils import docker_cp
 
 class DockerDevManager:
     def __init__(self):
         self.compose_dir = os.path.join(ROOT_DIR, 'comfyui-storage')
+        self._load_service_config()
+
+    def _load_service_config(self):
+        """Loads the service config from the master services.json file."""
+        try:
+            # Path from dgn-client/services -> dgn-client -> root
+            config_path = os.path.join(ROOT_DIR, '..', 'services.json')
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+            
+            self.service_config = {s['service_type']: s for s in data['services']}
+            logging.info("Successfully loaded services.json for dev manager.")
+        except (IOError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to load or parse services.json: {e}")
+            self.service_config = {}
+
+    def set_docker_image_map(self, image_map: dict):
+        # This method is a no-op for the dev manager as it uses docker-compose files,
+        # but it's here to maintain a consistent interface with the prod manager.
+        logging.debug("set_docker_image_map called on dev manager (no-op).")
+        pass
 
     def _get_compose_file(self, service_type: str) -> str:
-        # Services use a specific compose file, e.g., docker-compose.foley.yaml
-        compose_file = os.path.join(self.compose_dir, f'docker-compose.{service_type}.yaml')
+        """Gets the docker-compose file path from the loaded service config."""
+        service_info = self.service_config.get(service_type)
+        if not service_info or not service_info.get('dev_compose_file'):
+            raise ValueError(f"Service '{service_type}' or its dev_compose_file not found in services.json")
+
+        compose_file = os.path.join(self.compose_dir, service_info['dev_compose_file'])
+        
         if not os.path.exists(compose_file):
-            raise FileNotFoundError(f"Docker compose file not found for service '{service_type}' at {compose_file}")
+            raise FileNotFoundError(f"Docker compose file '{service_info['dev_compose_file']}' not found for service '{service_type}' at {compose_file}")
         return compose_file
 
     def _run_command(self, command: list):
