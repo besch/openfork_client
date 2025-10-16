@@ -19,14 +19,13 @@ from services.token_update_service import start_token_update_server
 
 
 class DGNClient:
-    def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str, access_token: str, refresh_token: str):
+    def __init__(self, orchestrator_url: str, root_dir: str, cache_dir: str, data_dir: str, access_token: str, refresh_token: str):
         self.orchestrator_service = OrchestratorService(orchestrator_url, access_token, refresh_token)
         self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
         self.root_dir = root_dir
+        self.data_dir = data_dir
         self.cache_dir = cache_dir
-        self.input_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "input")
-        self.output_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "output")
-        self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
+        self.input_dir = os.path.join(data_dir, "input")
         os.makedirs(self.input_dir, exist_ok=True)
         self.active_service_type = None
         self.current_job = None

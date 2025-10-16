@@ -36,6 +36,7 @@ def setup_client(args):
         orchestrator_url=determined_orchestrator_url,
         root_dir=root_dir,
         cache_dir=CACHE_DIR,
+        data_dir=args.data_dir,
         access_token=args.access_token,
         refresh_token=args.refresh_token
     )
@@ -113,6 +114,7 @@ def main():
     parser.add_argument('--service', type=str, default='AUTO', help=help_string)
 
     parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
+    parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')
     args = parser.parse_args()
 
     if args.service != 'auto':

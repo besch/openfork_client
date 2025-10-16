@@ -27,7 +27,6 @@ class BaseJobProcessor(ABC):
         self.shutdown_event = shutdown_event
         self.root_dir = client.root_dir
         self.input_dir = client.input_dir
-        self.output_dir = client.output_dir # This is now effectively unused for finding files
         self.cache_dir = client.cache_dir
         self.positive_prompt = job.get('prompt') or ""
         self.negative_prompt = job.get('negative_prompt') or ""
