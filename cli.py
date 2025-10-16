@@ -35,7 +35,6 @@ def setup_client(args):
     client = DGNClient(
         orchestrator_url=determined_orchestrator_url,
         root_dir=root_dir,
-        cache_dir=CACHE_DIR,
         data_dir=args.data_dir,
         access_token=args.access_token,
         refresh_token=args.refresh_token
