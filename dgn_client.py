@@ -27,6 +27,7 @@ class DGNClient:
         self.input_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "input")
         self.output_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "output")
         self.models_dir = os.path.join(root_dir, "comfyui-storage", "storage", "ComfyUI", "models")
+        os.makedirs(self.input_dir, exist_ok=True)
         self.active_service_type = None
         self.current_job = None
         self.httpd = None
