@@ -5,16 +5,31 @@ import os
 import time
 import urllib.request
 import urllib.error
+import http.client
 import threading
 from queue import Queue, Empty
 import logging
 from typing import Union
 import requests
+from supabase import create_client, Client
 
 class ComfyUIClient:
     def __init__(self, comfyui_ws_url: str):
         self.comfyui_ws_url = comfyui_ws_url
         self.http_base = self._http_base_from_ws(comfyui_ws_url)
+        self.supabase_client: Union[Client, None] = self._init_supabase_client()
+
+    def _init_supabase_client(self) -> Union[Client, None]:
+        supabase_url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        if not supabase_url or not supabase_key:
+            logging.warning("Supabase URL/key not set. Real-time cancellation will not work.")
+            return None
+        try:
+            return create_client(supabase_url, supabase_key)
+        except Exception as e:
+            logging.error(f"Failed to create Supabase client: {e}")
+            return None
 
     def _http_base_from_ws(self, ws_url: str) -> str:
         # ws://host:port/ws?... -> http://host:port
@@ -151,9 +166,23 @@ class ComfyUIClient:
         logging.info("WebSocket reader thread started.")
 
         start_ts = time.time()
-        last_cancel_check_ts = start_ts
+        last_poll_ts = start_ts
         all_node_outputs = {}
         executed_nodes = set()
+
+        job_cancellation_event = threading.Event()
+        subscription = None
+        if self.supabase_client:
+            try:
+                def on_update(payload):
+                    if payload.get('new', {}).get('status') == 'cancelled':
+                        logging.warning(f"Cancellation requested for job {job_id} via real-time. Interrupting workflow.")
+                        job_cancellation_event.set()
+
+                logging.info(f"Subscribing to real-time updates for job {job_id}")
+                subscription = self.supabase_client.table("dgn_jobs").on("UPDATE", on_update).filter("id", "eq", job_id).subscribe()
+            except Exception as e:
+                logging.error(f"Failed to subscribe to real-time job updates: {e}")
 
         try:
             while True:
@@ -161,24 +190,28 @@ class ComfyUIClient:
                     logging.warning("Shutdown event received, interrupting workflow output wait.")
                     return "interrupted"
 
+                if job_cancellation_event.is_set():
+                    self.interrupt_workflow()
+                    return "interrupted"
+
                 if (time.time() - start_ts) > timeout_sec:
                     logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Breaking loop to fetch history.")
                     break
 
-                # Check for cancellation every 5 seconds
-                if time.time() - last_cancel_check_ts > 5:
-                    last_cancel_check_ts = time.time()
+                # Fallback polling mechanism
+                if time.time() - last_poll_ts > 5:
+                    last_poll_ts = time.time()
                     try:
                         job_details = orchestrator_service.get_job(job_id)
                         if job_details and job_details.get('status') == 'cancelled':
-                            logging.warning(f"Cancellation requested for job {job_id}. Interrupting workflow.")
+                            logging.warning(f"Cancellation requested for job {job_id} (polled). Interrupting workflow.")
                             self.interrupt_workflow()
                             return "interrupted"
                     except Exception as e:
-                        logging.error(f"Error checking for job cancellation: {e}")
+                        logging.error(f"Error checking for job cancellation (polling fallback): {e}")
 
                 try:
-                    out = q.get(timeout=2)  # Use a short timeout to allow checking the shutdown event
+                    out = q.get(timeout=1)  # Shorter timeout to allow event checks
                     logging.debug(f"Received raw WebSocket message: {out}")
                     if isinstance(out, Exception):
                         logging.error(f"Exception in WebSocket reader thread: {out}")
@@ -226,6 +259,12 @@ class ComfyUIClient:
                     else:
                         logging.info(f"Received WebSocket message of type: {mtype}. Data keys: {data.keys()}")
         finally:
+            if subscription and self.supabase_client:
+                try:
+                    self.supabase_client.realtime.remove_channel(subscription)
+                    logging.info(f"Unsubscribed from real-time updates for job {job_id}")
+                except Exception as e:
+                    logging.error(f"Error unsubscribing from real-time updates: {e}")
             try:
                 ws.close()
                 logging.info("WebSocket connection closed.")
