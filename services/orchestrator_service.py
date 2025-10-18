@@ -104,11 +104,26 @@ class OrchestratorService:
         
         return response
 
-    def get_next_job(self, provider_id: str) -> Union[Dict, None]:
-        """Get the next available job for a provider."""
+    def get_next_job(self, provider_id: str, accept_policy: str, allowed_ids: list[str]) -> Union[Dict, None]:
+        """Get the next available job for a provider based on their policy."""
         try:
-            url = f"{self.orchestrator_url}/api/dgn/jobs/{provider_id}?ts={int(time.time())}"
-            response = self._make_request('get', url)
+            base_url = f"{self.orchestrator_url}/api/dgn/jobs/{provider_id}"
+            params = {
+                "ts": int(time.time()),
+                "acceptPolicy": accept_policy,
+            }
+
+            if accept_policy == 'own':
+                user_id = self._get_user_id_from_token()
+                if not user_id:
+                    logging.error("Could not get user ID for 'own' policy. Aborting job fetch.")
+                    return None
+                params["userId"] = user_id
+            
+            if accept_policy in ['specific_projects', 'specific_branches'] and allowed_ids:
+                params["allowedIds"] = ",".join(allowed_ids)
+
+            response = self._make_request('get', base_url, params=params)
             response.raise_for_status()
             if not response.content:
                 return None

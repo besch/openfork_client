@@ -18,7 +18,7 @@ from services.job_processors import (
 
 
 class DGNClient:
-    def __init__(self, orchestrator_url: str, root_dir: str, data_dir: str, access_token: str, refresh_token: str):
+    def __init__(self, orchestrator_url: str, root_dir: str, data_dir: str, access_token: str, refresh_token: str, accept_policy: str = 'public', allowed_ids: list[str] = None):
         self.orchestrator_service = OrchestratorService(orchestrator_url, access_token, refresh_token)
         self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
         self.root_dir = root_dir
@@ -30,6 +30,8 @@ class DGNClient:
         self.active_service_type = None
         self.current_job = None
         self.config = None
+        self.accept_policy = accept_policy
+        self.allowed_ids = allowed_ids or []
 
     def load_config(self):
         """Loads the configuration from the orchestrator."""

@@ -14,7 +14,11 @@ class JobListener:
             job = None
             try:
                 logging.info(f"Checking for new jobs for provider {self.provider_id}...")
-                job = self.orchestrator_service.get_next_job(self.provider_id)
+                job = self.orchestrator_service.get_next_job(
+                    provider_id=self.provider_id,
+                    accept_policy=self.client.accept_policy,
+                    allowed_ids=self.client.allowed_ids
+                )
 
                 if job and job.get('id'):
                     self.client.current_job = job
@@ -42,7 +46,11 @@ class JobListener:
             job = None
             try:
                 logging.info("Auto mode: Checking for new jobs...")
-                job = self.orchestrator_service.get_next_job(self.provider_id)
+                job = self.orchestrator_service.get_next_job(
+                    provider_id=self.provider_id,
+                    accept_policy=self.client.accept_policy,
+                    allowed_ids=self.client.allowed_ids
+                )
 
                 if job and job.get('id'):
                     self.client.current_job = job
