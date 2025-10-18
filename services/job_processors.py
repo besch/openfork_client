@@ -58,11 +58,14 @@ class BaseJobProcessor(ABC):
             logging.error("Cannot copy from container: no active service type is set.")
             return None
 
-        source_in_container = os.path.join("/opt/ComfyUI/output", subfolder, filename).replace('\\', '/')
+        # Sanitize filename to prevent path traversal
+        safe_filename = os.path.basename(filename)
+
+        source_in_container = os.path.join("/opt/ComfyUI/output", subfolder, safe_filename).replace('\\', '/')
         
         os.makedirs(self.cache_dir, exist_ok=True)
 
-        temp_filename = f"{self.job_id}_{filename}"
+        temp_filename = f"{self.job_id}_{safe_filename}"
         dest_on_host = os.path.join(self.cache_dir, temp_filename)
 
         try:

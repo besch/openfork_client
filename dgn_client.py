@@ -15,7 +15,6 @@ from services.job_processors import (
     TextToVideoLightningJobProcessor,
     ImageToVideoLightningJobProcessor
 )
-from services.token_update_service import start_token_update_server
 
 
 class DGNClient:
@@ -30,14 +29,7 @@ class DGNClient:
         os.makedirs(self.cache_dir, exist_ok=True)
         self.active_service_type = None
         self.current_job = None
-        self.httpd = None
-        self.token_server_port = None
         self.config = None
-
-        # Start the token update server and notify Electron of the port
-        self.httpd, self.token_server_port = start_token_update_server(self.orchestrator_service)
-        if self.token_server_port:
-            print(f"DGN_CLIENT_TOKEN_SERVER_PORT: {self.token_server_port}", flush=True)
 
     def load_config(self):
         """Loads the configuration from the orchestrator."""
