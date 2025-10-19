@@ -37,7 +37,9 @@ def setup_client(args):
         root_dir=root_dir,
         data_dir=args.data_dir,
         access_token=args.access_token,
-        refresh_token=args.refresh_token
+        refresh_token=args.refresh_token,
+        accept_policy=args.accept_policy,
+        allowed_ids=args.allowed_ids.split(',') if args.allowed_ids else None
     )
 
     client.load_config() # Fetch config from orchestrator
@@ -114,6 +116,8 @@ def main():
 
     parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
     parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')
+    parser.add_argument('--accept-policy', type=str, default='public', help='The job acceptance policy.')
+    parser.add_argument('--allowed-ids', type=str, help='Comma-separated list of project or branch IDs for specific policies.')
     args = parser.parse_args()
 
     if args.service != 'auto':
