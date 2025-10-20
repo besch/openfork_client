@@ -104,6 +104,36 @@ class OrchestratorService:
         
         return response
 
+    def resolve_targets(self, targets: list[str]) -> list[str]:
+        """Resolves a list of target strings to UUIDs."""
+        if not targets:
+            return []
+        
+        try:
+            response = self._make_request(
+                'post',
+                f"{self.orchestrator_url}/api/dgn/resolve-targets",
+                json={"targets": targets}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            resolved_ids = [item['id'] for item in data.get('resolved', []) if item['id']]
+            
+            unresolved_targets = [item['target'] for item in data.get('resolved', []) if not item['id']]
+            if unresolved_targets:
+                logging.warning(f"Some targets could not be resolved and will be ignored: {unresolved_targets}")
+
+            return resolved_ids
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error resolving targets: {e}")
+            if e.response:
+                logging.error(f"Response content: {e.response.text}")
+            return []
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from resolve_targets response: {response.text}")
+            return []
+
     def get_next_job(self, provider_id: str, accept_policy: str, allowed_ids: list[str]) -> Union[Dict, None]:
         """Get the next available job for a provider based on their policy."""
         try:
