@@ -116,8 +116,8 @@ def main():
 
     parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
     parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')
-    parser.add_argument('--accept-policy', type=str, default='public', help='The job acceptance policy.')
-    parser.add_argument('--allowed-ids', type=str, help='Comma-separated list of project or branch IDs for specific policies.')
+    parser.add_argument('--accept-policy', type=str, default='public', help='The job acceptance policy (public, own, specific_projects, specific_branches).')
+    parser.add_argument('--allowed-ids', type=str, help='For specific_* policies, a comma-separated list of project or branch UUIDs.')
     args = parser.parse_args()
 
     if args.service != 'auto':
