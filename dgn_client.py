@@ -18,7 +18,7 @@ from services.job_processors import (
 
 
 class DGNClient:
-    def __init__(self, orchestrator_url: str, root_dir: str, data_dir: str, access_token: str, refresh_token: str, accept_policy: str = 'public', allowed_targets: list[str] = None):
+    def __init__(self, orchestrator_url: str, root_dir: str, data_dir: str, access_token: str, refresh_token: str, accept_policy: str = 'all', allowed_targets: list[str] = None):
         self.orchestrator_service = OrchestratorService(orchestrator_url, access_token, refresh_token)
         self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
         self.root_dir = root_dir
@@ -34,7 +34,7 @@ class DGNClient:
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
 
-        if self.accept_policy in ['specific_projects', 'specific_branches'] and self.allowed_targets:
+        if self.accept_policy == 'project' and self.allowed_targets:
             logging.info(f"Resolving targets: {self.allowed_targets}")
             self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets)
             logging.info(f"Resolved targets to IDs: {self.allowed_ids}")

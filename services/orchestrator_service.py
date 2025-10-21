@@ -143,14 +143,14 @@ class OrchestratorService:
                 "acceptPolicy": accept_policy,
             }
 
-            if accept_policy == 'own':
+            if accept_policy == 'mine':
                 user_id = self._get_user_id_from_token()
                 if not user_id:
                     logging.error("Could not get user ID for 'own' policy. Aborting job fetch.")
                     return None
                 params["userId"] = user_id
             
-            if accept_policy in ['specific_projects', 'specific_branches'] and allowed_ids:
+            if accept_policy == 'project' and allowed_ids:
                 params["allowedIds"] = ",".join(allowed_ids)
 
             response = self._make_request('get', base_url, params=params)
