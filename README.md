@@ -1,11 +1,11 @@
-# DGN Client
+# Openfork Client
 
-This is a DGN client that uses Docker to run a ComfyUI workflow in a containerized environment.
+This is a Openfork client that uses Docker to run a ComfyUI workflow in a containerized environment.
 
 ## Docker
 
-docker build -t crowdmovie-dgn-client .
-docker run --gpus all -it --rm -p 8188:8188 crowdmovie-dgn-client
+docker build -t openfork-client .
+docker run --gpus all -it --rm -p 8188:8188 openfork-client
 
 ## Setup
 
