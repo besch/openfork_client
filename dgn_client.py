@@ -4,6 +4,7 @@ import threading
 
 from services.orchestrator_service import OrchestratorService
 from services.comfyui_service import ComfyUIClient
+from services.docker_manager import docker_manager
 from services.job_processors import (
     FoleyJobProcessor,
     TextToImageJobProcessor,
@@ -60,7 +61,9 @@ class DGNClient:
         # Filter out None keys in case a workflow type is missing from config
         self.processor_map = {k: v for k, v in self.processor_map.items() if k}
 
-        # TODO: Pass self.config['docker_image_map'] to docker_manager
+        docker_image_map = self.config.get('docker_image_map', {})
+        if docker_image_map:
+            docker_manager.set_docker_image_map(docker_image_map)
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
         """Maps a workflow type to a service type using the dynamic config."""

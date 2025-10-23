@@ -50,8 +50,6 @@ def setup_client(args):
         logging.error(f"Invalid service '{args.service}'. Available services: {', '.join(s for s in available_services if s != 'auto')}")
         sys.exit(1)
 
-    docker_manager.set_docker_image_map(client.config.get('docker_image_map', {}))
-
     provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
     if not provider_id:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
