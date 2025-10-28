@@ -1,21 +1,13 @@
 import os
 import logging
 import threading
+from utils.shutdown_handler import SHUTDOWN_EVENT
 
 from services.orchestrator_service import OrchestratorService
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
-from services.job_processors import (
-    FoleyJobProcessor,
-    TextToImageJobProcessor,
-    VibeVoiceJobProcessor,
-    VibeVoiceMultiCloneJobProcessor,
-    TextToVideoJobProcessor,
-    ImageToVideoJobProcessor,
-    DiffRhythmJobProcessor,
-    TextToVideoLightningJobProcessor,
-    ImageToVideoLightningJobProcessor
-)
+from services.job_processors import DynamicJobProcessor
+from services.job_listener import JobListener
 
 
 class DGNClient:
@@ -24,11 +16,11 @@ class DGNClient:
         self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
         self.root_dir = root_dir
         self.data_dir = data_dir
+        self.job_listener = JobListener(self, SHUTDOWN_EVENT)
         self.cache_dir = os.path.join(data_dir, ".cache")
         self.input_dir = os.path.join(data_dir, "input")
         os.makedirs(self.input_dir, exist_ok=True)
         os.makedirs(self.cache_dir, exist_ok=True)
-        self.active_service_type = None
         self.current_job = None
         self.config = None
         self.accept_policy = accept_policy
@@ -40,48 +32,8 @@ class DGNClient:
             self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets)
             logging.info(f"Resolved targets to IDs: {self.allowed_ids}")
 
-    def load_config(self):
-        """Loads the configuration from the orchestrator."""
-        self.config = self.orchestrator_service.get_dgn_config()
-        if not self.config:
-            raise RuntimeError("Failed to load DGN configuration from orchestrator.")
-
-        wt = self.config.get('workflow_types', {})
-        self.processor_map = {
-            wt.get('HUNYUAN_VIDEO_FOLEY'): FoleyJobProcessor,
-            wt.get('QWEN_TEXT_TO_IMAGE'): TextToImageJobProcessor,
-            wt.get('VIBEVOICE_TTS'): VibeVoiceJobProcessor,
-            wt.get('VIBEVOICE_TTS_MULTI_CLONE'): VibeVoiceMultiCloneJobProcessor,
-            wt.get('DIFFRHYTHM_MUSIC_GENERATION'): DiffRhythmJobProcessor,
-            wt.get('WAN22_TEXT_TO_VIDEO'): TextToVideoJobProcessor,
-            wt.get('WAN22_IMAGE_TO_VIDEO'): ImageToVideoJobProcessor,
-            wt.get('WAN22_LIGHTNING_TEXT_TO_VIDEO'): TextToVideoLightningJobProcessor,
-            wt.get('WAN22_LIGHTNING_IMAGE_TO_VIDEO'): ImageToVideoLightningJobProcessor,
-        }
-        # Filter out None keys in case a workflow type is missing from config
-        self.processor_map = {k: v for k, v in self.processor_map.items() if k}
-
-        docker_image_map = self.config.get('docker_image_map', {})
-        if docker_image_map:
-            docker_manager.set_docker_image_map(docker_image_map)
-
-    def get_service_type_for_workflow(self, workflow_type: str) -> str:
-        """Maps a workflow type to a service type using the dynamic config."""
-        if not self.config or 'workflow_to_service_map' not in self.config:
-            raise ValueError("DGN configuration is not loaded or is invalid.")
-        
-        service_type = self.config['workflow_to_service_map'].get(workflow_type)
-        if not service_type:
-            raise ValueError(f"Unknown workflow type, cannot determine service: {workflow_type}")
-        return service_type
-
     def _get_job_processor(self, job, shutdown_event):
-        workflow_type = job.get('workflow_type')
-
-        ProcessorClass = self.processor_map.get(workflow_type)
-        if not ProcessorClass:
-            raise ValueError(f"No job processor found for workflow type: {workflow_type}")
-        return ProcessorClass(self, job, shutdown_event)
+        return DynamicJobProcessor(self, job, shutdown_event)
 
     def _process_job(self, job, shutdown_event: threading.Event):
         """Processes a single DGN job by delegating to a specific job processor."""

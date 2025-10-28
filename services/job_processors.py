@@ -1,23 +1,11 @@
 import os
 import logging
-import subprocess
-from typing import Union, Dict
-from abc import ABC, abstractmethod
-from config import DEV_MODE
+from typing import Union
 from services.docker_manager import docker_manager
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration
-from utils.comfyui_workflow_utils import (
-    inject_prompt_and_image_into_workflow,
-    inject_video_and_prompt_into_foley_workflow,
-    inject_prompt_into_qwen_workflow,
-    inject_prompt_into_text_to_video_workflow,
-    inject_prompt_into_vibevoice_workflow,
-    inject_script_and_clones_into_vibevoice_workflow,
-    inject_prompt_into_diffrhythm_workflow,
-    materialize_start_image
-)
+from utils.comfyui_workflow_utils import find_node_by_type_and_field, set_node_property, materialize_image_input
 
-class BaseJobProcessor(ABC):
+class DynamicJobProcessor:
     def __init__(self, client, job, shutdown_event):
         self.client = client
         self.orchestrator_service = client.orchestrator_service
@@ -28,23 +16,22 @@ class BaseJobProcessor(ABC):
         self.root_dir = client.root_dir
         self.input_dir = client.input_dir
         self.cache_dir = client.cache_dir
-        self.positive_prompt = job.get('prompt') or ""
-        self.negative_prompt = job.get('negative_prompt') or ""
+        
+        self.workflow_template = self._get_workflow_template()
+        if not self.workflow_template:
+            raise ValueError(f"Failed to load workflow template for job {self.job_id}")
+        
+        self.workflow_json = self.workflow_template['workflow_json']
+        self.input_schema = self.workflow_template.get('input_schema', {})
+        self.job_inputs = self.job.get('inputs', {})
+        self.workflow_type = self.workflow_template.get('workflow_type')
+        self.target_entity = self.workflow_template.get('target_entity')
 
-    @property
-    @abstractmethod
-    def workflow_name(self) -> str:
-        """The filename of the workflow to be used for this processor."""
-        pass
-
-    def _get_workflow_payload(self) -> Union[Dict, None]:
-        """Fetches the workflow from the orchestrator and returns it."""
-        workflow_data = self.orchestrator_service.get_workflow(self.workflow_name, self.cache_dir)
-        if not workflow_data:
-            logging.error(f"Failed to get workflow {self.workflow_name} for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return None
-        return workflow_data
+    def _get_workflow_template(self):
+        workflow_template_id = self.job.get('workflow_template_id')
+        if not workflow_template_id:
+            raise ValueError(f"Job {self.job_id} is missing workflow_template_id.")
+        return self.orchestrator_service.get_workflow_template(workflow_template_id)
 
     def _check_interruption(self, outputs):
         if outputs == "interrupted":
@@ -54,14 +41,10 @@ class BaseJobProcessor(ABC):
 
     def _copy_file_from_container(self, filename: str, subfolder: str) -> Union[str, None]:
         """Copies a file from the active container to a temporary location on the host."""
-        if not self.client.active_service_type:
-            logging.error("Cannot copy from container: no active service type is set.")
-            return None
-
         # Sanitize filename to prevent path traversal
         safe_filename = os.path.basename(filename)
 
-        source_in_container = os.path.join("/opt/ComfyUI/output", subfolder, safe_filename).replace('\\', '/')
+        source_in_container = os.path.join("/app/ComfyUI/output", subfolder, safe_filename).replace('\\', '/')
         
         os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -70,7 +53,6 @@ class BaseJobProcessor(ABC):
 
         try:
             docker_manager.copy_file_from_container(
-                service_type=self.client.active_service_type,
                 source_in_container=source_in_container,
                 dest_on_host=dest_on_host
             )
@@ -107,355 +89,149 @@ class BaseJobProcessor(ABC):
             
         return outputs
 
-    @abstractmethod
+    def _get_input_value(self, input_name, input_definition):
+        value = self.job_inputs.get(input_name)
+        if value is None and 'default' in input_definition:
+            value = input_definition['default']
+        return value
+
+    def _inject_dynamic_inputs(self):
+        if not self.input_schema or not self.input_schema.get('properties'):
+            logging.info(f"No input schema defined for workflow {self.workflow_template.get('name')}. Skipping dynamic injection.")
+            return
+
+        for input_name, input_definition in self.input_schema['properties'].items():
+            value = self._get_input_value(input_name, input_definition)
+            if value is None:
+                if input_name in self.input_schema.get('required', []):
+                    logging.warning(f"Required input '{input_name}' missing for job {self.job_id}. Workflow might fail.")
+                continue
+
+            node_type = input_definition.get('node_type')
+            field_name = input_definition.get('field_name')
+
+            if not node_type or not field_name:
+                logging.warning(f"Input '{input_name}' in schema is missing 'node_type' or 'field_name'. Skipping.")
+                continue
+
+            if input_definition['type'] == 'image':
+                # Materialize image from base64 or URL if provided
+                materialized_path = materialize_image_input(value, self.input_dir)
+                if materialized_path:
+                    value = os.path.basename(materialized_path)
+                else:
+                    logging.error(f"Failed to materialize image for input '{input_name}'. Skipping injection.")
+                    continue
+
+            # Find the node and set its property
+            node = find_node_by_type_and_field(self.workflow_json, node_type, field_name)
+            if node:
+                set_node_property(node, field_name, value)
+                logging.info(f"Injected input '{input_name}' (value: {value}) into node {node_type} field {field_name}.")
+            else:
+                logging.warning(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. Skipping injection.")
+
     def process(self):
-        pass
-
-class FoleyJobProcessor(BaseJobProcessor):
-    workflow_name = 'HUNYUAN_VIDEO_FOLEY.json'
-
-    def process(self):
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
-            return
-
-        input_video_url = self.job.get('input_video_url')
-        if not input_video_url:
-            logging.error(f"Foley job {self.job_id} missing 'input_video_url'.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
-        if not video_path:
-            logging.error(f"Failed to download input video for foley job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-        
-        video_filename = os.path.basename(video_path)
-        wf_ready = inject_video_and_prompt_into_foley_workflow(workflow_data, video_filename, self.positive_prompt, self.negative_prompt)
-        
-        payload = {"prompt": wf_ready}
+        self._inject_dynamic_inputs()
+        payload = {"prompt": self.workflow_json}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
             return
 
-        audio_info = find_audio_in_output(outputs)
-        if not audio_info:
-            logging.error(f"Foley workflow for job {self.job_id} completed, but no audio file found.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
+        output_path = None
+        thumbnail_path = None
+        duration = None
 
-        audio_filename, subfolder = audio_info
-        temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
-        if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        try:
-            audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
-            if audio_storage_path:
-                duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
-            else:
-                logging.error(f"Foley job {self.job_id} completed, but audio upload failed.")
-                self.orchestrator_service.update_job_status(self.job_id, 'failed')
-        finally:
-            logging.info(f"Cleaning up temporary file: {temp_host_path}")
-            os.remove(temp_host_path)
-
-class TextToImageJobProcessor(BaseJobProcessor):
-    workflow_name = 'QWEN_TEXT_TO_IMAGE.json'
-
-    def process(self):
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
-            return
-
-        wf_ready = inject_prompt_into_qwen_workflow(workflow_data, self.positive_prompt, self.negative_prompt)
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
-        image_info = find_image_in_output(outputs)
-        if not image_info:
-            logging.error(f"Workflow for job {self.job_id} completed, but no image file found.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        image_filename, subfolder = image_info
-        temp_host_path = self._copy_file_from_container(image_filename, subfolder)
-        if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        try:
-            image_storage_path = self.orchestrator_service.upload_image_output(temp_host_path, self.job_id)
-            if image_storage_path:
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=image_storage_path, thumbnail_path=image_storage_path, prompt=self.positive_prompt)
-            else:
-                logging.error(f"Image upload failed for job {self.job_id}.")
-                self.orchestrator_service.update_job_status(self.job_id, 'failed')
-        finally:
-            logging.info(f"Cleaning up temporary file: {temp_host_path}")
-            os.remove(temp_host_path)
-
-class VibeVoiceJobProcessor(BaseJobProcessor):
-    workflow_name = 'VIBEVOICE_TTS.json'
-
-    def process(self):
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
-            return
-
-        wf_ready = inject_prompt_into_vibevoice_workflow(workflow_data, self.positive_prompt)
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
-        audio_info = find_audio_in_output(outputs)
-        if not audio_info:
-            logging.error(f"VibeVoice workflow for job {self.job_id} completed, but no audio file found.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        audio_filename, subfolder = audio_info
-        temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
-        if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        try:
-            audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
-            if audio_storage_path:
-                duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
-            else:
-                logging.error(f"VibeVoice job {self.job_id} completed, but audio upload failed.")
-                self.orchestrator_service.update_job_status(self.job_id, 'failed')
-        finally:
-            logging.info(f"Cleaning up temporary file: {temp_host_path}")
-            os.remove(temp_host_path)
-
-class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
-    workflow_name = 'VIBEVOICE_TTS_MULTI_CLONE.json'
-
-    def process(self):
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
-            return
-
-        voice_clone_urls = self.job.get('voice_clone_urls', [])
-        if not voice_clone_urls:
-            logging.error(f"VibeVoice multi-clone job {self.job_id} missing 'voice_clone_urls'.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        clone_paths = []
-        for url in voice_clone_urls:
-            clone_path = self.orchestrator_service.download_asset_by_url(url, self.input_dir)
-            if not clone_path:
-                logging.error(f"Failed to download voice clone from {url} for job {self.job_id}.")
+        if self.target_entity == 'scene' or self.workflow_type in ['wan-2.2-text-to-video', 'wan-2.2-image-to-video']:
+            video_info = find_video_in_output(outputs)
+            if not video_info:
+                logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
-            clone_paths.append(os.path.basename(clone_path))
 
-        wf_ready = inject_script_and_clones_into_vibevoice_workflow(workflow_data, self.positive_prompt, clone_paths)
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
-        audio_info = find_audio_in_output(outputs)
-        if not audio_info:
-            logging.error(f"VibeVoice multi-clone workflow for job {self.job_id} completed, but no audio file found.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        audio_filename, subfolder = audio_info
-        temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
-        if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        try:
-            audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
-            if audio_storage_path:
-                duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
-            else:
-                logging.error(f"VibeVoice multi-clone job {self.job_id} completed, but audio upload failed.")
+            video_filename, subfolder = video_info
+            temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+            if not temp_host_path:
+                logging.error(f"Failed to copy output file from container for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-        finally:
-            logging.info(f"Cleaning up temporary file: {temp_host_path}")
-            os.remove(temp_host_path)
+                return
 
-class DiffRhythmJobProcessor(BaseJobProcessor):
-    workflow_name = 'DIFFRHYTHM_MUSIC_GENERATION.json'
+            try:
+                output_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+                if output_path:
+                    thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                    if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                        thumbnail_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                        os.remove(thumbnail_local_path)
+                    duration = get_video_duration(temp_host_path)
+                else:
+                    logging.error(f"Video upload failed for job {self.job_id}.")
+                    self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                    return
+            finally:
+                logging.info(f"Cleaning up temporary file: {temp_host_path}")
+                os.remove(temp_host_path)
 
-    def process(self):
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
-            return
-
-        wf_ready = inject_prompt_into_diffrhythm_workflow(workflow_data, self.positive_prompt)
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
-        audio_info = find_audio_in_output(outputs)
-        if not audio_info:
-            logging.error(f"DiffRhythm workflow for job {self.job_id} completed, but no audio file found.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        audio_filename, subfolder = audio_info
-        temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
-        if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        try:
-            audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
-            if audio_storage_path:
-                duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
-            else:
-                logging.error(f"DiffRhythm job {self.job_id} completed, but audio upload failed.")
+        elif self.target_entity == 'audio_clip' or self.workflow_type in ['hunyuan_video_foley', 'vibevoice', 'vibevoice_multi_clone', 'diffrhythm']:
+            audio_info = find_audio_in_output(outputs)
+            if not audio_info:
+                logging.error(f"Workflow for job {self.job_id} completed, but no audio file found.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-        finally:
-            logging.info(f"Cleaning up temporary file: {temp_host_path}")
-            os.remove(temp_host_path)
+                return
 
-class TextToVideoJobProcessor(BaseJobProcessor):
-    workflow_name = 'WAN22_TEXT_TO_VIDEO.json'
-
-    def process(self):
-        if DEV_MODE:
-            # Dev mode logic remains unchanged
-            return
-
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
-            return
-            
-        wf_ready = inject_prompt_into_text_to_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt)
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
-        video_info = find_video_in_output(outputs)
-        if not video_info:
-            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        video_filename, subfolder = video_info
-        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
-        if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        try:
-            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
-            if video_storage_path:
-                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
-                thumbnail_storage_path = None
-                
-                if generate_thumbnail(temp_host_path, thumbnail_local_path):
-                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
-                    os.remove(thumbnail_local_path)
-                
-                duration = get_video_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
-            else:
-                logging.error(f"Video upload failed for job {self.job_id}.")
+            audio_filename, subfolder = audio_info
+            temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
+            if not temp_host_path:
+                logging.error(f"Failed to copy output file from container for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-        finally:
-            logging.info(f"Cleaning up temporary file: {temp_host_path}")
-            os.remove(temp_host_path)
+                return
 
-class ImageToVideoJobProcessor(BaseJobProcessor):
-    workflow_name = 'WAN22_IMAGE_TO_VIDEO.json'
+            try:
+                output_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
+                if output_path:
+                    duration = get_audio_duration(temp_host_path)
+                else:
+                    logging.error(f"Audio upload failed for job {self.job_id}.")
+                    self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                    return
+            finally:
+                logging.info(f"Cleaning up temporary file: {temp_host_path}")
+                os.remove(temp_host_path)
 
-    def process(self):
-        if DEV_MODE:
-            # Dev mode logic remains unchanged
-            return
-
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
-            return
-
-        start_image_filename = materialize_start_image(self.job, self.input_dir)
-        if not start_image_filename:
-            logging.error(f"Failed to materialize start image for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        start_image_full_path = os.path.join(self.input_dir, start_image_filename)
-
-        try:
-            container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
-            docker_manager.copy_file_to_container(
-                service_type=self.client.active_service_type,
-                source_on_host=start_image_full_path,
-                dest_in_container=container_input_path
-            )
-        except Exception as e:
-            logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        wf_ready = inject_prompt_and_image_into_workflow(workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename)
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
-        video_info = find_video_in_output(outputs)
-        if not video_info:
-            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        video_filename, subfolder = video_info
-        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
-        if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        try:
-            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
-            if video_storage_path:
-                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
-                thumbnail_storage_path = None
-                
-                if generate_thumbnail(temp_host_path, thumbnail_local_path):
-                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
-                    os.remove(thumbnail_local_path)
-                
-                duration = get_video_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
-            else:
-                logging.error(f"Video upload failed for job {self.job_id}.")
+        elif self.target_entity == 'character' or self.workflow_type == 'qwen':
+            image_info = find_image_in_output(outputs)
+            if not image_info:
+                logging.error(f"Workflow for job {self.job_id} completed, but no image file found.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-        finally:
-            logging.info(f"Cleaning up temporary file: {temp_host_path}")
-            os.remove(temp_host_path)
+                return
 
-class TextToVideoLightningJobProcessor(TextToVideoJobProcessor):
-    workflow_name = 'WAN22_LIGHTNING_TEXT_TO_VIDEO.json'
+            image_filename, subfolder = image_info
+            temp_host_path = self._copy_file_from_container(image_filename, subfolder)
+            if not temp_host_path:
+                logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
 
-class ImageToVideoLightningJobProcessor(ImageToVideoJobProcessor):
-    workflow_name = 'WAN22_LIGHTNING_IMAGE_TO_VIDEO.json'
+            try:
+                output_path = self.orchestrator_service.upload_image_output(temp_host_path, self.job_id)
+                if output_path:
+                    thumbnail_path = output_path # For images, thumbnail is the image itself
+                else:
+                    logging.error(f"Image upload failed for job {self.job_id}.")
+                    self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                    return
+            finally:
+                logging.info(f"Cleaning up temporary file: {temp_host_path}")
+                os.remove(temp_host_path)
+
+        else:
+            logging.warning(f"Job {self.job_id} completed, but no specific output handling for workflow_type: {self.workflow_type} and target_entity: {self.target_entity}. Marking as completed without asset upload.")
+
+        self.orchestrator_service.update_job_status(
+            self.job_id, 
+            'completed', 
+            output_path=output_path, 
+            thumbnail_path=thumbnail_path, 
+            duration_seconds=duration, 
+            completion_metadata=self.job.get('completion_metadata')
+        )

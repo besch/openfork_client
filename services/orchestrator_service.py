@@ -8,7 +8,7 @@ from typing import Union, Dict
 from services.hardware_profiler import get_hardware_profile
 import os
 from supabase_auth import SyncGoTrueClient, AuthResponse
-from config import SUPABASE_URL, SUPABASE_ANON_KEY
+from config import Config
 
 class OrchestratorService:
     def __init__(self, orchestrator_url: str, access_token: str, refresh_token: str):
@@ -16,8 +16,8 @@ class OrchestratorService:
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.gotrue_client = SyncGoTrueClient(
-            url=f"{SUPABASE_URL}/auth/v1",
-            headers={"apiKey": SUPABASE_ANON_KEY},
+            url=f"{Config.SUPABASE_URL}/auth/v1",
+            headers={"apiKey": Config.SUPABASE_ANON_KEY},
             auto_refresh_token=False # We will handle refresh manually
         )
         self.token_update_lock = threading.Lock()
@@ -335,7 +335,7 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self, service_type: str) -> Union[str, None]:
+    def register_with_orchestrator(self) -> Union[str, None]:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
         
@@ -344,7 +344,7 @@ class OrchestratorService:
             logging.error("Could not extract user_id from token. Cannot register.")
             return None
         
-        payload = {**hardware_profile, "user_id": user_id, "service_type": service_type}
+        payload = {**hardware_profile, "user_id": user_id, "service_type": "unified"}
 
         logging.info(f"Registering with profile: {payload}")
         try:
@@ -392,53 +392,20 @@ class OrchestratorService:
                 logging.error(f"Reset API response: {e.response.text}")
             raise
 
-    def get_workflow(self, workflow_name: str, cache_dir: str) -> Union[Dict, None]:
-        """
-        Fetches a workflow definition, using a local cache to avoid re-downloads.
-        The workflow is assumed to be a JSON file.
-        """
-        workflow_cache_dir = os.path.join(cache_dir, 'workflows')
-        os.makedirs(workflow_cache_dir, exist_ok=True)
-        cached_workflow_path = os.path.join(workflow_cache_dir, workflow_name)
-
-        # For now, we prioritize the cached version if it exists.
-        # A more advanced implementation could involve version checking.
-        if os.path.exists(cached_workflow_path):
-            logging.info(f"Loading workflow '{workflow_name}' from cache.")
-            try:
-                with open(cached_workflow_path, 'r') as f:
-                    return json.load(f)
-            except (IOError, json.JSONDecodeError) as e:
-                logging.error(f"Error reading cached workflow {workflow_name}: {e}. Will attempt to re-download.")
-
-        # If not in cache or reading failed, download it
-        logging.info(f"Downloading workflow '{workflow_name}' from orchestrator.")
+    def get_workflow_template(self, template_id: str) -> Union[Dict, None]:
+        """Fetches a full workflow template by its ID."""
+        logging.info(f"Fetching workflow template with ID: {template_id}")
         try:
-            # Note: This API endpoint needs to be created in the Next.js backend.
-            # It should serve the contents of the corresponding file from `dgn-client/workflows`.
-            url = f"{self.orchestrator_url}/api/dgn/workflows/{workflow_name}"
+            url = f"{self.orchestrator_url}/api/dgn/workflow-templates/{template_id}"
             response = self._make_request('get', url)
             response.raise_for_status()
-            
-            workflow_data = response.json()
-
-            # Save the newly downloaded workflow to the cache
-            with open(cached_workflow_path, 'w') as f:
-                json.dump(workflow_data, f)
-            
-            logging.info(f"Successfully downloaded and cached workflow '{workflow_name}'.")
-            return workflow_data
-
+            return response.json()
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error downloading workflow {workflow_name}: {e}")
+            logging.error(f"Error downloading workflow template {template_id}: {e}")
             return None
         except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON from workflow response for {workflow_name}: {response.text}")
+            logging.error(f"Failed to decode JSON from workflow template response: {response.text}")
             return None
-        except IOError as e:
-            logging.error(f"Error saving downloaded workflow {workflow_name} to cache: {e}")
-            # We can still return the data even if caching fails
-            return workflow_data
 
     def get_dgn_config(self) -> Union[Dict, None]:
         """Fetches the DGN client configuration from the orchestrator."""

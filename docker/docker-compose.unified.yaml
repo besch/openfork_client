@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  comfyui:
+    build:
+      context: .
+      dockerfile: Dockerfile.unified
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./storage/ComfyUI/models:/app/ComfyUI/models
+      - ./storage/ComfyUI/custom_nodes:/app/ComfyUI/custom_nodes
+      - ./storage/ComfyUI/output:/app/ComfyUI/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

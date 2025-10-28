@@ -3,6 +3,7 @@ models
 comfyui-storage/models
 comfyui-storage/workflows
 comfyui-storage/storage
+tools/dependency_cache.json
 
 
 __pycache__

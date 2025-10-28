@@ -1,111 +1,74 @@
-'''
-This module contains the production Docker service, which manages pre-built
-images from a Docker registry (e.g., Docker Hub).
-'''
-import docker
 import logging
 import subprocess
-from config import DOCKER_IMAGE_MAP
-from .docker_utils import docker_cp
+import os
+from config import Config
 
 class DockerProdManager:
     def __init__(self):
+        self.config = Config
+        self.compose_file_path = os.path.join(Config.ROOT_DIR, 'comfyui-storage', 'docker-compose.unified.yaml')
+        self.service_name = 'comfyui'
+
+    def _run_command(self, command):
+        logging.info(f"Running command: {' '.join(command)}")
         try:
-            self.client = docker.from_env()
-            self.docker_image_map = DOCKER_IMAGE_MAP # Fallback to static config
-        except docker.errors.DockerException:
-            logging.error("Docker is not running. Please start Docker Desktop.")
-            raise
-
-    def set_docker_image_map(self, image_map: dict):
-        if image_map:
-            logging.info("Setting dynamic Docker image map.")
-            self.docker_image_map = image_map
-        else:
-            logging.warning("Dynamic Docker image map is empty. Using fallback static map.")
-
-    def get_image_name(self, service_type: str) -> str:
-        image = self.docker_image_map.get(service_type)
-        if not image:
-            raise ValueError(f"No Docker image configured for service type '{service_type}'")
-        return image
-
-    def get_container_name(self, service_type: str) -> str:
-        return f"dgn-client-comfyui-{service_type}"
-
-    def pull_image(self, image_name: str):
-        try:
-            logging.info(f"Checking for Docker image: {image_name}...")
-            self.client.images.get(image_name)
-            logging.info(f"Image '{image_name}' found locally.")
-        except docker.errors.ImageNotFound:
-            logging.info(f"Image '{image_name}' not found locally. Pulling from Docker Hub...")
-            try:
-                self.client.images.pull(image_name)
-                logging.info(f"Successfully pulled image: {image_name}")
-            except docker.errors.APIError as e:
-                logging.error(f"Failed to pull image '{image_name}': {e}")
-                raise
-
-    def run_container(self, service_type: str):
-        image_name = self.get_image_name(service_type)
-        container_name = self.get_container_name(service_type)
-
-        try:
-            container = self.client.containers.get(container_name)
-            if container.status == 'running':
-                logging.info(f"Container '{container_name}' is already running.")
-                return
-            else:
-                logging.info(f"Found a stopped container '{container_name}'. Removing it before starting a new one.")
-                container.remove(force=True)
-        except docker.errors.NotFound:
-            pass
-
-        self.pull_image(image_name)
-
-        logging.info(f"Starting container '{container_name}' from image '{image_name}'...")
-        try:
-            self.client.containers.run(
-                image=image_name,
-                detach=True,
-                name=container_name,
-                ports={'8188/tcp': 8188},
-                device_requests=[
-                    docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
-                ],
-                restart_policy={"Name": "no"}
+            process = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=os.path.dirname(self.compose_file_path)
             )
-            logging.info(f"Container '{container_name}' started successfully.")
-        except docker.errors.APIError as e:
-            logging.error(f"Failed to start container '{container_name}': {e}")
+            logging.info(process.stdout)
+            if process.stderr:
+                logging.warning(process.stderr)
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Command failed: {' '.join(command)}")
+            logging.error(f"Stderr: {e.stderr}")
+            logging.error(f"Stdout: {e.stdout}")
             raise
 
-    def stop_container(self, service_type: str):
-        container_name = self.get_container_name(service_type)
-        logging.info(f"Attempting to stop and remove container '{container_name}'...")
-        try:
-            container = self.client.containers.get(container_name)
-            if container.status == 'running':
-                logging.info(f"Container '{container_name}' is running. Stopping it now.")
-                container.stop()
-                logging.info(f"Container '{container_name}' stopped.")
-            
-            logging.info(f"Removing container '{container_name}'.")
-            container.remove()
-            logging.info(f"Container '{container_name}' removed.")
+    def run_container(self, dependencies: dict = None):
+        logging.info("Starting unified ComfyUI container...")
+        
+        env_file_path = os.path.join(os.path.dirname(self.compose_file_path), 'dgn_job.env')
+        with open(env_file_path, 'w') as f:
+            if dependencies and dependencies.get('custom_node_urls'):
+                urls = ' '.join(dependencies['custom_node_urls'])
+                f.write(f'CUSTOM_NODES_GIT_URLS="{urls}"\n')
+            if dependencies and dependencies.get('model_urls'):
+                urls = ' '.join(dependencies['model_urls'])
+                f.write(f'MODEL_URLS="{urls}"\n')
 
-        except docker.errors.NotFound:
-            logging.info(f"Container '{container_name}' not found. Nothing to stop.")
-        except docker.errors.APIError as e:
-            logging.error(f"Failed to stop or remove container '{container_name}': {e}")
+        command = [
+            'docker-compose',
+            '-f', self.compose_file_path,
+            'up',
+            '--build',
+            '-d',
+            '--env-file', env_file_path
+        ]
+        self._run_command(command)
+        logging.info(f"Container for service '{self.service_name}' started successfully.")
 
-    def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str):
-        container_name = self.get_container_name(service_type)
+    def stop_container(self, service_type: str = None):
+        logging.info(f"Stopping unified ComfyUI container...")
+        command = [
+            'docker-compose',
+            '-f', self.compose_file_path,
+            'down'
+        ]
+        self._run_command(command)
+        logging.info(f"Container for service '{self.service_name}' stopped successfully.")
+
+    def copy_file_from_container(self, source_in_container: str, dest_on_host: str):
+        container_name = f"comfyui-storage_{self.service_name}_1" # Default name from docker-compose
         source_path = f"{container_name}:{source_in_container}"
-        docker_cp(source_path, dest_on_host)
+        command = ['docker', 'cp', source_path, dest_on_host]
+        self._run_command(command)
 
-    def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str):
-        container_name = self.get_container_name(service_type)
+    def copy_file_to_container(self, source_on_host: str, dest_in_container: str):
+        container_name = f"comfyui-storage_{self.service_name}_1" # Default name from docker-compose
         dest_path = f"{container_name}:{dest_in_container}"
-        docker_cp(source_on_host, dest_path)
+        command = ['docker', 'cp', source_on_host, dest_path]
+        self._run_command(command)

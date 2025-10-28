@@ -1,106 +1,89 @@
-'''
-This module contains the development Docker service, which uses docker-compose
-to manage local containers for testing and iteration.
-'''
+"""
+This module contains the development Docker service.
+It now mirrors the production service by using a single, unified docker-compose file.
+"""
 import logging
 import subprocess
 import os
-import json
-from config import ROOT_DIR
-from .docker_utils import docker_cp
+from config import Config
 
 class DockerDevManager:
     def __init__(self):
-        self.compose_dir = os.path.join(ROOT_DIR, 'comfyui-storage')
-        self._load_service_config()
+        self.config = Config
+        self.compose_file_path = os.path.join(Config.ROOT_DIR, 'comfyui-storage', 'docker-compose.unified.yaml')
+        self.service_name = 'comfyui' # As defined in the unified compose file
 
-    def _load_service_config(self):
-        """Loads the service config from the master services.json file."""
+    def _run_command(self, command):
+        logging.info(f"Running dev command: {' '.join(command)}")
         try:
-            # Path from dgn-client/services -> dgn-client -> root
-            config_path = os.path.join(ROOT_DIR, '..', 'services.json')
-            with open(config_path, 'r') as f:
-                data = json.load(f)
-            
-            self.service_config = {s['service_type']: s for s in data['services']}
-            logging.info("Successfully loaded services.json for dev manager.")
-        except (IOError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to load or parse services.json: {e}")
-            self.service_config = {}
+            process = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=os.path.dirname(self.compose_file_path) # Run from the compose file's directory
+            )
+            logging.info(process.stdout)
+            if process.stderr:
+                logging.warning(process.stderr)
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Dev command failed: {' '.join(command)}")
+            logging.error(f"Stderr: {e.stderr}")
+            logging.error(f"Stdout: {e.stdout}")
+            raise
 
-    def set_docker_image_map(self, image_map: dict):
-        # This method is a no-op for the dev manager as it uses docker-compose files,
-        # but it's here to maintain a consistent interface with the prod manager.
-        logging.debug("set_docker_image_map called on dev manager (no-op).")
-        pass
-
-    def _get_compose_file(self, service_type: str) -> str:
-        """Gets the docker-compose file path from the loaded service config."""
-        service_info = self.service_config.get(service_type)
-        if not service_info or not service_info.get('dev_compose_file'):
-            raise ValueError(f"Service '{service_type}' or its dev_compose_file not found in services.json")
-
-        compose_file = os.path.join(self.compose_dir, service_info['dev_compose_file'])
+    def run_container(self, dependencies: dict = None):
+        """
+        Starts the unified ComfyUI container for development.
+        Accepts dependencies to write to an environment file, mirroring production behavior.
+        """
+        logging.info("Starting unified ComfyUI container for development...")
         
-        if not os.path.exists(compose_file):
-            raise FileNotFoundError(f"Docker compose file '{service_info['dev_compose_file']}' not found for service '{service_type}' at {compose_file}")
-        return compose_file
+        # Create a .env file for the compose command to use
+        env_file_path = os.path.join(os.path.dirname(self.compose_file_path), 'dgn_job.env')
+        with open(env_file_path, 'w') as f:
+            if dependencies and dependencies.get('custom_node_urls'):
+                urls = ' '.join(dependencies['custom_node_urls'])
+                f.write(f'CUSTOM_NODES_GIT_URLS="{urls}"\n')
+            if dependencies and dependencies.get('model_urls'):
+                urls = ' '.join(dependencies['model_urls'])
+                f.write(f'MODEL_URLS="{urls}"\n')
 
-    def _run_command(self, command: list):
-        try:
-            # Using cwd ensures docker-compose can find relative paths in the .yaml files
-            subprocess.run(command, check=True, capture_output=True, text=True, cwd=self.compose_dir)
-            logging.info(f"Successfully ran command: {' '.join(command)}")
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Error running command: {' '.join(command)}")
-            logging.error(f"Stderr: {e.stderr}")
-            logging.error(f"Stdout: {e.stdout}")
-            raise
+        command = [
+            'docker-compose',
+            '-f', self.compose_file_path,
+            'up',
+            '--build', # Rebuild if Dockerfile has changed
+            '-d' # Detached mode
+        ]
+        self._run_command(command)
+        logging.info(f"Dev container for service '{self.service_name}' started successfully.")
 
-    def get_container_id(self, service_type: str) -> str:
-        compose_file = self._get_compose_file(service_type)
-        command = ['docker-compose', '-f', compose_file, 'ps', '-q']
-        try:
-            # Run command to get container ID
-            result = subprocess.run(command, check=True, capture_output=True, text=True, cwd=self.compose_dir)
-            container_id = result.stdout.strip()
-            if not container_id:
-                raise RuntimeError(f"Could not determine container ID for service '{service_type}'. Is it running?")
-            logging.info(f"Found container ID for service '{service_type}': {container_id}")
-            return container_id
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Error getting container ID for service '{service_type}': {e.stderr}")
-            raise
+    def stop_container(self, service_type: str = None):
+        """
+        Stops the unified ComfyUI container. The service_type argument is ignored
+        to maintain interface consistency with the old manager.
+        """
+        logging.info(f"Stopping unified ComfyUI container for development...")
+        command = [
+            'docker-compose',
+            '-f', self.compose_file_path,
+            'down'
+        ]
+        self._run_command(command)
+        logging.info(f"Dev container for service '{self.service_name}' stopped successfully.")
 
-    def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str):
-        container_id = self.get_container_id(service_type)
-        source_path = f"{container_id}:{source_in_container}"
-        docker_cp(source_path, dest_on_host)
-
-    def run_container(self, service_type: str):
-        compose_file = self._get_compose_file(service_type)
-        logging.info(f"Starting container for service '{service_type}' using compose file: {compose_file}")
-        # The command is structured to use a specific compose file and bring the service up
-        command = ['docker-compose', '-f', compose_file, 'up', '--build', '-d']
+    def copy_file_from_container(self, source_in_container: str, dest_on_host: str):
+        """Copies a file from the unified container to the host."""
+        # The container name is typically <project>_<service>_1
+        container_name = f"comfyui-storage_{self.service_name}_1"
+        source_path = f"{container_name}:{source_in_container}"
+        command = ['docker', 'cp', source_path, dest_on_host]
         self._run_command(command)
 
-    def stop_container(self, service_type: str):
-        compose_file = self._get_compose_file(service_type)
-        logging.info(f"Stopping container for service '{service_type}' using compose file: {compose_file}")
-        # The 'down' command stops and removes containers, networks, etc.
-        command = ['docker-compose', '-f', compose_file, 'down']
-        self._run_command(command)
-
-    def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str):
-        container_id = self.get_container_id(service_type)
-        dest_path = f"{container_id}:{dest_in_container}"
+    def copy_file_to_container(self, source_on_host: str, dest_in_container: str):
+        """Copies a file from the host to the unified container."""
+        container_name = f"comfyui-storage_{self.service_name}_1"
+        dest_path = f"{container_name}:{dest_in_container}"
         command = ['docker', 'cp', source_on_host, dest_path]
-        logging.info(f"Copying file to container: {' '.join(command)}")
-        try:
-            subprocess.run(command, check=True, capture_output=True, text=True)
-            logging.info(f"Successfully ran command: {' '.join(command)}")
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Error running command: {' '.join(command)}")
-            logging.error(f"Stderr: {e.stderr}")
-            logging.error(f"Stdout: {e.stdout}")
-            raise
+        self._run_command(command)

@@ -9,6 +9,67 @@ from typing import Union, Dict
 # Assuming OUTPUT_DIR, INPUT_DIR are passed or imported from config
 # from config import OUTPUT_DIR, INPUT_DIR
 
+def find_node_by_type_and_field(workflow_json: Dict, node_type: str, field_name: str) -> Union[Dict, None]:
+    """Finds a node in the workflow JSON by its class_type and checks if it has the specified input field."""
+    for node_id, node_data in workflow_json.items():
+        if node_data.get('class_type') == node_type:
+            if 'inputs' in node_data and field_name in node_data['inputs']:
+                return node_data
+    return None
+
+def set_node_property(node: Dict, field_name: str, value):
+    """Sets a property in a node's inputs."""
+    if 'inputs' in node:
+        node['inputs'][field_name] = value
+
+def materialize_image_input(image_data: str, input_dir: str) -> Union[str, None]:
+    """
+    Materializes an image from base64 data or a URL into the input directory.
+    Returns the full path to the materialized image.
+    """
+    if image_data.startswith('data:image') or image_data.startswith('base64,'):
+        # Handle base64 image
+        b64 = image_data.split(",", 1)[1] if "," in image_data else image_data
+        try:
+            binary = base64.b64decode(b64, validate=True)
+        except Exception:
+            binary = base64.b64decode(b64)
+        
+        # Generate a unique filename
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        fname = f"dynamic_image_{timestamp}.png"
+        out_path = os.path.join(input_dir, fname)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "wb") as f:
+            f.write(binary)
+        logging.info(f"Dynamic image (from base64) written to {out_path}")
+        return out_path
+    elif image_data.startswith('http://') or image_data.startswith('https://'):
+        # Handle image from URL (requires requests library)
+        try:
+            import requests
+            response = requests.get(image_data, stream=True)
+            response.raise_for_status()
+            
+            # Extract filename from URL or generate one
+            fname = os.path.basename(image_data.split('?')[0])
+            if not fname or '.' not in fname:
+                fname = f"dynamic_image_{datetime.now().strftime('%Y%m%d%H%M%S%f')}.png"
+
+            out_path = os.path.join(input_dir, fname)
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            logging.info(f"Dynamic image (from URL) written to {out_path}")
+            return out_path
+        except Exception as e:
+            logging.error(f"Failed to download image from URL {image_data}: {e}")
+            return None
+    else:
+        logging.warning(f"Unsupported image data format: {image_data[:50]}...")
+        return None
+
 def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
     """
     Accepts:
@@ -51,170 +112,7 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
         logging.error(f"Failed to materialize start image: {e}")
     return None
 
-def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, start_image_filename: str):
-    """
-    Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
-    # Inject prompts and image filename
-    for node in api_graph.values():
-        if node["class_type"] == "CLIPTextEncode":
-            if "Positive" in node.get("title", ""):
-                node["inputs"]["text"] = prompt
-            elif "Negative" in node.get("title", ""):
-                node["inputs"]["text"] = negative_prompt
-        elif node["class_type"] == "LoadImage":
-            node["inputs"]["image"] = start_image_filename
-        elif node["class_type"] == "VHS_VideoCombine":
-            # Replace date token in filename_prefix
-            prefix = node["inputs"].get("filename_prefix", "")
-            if "%date:yyyy-MM-dd%" in prefix:
-                datestr = datetime.now().strftime("%Y-%m-%d")
-                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
-
-    return api_graph
-
-def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
-    """
-    Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # Node 6 is positive, Node 7 is negative
-    if '6' in api_graph and 'inputs' in api_graph['6'] and 'text' in api_graph['6']['inputs']:
-        api_graph['6']['inputs']['text'] = prompt
-    else:
-        logging.warning("Could not find positive prompt node 6 in text-to-video workflow")
-
-    if '7' in api_graph and 'inputs' in api_graph['7'] and 'text' in api_graph['7']['inputs']:
-        api_graph['7']['inputs']['text'] = negative_prompt
-    else:
-        logging.warning("Could not find negative prompt node 7 in text-to-video workflow")
-
-    # Replace date token in filename_prefix for VHS_VideoCombine node
-    for node in api_graph.values():
-        if node.get("class_type") == "VHS_VideoCombine":
-            prefix = node["inputs"].get("filename_prefix", "")
-            if "%date:yyyy-MM-dd%" in prefix:
-                datestr = datetime.now().strftime("%Y-%m-%d")
-                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
-
-    return api_graph
-
-def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
-    """
-    Loads a ComfyUI API-formatted workflow, injects prompts for Qwen.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # In the qwen-text-to-image.api.json:
-    # Node 6 is positive prompt
-    # Node 7 is negative prompt
-    if '6' in api_graph and 'inputs' in api_graph['6'] and 'text' in api_graph['6']['inputs']:
-        api_graph['6']['inputs']['text'] = prompt
-    else:
-        logging.warning("Could not find positive prompt node 6 in Qwen workflow")
-
-    if '7' in api_graph and 'inputs' in api_graph['7'] and 'text' in api_graph['7']['inputs']:
-        api_graph['7']['inputs']['text'] = negative_prompt
-    else:
-        logging.warning("Could not find negative prompt node 7 in Qwen workflow")
-
-    return api_graph
-
-def inject_prompt_into_flux_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
-    """
-    Loads a ComfyUI API-formatted workflow, injects prompts for FLUX.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # In the new flux-text-to-image.api.json:
-    # Node 7 is positive prompt
-    # Node 6 is negative prompt
-    if '7' in api_graph and 'inputs' in api_graph['7'] and 'text' in api_graph['7']['inputs']:
-        api_graph['7']['inputs']['text'] = prompt
-    else:
-        logging.warning("Could not find positive prompt node 7 in FLUX workflow")
-
-    if '6' in api_graph and 'inputs' in api_graph['6'] and 'text' in api_graph['6']['inputs']:
-        api_graph['6']['inputs']['text'] = negative_prompt
-    else:
-        logging.warning("Could not find negative prompt node 6 in FLUX workflow")
-
-    return api_graph
-
-def inject_video_and_prompt_into_foley_workflow(workflow_api_data: Dict, video_filename: str, prompt: str, negative_prompt: str):
-    """
-    Loads the Foley ComfyUI API-formatted workflow, injects video filename and prompts.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # Inject video filename and prompts
-    for node in api_graph.values():
-        if node["class_type"] == "HunyuanVideoFoleyGeneratorAdvanced":
-            node["inputs"]["video"] = video_filename
-            node["inputs"]["text_prompt"] = prompt
-            node["inputs"]["negative_prompt"] = negative_prompt
-
-    return api_graph
-
-def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
-    """
-    Loads the VibeVoice ComfyUI API-formatted workflow, injects the prompt
-    and ensures all required inputs for VibeVoiceSingleSpeakerNode are present.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # Find the VibeVoice node and explicitly set its inputs
-    for node in api_graph.values():
-        if node["class_type"] == "VibeVoiceSingleSpeakerNode":
-            # Overwrite the entire 'inputs' dictionary to ensure correctness
-            node["inputs"] = {
-                "text": prompt,
-                "model": "VibeVoice-1.5B",
-                "attention_type": "auto",
-                "free_memory_after_generate": True,
-                "diffusion_steps": 10,
-                "seed": 0,
-                "cfg_scale": 3.5,
-                "use_sampling": False,
-                "temperature": 0.8,
-                "top_p": 0.95,
-                "quantize_llm": "full precision"
-            }
-            break  # Assuming only one such node
-
-    return api_graph
-
-def inject_prompt_into_diffrhythm_workflow(workflow_api_data: Dict, prompt: str):
-    """
-    Loads the DiffRhythm ComfyUI API-formatted workflow, injects the prompt.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # Inject prompt
-    for node in api_graph.values():
-        if node["class_type"] == "DiffRhythmRun":
-            node["inputs"]["lyrics_or_edit_lyrics"] = prompt
-            node["inputs"]["edit"] = False
-
-    return api_graph
-
-def inject_script_and_clones_into_vibevoice_workflow(workflow_api_data: Dict, script: str, clone_paths: list[str]):
-    """
-    Loads the VibeVoice ComfyUI API-formatted workflow, injects the script and clone paths.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # Inject script and clone paths
-    for node in api_graph.values():
-        if node["class_type"] == "VibeVoiceMultipleSpeakers":
-            node["inputs"]["text"] = script
-            for i, clone_path in enumerate(clone_paths):
-                node["inputs"][f"voice_{i+1}_clone_path"] = clone_path
-
-    return api_graph
 
 def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_output_func) -> Union[str, None]:
     """Process the workflow output, upload the generated files, and return the first successful upload path."""

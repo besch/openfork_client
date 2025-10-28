@@ -1,0 +1,21 @@
+# Use the official ComfyUI base image
+FROM comfyui/comfyui:latest
+
+# Set the working directory
+WORKDIR /app/ComfyUI
+
+# Install git and other dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    aria2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone the ComfyUI-Manager
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /app/ComfyUI/custom_nodes/ComfyUI-Manager
+
+# Copy the entrypoint script and make it executable
+COPY ./entrypoint.sh /app/ComfyUI/entrypoint.sh
+RUN chmod +x /app/ComfyUI/entrypoint.sh
+
+# Set the entrypoint
+ENTRYPOINT ["/app/ComfyUI/entrypoint.sh"]
