@@ -78,95 +78,123 @@ def analyze_workflow(workflow: Dict) -> Dict:
     
     standard_nodes = get_standard_nodes()
     
-    # --- Node Iteration ---
-    nodes = workflow.get('nodes', []) # LiteGraph format
-    if not nodes and isinstance(workflow, dict): # API format
-        nodes = list(workflow.values())
+    # Determine format: LiteGraph has a 'nodes' list, API format has a dict of nodes.
+    is_api_format = 'nodes' not in workflow and isinstance(workflow, dict)
 
-    for node in nodes:
-        node_type = node.get('type') or node.get('class_type')
-        if not node_type:
-            continue
+    if is_api_format:
+        # --- API FORMAT PARSING ---
+        node_items = workflow.items()
 
-        # --- Custom Node Detection ---
-        if node_type not in standard_nodes:
-            custom_nodes.add(node_type)
+        for node_id, node in node_items:
+            node_type = node.get("class_type")
+            if not node_type:
+                continue
 
-        # --- Model Detection ---
-        widgets = node.get('widgets_values', [])
-        if widgets:
-            for widget_val in widgets:
-                if isinstance(widget_val, str):
-                    # Check if it's a direct URL to a model
-                    if is_url(widget_val) and any(widget_val.endswith(ext) for ext in ['.safetensors', '.pth', '.ckpt', '.bin']):
-                        # Store the URL directly
-                        models.add(widget_val) # Store the URL, not just basename
-                    # If not a URL, but a model filename
-                    elif any(widget_val.endswith(ext) for ext in ['.safetensors', '.pth', '.ckpt', '.bin']):
-                        # Store the basename, and the main loop will ask for URL if not cached
+            # Custom Node Detection
+            if node_type not in standard_nodes:
+                custom_nodes.add(node_type)
+
+            # Input and Model Detection
+            if 'inputs' in node and isinstance(node['inputs'], dict):
+                for input_name, input_value in node['inputs'].items():
+                    is_link = (isinstance(input_value, list) and
+                               len(input_value) == 2 and
+                               isinstance(input_value[0], str) and
+                               isinstance(input_value[1], int))
+
+                    if not is_link:
+                        # This is a widget input or a model name
+                        
+                        # Model Detection
+                        if input_name.lower() in ['ckpt_name', 'model_name', 'lora_name', 'vae_name', 'control_net_name'] and isinstance(input_value, str):
+                            models.add(os.path.basename(input_value))
+                            continue
+
+                        # Input Detection
+                        json_schema_type = 'string'
+                        if isinstance(input_value, (int, float)):
+                            json_schema_type = 'number'
+                        elif isinstance(input_value, bool):
+                            json_schema_type = 'boolean'
+
+                        key_name_base = input_name
+                        # Heuristics for better naming
+                        if key_name_base.lower() == 'text' and node_type == 'CLIPTextEncode':
+                            # In API format, we can't easily distinguish positive/negative prompts by title.
+                            # We'll use the node ID to ensure uniqueness.
+                            key_name_base = f'text_prompt_{node_id}'
+                        elif key_name_base.lower() == 'seed':
+                            key_name_base = 'seed'
+
+                        final_key_name = key_name_base
+                        counter = 1
+                        while final_key_name in inputs:
+                            final_key_name = f"{key_name_base}_{counter}"
+                            counter += 1
+                        
+                        inputs[final_key_name] = {
+                            'type': json_schema_type,
+                            'default': input_value,
+                            'description': f'{input_name} (node {node_id})'
+                        }
+
+    else:
+        # --- LITEGRAPH FORMAT PARSING (Original Logic with safety check) ---
+        nodes = workflow.get('nodes', [])
+        for node in nodes:
+            node_type = node.get('type')
+            if not node_type:
+                continue
+
+            if node_type not in standard_nodes:
+                custom_nodes.add(node_type)
+
+            widgets = node.get('widgets_values', [])
+            if widgets:
+                for widget_val in widgets:
+                    if isinstance(widget_val, str) and any(widget_val.endswith(ext) for ext in ['.safetensors', '.pth', '.ckpt', '.bin']):
                         models.add(os.path.basename(widget_val))
 
-        # --- Improved Input Detection ---
-        input_widgets = []
-        if 'inputs' in node:
-            for input_def in node['inputs']:
-                if input_def.get('link') is None and 'name' in input_def: # Check if it's an unconnected widget input
-                    input_widgets.append(input_def)
-
-        if input_widgets:
-            widget_values = node.get('widgets_values', [])
-            for i, input_def in enumerate(input_widgets):
-                input_name = input_def['name']
-                comfyui_type = input_def['type']
-
-                json_schema_type = 'string'
-                if comfyui_type in ['INT', 'FLOAT']:
-                    json_schema_type = 'number'
-                elif comfyui_type == 'BOOLEAN':
-                    json_schema_type = 'boolean'
-                elif comfyui_type == 'IMAGE':
-                    json_schema_type = 'image'
-
-                # Generate a unique key, prioritizing common names
-                key_name_base = input_name # Use a base name for uniqueness check
-                
-                # Apply heuristics for common names
-                if key_name_base.lower() == 'text' and node_type == 'CLIPTextEncode':
-                    if 'positive' in node.get('title', '').lower() or 'prompt' in node.get('title', '').lower():
-                        key_name_base = 'positive_prompt'
-                    elif 'negative' in node.get('title', '').lower():
-                        key_name_base = 'negative_prompt'
-                    else:
-                        key_name_base = 'text_input'
-                elif key_name_base.lower() == 'image' and node_type == 'LoadImage':
-                    key_name_base = 'input_image'
-                elif key_name_base.lower() == 'seed':
-                    key_name_base = 'seed'
-                elif key_name_base.lower() == 'ckpt_name' or key_name_base.lower() == 'model_name':
-                    key_name_base = 'model_name'
-                elif key_name_base.lower() == 'lora_name':
-                    key_name_base = 'lora_name'
-                elif key_name_base.lower() == 'vae_name':
-                    key_name_base = 'vae_name'
-                elif key_name_base.lower() == 'clip_name':
-                    key_name_base = 'clip_name'
-                
-                # Ensure uniqueness for the final key_name
-                final_key_name = key_name_base
-                counter = 1
-                while final_key_name in inputs:
-                    final_key_name = f"{key_name_base}_{counter}"
-                    counter += 1
-
-                # Construct the input definition dictionary
-                input_definition = {'type': json_schema_type}
-                # Safely get default value if widget_values is a list and index is valid
-                if isinstance(widget_values, list) and i < len(widget_values):
-                    input_definition['default'] = widget_values[i]
-                
-                # Assign the complete definition to the inputs dictionary
-                inputs[final_key_name] = input_definition
+            input_widgets = []
+            if 'inputs' in node:
+                for input_def in node.get('inputs', []):
+                    if isinstance(input_def, dict) and input_def.get('link') is None and 'name' in input_def:
+                        input_widgets.append(input_def)
             
+            if input_widgets:
+                widget_values = node.get('widgets_values', [])
+                for i, input_def in enumerate(input_widgets):
+                    input_name = input_def['name']
+                    comfyui_type = input_def['type']
+
+                    json_schema_type = 'string'
+                    if comfyui_type in ['INT', 'FLOAT']:
+                        json_schema_type = 'number'
+                    elif comfyui_type == 'BOOLEAN':
+                        json_schema_type = 'boolean'
+
+                    key_name_base = input_name
+                    if key_name_base.lower() == 'text' and node_type == 'CLIPTextEncode':
+                        title = node.get('title', '').lower()
+                        if 'positive' in title or 'prompt' in title:
+                            key_name_base = 'positive_prompt'
+                        elif 'negative' in title:
+                            key_name_base = 'negative_prompt'
+                    elif key_name_base.lower() == 'seed':
+                        key_name_base = 'seed'
+                    
+                    final_key_name = key_name_base
+                    counter = 1
+                    while final_key_name in inputs:
+                        final_key_name = f"{key_name_base}_{counter}"
+                        counter += 1
+
+                    input_definition = {'type': json_schema_type, 'description': f'{input_name} (node {node.get("id")})'}
+                    if isinstance(widget_values, list) and i < len(widget_values):
+                        input_definition['default'] = widget_values[i]
+                    
+                    inputs[final_key_name] = input_definition
+
     return {
         "models": list(models),
         "custom_nodes": list(custom_nodes),
@@ -222,6 +250,8 @@ def main():
     print("--- Enter Workflow Metadata ---")
     name = get_input("Workflow Name")
     description = get_input("Description")
+    category = get_input("Category (e.g., Text-to-Image, Image-to-Video)", default='General')
+    preview_image_url = get_input("Preview Image URL (optional)")
     workflow_type = get_input("Workflow Type (e.g., text_to_image, image_to_video)")
     target_entity = get_input("Target Entity (scene, audio_clip, character, project)", default='scene')
     is_public = get_input("Is Public? (true/false)", default='true').lower() == 'true'
@@ -289,6 +319,8 @@ def main():
     template = {
         "name": name,
         "description": description,
+        "category": category,
+        "preview_image_url": preview_image_url,
         "workflow_json": workflow_data,
         "input_schema": input_schema,
         "workflow_type": workflow_type,
