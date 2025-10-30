@@ -309,24 +309,14 @@ class WorkflowSynchronizer:
                 else:
                     logger.error(f"Failed to get public URL for {destination_name}")
                     return None
-            elif response.error and response.error.get('statusCode') == 409: # Resource already exists, try to update
-                logger.info(f"Preview asset {file_path.name} already exists. Attempting to update.")
-                response = self.supabase.storage.from_(self.workflow_previews_bucket).update(
-                    file=file_bytes,
-                    path=destination_name,
-                    file_options={"content-type": content_type}
-                )
-                if response.error is None:
-                    public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
-                    logger.debug(f"get_public_url returned after update: {public_url}")
-                    if public_url:
-                        logger.info(f"Updated {file_path.name} to {public_url}")
-                        return public_url
-                    else:
-                        logger.error(f"Failed to get public URL for {destination_name} after update.")
-                        return None
+            elif response.error and response.error.get('statusCode') == 409: # Resource already exists, get its public URL
+                logger.info(f"Preview asset {file_path.name} already exists. Retrieving public URL.")
+                public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
+                logger.debug(f"get_public_url returned for existing asset: {public_url}")
+                if public_url:
+                    return public_url
                 else:
-                    logger.error(f"Failed to update {file_path.name}: {response.error}")
+                    logger.error(f"Failed to get public URL for existing asset {destination_name}.")
                     return None
             else:
                 logger.error(f"Failed to upload {file_path.name}: {response.error}")
