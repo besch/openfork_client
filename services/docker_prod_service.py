@@ -1,12 +1,20 @@
 import logging
 import subprocess
 import os
+import tempfile
+import sys
+
 from config import Config
 
 class DockerProdManager:
     def __init__(self):
         self.config = Config
-        self.compose_file_path = os.path.join(Config.ROOT_DIR, 'docker', 'docker-compose.unified.yaml')
+        if getattr(sys, 'frozen', False):
+            # When frozen, the docker-compose file is likely relative to the executable
+            self.compose_file_path = os.path.join(os.path.dirname(sys.executable), 'docker', 'docker-compose.unified.yaml')
+        else:
+            # When running as a script, it's relative to Config.ROOT_DIR
+            self.compose_file_path = os.path.join(Config.ROOT_DIR, 'docker', 'docker-compose.unified.yaml')
         self.service_name = 'comfyui'
 
     def _run_command(self, command):
@@ -36,25 +44,30 @@ class DockerProdManager:
     def run_container(self, dependencies: dict = None):
         logging.info("Starting unified ComfyUI container...")
         
-        env_file_path = os.path.join(os.path.dirname(self.compose_file_path), 'dgn_job.env')
-        with open(env_file_path, 'w') as f:
+        # Create a temporary env file
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.env') as temp_env_file:
+            env_file_path = temp_env_file.name
             if dependencies and dependencies.get('custom_node_urls'):
                 urls = ' '.join(dependencies['custom_node_urls'])
-                f.write(f'CUSTOM_NODES_GIT_URLS="{urls}"\n')
+                temp_env_file.write(f'CUSTOM_NODES_GIT_URLS="{urls}"\n')
             if dependencies and dependencies.get('model_urls'):
                 urls = ' '.join(dependencies['model_urls'])
-                f.write(f'MODEL_URLS="{urls}"\n')
-
-        command = [
-            'docker-compose',
-            '-f', self.compose_file_path,
-            'up',
-            '--build',
-            '-d',
-            '--env-file', env_file_path
-        ]
-        self._run_command(command)
-        logging.info(f"Container for service '{self.service_name}' started successfully.")
+                temp_env_file.write(f'MODEL_URLS="{urls}"\n')
+        
+        try:
+            command = [
+                'docker-compose',
+                '-f', self.compose_file_path,
+                'up',
+                '--build',
+                '-d',
+                '--env-file', env_file_path
+            ]
+            self._run_command(command)
+            logging.info(f"Container for service '{self.service_name}' started successfully.")
+        finally:
+            # Clean up the temporary env file
+            os.unlink(env_file_path)
 
     def stop_container(self, service_type: str = None):
         logging.info(f"Stopping unified ComfyUI container...")
