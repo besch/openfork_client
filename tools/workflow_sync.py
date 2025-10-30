@@ -25,8 +25,12 @@ SCRIPTS_DIR = LOCAL_REPO_PATH / "scripts"
 CUSTOM_NODE_LIST_URL = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json"
 
 # --- Logging Setup ---
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Suppress verbose logging from httpx and h2
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("h2").setLevel(logging.WARNING)
 
 # --- Helper Functions (adapted from ingest_workflow.py) ---
 STANDARD_NODES_FILE = Path(__file__).parent / 'standard_nodes.json'
@@ -257,10 +261,9 @@ class WorkflowSynchronizer:
             custom_node_list = response.json()
             
             registry = {}
-            for node_entry in custom_node_list:
-                if "id" in node_entry and "install" in node_entry and isinstance(node_entry["install"], list) and node_entry["install"]:
-                    # Assuming the first item in 'install' list is the Git URL
-                    registry[node_entry["id"]] = node_entry["install"][0]
+            for node_entry in custom_node_list.get("custom_nodes", []):
+                if "id" in node_entry and "reference" in node_entry:
+                    registry[node_entry["id"]] = node_entry["reference"]
             self.custom_node_registry = registry
             logger.info(f"Loaded {len(self.custom_node_registry)} custom node entries from registry.")
         except requests.exceptions.RequestException as e:
@@ -297,13 +300,33 @@ class WorkflowSynchronizer:
                 file_options={"content-type": content_type}
             )
             
-            if response.data is not None:
-                public_url_response = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
-                if public_url_response:
-                    logger.info(f"Uploaded {file_path.name} to {public_url_response}")
-                    return public_url_response
+            if response.error is None:
+                public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
+                logger.debug(f"get_public_url returned: {public_url}")
+                if public_url:
+                    logger.info(f"Uploaded {file_path.name} to {public_url}")
+                    return public_url
                 else:
                     logger.error(f"Failed to get public URL for {destination_name}")
+                    return None
+            elif response.error and response.error.get('statusCode') == 409: # Resource already exists, try to update
+                logger.info(f"Preview asset {file_path.name} already exists. Attempting to update.")
+                response = self.supabase.storage.from_(self.workflow_previews_bucket).update(
+                    file=file_bytes,
+                    path=destination_name,
+                    file_options={"content-type": content_type}
+                )
+                if response.error is None:
+                    public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
+                    logger.debug(f"get_public_url returned after update: {public_url}")
+                    if public_url:
+                        logger.info(f"Updated {file_path.name} to {public_url}")
+                        return public_url
+                    else:
+                        logger.error(f"Failed to get public URL for {destination_name} after update.")
+                        return None
+                else:
+                    logger.error(f"Failed to update {file_path.name}: {response.error}")
                     return None
             else:
                 logger.error(f"Failed to upload {file_path.name}: {response.error}")
