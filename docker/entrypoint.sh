@@ -36,10 +36,9 @@ if [ -n "$MODEL_URLS" ]; then
     for url in "${urls[@]}"; do
         # Trim leading/trailing whitespace
         trimmed_url=$(echo "$url" | xargs)
-        if [ -n "$trimmed_url" ]; {
+        if [ -n "$trimmed_url" ]; then
             log "Installing model from: $trimmed_url"
             python /app/ComfyUI/custom_nodes/ComfyUI-Manager/cli/main.py --install-model "$trimmed_url"
-        }
         fi
     done
     log "Model installation finished."
