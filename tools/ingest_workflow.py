@@ -204,7 +204,7 @@ def analyze_workflow(workflow: Dict) -> Dict:
 # --- Main Ingestion Logic ---
 
 def main():
-    parser = argparse.ArgumentParser(description="Ingest a ComfyUI workflow into the database.")
+    parser = argparse.ArgumentParser(description="Ingest a ComfyUI workflow into the database. This tool is for custom, one-off workflows not managed by the automated repository synchronization.")
     parser.add_argument("file_path", help="Path to the ComfyUI API format JSON file.")
     parser.add_argument("--orchestrator-url", type=str, help="URL of the orchestrator (overrides .env)")
     parser.add_argument("--service-role-key", type=str, help="Supabase Service Role Key (overrides .env)")
@@ -329,6 +329,8 @@ def main():
         "custom_node_urls": custom_node_urls,
         "model_urls": model_urls,
         "is_public": is_public,
+        "source_repo_identifier": "manual", # Mark as manually ingested
+        "source_repo_commit_hash": None # No commit hash for manual workflows
     }
 
     print("\n--- Review Workflow Template ---")
@@ -339,11 +341,11 @@ def main():
 
     confirm = get_input("\nInsert this template into the database? (y/n)", default='y').lower()
     if confirm == 'y':
-        ingest_url = f"https://www.openfork.video/api/workflows/ingest"
+        ingest_url = f"{orchestrator_url}/api/workflows/ingest"
         headers = {
             "Content-Type": "application/json",
-            "apikey": args.service_role_key,
-            "Authorization": f"Bearer {args.service_role_key}"
+            "apikey": service_role_key,
+            "Authorization": f"Bearer {service_role_key}"
         }
         try:
             response = requests.post(ingest_url, headers=headers, json=template)
