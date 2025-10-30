@@ -136,14 +136,15 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict) -> Di
                             'description': f'{input_name} (node {node_id})'
                         }
     else:
-        # --- LITEGRAPH FORMAT PARSING (Not expected for Comfy-Org templates, but kept for robustness) ---
+        # --- LITEGRAPH FORMAT PARSING ---
         nodes = workflow_json.get('nodes', [])
         for node in nodes:
             node_type = node.get('type')
+            node_id = node.get('id')
             if not node_type:
                 continue
 
-            # Custom Node Detection (by cnr_id in properties)
+            # Custom Node Detection
             properties = node.get('properties', {})
             cnr_id = properties.get('cnr_id')
             if cnr_id and cnr_id != 'comfy-core':
@@ -155,57 +156,84 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict) -> Di
             elif node_type not in standard_nodes:
                 pass
 
+            # Model URL Detection from widgets_values
             widgets = node.get('widgets_values', [])
             if widgets:
                 for widget_val in widgets:
                     if isinstance(widget_val, str):
-                        # Markdown link: [filename.safetensors](url)
-                        for match in re.finditer(r'\\\[([^\\]+?\\.safetensors)]\(([^)]+)\)', widget_val):
+                        for match in re.finditer(r'\\\[([^\\]+?\\.safetensors)]\\(([^)]+)\\)', widget_val):
                             model_urls.add(match.group(2))
 
-                        # Model Detection (from widget_val heuristics, if not already found by markdown link)
-                        if any(widget_val.endswith(ext) for ext in ['.safetensors', '.pth', '.ckpt', '.bin']):
-                            pass # We already handle model_urls via markdown links
-
-            input_widgets = []
-            if 'inputs' in node:
-                for input_def in node.get('inputs', []):
-                    if isinstance(input_def, dict) and input_def.get('link') is None and 'name' in input_def:
-                        input_widgets.append(input_def)
+            # --- REVISED INPUT SCHEMA DETECTION ---
             
-            if input_widgets:
-                widget_values = node.get('widgets_values', [])
-                for i, input_def in enumerate(input_widgets):
-                    input_name = input_def['name']
-                    comfyui_type = input_def['type']
+            # Special case for LoadImage nodes
+            if node_type == 'LoadImage':
+                node_title = node.get('title', f'Input Image {node_id}')
+                key_name_base = f'input_image_{node_id}' # Ensure unique key
+                
+                if key_name_base not in inputs:
+                    inputs[key_name_base] = {
+                        'type': 'string',
+                        'format': 'uri',
+                        'description': node_title,
+                        'x-comfy-node-id': node_id
+                    }
+                continue # Move to next node
 
-                    json_schema_type = 'string'
-                    if comfyui_type in ['INT', 'FLOAT']:
-                        json_schema_type = 'number'
-                    elif comfyui_type == 'BOOLEAN':
-                        json_schema_type = 'boolean'
+            # General input detection for other nodes
+            widget_values = node.get('widgets_values', [])
+            widget_names = []
 
-                    key_name_base = input_name
-                    if key_name_base.lower() == 'text' and node_type == 'CLIPTextEncode':
-                        title = node.get('title', '').lower()
-                        if 'positive' in title or 'prompt' in title:
-                            key_name_base = 'positive_prompt'
-                        elif 'negative' in title:
-                            key_name_base = 'negative_prompt'
-                    elif key_name_base.lower() == 'seed':
-                        key_name_base = 'seed'
-                    
-                    final_key_name = key_name_base
-                    counter = 1
-                    while final_key_name in inputs:
-                        final_key_name = f"{key_name_base}_{counter}"
-                        counter += 1
+            # Method 1: Subgraph proxy widgets
+            if 'properties' in node and 'proxyWidgets' in node.get('properties', {}):
+                proxy_widgets = node['properties']['proxyWidgets']
+                widget_names = [p[1] for p in proxy_widgets if isinstance(p, list) and len(p) > 1]
+            # Method 2: Standard node widgets defined in 'inputs' (unlinked)
+            elif 'inputs' in node:
+                widget_names = [i['name'] for i in node['inputs'] if isinstance(i, dict) and i.get('link') is None and 'name' in i]
 
-                    input_definition = {'type': json_schema_type, 'description': f'{input_name} (node {node.get("id")})'}
-                    if isinstance(widget_values, list) and i < len(widget_values):
-                        input_definition['default'] = widget_values[i]
-                    
-                    inputs[final_key_name] = input_definition
+            if not widget_names or not widget_values:
+                continue
+
+            for i, input_name in enumerate(widget_names):
+                if i >= len(widget_values):
+                    break
+                
+                input_value = widget_values[i]
+
+                # Filter out names that are clearly not user-configurable settings
+                if input_name.lower().endswith(('_name', '.name')) or input_name.lower() in ['model', 'clip', 'vae', 'latent', 'image', 'pixels', 'control_after_generate', 'sampler_name', 'scheduler']:
+                    continue
+
+                json_schema_type = 'string'
+                if isinstance(input_value, int):
+                    json_schema_type = 'integer'
+                elif isinstance(input_value, float):
+                    json_schema_type = 'number'
+                elif isinstance(input_value, bool):
+                    json_schema_type = 'boolean'
+
+                key_name_base = input_name
+                if 'prompt' in key_name_base.lower() or 'text' in key_name_base.lower():
+                    title = node.get('title', '').lower()
+                    if 'negative' in title:
+                        key_name_base = 'negative_prompt'
+                    else:
+                        key_name_base = 'prompt'
+                elif key_name_base.lower() == 'seed':
+                    key_name_base = 'seed'
+                
+                final_key_name = key_name_base
+                counter = 1
+                while final_key_name in inputs:
+                    final_key_name = f"{key_name_base}_{counter}"
+                    counter += 1
+                
+                inputs[final_key_name] = {
+                    'type': json_schema_type,
+                    'default': input_value,
+                    'description': f'{input_name}'
+                }
 
     return {
         "model_urls": list(model_urls),
