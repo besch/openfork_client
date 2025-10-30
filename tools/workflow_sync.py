@@ -13,7 +13,8 @@ from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from config import Config
-from supabase import create_client, Client
+import asyncio
+from supabase.client import create_client, AsyncClient
 
 
 # --- Configuration ---
@@ -215,7 +216,7 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict) -> Di
 
 class WorkflowSynchronizer:
     def __init__(self, supabase_url: str, supabase_key: str):
-        self.supabase: Client = create_client(supabase_url, supabase_key)
+        self.supabase: AsyncClient = create_client(supabase_url, supabase_key)
         self.repo_path = LOCAL_REPO_PATH
         self.current_commit_hash: Optional[str] = None
         self.workflow_previews_bucket = "workflow-previews"
@@ -251,7 +252,7 @@ class WorkflowSynchronizer:
         self.current_commit_hash = self._run_git_command(["rev-parse", "HEAD"])
         logger.info(f"Current repository commit hash: {self.current_commit_hash}")
 
-    def _get_custom_node_registry(self):
+    async def _get_custom_node_registry(self):
         """Fetches and parses the custom-node-list.json from ComfyUI-Manager's GitHub repo."""
         logger.info(f"Fetching custom node registry from {CUSTOM_NODE_LIST_URL}...")
         try:
@@ -271,7 +272,7 @@ class WorkflowSynchronizer:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse custom node list JSON: {e}")
 
-    def _upload_preview_asset(self, file_path: Path, destination_name: str) -> Optional[str]:
+    async def _upload_preview_asset(self, file_path: Path, destination_name: str) -> Optional[str]:
         """Uploads a preview asset to Supabase Storage and returns its public URL."""
         if not file_path or not file_path.exists():
             logger.warning(f"Preview asset file not found: {file_path}")
@@ -294,38 +295,28 @@ class WorkflowSynchronizer:
             elif file_path.suffix.lower() == ".jpg" or file_path.suffix.lower() == ".jpeg":
                 content_type = "image/jpeg"
 
-            response = self.supabase.storage.from_(self.workflow_previews_bucket).upload(
-                file=file_bytes,
-                path=destination_name,
-                file_options={"content-type": content_type}
+            response = await self.supabase.storage.from_(self.workflow_previews_bucket).upload(
+                destination_name,  # path argument first
+                file_bytes,
+                {"content-type": content_type}
             )
-            
+
             if response.error is None:
                 public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
-                logger.debug(f"get_public_url returned: {public_url}")
-                if public_url:
-                    logger.info(f"Uploaded {file_path.name} to {public_url}")
-                    return public_url
-                else:
-                    logger.error(f"Failed to get public URL for {destination_name}")
-                    return None
-            elif response.error and response.error.get('statusCode') == 409: # Resource already exists, get its public URL
-                logger.info(f"Preview asset {file_path.name} already exists. Retrieving public URL.")
+                logger.info(f"Uploaded {file_path.name} to {public_url}")
+                return public_url
+            elif "The resource already exists" in str(response.error):
                 public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
-                logger.debug(f"get_public_url returned for existing asset: {public_url}")
-                if public_url:
-                    return public_url
-                else:
-                    logger.error(f"Failed to get public URL for existing asset {destination_name}.")
-                    return None
+                logger.info(f"Asset already exists, returning existing URL {public_url}")
+                return public_url
             else:
-                logger.error(f"Failed to upload {file_path.name}: {response.error}")
+                logger.error(f"Upload failed for {file_path.name}: {response.error}")
                 return None
         except Exception as e:
             logger.error(f"Error uploading preview asset {file_path.name}: {e}")
             return None
 
-    def parse_repository(self) -> List[Dict[str, Any]]:
+    async def parse_repository(self) -> List[Dict[str, Any]]:
         """Parses the cloned repository to extract workflow metadata and details."""
         workflows_data = []
         index_file = TEMPLATES_DIR / "index.json"
@@ -339,12 +330,17 @@ class WorkflowSynchronizer:
             return []
 
         # Fetch custom node registry once
-        self._get_custom_node_registry()
+        await self._get_custom_node_registry()
 
         for category_entry in index_data:
             category_name = category_entry.get("category", "General")
             workflow_type_from_category = category_entry.get("type", "unknown")
             
+            # Filter out workflows from 'CLOSED SOURCE MODELS' category
+            if category_name == "CLOSED SOURCE MODELS":
+                logger.info(f"Skipping category '{category_name}' as it contains closed-source models.")
+                continue
+
             for template_entry in category_entry.get("templates", []):
                 workflow_name = template_entry.get("name")
                 if not workflow_name:
@@ -386,13 +382,13 @@ class WorkflowSynchronizer:
                 # Check for workflow_name-1.suffix
                 preview_asset_path_1 = TEMPLATES_DIR / f"{workflow_name}-1.{preview_asset_suffix}"
                 if preview_asset_path_1.exists():
-                    uploaded_preview_url = self._upload_preview_asset(preview_asset_path_1, f"{workflow_name}-1.{preview_asset_suffix}")
+                    uploaded_preview_url = await self._upload_preview_asset(preview_asset_path_1, f"{workflow_name}-1.{preview_asset_suffix}")
                 
                 # If -1 doesn't exist or failed, check for workflow_name.suffix
                 if not uploaded_preview_url:
                     preview_asset_path_no_num = TEMPLATES_DIR / f"{workflow_name}.{preview_asset_suffix}"
                     if preview_asset_path_no_num.exists():
-                        uploaded_preview_url = self._upload_preview_asset(preview_asset_path_no_num, f"{workflow_name}.{preview_asset_suffix}")
+                        uploaded_preview_url = await self._upload_preview_asset(preview_asset_path_no_num, f"{workflow_name}.{preview_asset_suffix}")
 
                 workflows_data.append({
                     "source_repo_identifier": workflow_name,
@@ -412,12 +408,12 @@ class WorkflowSynchronizer:
                 })
         return workflows_data
 
-    def _sync_to_database(self, parsed_workflows: List[Dict[str, Any]]):
+    async def _sync_to_database(self, parsed_workflows: List[Dict[str, Any]]):
         """Synchronizes the parsed workflows to the Supabase database."""
         logger.info("Starting database synchronization...")
         
         # Fetch existing workflows from the database
-        response = self.supabase.from_("workflow_templates").select("id, source_repo_identifier, source_repo_commit_hash").execute()
+        response = await self.supabase.from_("workflow_templates").select("id, source_repo_identifier, source_repo_commit_hash").execute()
         if response.data is None:
             logger.error(f"Failed to fetch existing workflows: {response.error}")
             return
@@ -432,7 +428,7 @@ class WorkflowSynchronizer:
                 # Check if update is needed
                 if existing_workflows[identifier]["source_repo_commit_hash"] != commit_hash:
                     logger.info(f"Updating workflow: {identifier}")
-                    response = self.supabase.from_("workflow_templates").update(workflow_data).eq("source_repo_identifier", identifier).execute()
+                    response = await self.supabase.from_("workflow_templates").update(workflow_data).eq("source_repo_identifier", identifier).execute()
                     if response.data is None:
                         logger.error(f"Failed to update workflow {identifier}: {response.error}")
                 else:
@@ -440,7 +436,7 @@ class WorkflowSynchronizer:
             else:
                 # Insert new workflow
                 logger.info(f"Inserting new workflow: {identifier}")
-                response = self.supabase.from_("workflow_templates").insert(workflow_data).execute()
+                response = await self.supabase.from_("workflow_templates").insert(workflow_data).execute()
                 if response.data is None:
                     logger.error(f"Failed to insert workflow {identifier}: {response.error}")
         
@@ -451,15 +447,15 @@ class WorkflowSynchronizer:
         
         logger.info("Database synchronization completed.")
 
-    def sync_workflows(self):
+    async def sync_workflows(self):
         """Main synchronization logic will go here."""
         logger.info("Starting workflow synchronization...")
         self.clone_or_pull_repository()
         
-        parsed_workflows = self.parse_repository()
+        parsed_workflows = await self.parse_repository()
         logger.info(f"Parsed and processed {len(parsed_workflows)} workflows from the repository.")
 
-        self._sync_to_database(parsed_workflows)
+        await self._sync_to_database(parsed_workflows)
         
         logger.info("Workflow synchronization completed.")
 
@@ -488,4 +484,4 @@ if __name__ == "__main__":
         sys.exit(1)
 
     synchronizer = WorkflowSynchronizer(supabase_url, supabase_key)
-    synchronizer.sync_workflows()
+    asyncio.run(synchronizer.sync_workflows())
