@@ -20,7 +20,7 @@ if [ -n "$CUSTOM_NODES_GIT_URLS" ]; then
         trimmed_url=$(echo "$url" | xargs)
         if [ -n "$trimmed_url" ]; then
             log "Installing custom node from: $trimmed_url"
-            python /app/ComfyUI/custom_nodes/ComfyUI-Manager/cli/main.py --install-custom-node "$trimmed_url"
+            python3 /app/ComfyUI/custom_nodes/ComfyUI-Manager/cli/main.py --install-custom-node "$trimmed_url"
         fi
     done
     log "Custom node installation finished."
@@ -38,7 +38,7 @@ if [ -n "$MODEL_URLS" ]; then
         trimmed_url=$(echo "$url" | xargs)
         if [ -n "$trimmed_url" ]; then
             log "Installing model from: $trimmed_url"
-            python /app/ComfyUI/custom_nodes/ComfyUI-Manager/cli/main.py --install-model "$trimmed_url"
+            python3 /app/ComfyUI/custom_nodes/ComfyUI-Manager/cli/main.py --install-model "$trimmed_url"
         fi
     done
     log "Model installation finished."
@@ -50,4 +50,4 @@ log "All dependencies installed."
 log "Starting ComfyUI..."
 
 # Execute the main ComfyUI process
-exec python main.py --listen --port 8188
+exec python3 main.py --listen --port 8188
