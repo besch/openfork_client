@@ -42,7 +42,7 @@ def setup_client(args):
         allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None
     )
 
-    client.load_config() # Fetch config from orchestrator
+
 
     client.provider_id = client.orchestrator_service.register_with_orchestrator()
     if not client.provider_id:

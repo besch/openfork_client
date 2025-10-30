@@ -10,7 +10,7 @@ from config import Config
 class DockerDevManager:
     def __init__(self):
         self.config = Config
-        self.compose_file_path = os.path.join(Config.ROOT_DIR, 'comfyui-storage', 'docker-compose.unified.yaml')
+        self.compose_file_path = os.path.join(Config.ROOT_DIR, 'docker', 'docker-compose.unified.yaml')
         self.service_name = 'comfyui' # As defined in the unified compose file
 
     def _run_command(self, command):
@@ -76,14 +76,14 @@ class DockerDevManager:
     def copy_file_from_container(self, source_in_container: str, dest_on_host: str):
         """Copies a file from the unified container to the host."""
         # The container name is typically <project>_<service>_1
-        container_name = f"comfyui-storage_{self.service_name}_1"
+        container_name = f"openfork_{self.service_name}_1"
         source_path = f"{container_name}:{source_in_container}"
         command = ['docker', 'cp', source_path, dest_on_host]
         self._run_command(command)
 
     def copy_file_to_container(self, source_on_host: str, dest_in_container: str):
         """Copies a file from the host to the unified container."""
-        container_name = f"comfyui-storage_{self.service_name}_1"
+        container_name = f"openfork_{self.service_name}_1"
         dest_path = f"{container_name}:{dest_in_container}"
         command = ['docker', 'cp', source_on_host, dest_path]
         self._run_command(command)

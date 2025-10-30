@@ -6,7 +6,7 @@ from config import Config
 class DockerProdManager:
     def __init__(self):
         self.config = Config
-        self.compose_file_path = os.path.join(Config.ROOT_DIR, 'comfyui-storage', 'docker-compose.unified.yaml')
+        self.compose_file_path = os.path.join(Config.ROOT_DIR, 'docker', 'docker-compose.unified.yaml')
         self.service_name = 'comfyui'
 
     def _run_command(self, command):
@@ -62,13 +62,13 @@ class DockerProdManager:
         logging.info(f"Container for service '{self.service_name}' stopped successfully.")
 
     def copy_file_from_container(self, source_in_container: str, dest_on_host: str):
-        container_name = f"comfyui-storage_{self.service_name}_1" # Default name from docker-compose
+        container_name = f"openfork__{self.service_name}_1" # Default name from docker-compose
         source_path = f"{container_name}:{source_in_container}"
         command = ['docker', 'cp', source_path, dest_on_host]
         self._run_command(command)
 
     def copy_file_to_container(self, source_on_host: str, dest_in_container: str):
-        container_name = f"comfyui-storage_{self.service_name}_1" # Default name from docker-compose
+        container_name = f"openfork__{self.service_name}_1" # Default name from docker-compose
         dest_path = f"{container_name}:{dest_in_container}"
         command = ['docker', 'cp', source_on_host, dest_path]
         self._run_command(command)
