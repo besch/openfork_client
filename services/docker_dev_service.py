@@ -5,7 +5,6 @@ It now mirrors the production service by using a single, unified docker-compose 
 import logging
 import subprocess
 import os
-import tempfile
 import sys
 
 from config import Config
@@ -35,7 +34,7 @@ class DockerDevManager:
         self.compose_file_path = os.path.join(root_dir, 'docker', 'docker-compose.unified.yaml')
         self.service_name = 'comfyui' # As defined in the unified compose file
 
-    def _run_command(self, command):
+    def _run_command(self, command, env=None):
         compose_dir = os.path.dirname(self.compose_file_path)
         if not os.path.isdir(compose_dir):
             logging.error(f"Docker compose directory not found: {compose_dir}")
@@ -48,7 +47,8 @@ class DockerDevManager:
                 check=True,
                 capture_output=True,
                 text=True,
-                cwd=compose_dir # Run from the compose file's directory
+                cwd=compose_dir, # Run from the compose file's directory
+                env=env
             )
             logging.info(process.stdout)
             if process.stderr:
@@ -66,29 +66,27 @@ class DockerDevManager:
         """
         logging.info("Starting unified ComfyUI container for development...")
         
-        # Create a temporary .env file for the compose command to use
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.env') as temp_env_file:
-            env_file_path = temp_env_file.name
-            if dependencies and dependencies.get('custom_node_urls'):
+        env_updates = {}
+        if dependencies:
+            if dependencies.get('custom_node_urls'):
                 urls = ' '.join(dependencies['custom_node_urls'])
-                temp_env_file.write(f'CUSTOM_NODES_GIT_URLS="{urls}"\n')
-            if dependencies and dependencies.get('model_urls'):
+                env_updates['CUSTOM_NODES_GIT_URLS'] = urls
+            if dependencies.get('model_urls'):
                 urls = ' '.join(dependencies['model_urls'])
-                temp_env_file.write(f'MODEL_URLS="{urls}"\n')
+                env_updates['MODEL_URLS'] = urls
 
-        try:
-            command = [
-                'docker-compose',
-                '-f', self.compose_file_path,
-                'up',
-                '--build', # Rebuild if Dockerfile has changed
-                '-d' # Detached mode
-            ]
-            self._run_command(command)
-            logging.info(f"Dev container for service '{self.service_name}' started successfully.")
-        finally:
-            # Clean up the temporary env file
-            os.unlink(env_file_path)
+        process_env = os.environ.copy()
+        process_env.update(env_updates)
+
+        command = [
+            'docker-compose',
+            '-f', self.compose_file_path,
+            'up',
+            '--build', # Rebuild if Dockerfile has changed
+            '-d' # Detached mode
+        ]
+        self._run_command(command, env=process_env)
+        logging.info(f"Dev container for service '{self.service_name}' started successfully.")
 
     def stop_container(self, service_type: str = None):
         """
