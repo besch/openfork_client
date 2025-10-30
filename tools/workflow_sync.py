@@ -277,6 +277,8 @@ class WorkflowSynchronizer:
         if not file_path or not file_path.exists():
             logger.warning(f"Preview asset file not found: {file_path}")
             return None
+            
+        logger.info(f"Uploading preview asset: {file_path} -> {destination_name}")
 
         try:
             with open(file_path, 'rb') as f:
@@ -295,22 +297,27 @@ class WorkflowSynchronizer:
             elif file_path.suffix.lower() == ".jpg" or file_path.suffix.lower() == ".jpeg":
                 content_type = "image/jpeg"
 
-            response = await self.supabase.storage.from_(self.workflow_previews_bucket).upload(
-                destination_name,  # path argument first
-                file_bytes,
-                {"content-type": content_type}
-            )
+            try:
+                await self.supabase.storage.from_(self.workflow_previews_bucket).upload(
+                    path=destination_name,
+                    file=file_bytes,
+                    file_options={"contentType": content_type}
+                )
+            except Exception as e:
+                if "The resource already exists" in str(e):
+                    logger.info(f"Asset {destination_name} already exists")
+                else:
+                    logger.error(f"Upload failed for {file_path.name}: {str(e)}")
+                    return None
 
-            if response.error is None:
+            # Get public URL after successful upload or if file already exists
+            try:
                 public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
-                logger.info(f"Uploaded {file_path.name} to {public_url}")
+                logger.info(f"Public URL for {file_path.name}: {public_url}")
                 return public_url
-            elif "The resource already exists" in str(response.error):
-                public_url = self.supabase.storage.from_(self.workflow_previews_bucket).get_public_url(destination_name)
-                logger.info(f"Asset already exists, returning existing URL {public_url}")
-                return public_url
-            else:
-                logger.error(f"Upload failed for {file_path.name}: {response.error}")
+            except Exception as e:
+                logger.error(f"Failed to get public URL for {destination_name}: {str(e)}")
+                return None
                 return None
         except Exception as e:
             logger.error(f"Error uploading preview asset {file_path.name}: {e}")
@@ -413,12 +420,12 @@ class WorkflowSynchronizer:
         logger.info("Starting database synchronization...")
         
         # Fetch existing workflows from the database
-        response = await self.supabase.from_("workflow_templates").select("id, source_repo_identifier, source_repo_commit_hash").execute()
-        if response.data is None:
-            logger.error(f"Failed to fetch existing workflows: {response.error}")
+        try:
+            response = await self.supabase.table("workflow_templates").select("id, source_repo_identifier, source_repo_commit_hash").execute()
+            existing_workflows = {wf["source_repo_identifier"]: wf for wf in response.data if wf["source_repo_identifier"]}
+        except Exception as e:
+            logger.error(f"Failed to fetch existing workflows from database: {str(e)}")
             return
-        
-        existing_workflows = {wf["source_repo_identifier"]: wf for wf in response.data if wf["source_repo_identifier"]}
         
         for workflow_data in parsed_workflows:
             identifier = workflow_data["source_repo_identifier"]
@@ -427,18 +434,20 @@ class WorkflowSynchronizer:
             if identifier in existing_workflows:
                 # Check if update is needed
                 if existing_workflows[identifier]["source_repo_commit_hash"] != commit_hash:
-                    logger.info(f"Updating workflow: {identifier}")
-                    response = await self.supabase.from_("workflow_templates").update(workflow_data).eq("source_repo_identifier", identifier).execute()
-                    if response.data is None:
-                        logger.error(f"Failed to update workflow {identifier}: {response.error}")
+                    try:
+                        logger.info(f"Updating workflow: {identifier}")
+                        await self.supabase.table("workflow_templates").update(workflow_data).eq("source_repo_identifier", identifier).execute()
+                    except Exception as e:
+                        logger.error(f"Failed to update workflow {identifier}: {str(e)}")
                 else:
                     logger.info(f"Workflow {identifier} is up-to-date. Skipping.")
             else:
                 # Insert new workflow
-                logger.info(f"Inserting new workflow: {identifier}")
-                response = await self.supabase.from_("workflow_templates").insert(workflow_data).execute()
-                if response.data is None:
-                    logger.error(f"Failed to insert workflow {identifier}: {response.error}")
+                try:
+                    logger.info(f"Inserting new workflow: {identifier}")
+                    await self.supabase.table("workflow_templates").insert(workflow_data).execute()
+                except Exception as e:
+                    logger.error(f"Failed to insert workflow {identifier}: {str(e)}")
         
         # Optional: Deactivate workflows no longer in the repository
         # For now, we won't delete, but could set is_public = False or add a 'deleted_in_repo' flag
