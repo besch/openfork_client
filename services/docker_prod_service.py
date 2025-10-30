@@ -6,15 +6,29 @@ import sys
 
 from config import Config
 
+def get_root_dir_from_args():
+    if '--root-dir' in sys.argv:
+        try:
+            index = sys.argv.index('--root-dir')
+            return sys.argv[index + 1]
+        except (ValueError, IndexError):
+            return None
+    return None
+
 class DockerProdManager:
     def __init__(self):
         self.config = Config
-        if getattr(sys, 'frozen', False):
-            # When frozen, the docker-compose file is likely relative to the executable
-            self.compose_file_path = os.path.join(os.path.dirname(sys.executable), 'docker', 'docker-compose.unified.yaml')
-        else:
-            # When running as a script, it's relative to Config.ROOT_DIR
-            self.compose_file_path = os.path.join(Config.ROOT_DIR, 'docker', 'docker-compose.unified.yaml')
+        
+        root_dir = get_root_dir_from_args()
+        if not root_dir:
+            if getattr(sys, 'frozen', False):
+                # Fallback for frozen apps if --root-dir is not provided
+                root_dir = os.path.dirname(sys.executable)
+            else:
+                # Fallback for script-based execution
+                root_dir = self.config.ROOT_DIR
+
+        self.compose_file_path = os.path.join(root_dir, 'docker', 'docker-compose.unified.yaml')
         self.service_name = 'comfyui'
 
     def _run_command(self, command):
