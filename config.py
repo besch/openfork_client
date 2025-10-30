@@ -10,12 +10,7 @@ load_dotenv()
 
 class Config:
     # --- General Configuration ---
-    if getattr(sys, 'frozen', False):
-        # If the application is run as a bundle (e.g., by PyInstaller)
-        ROOT_DIR = os.path.dirname(sys.executable)
-    else:
-        # If running as a script in a normal Python environment
-        ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 
     # os.chdir(ROOT_DIR) # This should not be here, it changes the working directory for the entire process
 

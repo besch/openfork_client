@@ -101,7 +101,8 @@ class OrchestratorService:
                     kwargs['data'].seek(original_data_pos)
 
                 response = requests.request(method, url, headers=retry_headers, **kwargs)
-        
+        if not response.ok:
+            logging.error(f"Request to {url} failed with status {response.status_code}: {response.text}")
         return response
 
     def resolve_targets(self, targets: list[str]) -> list[str]:

@@ -14,6 +14,11 @@ class DockerDevManager:
         self.service_name = 'comfyui' # As defined in the unified compose file
 
     def _run_command(self, command):
+        compose_dir = os.path.dirname(self.compose_file_path)
+        if not os.path.isdir(compose_dir):
+            logging.error(f"Docker compose directory not found: {compose_dir}")
+            raise NotADirectoryError(f"Docker compose directory not found: {compose_dir}")
+
         logging.info(f"Running dev command: {' '.join(command)}")
         try:
             process = subprocess.run(
@@ -21,7 +26,7 @@ class DockerDevManager:
                 check=True,
                 capture_output=True,
                 text=True,
-                cwd=os.path.dirname(self.compose_file_path) # Run from the compose file's directory
+                cwd=compose_dir # Run from the compose file's directory
             )
             logging.info(process.stdout)
             if process.stderr:

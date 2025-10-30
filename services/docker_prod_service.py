@@ -10,6 +10,11 @@ class DockerProdManager:
         self.service_name = 'comfyui'
 
     def _run_command(self, command):
+        compose_dir = os.path.dirname(self.compose_file_path)
+        if not os.path.isdir(compose_dir):
+            logging.error(f"Docker compose directory not found: {compose_dir}")
+            raise NotADirectoryError(f"Docker compose directory not found: {compose_dir}")
+
         logging.info(f"Running command: {' '.join(command)}")
         try:
             process = subprocess.run(
@@ -17,7 +22,7 @@ class DockerProdManager:
                 check=True,
                 capture_output=True,
                 text=True,
-                cwd=os.path.dirname(self.compose_file_path)
+                cwd=compose_dir
             )
             logging.info(process.stdout)
             if process.stderr:
