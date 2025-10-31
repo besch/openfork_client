@@ -392,14 +392,49 @@ class WorkflowSynchronizer:
                     logger.warning(f"Could not load workflow JSON for {workflow_name}. Skipping.")
                     continue
 
-                # Analyze workflow JSON for inputs and dependencies
-                analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
-
-                # Convert LiteGraph to a basic node dictionary if necessary
+                # Convert LiteGraph to a proper API format if necessary
                 api_formatted_workflow = workflow_json
                 if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
-                    logger.info(f"Converting LiteGraph format to node dictionary for {workflow_name}")
-                    api_formatted_workflow = {str(node['id']): node for node in workflow_json['nodes']}
+                    logger.info(f"Converting LiteGraph format to API format for {workflow_name}")
+                    
+                    # Create a map for link source info
+                    link_map = {}
+                    for link_info in workflow_json.get("links", []):
+                        link_id, from_node_id, from_slot, to_node_id, to_slot, link_type = link_info
+                        if to_node_id not in link_map:
+                            link_map[to_node_id] = {}
+                        # Find the input name for the target slot
+                        for node in workflow_json['nodes']:
+                            if node['id'] == to_node_id:
+                                if 'inputs' in node and len(node['inputs']) > to_slot:
+                                    input_name = node['inputs'][to_slot]['name']
+                                    link_map[to_node_id][input_name] = [str(from_node_id), from_slot]
+                                break
+
+                    converted_workflow = {}
+                    for node in workflow_json['nodes']:
+                        node_id = node['id']
+                        api_node = {
+                            "class_type": node["type"],
+                            "inputs": {}
+                        }
+
+                        # Get widget values
+                        if 'widgets_values' in node:
+                            # This heuristic for widget names is fragile but necessary
+                            widget_names = [inp['name'] for inp in node.get('inputs', []) if inp.get('link') is None and 'name' in inp]
+                            for i, value in enumerate(node['widgets_values']):
+                                if i < len(widget_names):
+                                    api_node["inputs"][widget_names[i]] = value
+
+                        # Get linked inputs from our map
+                        if node_id in link_map:
+                            for input_name, source in link_map[node_id].items():
+                                api_node["inputs"][input_name] = source
+
+                        converted_workflow[str(node_id)] = api_node
+                    
+                    api_formatted_workflow = converted_workflow
 
                 # Determine target_entity based on workflow_type_from_category or tags
                 target_entity = "scene" # Default
@@ -408,6 +443,9 @@ class WorkflowSynchronizer:
                 elif workflow_type_from_category == "3d":
                     target_entity = "character" # Assuming 3D models are for characters
                 # Further refinement could be done based on tags or specific workflow names
+
+                # Analyze workflow JSON for inputs and dependencies
+                analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
 
                 # Construct input_schema
                 input_schema = {
