@@ -9,7 +9,7 @@ import http.client
 import threading
 from queue import Queue, Empty
 import logging
-from typing import Union
+from typing import Union, Dict, List
 import requests
 from supabase import create_client, Client
 
@@ -38,6 +38,50 @@ class ComfyUIClient:
         if base.startswith("wss://"):
             return base.replace("wss://", "https://")
         return base.replace("ws://", "http://")
+
+    def get_object_info(self) -> Union[Dict, None]:
+        """Fetches the raw object_info from the ComfyUI server."""
+        url = f"{self.http_base}/object_info"
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to get object_info from ComfyUI: {e}")
+            return None
+
+    def get_installed_nodes(self) -> List[str]:
+        """Returns a list of all installed node class_types."""
+        object_info = self.get_object_info()
+        if not object_info:
+            return []
+        
+        # object_info is a dictionary where keys are node class_types
+        return list(object_info.keys())
+
+    def install_custom_nodes(self, node_urls: List[str]):
+        """
+        Placeholder for triggering custom node installation.
+        In a real implementation, this would likely call an endpoint on a manager
+        service running alongside ComfyUI, or trigger a script inside the container.
+        """
+        if not node_urls:
+            return
+
+        logging.info(f"[DEPENDENCY-MANAGER] Requesting installation for the following custom nodes:")
+        for url in node_urls:
+            logging.info(f"  - {url}")
+        # In a real scenario, you would now trigger the installation process.
+        # For this simulation, we assume it happens magically.
+        logging.info("[DEPENDENCY-MANAGER] Installation trigger sent.")
+
+    def restart(self):
+        """
+        Placeholder for triggering a restart of the ComfyUI service.
+        """
+        logging.info("[SERVICE-MANAGER] A restart of the ComfyUI service would be triggered now.")
+        # In a real implementation, this would call the container management service
+        # to restart the ComfyUI container.
 
     def wait_for_ready(self, shutdown_event: threading.Event, timeout=180):
         """Waits for the ComfyUI server to be available."""

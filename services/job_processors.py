@@ -131,7 +131,50 @@ class DynamicJobProcessor:
             else:
                 logging.warning(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. Skipping injection.")
 
+    def _ensure_dependencies(self):
+        """Checks for and triggers installation of missing custom node dependencies."""
+        required_deps = self.workflow_template.get('custom_node_dependencies', [])
+        if not required_deps:
+            logging.info("No custom node dependencies specified for this workflow.")
+            return
+
+        logging.info("Checking for custom node dependencies...")
+        installed_nodes = self.comfyui_client.get_installed_nodes()
+        installed_nodes_set = set(installed_nodes)
+
+        missing_repos = []
+        for dep in required_deps:
+            is_installed = False
+            # Check if any node from this repo is already installed
+            for node_class_type in dep.get('nodes', []):
+                if node_class_type in installed_nodes_set:
+                    is_installed = True
+                    logging.info(f"  - Dependency for repo {dep.get('url')} met by node: {node_class_type}")
+                    break
+            
+            if not is_installed:
+                logging.warning(f"  - Dependency MISSING for repo: {dep.get('url')}")
+                missing_repos.append(dep.get('url'))
+
+        if missing_repos:
+            logging.warning(f"Found {len(missing_repos)} missing custom node repositories. Triggering installation.")
+            self.comfyui_client.install_custom_nodes(missing_repos)
+            
+            # After installation, a restart is required
+            logging.info("Triggering ComfyUI restart to load new nodes...")
+            self.comfyui_client.restart()
+            
+            # Wait for the server to become ready again
+            if not self.comfyui_client.wait_for_ready(self.shutdown_event):
+                raise RuntimeError("ComfyUI did not become ready after dependency installation and restart.")
+            logging.info("ComfyUI is ready after restart.")
+        else:
+            logging.info("All custom node dependencies are met.")
+
     def process(self):
+        # First, ensure all dependencies are met before processing
+        self._ensure_dependencies()
+
         self._inject_dynamic_inputs()
         payload = {"prompt": self.workflow_json}
         outputs = self._trigger_and_get_output(payload)

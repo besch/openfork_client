@@ -57,188 +57,165 @@ def get_standard_nodes() -> List[str]:
         return []
     return nodes
 
-def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict) -> Dict:
-    """Analyzes a workflow JSON to extract models, custom nodes (cnr_ids), and potential inputs."""
+def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, Dict]) -> Dict:
+    """
+    Analyzes a workflow JSON to extract models, custom nodes (with git URLs and node class_types),
+    and a generated input schema.
+    """
     model_urls = set()
-    custom_node_git_urls = set()
+    custom_node_map: Dict[str, set] = {}  # Maps git_url -> set of class_types
     inputs = {}
     
     standard_nodes = get_standard_nodes()
     
     # Determine format: LiteGraph has a 'nodes' list, API format has a dict of nodes.
     is_api_format = 'nodes' not in workflow_json and isinstance(workflow_json, dict)
-
+    
+    nodes_to_process = []
     if is_api_format:
-        # --- API FORMAT PARSING ---
-        node_items = workflow_json.items()
-
-        for node_id, node in node_items:
-            node_class_type = node.get("class_type")
-            if not node_class_type:
-                continue
-
-            # Custom Node Detection (by cnr_id in properties)
-            properties = node.get('properties', {})
-            cnr_id = properties.get('cnr_id')
-            if cnr_id and cnr_id != 'comfy-core': # 'comfy-core' is whitelisted/standard
-                git_url = custom_node_registry.get(cnr_id)
-                if git_url:
-                    custom_node_git_urls.add(git_url)
-                else:
-                    logger.warning(f"Custom node with cnr_id '{cnr_id}' found but no Git URL in registry. Skipping.")
-            elif node_class_type not in standard_nodes: # Fallback to class_type if no cnr_id
-                # This might be a custom node without a cnr_id, or a subgraph. For now, collect cnr_ids.
-                pass
-
-            # Input and Model Detection
-            if 'inputs' in node and isinstance(node['inputs'], dict):
-                for input_name, input_value in node['inputs'].items():
-                    # Model Detection from markdown links
-                    if isinstance(input_value, str):
-                        # Markdown link: [filename.safetensors](url)
-                        for match in re.finditer(r'\\\[([^\\]+?\\.safetensors)]\(([^)]+)\)', input_value):
-                            model_urls.add(match.group(2))
-
-                    is_link = (isinstance(input_value, list) and
-                               len(input_value) == 2 and
-                               isinstance(input_value[0], str) and
-                               isinstance(input_value[1], int))
-
-                    if not is_link:
-                        # This is a widget input or a model name
-                        
-                        # Model Detection (from input_name heuristics, if not already found by markdown link)
-                        if input_name.lower() in ['ckpt_name', 'model_name', 'lora_name', 'vae_name', 'control_net_name'] and isinstance(input_value, str):
-                            # This is a model name, but we need its URL. We'll rely on markdown links for URLs.
-                            pass # We already handle model_urls via markdown links
-
-                        # Input Schema Detection (heuristic)
-                        json_schema_type = 'string'
-                        if isinstance(input_value, (int, float)):
-                            json_schema_type = 'number'
-                        elif isinstance(input_value, bool):
-                            json_schema_type = 'boolean'
-
-                        key_name_base = input_name
-                        if key_name_base.lower() == 'text' and node_class_type == 'CLIPTextEncode':
-                            key_name_base = f'text_prompt_{node_id}'
-                        elif key_name_base.lower() == 'seed':
-                            key_name_base = 'seed'
-
-                        final_key_name = key_name_base
-                        counter = 1
-                        while final_key_name in inputs:
-                            final_key_name = f"{key_name_base}_{counter}"
-                            counter += 1
-                        
-                        inputs[final_key_name] = {
-                            'type': json_schema_type,
-                            'default': input_value,
-                            'description': f'{input_name} (node {node_id})'
-                        }
+        # Convert API format to a list of nodes with their IDs
+        for node_id, node_data in workflow_json.items():
+            node_with_id = node_data.copy()
+            node_with_id['id'] = node_id
+            # API format uses 'class_type', LiteGraph uses 'type'. Standardize to 'type' for processing.
+            if 'class_type' in node_with_id:
+                node_with_id['type'] = node_with_id.pop('class_type')
+            nodes_to_process.append(node_with_id)
     else:
-        # --- LITEGRAPH FORMAT PARSING ---
-        nodes = workflow_json.get('nodes', [])
-        for node in nodes:
-            node_type = node.get('type')
-            node_id = node.get('id')
-            if not node_type:
-                continue
+        # LiteGraph format already has a 'nodes' list
+        nodes_to_process = workflow_json.get('nodes', [])
 
-            # Custom Node Detection
-            properties = node.get('properties', {})
-            cnr_id = properties.get('cnr_id')
-            if cnr_id and cnr_id != 'comfy-core':
-                git_url = custom_node_registry.get(cnr_id)
-                if git_url:
-                    custom_node_git_urls.add(git_url)
-                else:
-                    logger.warning(f"Custom node with cnr_id '{cnr_id}' found but no Git URL in registry. Skipping.")
-            elif node_type not in standard_nodes:
-                pass
+    for node in nodes_to_process:
+        node_type = node.get('type')
+        node_id = node.get('id')
+        if not node_type:
+            continue
 
-            # Model URL Detection from widgets_values
-            widgets = node.get('widgets_values', [])
-            if widgets:
-                for widget_val in widgets:
-                    if isinstance(widget_val, str):
-                        for match in re.finditer(r'\\\[([^\\]+?\\.safetensors)]\\(([^)]+)\\)', widget_val):
-                            model_urls.add(match.group(2))
+        # --- Custom Node Detection ---
+        # Use a more robust detection that checks against the full custom_node_registry
+        if node_type not in standard_nodes:
+            found_node = False
+            # The registry maps a custom node's title/folder to its details including git url
+            for reg_key, reg_value in custom_node_registry.items():
+                # The registry's `title` is often the node's folder name or a close variant
+                # and `files` contains the python files where nodes are defined.
+                # A simple heuristic: if the node_type is in the list of nodes provided by a custom_node entry.
+                if 'nodes' in reg_value and node_type in reg_value['nodes']:
+                    git_url = reg_value.get('reference')
+                    if git_url:
+                        if git_url not in custom_node_map:
+                            custom_node_map[git_url] = set()
+                        custom_node_map[git_url].add(node_type)
+                        found_node = True
+                        break # Found the right registry entry for this node
+            if not found_node:
+                 logger.warning(f"Custom node '{node_type}' found in workflow but could not be resolved to a git repository. It might be a built-in or subgraph node.")
 
-            # --- REVISED INPUT SCHEMA DETECTION ---
-            
-            # Special case for LoadImage nodes
-            if node_type == 'LoadImage':
-                node_title = node.get('title', f'Input Image {node_id}')
-                key_name_base = f'input_image_{node_id}' # Ensure unique key
-                
-                if key_name_base not in inputs:
-                    inputs[key_name_base] = {
-                        'type': 'string',
-                        'format': 'uri',
-                        'description': node_title,
-                        'x-comfy-node-id': node_id
-                    }
-                continue # Move to next node
 
-            # General input detection for other nodes
-            widget_values = node.get('widgets_values', [])
-            widget_names = []
+        # --- Model URL Detection ---
+        # This can be found in various places, widgets_values is a common one for LiteGraph
+        widgets = node.get('widgets_values', [])
+        if widgets:
+            for widget_val in widgets:
+                if isinstance(widget_val, str):
+                    # Regex for markdown links: [filename.safetensors](url)
+                    for match in re.finditer(r'\[(?:[^\]]+?\.safetensors)\]\(([^)]+)\)', widget_val):
+                        model_urls.add(match.group(1))
+        
+        # Also check 'inputs' for API format which might contain model names in markdown
+        if 'inputs' in node and isinstance(node['inputs'], dict):
+            for input_name, input_value in node['inputs'].items():
+                if isinstance(input_value, str):
+                    for match in re.finditer(r'\[(?:[^\]]+?\.safetensors)\]\(([^)]+)\)', input_value):
+                        model_urls.add(match.group(1))
 
-            # Method 1: Subgraph proxy widgets
-            if 'properties' in node and 'proxyWidgets' in node.get('properties', {}):
-                proxy_widgets = node['properties']['proxyWidgets']
-                widget_names = [p[1] for p in proxy_widgets if isinstance(p, list) and len(p) > 1]
-            # Method 2: Standard node widgets defined in 'inputs' (unlinked)
-            elif 'inputs' in node:
-                widget_names = [i['name'] for i in node['inputs'] if isinstance(i, dict) and i.get('link') is None and 'name' in i]
 
-            if not widget_names or not widget_values:
-                continue
-
-            for i, input_name in enumerate(widget_names):
-                if i >= len(widget_values):
-                    break
-                
-                input_value = widget_values[i]
-
-                # Filter out names that are clearly not user-configurable settings
-                if input_name.lower().endswith(('_name', '.name')) or input_name.lower() in ['model', 'clip', 'vae', 'latent', 'image', 'pixels', 'control_after_generate', 'sampler_name', 'scheduler']:
-                    continue
-
-                json_schema_type = 'string'
-                if isinstance(input_value, int):
-                    json_schema_type = 'integer'
-                elif isinstance(input_value, float):
-                    json_schema_type = 'number'
-                elif isinstance(input_value, bool):
-                    json_schema_type = 'boolean'
-
-                key_name_base = input_name
-                if 'prompt' in key_name_base.lower() or 'text' in key_name_base.lower():
-                    title = node.get('title', '').lower()
-                    if 'negative' in title:
-                        key_name_base = 'negative_prompt'
-                    else:
-                        key_name_base = 'prompt'
-                elif key_name_base.lower() == 'seed':
-                    key_name_base = 'seed'
-                
-                final_key_name = key_name_base
-                counter = 1
-                while final_key_name in inputs:
-                    final_key_name = f"{key_name_base}_{counter}"
-                    counter += 1
-                
-                inputs[final_key_name] = {
-                    'type': json_schema_type,
-                    'default': input_value,
-                    'description': f'{input_name}'
+        # --- Input Schema Detection (Heuristics) ---
+        # This part remains complex, the existing logic is a good starting point.
+        # We'll refine it slightly for clarity.
+        
+        # Heuristic for LoadImage
+        if node_type == 'LoadImage':
+            node_title = node.get('title', f'Input Image {node_id}')
+            key_name_base = f'input_image_{node_id}'
+            if key_name_base not in inputs:
+                inputs[key_name_base] = {
+                    'type': 'image', # Use a specific type for images
+                    'description': node_title,
+                    'node_type': 'LoadImage',
+                    'field_name': 'image' # The field in the node to update
                 }
+            continue
+
+        # General input detection
+        widget_values = node.get('widgets_values', [])
+        widget_names = []
+
+        if 'inputs' in node:
+            # This works for both API and LiteGraph formats if 'inputs' is a list of dicts
+            if isinstance(node['inputs'], list):
+                 widget_names = [i['name'] for i in node['inputs'] if isinstance(i, dict) and i.get('link') is None and 'name' in i]
+            # For API format, inputs is a dict, we look at non-linked values
+            elif isinstance(node['inputs'], dict):
+                 for name, val in node['inputs'].items():
+                     if not isinstance(val, list): # Links are lists [node_id, slot_index]
+                         widget_names.append(name)
+                         widget_values.append(val)
+
+
+        if not widget_names or not widget_values:
+            continue
+
+        for i, input_name in enumerate(widget_names):
+            if i >= len(widget_values):
+                break
+            
+            input_value = widget_values[i]
+
+            # Filter out non-user-configurable settings
+            if input_name.lower().endswith(('_name', '.name')) or input_name.lower() in ['model', 'clip', 'vae', 'latent', 'image', 'pixels', 'control_after_generate', 'sampler_name', 'scheduler']:
+                continue
+
+            json_schema_type = 'string'
+            if isinstance(input_value, int):
+                json_schema_type = 'integer'
+            elif isinstance(input_value, float):
+                json_schema_type = 'number'
+            elif isinstance(input_value, bool):
+                json_schema_type = 'boolean'
+
+            key_name_base = input_name
+            if 'prompt' in key_name_base.lower() or 'text' in key_name_base.lower():
+                title = node.get('title', '').lower()
+                if 'negative' in title:
+                    key_name_base = 'negative_prompt'
+                else:
+                    key_name_base = 'prompt'
+            elif key_name_base.lower() == 'seed':
+                key_name_base = 'seed'
+            
+            final_key_name = key_name_base
+            counter = 1
+            while final_key_name in inputs:
+                final_key_name = f"{key_name_base}_{counter}"
+                counter += 1
+            
+            inputs[final_key_name] = {
+                'type': json_schema_type,
+                'default': input_value,
+                'description': f'{input_name} for {node_type}',
+                'node_type': node_type,
+                'field_name': input_name
+            }
+
+    # Convert the custom_node_map to the desired JSONB format
+    custom_node_dependencies = [
+        {"url": url, "nodes": list(nodes)} for url, nodes in custom_node_map.items()
+    ]
 
     return {
         "model_urls": list(model_urls),
-        "custom_node_git_urls": list(custom_node_git_urls),
+        "custom_node_dependencies": custom_node_dependencies,
         "input_schema_properties": inputs
     }
 
@@ -313,7 +290,7 @@ class WorkflowSynchronizer:
         self.repo_path = LOCAL_REPO_PATH
         self.current_commit_hash: Optional[str] = None
         self.workflow_previews_bucket = "workflow-previews"
-        self.custom_node_registry: Dict[str, str] = {}
+        self.custom_node_registry: Dict[str, Dict] = {}
 
     def _run_git_command(self, command: List[str]) -> str:
         """Runs a git command in the local repository directory."""
@@ -351,13 +328,32 @@ class WorkflowSynchronizer:
         try:
             response = requests.get(CUSTOM_NODE_LIST_URL)
             response.raise_for_status() # Raise an exception for HTTP errors
-            logger.debug(f"Raw custom node list response: {response.text[:500]}...") # Log first 500 chars
             custom_node_list = response.json()
             
             registry = {}
+            # The json is a list of custom node entries
             for node_entry in custom_node_list.get("custom_nodes", []):
-                if "id" in node_entry and "reference" in node_entry:
-                    registry[node_entry["id"]] = node_entry["reference"]
+                # We need to know the nodes provided by each git repo.
+                # The 'title' is often the folder name and a good key.
+                title = node_entry.get('title')
+                git_url = node_entry.get('reference')
+                author = node_entry.get('author')
+                
+                if not title or not git_url:
+                    continue
+
+                # The 'files' array lists python files that define the nodes.
+                # We need to extract the node class names from them.
+                # The `node_list` in the JSON is exactly what we need.
+                provided_nodes = node_entry.get('nodes', [])
+                
+                if provided_nodes:
+                    registry[title] = {
+                        "reference": git_url,
+                        "author": author,
+                        "nodes": provided_nodes
+                    }
+
             self.custom_node_registry = registry
             logger.info(f"Loaded {len(self.custom_node_registry)} custom node entries from registry.")
         except requests.exceptions.RequestException as e:
@@ -513,7 +509,7 @@ class WorkflowSynchronizer:
                     "workflow_type": workflow_type_from_category, # Use type from index.json
                     "target_entity": target_entity,
                     "hardware_requirements": {"gpu_vram": round(template_entry.get("vram", 0) / (1024**3))} if template_entry.get("vram") else {},
-                    "custom_node_urls": analysis_result["custom_node_git_urls"], # Now these are Git URLs
+                    "custom_node_dependencies": analysis_result["custom_node_dependencies"], # Now these are Git URLs
                     "model_urls": analysis_result["model_urls"],
                     "is_public": True, # Assuming all templates from this repo are public
                 })
@@ -535,27 +531,40 @@ class WorkflowSynchronizer:
             identifier = workflow_data["source_repo_identifier"]
             commit_hash = workflow_data["source_repo_commit_hash"]
             
+            # The data to be inserted or updated.
+            # custom_node_dependencies is now a JSONB field.
+            db_payload = {
+                "source_repo_identifier": identifier,
+                "source_repo_commit_hash": commit_hash,
+                "name": workflow_data["name"],
+                "description": workflow_data["description"],
+                "category": workflow_data["category"],
+                "preview_image_url": workflow_data["preview_image_url"],
+                "workflow_json": workflow_data["workflow_json"],
+                "input_schema": workflow_data["input_schema"],
+                "workflow_type": workflow_data["workflow_type"],
+                "target_entity": workflow_data["target_entity"],
+                "hardware_requirements": workflow_data["hardware_requirements"],
+                "custom_node_dependencies": workflow_data["custom_node_dependencies"], # Changed from custom_node_urls
+                "model_urls": workflow_data["model_urls"],
+                "is_public": workflow_data["is_public"],
+            }
+
             if identifier in existing_workflows:
-                # Check if update is needed
-                # if existing_workflows[identifier]["source_repo_commit_hash"] != commit_hash:
-                if True:
-                    try:
-                        logger.info(f"Updating workflow: {identifier}")
-                        self.supabase.table("workflow_templates").update(workflow_data).eq("source_repo_identifier", identifier).execute()
-                    except Exception as e:
-                        logger.error(f"Failed to update workflow {identifier}: {str(e)}")
-                else:
-                    logger.info(f"Workflow {identifier} is up-to-date. Skipping.")
+                # For now, we will always update if the workflow exists.
+                # A more sophisticated check could compare commit_hash.
+                try:
+                    logger.info(f"Updating workflow: {identifier}")
+                    self.supabase.table("workflow_templates").update(db_payload).eq("source_repo_identifier", identifier).execute()
+                except Exception as e:
+                    logger.error(f"Failed to update workflow {identifier}: {str(e)}")
             else:
                 # Insert new workflow
                 try:
                     logger.info(f"Inserting new workflow: {identifier}")
-                    self.supabase.table("workflow_templates").insert(workflow_data).execute()
+                    self.supabase.table("workflow_templates").insert(db_payload).execute()
                 except Exception as e:
-                    logger.error(f"Failed to insert workflow {identifier}: {str(e)}")        # Optional: Deactivate workflows no longer in the repository
-        # For now, we won't delete, but could set is_public = False or add a 'deleted_in_repo' flag
-        # This would require comparing all existing_workflows with parsed_workflows
-        # and marking those not found in parsed_workflows.
+                    logger.error(f"Failed to insert workflow {identifier}: {str(e)}")
         
         logger.info("Database synchronization completed.")
 
