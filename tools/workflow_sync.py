@@ -537,7 +537,8 @@ class WorkflowSynchronizer:
             
             if identifier in existing_workflows:
                 # Check if update is needed
-                if existing_workflows[identifier]["source_repo_commit_hash"] != commit_hash:
+                # if existing_workflows[identifier]["source_repo_commit_hash"] != commit_hash:
+                if True:
                     try:
                         logger.info(f"Updating workflow: {identifier}")
                         self.supabase.table("workflow_templates").update(workflow_data).eq("source_repo_identifier", identifier).execute()
