@@ -395,6 +395,12 @@ class WorkflowSynchronizer:
                 # Analyze workflow JSON for inputs and dependencies
                 analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
 
+                # Convert LiteGraph to a basic node dictionary if necessary
+                api_formatted_workflow = workflow_json
+                if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
+                    logger.info(f"Converting LiteGraph format to node dictionary for {workflow_name}")
+                    api_formatted_workflow = {str(node['id']): node for node in workflow_json['nodes']}
+
                 # Determine target_entity based on workflow_type_from_category or tags
                 target_entity = "scene" # Default
                 if workflow_type_from_category == "audio":
@@ -432,7 +438,7 @@ class WorkflowSynchronizer:
                     "description": template_entry.get("description", ""),
                     "category": category_name, # Use category from index.json
                     "preview_image_url": uploaded_preview_url, # Now it's the public URL
-                    "workflow_json": workflow_json,
+                    "workflow_json": api_formatted_workflow,
                     "input_schema": input_schema,
                     "workflow_type": workflow_type_from_category, # Use type from index.json
                     "target_entity": target_entity,
