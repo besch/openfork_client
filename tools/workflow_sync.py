@@ -91,25 +91,30 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         if not node_type:
             continue
 
-        # --- Custom Node Detection ---
-        # Use a more robust detection that checks against the full custom_node_registry
+        # --- Custom Node Detection (Heuristic-based) ---
         if node_type not in standard_nodes:
-            found_node = False
-            # The registry maps a custom node's title/folder to its details including git url
-            for reg_key, reg_value in custom_node_registry.items():
-                # The registry's `title` is often the node's folder name or a close variant
-                # and `files` contains the python files where nodes are defined.
-                # A simple heuristic: if the node_type is in the list of nodes provided by a custom_node entry.
-                if 'nodes' in reg_value and node_type in reg_value['nodes']:
-                    git_url = reg_value.get('reference')
-                    if git_url:
-                        if git_url not in custom_node_map:
-                            custom_node_map[git_url] = set()
-                        custom_node_map[git_url].add(node_type)
-                        found_node = True
-                        break # Found the right registry entry for this node
-            if not found_node:
-                 logger.warning(f"Custom node '{node_type}' found in workflow but could not be resolved to a git repository. It might be a built-in or subgraph node.")
+            found_repo_url = None
+            for reg_title, reg_value in custom_node_registry.items():
+                # 1. Check explicit node lists (exact match)
+                if node_type in reg_value.get('nodes', []) or node_type in reg_value.get('preemptions', []):
+                    found_repo_url = reg_value.get('reference')
+                    break
+
+            # 2. If not found, try fuzzy matching on title (e.g., node 'WAS_Foo' in repo 'WAS Node Suite')
+            if not found_repo_url:
+                for reg_title, reg_value in custom_node_registry.items():
+                    # Extract a key from the title, e.g., "WAS" from "WAS Node Suite"
+                    title_key = reg_title.split(' ')[0].replace('ComfyUI-', '').replace('_', ' ').split(' ')[0]
+                    if len(title_key) > 2 and node_type.startswith(title_key):
+                        found_repo_url = reg_value.get('reference')
+                        break
+            
+            if found_repo_url:
+                if found_repo_url not in custom_node_map:
+                    custom_node_map[found_repo_url] = set()
+                custom_node_map[found_repo_url].add(node_type)
+            else:
+                logger.warning(f"Custom node '{node_type}' could not be resolved to a git repository.")
 
 
         # --- Model URL Detection ---
@@ -270,7 +275,13 @@ class WorkflowSynchronizer:
             if ntype == 'CLIPTextEncode' and widgets:
                 key = 'positive_prompt' if 'pos' in title or 'positive' in title else 'negative_prompt'
                 key = self._unique_key(props, key, counter)
-                props[key] = {'type': 'string', 'default': str(widgets[0]), 'description': key.replace('_', ' ').title()}
+                props[key] = {
+                    'type': 'string', 
+                    'default': str(widgets[0]), 
+                    'description': key.replace('_', ' ').title(),
+                    'node_type': ntype,  # Add node_type
+                    'field_name': 'text' # Add field_name
+                }
             elif ntype == 'EmptyLatentImage' and len(widgets) >= 2:
                 props['width'] = {'type': 'number', 'default': float(widgets[0]), 'description': 'Width'}
                 props['height'] = {'type': 'number', 'default': float(widgets[1]), 'description': 'Height'}
@@ -333,26 +344,19 @@ class WorkflowSynchronizer:
             registry = {}
             # The json is a list of custom node entries
             for node_entry in custom_node_list.get("custom_nodes", []):
-                # We need to know the nodes provided by each git repo.
-                # The 'title' is often the folder name and a good key.
                 title = node_entry.get('title')
                 git_url = node_entry.get('reference')
-                author = node_entry.get('author')
                 
                 if not title or not git_url:
                     continue
 
-                # The 'files' array lists python files that define the nodes.
-                # We need to extract the node class names from them.
-                # The `node_list` in the JSON is exactly what we need.
-                provided_nodes = node_entry.get('nodes', [])
-                
-                if provided_nodes:
-                    registry[title] = {
-                        "reference": git_url,
-                        "author": author,
-                        "nodes": provided_nodes
-                    }
+                # Store all available metadata for later heuristics
+                registry[title] = {
+                    "reference": git_url,
+                    "author": node_entry.get('author'),
+                    "nodes": node_entry.get('nodes', []),
+                    "preemptions": node_entry.get('preemptions', [])
+                }
 
             self.custom_node_registry = registry
             logger.info(f"Loaded {len(self.custom_node_registry)} custom node entries from registry.")
@@ -360,6 +364,11 @@ class WorkflowSynchronizer:
             logger.error(f"Failed to fetch custom node list: {e}")
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse custom node list JSON: {e}")
+
+        if not self.custom_node_registry:
+            logger.critical("Custom node registry is empty. This is likely due to a failure to download the registry file from Github.")
+            logger.critical("Please check your internet connection and firewall settings, then try again.")
+            sys.exit(1)
 
     def _upload_preview_asset(self, file_path: Path, destination_name: str) -> Optional[str]:
         """Uploads a preview asset to Supabase Storage and returns its public URL."""

@@ -6,9 +6,9 @@ from utils.shutdown_handler import SHUTDOWN_EVENT
 from services.orchestrator_service import OrchestratorService
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
-from services.job_processors import DynamicJobProcessor
+import sys
+from services.job_processors import DynamicJobProcessor, MissingDependenciesError
 from services.job_listener import JobListener
-
 
 class DGNClient:
     def __init__(self, orchestrator_url: str, root_dir: str, data_dir: str, access_token: str, refresh_token: str, accept_policy: str = 'all', allowed_targets: list[str] = None):
@@ -40,6 +40,21 @@ class DGNClient:
         try:
             processor = self._get_job_processor(job, shutdown_event)
             processor.process()
+        except MissingDependenciesError as e:
+            logging.error("Job failed due to missing custom node dependencies.")
+            print("[DEPENDENCY_ERROR] A required custom node is not installed.", file=sys.stderr)
+            print("To fix this, please ask your AI assistant to run the following commands:", file=sys.stderr)
+            
+            for repo_url in e.missing_repos:
+                print(f'[COMMAND] python3 /app/ComfyUI/custom_nodes/ComfyUI-Manager/cli/main.py --install-custom-node "{repo_url}"')
+                
+            print('[COMMAND] pkill -f "main.py --listen"')
+            print("\nAfter the commands are run, please start the client again.", file=sys.stderr)
+            # We need to fail the job in the orchestrator as well
+            if job and job.get('id'):
+                self.orchestrator_service.update_job_status(job.get('id'), 'failed', error_message='Missing custom node dependencies.')
+            SHUTDOWN_EVENT.set() # Signal all threads to shut down
+
         except Exception as e:
             logging.error(f"An error occurred while processing job {job.get('id')}: {e}", exc_info=True)
             if job and job.get('id'):

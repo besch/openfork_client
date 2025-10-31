@@ -5,6 +5,17 @@ from services.docker_manager import docker_manager
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration
 from utils.comfyui_workflow_utils import find_node_by_type_and_field, set_node_property, materialize_image_input
 
+class MissingDependenciesError(Exception):
+    """Custom exception for missing ComfyUI custom node dependencies."""
+    def __init__(self, missing_repos: list[str]):
+        self.missing_repos = missing_repos
+        message = (
+            f"Execution failed: {len(missing_repos)} required custom node repositories are not installed.\n"
+            f"Please install them and restart the service.\n"
+            f"Missing repositories: {', '.join(missing_repos)}"
+        )
+        super().__init__(message)
+
 class DynamicJobProcessor:
     def __init__(self, client, job, shutdown_event):
         self.client = client
@@ -157,17 +168,8 @@ class DynamicJobProcessor:
                 missing_repos.append(dep.get('url'))
 
         if missing_repos:
-            logging.warning(f"Found {len(missing_repos)} missing custom node repositories. Triggering installation.")
-            self.comfyui_client.install_custom_nodes(missing_repos)
-            
-            # After installation, a restart is required
-            logging.info("Triggering ComfyUI restart to load new nodes...")
-            self.comfyui_client.restart()
-            
-            # Wait for the server to become ready again
-            if not self.comfyui_client.wait_for_ready(self.shutdown_event):
-                raise RuntimeError("ComfyUI did not become ready after dependency installation and restart.")
-            logging.info("ComfyUI is ready after restart.")
+            logging.error(f"Found {len(missing_repos)} missing custom node repositories.")
+            raise MissingDependenciesError(missing_repos)
         else:
             logging.info("All custom node dependencies are met.")
 
