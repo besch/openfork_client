@@ -4,6 +4,7 @@ from typing import Union
 from services.docker_manager import docker_manager
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration
 from utils.comfyui_workflow_utils import find_node_by_type_and_field, set_node_property, materialize_image_input
+from services.auto_installer import auto_install_all
 
 class MissingDependenciesError(Exception):
     """Custom exception for missing ComfyUI custom node dependencies."""
@@ -168,12 +169,41 @@ class DynamicJobProcessor:
                 missing_repos.append(dep.get('url'))
 
         if missing_repos:
-            logging.error(f"Found {len(missing_repos)} missing custom node repositories.")
-            raise MissingDependenciesError(missing_repos)
+            logging.warning(f"  - Dependency MISSING for repo(s): {missing_repos}")
+            # Try to auto-install nodes & models for this workflow via auto_installer
+            try:
+                installed_nodes, installed_models = auto_install_all(self.workflow_template)
+                if installed_nodes or installed_models:
+                    logging.info(f"Auto-installed nodes: {installed_nodes}, models: {installed_models}")
+                    # re-evaluate installed nodes: ask comfyui_client again
+                    installed_nodes_list = self.comfyui_client.get_installed_nodes()
+                    installed_nodes_set = set(installed_nodes_list)
+                    still_missing = []
+                    for dep in required_deps:
+                        dep_nodes = dep.get('nodes', [])
+                        if not any(n in installed_nodes_set for n in dep_nodes):
+                            still_missing.append(dep.get('url'))
+                    if not still_missing:
+                        logging.info("All dependencies resolved after auto-install.")
+                        return
+                    else:
+                        logging.warning(f"Still missing after auto-install: {still_missing}")
+                        raise MissingDependenciesError(still_missing)
+                else:
+                    # Nothing installed automatically -> raise original error
+                    raise MissingDependenciesError(missing_repos)
+            except MissingDependenciesError:
+                raise
+            except Exception as e:
+                logging.exception("Auto-install attempted but failed unexpectedly.")
+                # fallback to original behavior
+                raise MissingDependenciesError(missing_repos)
         else:
             logging.info("All custom node dependencies are met.")
 
     def process(self):
+
+
         # First, ensure all dependencies are met before processing
         self._ensure_dependencies()
 

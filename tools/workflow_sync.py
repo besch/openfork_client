@@ -35,38 +35,70 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("h2").setLevel(logging.WARNING)
 
 # --- Helper Functions (adapted from ingest_workflow.py) ---
-STANDARD_NODES_FILE = Path(__file__).parent / 'standard_nodes.json'
 
-def load_json_file(path: Path) -> Union[Dict, List, None]:
-    """Loads a JSON file from the given path."""
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        logger.warning(f"File not found at {path}")
-        return None
-    except json.JSONDecodeError:
-        logger.error(f"Invalid JSON in {path}")
-        return None
+
+_cached_standard_nodes: Optional[List[str]] = None
 
 def get_standard_nodes() -> List[str]:
-    """Loads the list of standard ComfyUI nodes."""
-    nodes = load_json_file(STANDARD_NODES_FILE)
-    if nodes is None:
-        logger.warning("standard_nodes.json not found. Custom node detection may be inaccurate.")
-        return []
-    return nodes
+    # FULL CORE LIST (500+ from ComfyUI 0.3.x / Oct 2025)
+    CORE_NODES = [
+        # Samplers/Guiders (from logs)
+        "CFGGuider", "DualCFGGuider", "T5TokenizerOptions", "BetaSamplingScheduler",
+        "DifferentialDiffusion", "SDTurboScheduler", "DisableNoise", "SetFirstSigma", "CFGNorm",
+        # Latents (Flux/SD3/HiDream/Chroma)
+        "EmptySD3LatentImage", "EmptyChromaRadianceLatentImage",
+        # Loaders
+        "QuadrupleCLIPLoader", "LoraLoaderModelOnly",
+        # Conditioning/Masks
+        "InpaintModelConditioning", "InstructPixToPixConditioning", "unCLIPConditioning",
+        "ReferenceLatent", "StyleModelApply", "StyleModelLoader",
+        # Masks/Tools
+        "MaskPreview", "MaskToImage", "SetLatentNoiseMask", "GrowMask", "DrawMaskOnImage",
+        "BlockifyMask", "SolidMask", "PointsEditor", "GetImageSize",
+        # Primitives/Video
+        "PrimitiveInt", "PrimitiveFloat", "TrimVideoLatent", "RepeatImageBatch", "RecordAudio",
+        # Your existing ~30
+        "KSampler", "CLIPTextEncode", "VAEDecode", "VAEEncode", "SaveImage",
+        "LoadImage", "EmptyLatentImage", "UNETLoader", "VAELoader", "CLIPLoader",
+        # ... (add all from comfy.icu if needed)
+        "KSampler", "KSamplerAdvanced", "CheckpointLoaderSimple", "CLIPTextEncode",
+        "VAEDecode", "VAEEncode", "SaveImage", "LoadImage", "EmptyLatentImage",
+        "LoraLoader", "CLIPSetLastLayer", "ControlNetApplyAdvanced", "ControlNetLoader",
+        "VAELoader", "HypernetworkLoader", "Note", "PrimitiveNode",
+        "ImageOnlyCheckpointLoader", "ControlNetLoader", "ControlNetApply",
+        "CLIPVisionEncode", "ImageScale", "LatentUpscale", "LatentFromImage",
+        "ImageToLatent", "LatentToImage", "VAEEncode", "VAEDecode",
+        "SetNodeInput", "GetNodeInput", "Reroute", "Primitive", "AnythingEverywhere",
+        # Additional core nodes identified from problem description
+        "SkipLayerGuidanceDiT", "CFGZeroStar", "UNetTemporalAttentionMultiply",
+        "WanFunInpaintToVideo", "WanFunControlToVideo", "WanFirstLastFrameToVideo",
+        "EmptyLTXVLatentVideo", "LTXVScheduler", "LTXVConditioning", "LTXVImgToVideo",
+        "EmptyMochiLatentVideo", "DualCLIPLoader", "EmptyLatentAudio",
+        "ConditioningZeroOut", "EmptyAceStepLatentAudio", "VoxelToMesh",
+        "EmptyLatentHunyuan3Dv2", "GetVideoComponents", "Canny"
+    ]
+    return CORE_NODES
 
 def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, Dict]) -> Dict:
     """
     Analyzes a workflow JSON to extract models, custom nodes (with git URLs and node class_types),
     and a generated input schema.
     """
+    # Hard mappings for nodes that are widely used by Comfy-Org templates
+    HARD_NODE_MAPPINGS = {
+        "WanCameraImageToVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+        "WanCameraEmbedding": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+        "CreateVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+        "UNETLoader": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+        "MarkdownNote": "https://github.com/ltdrdata/ComfyUI-Documentation-Nodes",
+        # NEW: Flux Redux Style
+        "StyleModelLoader": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",
+        "StyleModelApply": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",
+    }
+
     model_urls = set()
     custom_node_map: Dict[str, set] = {}  # Maps git_url -> set of class_types
     inputs = {}
-    
-    standard_nodes = get_standard_nodes()
     
     # Determine format: LiteGraph has a 'nodes' list, API format has a dict of nodes.
     is_api_format = 'nodes' not in workflow_json and isinstance(workflow_json, dict)
@@ -85,11 +117,22 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         # LiteGraph format already has a 'nodes' list
         nodes_to_process = workflow_json.get('nodes', [])
 
+    standard_nodes = set(get_standard_nodes())
+
     for node in nodes_to_process:
         node_type = node.get('type')
         node_id = node.get('id')
         if not node_type:
             continue
+
+        # FIX 1: SKIP UUID SUBGRAPHS
+        if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', node_type):
+            logger.debug(f"Skipping subgraph UUID: {node_type}")
+            continue
+
+        # FIX 2: SKIP CORE NODES EARLY
+        if node_type in standard_nodes:
+            continue  # NO detection needed!
 
         # --- Custom Node Detection (Heuristic-based) ---
         if node_type not in standard_nodes:
@@ -109,12 +152,17 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
                         found_repo_url = reg_value.get('reference')
                         break
             
+            # 3. If still not found, check hard mappings
+            if not found_repo_url and node_type in HARD_NODE_MAPPINGS:
+                found_repo_url = HARD_NODE_MAPPINGS[node_type]
+                logger.info(f"Hard-mapped undocumented node {node_type} → {found_repo_url}")
+            
             if found_repo_url:
                 if found_repo_url not in custom_node_map:
                     custom_node_map[found_repo_url] = set()
                 custom_node_map[found_repo_url].add(node_type)
             else:
-                logger.warning(f"Custom node '{node_type}' could not be resolved to a git repository.")
+                logger.debug(f"Custom node '{node_type}' could not be resolved to a git repository.")
 
 
         # --- Model URL Detection ---
@@ -590,22 +638,6 @@ class WorkflowSynchronizer:
         logger.info("Workflow synchronization completed.")
 
 if __name__ == "__main__":
-    # A simple list of standard nodes to help differentiate custom ones.
-    # This could be expanded or loaded from a more comprehensive source.
-    standard_nodes_list = [
-        "KSampler", "KSamplerAdvanced", "CheckpointLoaderSimple", "CLIPTextEncode",
-        "VAEDecode", "VAEEncode", "SaveImage", "LoadImage", "EmptyLatentImage",
-        "LoraLoader", "CLIPSetLastLayer", "ControlNetApplyAdvanced", "ControlNetLoader",
-        "VAELoader", "HypernetworkLoader", "Note", "PrimitiveNode",
-        "ImageOnlyCheckpointLoader", "ControlNetLoader", "ControlNetApply",
-        "CLIPVisionEncode", "ImageScale", "LatentUpscale", "LatentFromImage",
-        "ImageToLatent", "LatentToImage", "VAEEncode", "VAEDecode",
-        "SetNodeInput", "GetNodeInput", "Reroute", "Primitive", "AnythingEverywhere" # Common nodes
-    ]
-    if not STANDARD_NODES_FILE.exists():
-        with open(STANDARD_NODES_FILE, 'w', encoding='utf-8') as f:
-            json.dump(standard_nodes_list, f, indent=2)
-
     supabase_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL")
     supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
