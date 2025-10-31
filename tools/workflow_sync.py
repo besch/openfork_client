@@ -5,6 +5,7 @@ import subprocess
 import logging
 import re
 import requests
+import uuid
 from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
 from datetime import datetime
@@ -243,6 +244,70 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict) -> Di
 
 
 class WorkflowSynchronizer:
+    def _unique_key(self, props: Dict, base: str, counter: Dict) -> str:
+        key = base
+        c = counter.get(base, 0)
+        while key in props:
+            c += 1
+            key = f"{base}_{c}"
+        counter[base] = c
+        return key
+
+    def extract_inputs_from_litegraph(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
+        """Extracts user-editable inputs → JSON Schema for dynamic form."""
+        schema = {'type': 'object', 'properties': {}}
+        props: Dict[str, Any] = schema['properties']
+        counter: Dict[str, int] = {}
+        
+        defs = workflow.get('definitions', {}).get('subgraphs', [])
+        for node in workflow['nodes']:
+            ntype = node['type']
+            widgets = node.get('widgets_values', [])
+            title = node.get('title', '').lower()
+            
+            # 1. SUBGRAPHS (90% win: wan2, qwen, ace, video)
+            try:
+                uuid.UUID(ntype)  # Is UUID?
+                subgraph = next((s for s in defs if s['id'] == ntype), None)
+                if subgraph:
+                    for i, inp in enumerate(subgraph.get('inputs', [])):
+                        name = inp['name'].lower().replace(' ', '_')
+                        itype = inp['type'].lower()
+                        default = widgets[i] if i < len(widgets) else None
+                        
+                        key = self._unique_key(props, name, counter)
+                        
+                        if itype == 'image':
+                            props[key] = {'type': 'string', 'format': 'uri', 'default': '', 'description': f'Upload {name.title()}'}
+                        elif itype in ['string', 'text'] or 'prompt' in name or 'tags' in name or 'lyrics' in name:
+                            props[key] = {'type': 'string', 'default': str(default) if default else '', 'description': name.title()}
+                        elif itype in ['int', 'number', 'width', 'height', 'steps', 'seed', 'length', 'seconds']:
+                            props[key] = {'type': 'number', 'default': float(default) if default is not None else 512, 'description': name.title()}
+                        elif itype == 'boolean':
+                            props[key] = {'type': 'boolean', 'default': bool(default) if default is not None else False, 'description': name.title()}
+                    continue
+            except ValueError:
+                pass
+            
+            # 2. REGULAR NODES
+            if ntype == 'CLIPTextEncode' and widgets:
+                key = 'positive_prompt' if 'pos' in title or 'positive' in title else 'negative_prompt'
+                key = self._unique_key(props, key, counter)
+                props[key] = {'type': 'string', 'default': str(widgets[0]), 'description': key.replace('_', ' ').title()}
+            elif ntype == 'EmptyLatentImage' and len(widgets) >= 2:
+                props['width'] = {'type': 'number', 'default': float(widgets[0]), 'description': 'Width'}
+                props['height'] = {'type': 'number', 'default': float(widgets[1]), 'description': 'Height'}
+            elif ntype == 'LoadImage' and widgets:
+                key = self._unique_key(props, 'input_image', counter)
+                props[key] = {'type': 'string', 'format': 'uri', 'default': '', 'description': f'Upload Image ({node.get("title", "Input")})'}
+            elif 'TextToImage' in ntype or 't2i' in ntype.lower():  # API nodes like WanTextToImageApi
+                if len(widgets) > 1:
+                    props['prompt'] = {'type': 'string', 'default': str(widgets[1]), 'description': 'Prompt'}
+                    if len(widgets) > 2 and widgets[2]:
+                        props['negative_prompt'] = {'type': 'string', 'default': str(widgets[2]), 'description': 'Negative Prompt'}
+        
+        return schema
+
     def __init__(self, supabase_url: str, supabase_key: str):
         self.supabase: Client = create_client(supabase_url, supabase_key)
         self.repo_path = LOCAL_REPO_PATH
@@ -392,67 +457,34 @@ class WorkflowSynchronizer:
                     logger.warning(f"Could not load workflow JSON for {workflow_name}. Skipping.")
                     continue
 
-                # Convert LiteGraph to a proper API format if necessary
-                api_formatted_workflow = workflow_json
-                if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
-                    logger.info(f"Converting LiteGraph format to API format for {workflow_name}")
-                    
-                    # Create a map for link source info
-                    link_map = {}
-                    for link_info in workflow_json.get("links", []):
-                        link_id, from_node_id, from_slot, to_node_id, to_slot, link_type = link_info
-                        if to_node_id not in link_map:
-                            link_map[to_node_id] = {}
-                        # Find the input name for the target slot
-                        for node in workflow_json['nodes']:
-                            if node['id'] == to_node_id:
-                                if 'inputs' in node and len(node['inputs']) > to_slot:
-                                    input_name = node['inputs'][to_slot]['name']
-                                    link_map[to_node_id][input_name] = [str(from_node_id), from_slot]
-                                break
+                # Analyze workflow for models and custom nodes, but ignore its input schema
+                analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
 
-                    converted_workflow = {}
-                    for node in workflow_json['nodes']:
-                        node_id = node['id']
-                        api_node = {
-                            "class_type": node["type"],
-                            "inputs": {}
-                        }
-
-                        # Get widget values
-                        if 'widgets_values' in node:
-                            # This heuristic for widget names is fragile but necessary
-                            widget_names = [inp['name'] for inp in node.get('inputs', []) if inp.get('link') is None and 'name' in inp]
-                            for i, value in enumerate(node['widgets_values']):
-                                if i < len(widget_names):
-                                    api_node["inputs"][widget_names[i]] = value
-
-                        # Get linked inputs from our map
-                        if node_id in link_map:
-                            for input_name, source in link_map[node_id].items():
-                                api_node["inputs"][input_name] = source
-
-                        converted_workflow[str(node_id)] = api_node
-                    
-                    api_formatted_workflow = converted_workflow
+                # Generate a proper input schema using the new parser
+                input_schema = self.extract_inputs_from_litegraph(workflow_json)
 
                 # Determine target_entity based on workflow_type_from_category or tags
-                target_entity = "scene" # Default
+                target_entity = "scene"  # Default
                 if workflow_type_from_category == "audio":
                     target_entity = "audio_clip"
                 elif workflow_type_from_category == "3d":
-                    target_entity = "character" # Assuming 3D models are for characters
-                # Further refinement could be done based on tags or specific workflow names
+                    target_entity = "character"  # Assuming 3D models are for characters
 
-                # Analyze workflow JSON for inputs and dependencies
-                analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
-
-                # Construct input_schema
-                input_schema = {
-                    "type": "object",
-                    "properties": analysis_result["input_schema_properties"],
-                    "required": [] # We don't have explicit required info from Comfy-Org templates
-                }
+                # Convert LiteGraph to a basic node dictionary if necessary
+                api_formatted_workflow = workflow_json
+                if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
+                    logger.info(f"Converting LiteGraph format to node dictionary for {workflow_name}")
+                    converted_workflow = {}
+                    for node in workflow_json['nodes']:
+                        node_copy = node.copy()
+                        # The API format uses 'class_type' but LiteGraph uses 'type'.
+                        if 'type' in node_copy:
+                            node_copy['class_type'] = node_copy.pop('type')
+                        # The node ID is the key in the API format, not a field in the object.
+                        if 'id' in node_copy:
+                            node_id = str(node_copy.pop('id'))
+                            converted_workflow[node_id] = node_copy
+                    api_formatted_workflow = converted_workflow
 
                 # Determine preview_image_url (local path for now, will be uploaded later)
                 uploaded_preview_url = None
