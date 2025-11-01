@@ -59,6 +59,14 @@ class ComfyUIClient:
         # object_info is a dictionary where keys are node class_types
         return list(object_info.keys())
 
+    def refresh_nodes(self):
+        try:
+            requests.post(f"{self.http_base}/refresh", timeout=10)  # All!
+            time.sleep(3)
+            logging.info("🔄 Nodes refreshed")
+        except Exception:
+            logging.debug("Could not request /refresh")
+
     def install_custom_nodes(self, node_urls: List[str]):
         """
         Placeholder for triggering custom node installation.

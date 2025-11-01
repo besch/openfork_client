@@ -1,20 +1,49 @@
+import os
+import time
+import logging
+import subprocess
+import requests
 
+# Paths (inside container)
+COMFY_ROOT = "/app/ComfyUI"
+MANAGER_CLI = os.path.join(COMFY_ROOT, "custom_nodes", "ComfyUI-Manager", "cli", "main.py")
+MODEL_DIR = os.path.join(COMFY_ROOT, "models")
+TEMP_DL = os.path.join(MODEL_DIR, "_temp")
+os.makedirs(TEMP_DL, exist_ok=True)
 
-# -------------------------------------------------------
+# ------------------------------------------------------- 
+# Helpers
+# ------------------------------------------------------- 
+def comfy_refresh_nodes():
+    try:
+        requests.post("http://127.0.0.1:8188/refresh_nodes", timeout=5)
+    except Exception:
+        logging.debug("Could not request /refresh_nodes")
+
+def comfy_refresh_models():
+    try:
+        requests.post("http://127.0.0.1:8188/refresh_models", timeout=5)
+    except Exception:
+        logging.debug("Could not request /refresh_models")
+
+# ------------------------------------------------------- 
 # Install via ComfyUI-Manager CLI
-# -------------------------------------------------------
+# ------------------------------------------------------- 
 def manager_install_custom_node(repo_url: str):
     if not os.path.exists(MANAGER_CLI):
-        logging.warning("ComfyUI-Manager CLI not present")
+        logging.warning(f"Manager CLI missing: {MANAGER_CLI}")
         return False
     try:
-        subprocess.run(["python3", MANAGER_CLI, "--install-custom-node", repo_url], check=True)
-        # give ComfyUI a moment to load new node files
-        time.sleep(2)
+        result = subprocess.run(
+            ["python3", MANAGER_CLI, "--install-custom-node", repo_url],
+            check=True, capture_output=True, text=True, timeout=300
+        )
+        logging.info(f"Installed {repo_url}\n{result.stdout}")
+        time.sleep(8)  # CRITICAL: Restart + load nodes
         comfy_refresh_nodes()
         return True
     except subprocess.CalledProcessError as e:
-        logging.warning(f"Manager CLI install failed for {repo_url}: {e}")
+        logging.error(f"Install failed: {e.stderr}")
         return False
 
 def manager_install_model(url: str):
@@ -29,10 +58,10 @@ def manager_install_model(url: str):
         logging.warning(f"Manager CLI model install failed for {url}: {e}")
         return False
 
-# -------------------------------------------------------
+# ------------------------------------------------------- 
 # Top-level orchestration: given a workflow template dict,
 # install nodes & models (safe, idempotent).
-# -------------------------------------------------------
+# ------------------------------------------------------- 
 def auto_install_all(template: dict):
     installed_nodes = []
     installed_models = []
