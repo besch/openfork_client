@@ -1,88 +1,217 @@
-import os
-import time
+"""
+Dynamic dependency installer for ComfyUI nodes running in Docker.
+Executes Manager CLI commands inside the container.
+"""
 import logging
 import subprocess
-import requests
+from services.docker_manager import docker_manager
 
-# Paths (inside container)
-COMFY_ROOT = "/app/ComfyUI"
-MANAGER_CLI = os.path.join(COMFY_ROOT, "custom_nodes", "ComfyUI-Manager", "cli", "main.py")
-MODEL_DIR = os.path.join(COMFY_ROOT, "models")
-TEMP_DL = os.path.join(MODEL_DIR, "_temp")
-os.makedirs(TEMP_DL, exist_ok=True)
-
-# ------------------------------------------------------- 
-# Helpers
-# ------------------------------------------------------- 
-def comfy_refresh_nodes():
-    try:
-        requests.post("http://127.0.0.1:8188/refresh_nodes", timeout=5)
-    except Exception:
-        logging.debug("Could not request /refresh_nodes")
-
-def comfy_refresh_models():
-    try:
-        requests.post("http://127.0.0.1:8188/refresh_models", timeout=5)
-    except Exception:
-        logging.debug("Could not request /refresh_models")
-
-# ------------------------------------------------------- 
-# Install via ComfyUI-Manager CLI
-# ------------------------------------------------------- 
-def manager_install_custom_node(repo_url: str):
-    if not os.path.exists(MANAGER_CLI):
-        logging.warning(f"Manager CLI missing: {MANAGER_CLI}")
+def manager_install_custom_node(repo_url: str) -> bool:
+    """
+    Installs a custom node inside the running ComfyUI container.
+    
+    Args:
+        repo_url: Git repository URL of the custom node
+        
+    Returns:
+        True if installation succeeded, False otherwise
+    """
+    container_name = docker_manager.get_container_name()
+    
+    if not container_name:
+        logging.error("No active ComfyUI container found for node installation")
         return False
+    
+    # Use the Manager's pip package instead of CLI
+    # This is more reliable and doesn't depend on file paths
+    cmd = [
+        "docker", "exec", container_name,
+        "python3", "-c",
+        f"""
+            import sys
+            import os
+            import subprocess
+
+            # Add ComfyUI to path
+            sys.path.insert(0, '/app/ComfyUI')
+
+            # Clone the repository directly
+            repo_url = '{repo_url}'
+            repo_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
+            target_path = f'/app/ComfyUI/custom_nodes/{{repo_name}}'
+
+            if os.path.exists(target_path):
+                print(f'Repository already exists at {{target_path}}')
+                sys.exit(0)
+
+            # Clone using git
+            result = subprocess.run(
+                ['git', 'clone', repo_url, target_path],
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                print(f'Git clone failed: {{result.stderr}}')
+                sys.exit(1)
+
+            # Install requirements if they exist
+            req_file = os.path.join(target_path, 'requirements.txt')
+            if os.path.exists(req_file):
+                print(f'Installing requirements from {{req_file}}')
+                result = subprocess.run(
+                    ['pip3', 'install', '-r', req_file],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print(f'Requirements installation failed: {{result.stderr}}')
+                    sys.exit(1)
+
+            print(f'Successfully installed {{repo_name}}')
+        """
+    ]
+    
+    logging.info(f"Installing custom node in container: {repo_url}")
+    
     try:
         result = subprocess.run(
-            ["python3", MANAGER_CLI, "--install-custom-node", repo_url],
-            check=True, capture_output=True, text=True, timeout=300
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 minute timeout for large repos
+            check=False
         )
-        logging.info(f"Installed {repo_url}\n{result.stdout}")
-        time.sleep(8)  # CRITICAL: Restart + load nodes
-        comfy_refresh_nodes()
-        return True
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Install failed: {e.stderr}")
+        
+        if result.returncode == 0:
+            logging.info(f"Successfully installed custom node: {repo_url}")
+            if result.stdout:
+                logging.debug(f"Installation output: {result.stdout}")
+            return True
+        else:
+            logging.error(f"Failed to install custom node: {repo_url}")
+            if result.stderr:
+                logging.error(f"Error output: {result.stderr}")
+            if result.stdout:
+                logging.error(f"Stdout: {result.stdout}")
+            logging.error(f"Return code: {result.returncode}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout installing custom node: {repo_url}")
+        return False
+    except Exception as e:
+        logging.error(f"Exception installing custom node {repo_url}: {e}", exc_info=True)
         return False
 
-def manager_install_model(url: str):
-    if not os.path.exists(MANAGER_CLI):
+
+def manager_install_model(model_url: str) -> bool:
+    """
+    Installs a model inside the running ComfyUI container.
+    
+    Args:
+        model_url: URL to download the model from
+        
+    Returns:
+        True if installation succeeded, False otherwise
+    """
+    container_name = docker_manager.get_container_name()
+    
+    if not container_name:
+        logging.error("No active ComfyUI container found for model installation")
         return False
+    
+    # Download model directly using wget/aria2
+    cmd = [
+        "docker", "exec", container_name,
+        "python3", "-c",
+        f"""
+import os
+import subprocess
+import urllib.parse
+
+model_url = '{model_url}'
+
+# Try to determine target directory from URL
+url_path = urllib.parse.urlparse(model_url).path
+filename = os.path.basename(url_path)
+
+# Determine model type from filename
+if any(x in filename.lower() for x in ['checkpoint', 'ckpt', 'safetensors']):
+    if 'lora' in filename.lower():
+        target_dir = '/app/ComfyUI/models/loras'
+    elif 'vae' in filename.lower():
+        target_dir = '/app/ComfyUI/models/vae'
+    else:
+        target_dir = '/app/ComfyUI/models/checkpoints'
+else:
+    target_dir = '/app/ComfyUI/models/checkpoints'
+
+os.makedirs(target_dir, exist_ok=True)
+target_path = os.path.join(target_dir, filename)
+
+if os.path.exists(target_path):
+    print(f'Model already exists at {{target_path}}')
+    import sys
+    sys.exit(0)
+
+# Download using aria2c (faster) or wget
+try:
+    result = subprocess.run(
+        ['aria2c', '-x', '16', '-s', '16', '-o', target_path, model_url],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        print(f'Successfully downloaded model to {{target_path}}')
+        import sys
+        sys.exit(0)
+except FileNotFoundError:
+    pass
+
+# Fallback to wget
+result = subprocess.run(
+    ['wget', '-O', target_path, model_url],
+    capture_output=True,
+    text=True
+)
+
+if result.returncode != 0:
+    print(f'Download failed: {{result.stderr}}')
+    import sys
+    sys.exit(1)
+
+print(f'Successfully downloaded model to {{target_path}}')
+"""
+    ]
+    
+    logging.info(f"Installing model in container: {model_url}")
+    
     try:
-        subprocess.run(["python3", MANAGER_CLI, "--install-model", url], check=True)
-        time.sleep(1)
-        comfy_refresh_models()
-        return True
-    except subprocess.CalledProcessError as e:
-        logging.warning(f"Manager CLI model install failed for {url}: {e}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=1800,  # 30 minute timeout for large models
+            check=False
+        )
+        
+        if result.returncode == 0:
+            logging.info(f"Successfully installed model: {model_url}")
+            if result.stdout:
+                logging.debug(f"Installation output: {result.stdout}")
+            return True
+        else:
+            logging.error(f"Failed to install model: {model_url}")
+            if result.stderr:
+                logging.error(f"Error: {result.stderr}")
+            if result.stdout:
+                logging.error(f"Stdout: {result.stdout}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout installing model: {model_url}")
         return False
-
-# ------------------------------------------------------- 
-# Top-level orchestration: given a workflow template dict,
-# install nodes & models (safe, idempotent).
-# ------------------------------------------------------- 
-def auto_install_all(template: dict):
-    installed_nodes = []
-    installed_models = []
-
-    # 1. NODES: EXPLICIT URLs (from sync!)
-    for dep in template.get('custom_node_dependencies', []):
-        url = dep.get('url')
-        if url and manager_install_custom_node(url):
-            installed_nodes.append(url)
-
-    # 2. HARD-MAPS (backup for undocumented)
-    # This part requires a get_missing_nodes function, which is not defined yet.
-    # For now, I will skip this part and assume all nodes are explicitly defined or handled by manager_install_custom_node.
-    # If get_missing_nodes is needed, it would involve querying ComfyUI for installed nodes and comparing.
-    # The user's prompt implies that the custom_node_dependencies from workflow_sync should be sufficient.
-
-    # 3. MODELS: MANAGER CLI (handles ALL!)
-    for url in template.get('model_urls', []):
-        if manager_install_model(url):  # CivitAI/HF/GH/direct → MAGIC!
-            installed_models.append(url)
-
-    comfy_refresh_nodes()
-    comfy_refresh_models()
-    return installed_nodes, installed_models
+    except Exception as e:
+        logging.error(f"Exception installing model {model_url}: {e}", exc_info=True)
+        return False

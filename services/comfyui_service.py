@@ -18,6 +18,8 @@ class ComfyUIClient:
         self.comfyui_ws_url = comfyui_ws_url
         self.http_base = self._http_base_from_ws(comfyui_ws_url)
         self.supabase_client: Union[Client, None] = self._init_supabase_client()
+        self._health_check_cache = {'is_healthy': False, 'timestamp': 0}
+        self._health_check_ttl = 10  # Cache health status for 10 seconds
 
     def _init_supabase_client(self) -> Union[Client, None]:
         supabase_url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -32,12 +34,47 @@ class ComfyUIClient:
             return None
 
     def _http_base_from_ws(self, ws_url: str) -> str:
-        # ws://host:port/ws?... -> http://host:port
-        # wss://host:port/ws?... -> https://host:port
         base = ws_url.split("/ws")[0]
         if base.startswith("wss://"):
             return base.replace("wss://", "https://")
         return base.replace("ws://", "http://")
+
+    def check_health(self, use_cache: bool = True) -> bool:
+        """
+        Check if ComfyUI server is healthy and responding.
+        
+        Args:
+            use_cache: If True, use cached health status if available
+            
+        Returns:
+            True if server is healthy, False otherwise
+        """
+        # Check cache first
+        if use_cache:
+            cache_age = time.time() - self._health_check_cache['timestamp']
+            if cache_age < self._health_check_ttl:
+                return self._health_check_cache['is_healthy']
+        
+        try:
+            # Try to get object_info as a health check
+            response = requests.get(f"{self.http_base}/object_info", timeout=5)
+            is_healthy = response.status_code == 200
+            
+            # Update cache
+            self._health_check_cache = {
+                'is_healthy': is_healthy,
+                'timestamp': time.time()
+            }
+            
+            return is_healthy
+            
+        except Exception as e:
+            logging.debug(f"Health check failed: {e}")
+            self._health_check_cache = {
+                'is_healthy': False,
+                'timestamp': time.time()
+            }
+            return False
 
     def get_object_info(self) -> Union[Dict, None]:
         """Fetches the raw object_info from the ComfyUI server."""
@@ -56,61 +93,54 @@ class ComfyUIClient:
         if not object_info:
             return []
         
-        # object_info is a dictionary where keys are node class_types
         return list(object_info.keys())
 
     def refresh_nodes(self):
+        """Refresh ComfyUI's node cache."""
         try:
-            requests.post(f"{self.http_base}/refresh", timeout=10)  # All!
+            requests.post(f"{self.http_base}/refresh", timeout=10)
             time.sleep(3)
             logging.info("Nodes refreshed")
-        except Exception:
-            logging.debug("Could not request /refresh")
+            # Invalidate health cache after refresh
+            self._health_check_cache['timestamp'] = 0
+        except Exception as e:
+            logging.warning(f"Could not request /refresh: {e}")
 
-    def install_custom_nodes(self, node_urls: List[str]):
+    def wait_for_ready(self, shutdown_event: threading.Event, timeout=180) -> bool:
         """
-        Placeholder for triggering custom node installation.
-        In a real implementation, this would likely call an endpoint on a manager
-        service running alongside ComfyUI, or trigger a script inside the container.
+        Waits for the ComfyUI server to be available and healthy.
+        
+        Args:
+            shutdown_event: Event to check for shutdown signal
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if server became ready, False otherwise
         """
-        if not node_urls:
-            return
-
-        logging.info(f"[DEPENDENCY-MANAGER] Requesting installation for the following custom nodes:")
-        for url in node_urls:
-            logging.info(f"  - {url}")
-        # In a real scenario, you would now trigger the installation process.
-        # For this simulation, we assume it happens magically.
-        logging.info("[DEPENDENCY-MANAGER] Installation trigger sent.")
-
-    def restart(self):
-        """
-        Placeholder for triggering a restart of the ComfyUI service.
-        """
-        logging.info("[SERVICE-MANAGER] A restart of the ComfyUI service would be triggered now.")
-        # In a real implementation, this would call the container management service
-        # to restart the ComfyUI container.
-
-    def wait_for_ready(self, shutdown_event: threading.Event, timeout=180):
-        """Waits for the ComfyUI server to be available."""
         logging.info("Waiting for ComfyUI server to be ready...")
         start_time = time.time()
-        url = f"{self.http_base}/object_info"
+        attempt = 0
+        
         while time.time() - start_time < timeout:
             if shutdown_event.is_set():
                 logging.warning("Shutdown requested while waiting for ComfyUI.")
                 return False
-            try:
-                response = requests.get(url, timeout=5)
-                if response.status_code == 200:
-                    logging.info("ComfyUI server is ready.")
-                    return True
-                else:
-                    logging.debug(f"ComfyUI not ready yet (status {response.status_code}). Retrying...")
-            except requests.exceptions.RequestException as e:
-                logging.debug(f"ComfyUI not ready yet (connection error: {e}). Retrying...")
-
-            shutdown_event.wait(5)
+            
+            attempt += 1
+            
+            # Check health
+            if self.check_health(use_cache=False):
+                logging.info(f"ComfyUI server is ready (took {int(time.time() - start_time)}s)")
+                return True
+            
+            # Log progress every 10 attempts
+            if attempt % 10 == 0:
+                elapsed = int(time.time() - start_time)
+                logging.info(f"Still waiting for ComfyUI... ({elapsed}s elapsed)")
+            
+            # Wait before retry
+            shutdown_event.wait(2)
+        
         logging.error(f"ComfyUI server did not become ready in {timeout} seconds.")
         return False
 
@@ -122,7 +152,7 @@ class ComfyUIClient:
             raise ValueError("Invalid workflow payload; expected a dict with a 'prompt' key containing the API graph.")
         payload_prompt = workflow_json["prompt"]
 
-        # Validate API graph structure: dict of nodes with class_type and inputs
+        # Validate API graph structure
         if not isinstance(payload_prompt, dict) or not payload_prompt:
             raise ValueError("Invalid workflow payload; 'prompt' must be a non-empty dict of nodes.")
         for k, node in payload_prompt.items():
@@ -131,24 +161,18 @@ class ComfyUIClient:
             if not node.get("class_type"):
                 raise ValueError(f"Invalid node for id {k}: missing 'class_type'.")
 
-        # Probe with retry to ensure ComfyUI is fully ready. This acts as a mini
-        # "wait_for_ready" for modes where the full wait is not performed.
-        max_retries = 60
-        retry_delay = 5 # seconds
+        # Probe with retry to ensure ComfyUI is fully ready
+        max_retries = 12
+        retry_delay = 5
         for i in range(max_retries):
-            try:
-                probe_req = urllib.request.Request(f"{self.http_base}/object_info")
-                with urllib.request.urlopen(probe_req, timeout=5):
-                    pass # Success
-                break # Exit loop
-            except Exception as e:
-                if i < max_retries - 1:
-                    logging.warning(f"ComfyUI probe failed (attempt {i+1}/{max_retries}). Retrying in {retry_delay}s... Error: {e}")
-                    time.sleep(retry_delay)
-                else:
-                    logging.error(f"ComfyUI probe failed after {max_retries} attempts.")
-                    raise RuntimeError(f"Cannot reach ComfyUI at {self.http_base} (/object_info): {e}. "
-                                       f"Check COMFYUI_WS_URL and that ComfyUI is running and port 8188 is published.")
+            if self.check_health(use_cache=False):
+                break
+            
+            if i < max_retries - 1:
+                logging.warning(f"ComfyUI not fully ready (attempt {i+1}/{max_retries}). Retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                raise RuntimeError(f"Cannot reach ComfyUI at {self.http_base}. Check that ComfyUI is running.")
 
         body = json.dumps({"prompt": payload_prompt, "client_id": client_id}).encode("utf-8")
         req = urllib.request.Request(f"{self.http_base}/prompt", data=body, headers={"Content-Type": "application/json"})
@@ -170,7 +194,7 @@ class ComfyUIClient:
             raise RuntimeError(f"ComfyUI /prompt returned HTTP {e.code}: {detail}")
         except (urllib.error.URLError, http.client.RemoteDisconnected) as e:
             reason = e.reason if hasattr(e, 'reason') else str(e)
-            error_message = f"Cannot reach ComfyUI at {self.server_address} (/prompt): {reason}. Check COMFYUI_WS_URL and that ComfyUI is running and the port is published."
+            error_message = f"Cannot reach ComfyUI at {self.http_base} (/prompt): {reason}"
             logging.error(error_message)
             raise RuntimeError(error_message)
 
@@ -194,7 +218,7 @@ class ComfyUIClient:
                 out = ws.recv()
                 q.put(out)
             except Exception as e:
-                q.put(e) # Signal error to the main thread
+                q.put(e)
                 break
 
     def get_workflow_output(self, prompt_id: str, job_id: str, orchestrator_service, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200, shutdown_event: threading.Event = None) -> Union[dict, None, str]:
@@ -207,15 +231,15 @@ class ComfyUIClient:
         ws = websocket.WebSocket()
         try:
             ws.connect(self.comfyui_ws_url.format(client_id), timeout=600)
-            logging.info(f"Successfully connected to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}")
+            logging.info(f"Successfully connected to ComfyUI WebSocket")
         except Exception as e:
-            logging.error(f"Failed to connect to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}: {e}")
-            raise RuntimeError(f"Failed to connect to ComfyUI WebSocket at {self.comfyui_ws_url}: {e}")
+            logging.error(f"Failed to connect to ComfyUI WebSocket: {e}")
+            raise RuntimeError(f"Failed to connect to ComfyUI WebSocket: {e}")
 
         q = Queue()
         reader_thread = threading.Thread(target=self._ws_reader_thread, args=(ws, q), daemon=True)
         reader_thread.start()
-        logging.info("WebSocket reader thread started.")
+        logging.debug("WebSocket reader thread started.")
 
         start_ts = time.time()
         last_poll_ts = start_ts
@@ -228,10 +252,9 @@ class ComfyUIClient:
             try:
                 def on_update(payload):
                     if payload.get('new', {}).get('status') == 'cancelled':
-                        logging.warning(f"Cancellation requested for job {job_id} via real-time. Interrupting workflow.")
+                        logging.warning(f"Cancellation requested for job {job_id} via real-time.")
                         job_cancellation_event.set()
 
-                logging.info(f"Subscribing to real-time updates for job {job_id}")
                 subscription = self.supabase_client.table("dgn_jobs").on("UPDATE", on_update).filter("id", "eq", job_id).subscribe()
             except Exception as e:
                 logging.error(f"Failed to subscribe to real-time job updates: {e}")
@@ -239,7 +262,7 @@ class ComfyUIClient:
         try:
             while True:
                 if shutdown_event and shutdown_event.is_set():
-                    logging.warning("Shutdown event received, interrupting workflow output wait.")
+                    logging.warning("Shutdown event received, interrupting workflow.")
                     return "interrupted"
 
                 if job_cancellation_event.is_set():
@@ -247,37 +270,33 @@ class ComfyUIClient:
                     return "interrupted"
 
                 if (time.time() - start_ts) > timeout_sec:
-                    logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Breaking loop to fetch history.")
+                    logging.warning(f"Workflow timed out after {timeout_sec}s for prompt_id: {prompt_id}")
                     break
 
-                # Fallback polling mechanism
+                # Fallback polling
                 if time.time() - last_poll_ts > 5:
                     last_poll_ts = time.time()
                     try:
                         job_details = orchestrator_service.get_job(job_id)
                         if job_details and job_details.get('status') == 'cancelled':
-                            logging.warning(f"Cancellation requested for job {job_id} (polled). Interrupting workflow.")
+                            logging.warning(f"Job {job_id} cancelled (polled).")
                             self.interrupt_workflow()
                             return "interrupted"
                     except Exception as e:
-                        logging.error(f"Error checking for job cancellation (polling fallback): {e}")
+                        logging.error(f"Error checking for cancellation: {e}")
 
                 try:
-                    out = q.get(timeout=1)  # Shorter timeout to allow event checks
-                    logging.debug(f"Received raw WebSocket message: {out}")
+                    out = q.get(timeout=1)
                     if isinstance(out, Exception):
-                        logging.error(f"Exception in WebSocket reader thread: {out}")
+                        logging.error(f"Exception in WebSocket reader: {out}")
                         raise out
                 except Empty:
-                    logging.debug("Queue empty, continuing to wait for messages.")
                     continue
 
                 if isinstance(out, str):
                     try:
                         message = json.loads(out)
-                        logging.debug(f"Parsed WebSocket message: {json.dumps(message, indent=2)}")
-                    except Exception as e:
-                        logging.error(f"Failed to parse WebSocket message as JSON: {out}. Error: {e}")
+                    except Exception:
                         continue
 
                     mtype = message.get("type")
@@ -289,16 +308,13 @@ class ComfyUIClient:
                         node_id = data.get("node") or data.get("node_id") or data.get("node_id_name")
                         if node_id is not None:
                             executed_nodes.add(str(node_id))
-                            logging.info(f"Executed message for prompt_id {prompt_id}, node_id: {node_id}. Executed nodes count: {len(executed_nodes)}")
 
                         if "output" in data and node_id is not None:
                             all_node_outputs[str(node_id)] = data["output"]
-                            logging.info(f"Stored output for node_id {node_id}. Current all_node_outputs keys: {all_node_outputs.keys()}")
 
                         if terminal_node_ids:
                             need = {str(n) for n in terminal_node_ids}
                             if need and need.issubset(executed_nodes):
-                                logging.info(f"All terminal nodes {terminal_node_ids} executed for prompt_id {prompt_id}. Breaking loop to fetch history.")
                                 break
 
                     elif mtype == "status":
@@ -306,36 +322,29 @@ class ComfyUIClient:
                         if isinstance(status, dict):
                             exec_info = status.get("exec_info", {})
                             if isinstance(exec_info, dict) and exec_info.get("queue_remaining") == 0:
-                                logging.info(f"ComfyUI queue is empty for prompt_id {prompt_id}. Breaking loop to fetch history.")
                                 break
-                    else:
-                        logging.info(f"Received WebSocket message of type: {mtype}. Data keys: {data.keys()}")
         finally:
             if subscription and self.supabase_client:
                 try:
                     self.supabase_client.realtime.remove_channel(subscription)
-                    logging.info(f"Unsubscribed from real-time updates for job {job_id}")
                 except Exception as e:
-                    logging.error(f"Error unsubscribing from real-time updates: {e}")
+                    logging.error(f"Error unsubscribing: {e}")
             try:
                 ws.close()
-                logging.info("WebSocket connection closed.")
             except Exception as e:
-                logging.error(f"Error closing WebSocket connection: {e}")
+                logging.error(f"Error closing WebSocket: {e}")
 
-        logging.info(f"Exiting get_workflow_output for prompt_id {prompt_id} due to loop completion. Fetching history for outputs.")
         history_outputs = self.fetch_history_outputs(prompt_id)
         if history_outputs is not None:
             return history_outputs
         else:
-            logging.warning(f"Failed to fetch history outputs for prompt_id {prompt_id}. Returning accumulated outputs (which might be empty).")
+            logging.warning(f"Failed to fetch history for prompt_id {prompt_id}. Returning accumulated outputs.")
             return all_node_outputs
 
     def fetch_history_outputs(self, prompt_id: str) -> Union[dict, None]:
-        """Fetches workflow outputs from ComfyUI's /history endpoint for a given prompt_id."""
+        """Fetches workflow outputs from ComfyUI's /history endpoint."""
         try:
             history_url = f"{self.http_base}/history?prompt_id={prompt_id}"
-            logging.info(f"Fetching history from: {history_url}")
             req = urllib.request.Request(history_url)
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp_body = resp.read().decode("utf-8")
@@ -344,18 +353,7 @@ class ComfyUIClient:
                 if prompt_id in history_data:
                     prompt_history = history_data[prompt_id]
                     if "outputs" in prompt_history:
-                        logging.info(f"Successfully fetched outputs from history for prompt_id {prompt_id}.")
                         return prompt_history["outputs"]
-                    else:
-                        logging.warning(f"No 'outputs' found in history for prompt_id {prompt_id}.")
-                else:
-                    logging.warning(f"Prompt ID {prompt_id} not found in ComfyUI history.")
-        except urllib.error.HTTPError as e:
-            try:
-                detail = e.read().decode("utf-8")
-            except Exception:
-                detail = str(e)
-            logging.error(f"ComfyUI /history returned HTTP {e.code}: {detail}")
         except Exception as e:
-            logging.error(f"Failed to fetch history from ComfyUI: {e}")
-        return None # type: ignore
+            logging.error(f"Failed to fetch history: {e}")
+        return None

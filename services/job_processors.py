@@ -54,13 +54,10 @@ class DynamicJobProcessor:
 
     def _copy_file_from_container(self, filename: str, subfolder: str) -> Union[str, None]:
         """Copies a file from the active container to a temporary location on the host."""
-        # Sanitize filename to prevent path traversal
         safe_filename = os.path.basename(filename)
-
         source_in_container = os.path.join("/app/ComfyUI/output", subfolder, safe_filename).replace('\\', '/')
         
         os.makedirs(self.cache_dir, exist_ok=True)
-
         temp_filename = f"{self.job_id}_{safe_filename}"
         dest_on_host = os.path.join(self.cache_dir, temp_filename)
 
@@ -128,7 +125,6 @@ class DynamicJobProcessor:
                 continue
 
             if input_definition['type'] == 'image':
-                # Materialize image from base64 or URL if provided
                 materialized_path = materialize_image_input(value, self.input_dir)
                 if materialized_path:
                     value = os.path.basename(materialized_path)
@@ -136,7 +132,6 @@ class DynamicJobProcessor:
                     logging.error(f"Failed to materialize image for input '{input_name}'. Skipping injection.")
                     continue
 
-            # Find the node and set its property
             node = find_node_by_type_and_field(self.workflow_json, node_type, field_name)
             if node:
                 set_node_property(node, field_name, value)
@@ -145,7 +140,10 @@ class DynamicJobProcessor:
                 logging.warning(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. Skipping injection.")
 
     def _ensure_dependencies(self):
-        """Checks for and triggers installation of missing custom node dependencies."""
+        """
+        Checks for and triggers installation of missing custom node dependencies.
+        Now properly executes commands inside the Docker container.
+        """
         required_deps = self.workflow_template.get('custom_node_dependencies', [])
         if not required_deps:
             logging.info("No custom node dependencies specified for this workflow.")
@@ -158,42 +156,62 @@ class DynamicJobProcessor:
         missing_repos = []
         for dep in required_deps:
             is_installed = False
-            # Check if any node from this repo is already installed
             for node_class_type in dep.get('nodes', []):
                 if node_class_type in installed_nodes_set:
                     is_installed = True
-                    logging.info(f"  - Dependency for repo {dep.get('url')} met by node: {node_class_type}")
+                    logging.info(f"  - Dependency satisfied for {dep.get('url')} (found: {node_class_type})")
                     break
             
             if not is_installed:
-                logging.warning(f"  - Dependency MISSING for repo: {dep.get('url')}")
-                missing_repos.append(dep.get('url'))
+                repo_url = dep.get('url')
+                logging.warning(f"  - Missing dependency: {repo_url}")
+                missing_repos.append(repo_url)
 
-        if missing_repos:
-            logging.info(f"Auto-installing {len(missing_repos)} repos...")
-            for repo in set(missing_repos):  # Dedupe
-                manager_install_custom_node(repo)  # ✅ Direct CLI
-            
-            time.sleep(12)  # Restart + FULL load
-            self.comfyui_client.refresh_nodes() # Refresh nodes after installation
-            
-            # 🔄 Re-fetch
-            installed_nodes = self.comfyui_client.get_installed_nodes()
-            still_missing = []
-            for dep in required_deps:
-                if not any(n in installed_nodes for n in dep.get('nodes', [])):
-                    still_missing.append(dep['url'])
-                
-            if still_missing:
-                raise MissingDependenciesError(still_missing)
-            logging.info("All deps resolved!")
-        else:
-            logging.info("All custom node dependencies are met.")
+        if not missing_repos:
+            logging.info("All custom node dependencies are satisfied.")
+            return
+
+        # Install missing repositories
+        logging.info(f"Installing {len(missing_repos)} missing custom node(s)...")
+        
+        failed_installs = []
+        for repo_url in set(missing_repos):  # Dedupe
+            success = manager_install_custom_node(repo_url)
+            if not success:
+                failed_installs.append(repo_url)
+        
+        if failed_installs:
+            logging.error(f"Failed to install {len(failed_installs)} custom node(s): {failed_installs}")
+            raise MissingDependenciesError(failed_installs)
+        
+        # Restart container to fully load new nodes
+        logging.info("Restarting ComfyUI container to load new custom nodes...")
+        if not docker_manager.restart_container():
+            logging.error("Failed to restart container after installing dependencies")
+            raise RuntimeError("Container restart failed after dependency installation")
+        
+        # Wait for ComfyUI to be ready after restart
+        logging.info("Waiting for ComfyUI to be ready after restart...")
+        if not self.comfyui_client.wait_for_ready(self.shutdown_event, timeout=180):
+            raise RuntimeError("ComfyUI did not become ready after dependency installation restart")
+        
+        # Verify all dependencies are now present
+        logging.info("Verifying newly installed dependencies...")
+        installed_nodes = self.comfyui_client.get_installed_nodes()
+        still_missing = []
+        
+        for dep in required_deps:
+            if not any(n in installed_nodes for n in dep.get('nodes', [])):
+                still_missing.append(dep['url'])
+        
+        if still_missing:
+            logging.error(f"Dependencies still missing after installation: {still_missing}")
+            raise MissingDependenciesError(still_missing)
+        
+        logging.info("All dependencies successfully installed and verified!")
 
     def process(self):
-
-
-        # First, ensure all dependencies are met before processing
+        # Ensure all dependencies are met before processing
         self._ensure_dependencies()
 
         self._inject_dynamic_inputs()
@@ -279,7 +297,7 @@ class DynamicJobProcessor:
             try:
                 output_path = self.orchestrator_service.upload_image_output(temp_host_path, self.job_id)
                 if output_path:
-                    thumbnail_path = output_path # For images, thumbnail is the image itself
+                    thumbnail_path = output_path
                 else:
                     logging.error(f"Image upload failed for job {self.job_id}.")
                     self.orchestrator_service.update_job_status(self.job_id, 'failed')

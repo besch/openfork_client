@@ -7,7 +7,6 @@ from services.orchestrator_service import OrchestratorService
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 import sys
-from services.job_processors import DynamicJobProcessor, MissingDependenciesError
 from services.job_listener import JobListener
 
 class DGNClient:
@@ -27,6 +26,11 @@ class DGNClient:
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
 
+        # 🔧 CRITICAL FIX: Initialize docker_manager with compose file path
+        compose_file = os.path.join(root_dir, "docker", "docker-compose.unified.yaml")
+        docker_manager.set_compose_file(compose_file)
+        logging.info(f"Docker manager initialized with compose file: {compose_file}")
+
         if self.accept_policy == 'project' and self.allowed_targets:
             logging.info(f"Resolving targets: {self.allowed_targets}")
             self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets)
@@ -43,17 +47,25 @@ class DGNClient:
         except MissingDependenciesError as e:
             logging.error("Job failed due to missing custom node dependencies.")
             print("[DEPENDENCY_ERROR] A required custom node is not installed.", file=sys.stderr)
-            print("To fix this, please ask your AI assistant to run the following commands:", file=sys.stderr)
+            print("Missing repositories:", file=sys.stderr)
             
             for repo_url in e.missing_repos:
-                print(f'[COMMAND] python3 /app/ComfyUI/custom_nodes/ComfyUI-Manager/cli/main.py --install-custom-node "{repo_url}"')
+                print(f"  - {repo_url}", file=sys.stderr)
                 
-            print('[COMMAND] pkill -f "main.py --listen"')
-            print("\nAfter the commands are run, please start the client again.", file=sys.stderr)
-            # We need to fail the job in the orchestrator as well
+            print("\nThe system attempted to install these automatically but failed.", file=sys.stderr)
+            print("Please check the logs for installation errors.", file=sys.stderr)
+            
+            # Mark job as failed
             if job and job.get('id'):
-                self.orchestrator_service.update_job_status(job.get('id'), 'failed', completion_metadata={'error_message': 'Missing custom node dependencies.'})
-            SHUTDOWN_EVENT.set() # Signal all threads to shut down
+                self.orchestrator_service.update_job_status(
+                    job.get('id'), 
+                    'failed', 
+                    completion_metadata={
+                        'error_message': 'Failed to install required custom node dependencies.',
+                        'missing_repos': e.missing_repos
+                    }
+                )
+            SHUTDOWN_EVENT.set()
 
         except Exception as e:
             logging.error(f"An error occurred while processing job {job.get('id')}: {e}", exc_info=True)
@@ -65,6 +77,13 @@ if __name__ == "__main__":
     import sys
     from utils.shutdown_handler import SHUTDOWN_EVENT
     
+    # Configure logging to handle UTF-8 characters gracefully
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        encoding='utf-8'
+    )
+
     try:
         main()
         logging.info("Program exiting normally.")
