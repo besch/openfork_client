@@ -63,7 +63,7 @@ class ComfyUIClient:
         try:
             requests.post(f"{self.http_base}/refresh", timeout=10)  # All!
             time.sleep(3)
-            logging.info("🔄 Nodes refreshed")
+            logging.info("Nodes refreshed")
         except Exception:
             logging.debug("Could not request /refresh")
 
