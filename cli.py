@@ -14,7 +14,7 @@ from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
 from services.heartbeat_manager import HeartbeatManager
 from services.job_listener import JobListener
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)], encoding='utf-8')
 
 def setup_client(args):
     determined_orchestrator_url = Config.ORCHESTRATOR_URL_DEV if Config.DEV_MODE else Config.ORCHESTRATOR_URL_PROD

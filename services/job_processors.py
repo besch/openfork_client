@@ -170,7 +170,7 @@ class DynamicJobProcessor:
                 missing_repos.append(dep.get('url'))
 
         if missing_repos:
-            logging.info(f"🔄 Auto-installing {len(missing_repos)} repos...")
+            logging.info(f"Auto-installing {len(missing_repos)} repos...")
             for repo in set(missing_repos):  # Dedupe
                 manager_install_custom_node(repo)  # ✅ Direct CLI
             
@@ -186,7 +186,7 @@ class DynamicJobProcessor:
                 
             if still_missing:
                 raise MissingDependenciesError(still_missing)
-            logging.info("✅ All deps resolved!")
+            logging.info("All deps resolved!")
         else:
             logging.info("All custom node dependencies are met.")
 
