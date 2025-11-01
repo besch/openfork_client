@@ -52,7 +52,7 @@ class DGNClient:
             print("\nAfter the commands are run, please start the client again.", file=sys.stderr)
             # We need to fail the job in the orchestrator as well
             if job and job.get('id'):
-                self.orchestrator_service.update_job_status(job.get('id'), 'failed', error_message='Missing custom node dependencies.')
+                self.orchestrator_service.update_job_status(job.get('id'), 'failed', completion_metadata={'error_message': 'Missing custom node dependencies.'})
             SHUTDOWN_EVENT.set() # Signal all threads to shut down
 
         except Exception as e:
