@@ -59,7 +59,7 @@ def manager_install_custom_node(repo_url: str) -> bool:
     if not repo_url.endswith('.git'):
         repo_url = f"{repo_url}.git"
     
-    # Use bash script for better progress visibility
+    # Use bash script with fallback to zip download
     install_script = f"""
 set -e
 set -o pipefail
@@ -74,18 +74,109 @@ if [ -d "$TARGET_PATH" ]; then
     exit 0
 fi
 
-echo "[INSTALL]   Cloning repository..."
-# Disable git credential prompts and use anonymous HTTPS
-GIT_TERMINAL_PROMPT=0 git clone --progress --depth 1 "$REPO_URL" "$TARGET_PATH" 2>&1 | while IFS= read -r line; do
-    echo "[INSTALL]     $line"
-done
+echo "[INSTALL]   Attempting repository installation..."
+
+# Method 1: Try git clone with sanitized environment
+echo "[INSTALL]   Method 1: Trying git clone..."
+git_success=false
+
+(
+    # Create completely clean environment
+    cd /tmp
+    unset GIT_ASKPASS SSH_ASKPASS
+    export GIT_TERMINAL_PROMPT=0
+    export HOME=/tmp
+    
+    # Clone with no config files
+    if GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 "$REPO_URL" "/tmp/$REPO_NAME" 2>&1; then
+        mv "/tmp/$REPO_NAME" "$TARGET_PATH"
+        echo "[INSTALL]   [OK] Git clone succeeded"
+        exit 0
+    else
+        exit 1
+    fi
+) && git_success=true || git_success=false
+
+# Method 2: Fallback to zip download if git fails
+if [ "$git_success" = "false" ]; then
+    echo "[INSTALL]   Method 2: Falling back to zip download..."
+    
+    # Extract owner and repo from URL
+    REPO_PATH=$(echo "$REPO_URL" | sed 's|https://github.com/||' | sed 's|.git$||')
+    
+    # Try main branch first
+    ZIP_URL="https://github.com/$REPO_PATH/archive/refs/heads/main.zip"
+    echo "[INSTALL]   Downloading: $ZIP_URL"
+    
+    if wget -q -O /tmp/repo.zip "$ZIP_URL" 2>&1; then
+        echo "[INSTALL]   Extracting archive..."
+        unzip -q /tmp/repo.zip -d /tmp/ 2>&1
+        
+        # Find extracted directory (usually repo-main)
+        EXTRACTED_DIR=$(find /tmp -maxdepth 1 -type d -name "*-main" -o -name "$REPO_NAME-main" | head -n 1)
+        
+        if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
+            mv "$EXTRACTED_DIR" "$TARGET_PATH"
+            rm -f /tmp/repo.zip
+            echo "[INSTALL]   [OK] Downloaded and extracted successfully (main branch)"
+        else
+            # Try master branch as fallback
+            rm -f /tmp/repo.zip
+            ZIP_URL="https://github.com/$REPO_PATH/archive/refs/heads/master.zip"
+            echo "[INSTALL]   Trying master branch: $ZIP_URL"
+            
+            if wget -q -O /tmp/repo.zip "$ZIP_URL" 2>&1; then
+                echo "[INSTALL]   Extracting archive..."
+                unzip -q /tmp/repo.zip -d /tmp/ 2>&1
+                
+                EXTRACTED_DIR=$(find /tmp -maxdepth 1 -type d -name "*-master" -o -name "$REPO_NAME-master" | head -n 1)
+                
+                if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
+                    mv "$EXTRACTED_DIR" "$TARGET_PATH"
+                    rm -f /tmp/repo.zip
+                    echo "[INSTALL]   [OK] Downloaded and extracted successfully (master branch)"
+                else
+                    echo "[INSTALL]   [ERROR] Could not find extracted directory"
+                    rm -f /tmp/repo.zip
+                    exit 1
+                fi
+            else
+                echo "[INSTALL]   [ERROR] Failed to download repository from both main and master branches"
+                exit 1
+            fi
+        fi
+    else
+        echo "[INSTALL]   [ERROR] Failed to download from main branch, trying master..."
+        ZIP_URL="https://github.com/$REPO_PATH/archive/refs/heads/master.zip"
+        
+        if wget -q -O /tmp/repo.zip "$ZIP_URL" 2>&1; then
+            echo "[INSTALL]   Extracting archive..."
+            unzip -q /tmp/repo.zip -d /tmp/ 2>&1
+            
+            EXTRACTED_DIR=$(find /tmp -maxdepth 1 -type d -name "*-master" -o -name "$REPO_NAME-master" | head -n 1)
+            
+            if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
+                mv "$EXTRACTED_DIR" "$TARGET_PATH"
+                rm -f /tmp/repo.zip
+                echo "[INSTALL]   [OK] Downloaded and extracted successfully (master branch)"
+            else
+                echo "[INSTALL]   [ERROR] Could not find extracted directory"
+                rm -f /tmp/repo.zip
+                exit 1
+            fi
+        else
+            echo "[INSTALL]   [ERROR] Failed to download repository"
+            exit 1
+        fi
+    fi
+fi
 
 if [ ! -d "$TARGET_PATH" ]; then
-    echo "[INSTALL]   [ERROR] Clone failed - directory not created"
+    echo "[INSTALL]   [ERROR] Installation failed - directory not created"
     exit 1
 fi
 
-echo "[INSTALL]   [OK] Clone completed"
+echo "[INSTALL]   [OK] Repository installed successfully"
 
 # Check for requirements
 REQ_FILE="$TARGET_PATH/requirements.txt"
