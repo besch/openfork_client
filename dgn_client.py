@@ -7,6 +7,7 @@ from services.orchestrator_service import OrchestratorService
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 import sys
+from services.job_processors import DynamicJobProcessor, MissingDependenciesError
 from services.job_listener import JobListener
 
 class DGNClient:
