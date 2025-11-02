@@ -7,6 +7,79 @@ from utils.comfyui_workflow_utils import find_node_by_type_and_field, set_node_p
 from services.auto_installer import manager_install_custom_node
 import time
 
+# UI-only nodes that should be removed before execution
+UI_ONLY_NODES = {
+    "Note",  # Core UI node
+    "MarkdownNote",  # pythongosssss
+    "ShowText",  # pythongosssss (sometimes)
+    "PreviewBridge",  # Core preview
+}
+
+
+def clean_workflow_for_execution(workflow_json: dict) -> dict:
+    """
+    Removes UI-only nodes from a workflow before execution.
+    These nodes are for documentation/display only and don't affect the workflow logic.
+    
+    IMPORTANT: Only removes nodes that have NO outputs (not connected to anything).
+    If a UI node is connected to other nodes, we keep it to avoid breaking the graph.
+    """
+    if not isinstance(workflow_json, dict):
+        return workflow_json
+    
+    # First, find all nodes that are used as inputs to other nodes
+    referenced_nodes = set()
+    for node_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if isinstance(inputs, dict):
+            for input_name, input_value in inputs.items():
+                # Check if this input references another node
+                # Format is usually [node_id, slot_index] or just node_id
+                if isinstance(input_value, list) and len(input_value) >= 1:
+                    referenced_nodes.add(str(input_value[0]))
+                elif isinstance(input_value, str):
+                    # Sometimes it's just a string node_id
+                    referenced_nodes.add(input_value)
+    
+    cleaned = {}
+    removed_nodes = []
+    kept_connected_ui_nodes = []
+    
+    for node_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            cleaned[node_id] = node_data
+            continue
+        
+        class_type = node_data.get('class_type', '')
+        
+        # Only remove UI-only nodes if they're NOT referenced by other nodes
+        if class_type in UI_ONLY_NODES:
+            if str(node_id) in referenced_nodes:
+                # Keep it - something else needs it
+                cleaned[node_id] = node_data
+                kept_connected_ui_nodes.append((node_id, class_type))
+            else:
+                # Safe to remove - nothing uses it
+                removed_nodes.append((node_id, class_type))
+            continue
+        
+        cleaned[node_id] = node_data
+    
+    if removed_nodes:
+        logging.info(f"Removed {len(removed_nodes)} UI-only nodes before execution:")
+        for node_id, class_type in removed_nodes:
+            logging.debug(f"  - Node {node_id}: {class_type}")
+    
+    if kept_connected_ui_nodes:
+        logging.debug(f"Kept {len(kept_connected_ui_nodes)} UI nodes that are connected to the workflow:")
+        for node_id, class_type in kept_connected_ui_nodes:
+            logging.debug(f"  - Node {node_id}: {class_type} (has connections)")
+    
+    return cleaned
+
 class MissingDependenciesError(Exception):
     """Custom exception for missing ComfyUI custom node dependencies."""
     def __init__(self, missing_repos: list[str]):
@@ -105,11 +178,16 @@ class DynamicJobProcessor:
             value = input_definition['default']
         return value
 
+    def _clean_ui_nodes(self):
+        """Remove UI-only nodes before execution."""
+        self.workflow_json = clean_workflow_for_execution(self.workflow_json)
+
     def _inject_dynamic_inputs(self):
         if not self.input_schema or not self.input_schema.get('properties'):
             logging.info(f"No input schema defined for workflow {self.workflow_template.get('name')}. Skipping dynamic injection.")
             return
 
+        injection_count = 0
         for input_name, input_definition in self.input_schema['properties'].items():
             value = self._get_input_value(input_name, input_definition)
             if value is None:
@@ -124,7 +202,7 @@ class DynamicJobProcessor:
                 logging.warning(f"Input '{input_name}' in schema is missing 'node_type' or 'field_name'. Skipping.")
                 continue
 
-            if input_definition['type'] == 'image':
+            if input_definition.get('type') == 'image':
                 materialized_path = materialize_image_input(value, self.input_dir)
                 if materialized_path:
                     value = os.path.basename(materialized_path)
@@ -136,8 +214,12 @@ class DynamicJobProcessor:
             if node:
                 set_node_property(node, field_name, value)
                 logging.info(f"Injected input '{input_name}' (value: {value}) into node {node_type} field {field_name}.")
+                injection_count += 1
             else:
-                logging.warning(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. Skipping injection.")
+                logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
+        
+        if injection_count > 0:
+            logging.info(f"Successfully injected {injection_count} dynamic inputs into workflow.")
 
     def _ensure_dependencies(self):
         """
@@ -173,7 +255,7 @@ class DynamicJobProcessor:
             found_nodes = [n for n in expected_nodes if n in installed_nodes_set]
             
             if found_nodes:
-                logging.info(f"✓ Dependency satisfied: {repo_url}")
+                logging.info(f"[OK] Dependency satisfied: {repo_url}")
                 logging.debug(f"  Found nodes: {found_nodes}")
                 verified_deps.append(repo_url)
                 continue
@@ -188,13 +270,13 @@ class DynamicJobProcessor:
                         fuzzy_matches.append((expected_node, installed_node))
             
             if fuzzy_matches:
-                logging.info(f"✓ Dependency likely satisfied (fuzzy): {repo_url}")
+                logging.info(f"[OK] Dependency likely satisfied (fuzzy): {repo_url}")
                 logging.debug(f"  Fuzzy matches: {fuzzy_matches}")
                 verified_deps.append(repo_url)
                 continue
             
             # Not found - needs installation
-            logging.warning(f"✗ Dependency missing: {repo_url}")
+            logging.warning(f"[MISSING] Dependency missing: {repo_url}")
             logging.debug(f"  Expected nodes: {expected_nodes}")
             repos_to_install.append((repo_url, expected_nodes))
 
@@ -214,10 +296,10 @@ class DynamicJobProcessor:
             
             if success:
                 successful_installs.append(repo_url)
-                logging.info(f"✓ Successfully installed {repo_url}")
+                logging.info(f"[OK] Successfully installed {repo_url}")
             else:
                 failed_installs.append((repo_url, expected_nodes))
-                logging.error(f"✗ Failed to install {repo_url}")
+                logging.error(f"[ERROR] Failed to install {repo_url}")
 
         # Only restart if we installed something successfully
         if successful_installs:
@@ -255,18 +337,18 @@ class DynamicJobProcessor:
                                 installed_node.lower() in expected_node.lower()):
                                 found = True
                                 fuzzy_found = True
-                                logging.info(f"  ✓ Found {expected_node} as {installed_node} (fuzzy)")
+                                logging.info(f"  [FUZZY] Found {expected_node} as {installed_node}")
                                 break
                         if found:
                             break
                 
                 if found:
-                    logging.info(f"✓ Verified: {repo_url}")
+                    logging.info(f"[OK] Verified: {repo_url}")
                 else:
                     # Check if the repository directory exists (install succeeded but nodes not detected)
                     # This might be a false positive from workflow_sync misidentifying core nodes
                     still_missing.append(repo_url)
-                    logging.warning(f"⚠ Could not verify: {repo_url}")
+                    logging.warning(f"[WARNING] Could not verify: {repo_url}")
                     logging.warning(f"  Expected: {expected_nodes}")
                     logging.warning(f"  This may be a false positive (core node misidentified as custom)")
                     possibly_working.append(repo_url)
@@ -308,9 +390,58 @@ class DynamicJobProcessor:
             # Don't raise for verification failures (might be false positives)
             raise MissingDependenciesError(failed_repos)
 
+    def _validate_workflow(self):
+        """
+        Validates the workflow before execution to catch common issues.
+        Returns True if valid, logs warnings for issues.
+        """
+        issues = []
+        
+        for node_id, node_data in self.workflow_json.items():
+            if not isinstance(node_data, dict):
+                continue
+            
+            class_type = node_data.get('class_type', '')
+            inputs = node_data.get('inputs', {})
+            
+            # Check for nodes with missing required inputs
+            if not isinstance(inputs, dict):
+                continue
+            
+            # Special check for SaveImage - must have images input
+            if class_type == 'SaveImage':
+                if 'images' not in inputs or inputs.get('images') is None:
+                    issues.append(f"Node {node_id} (SaveImage) is missing required 'images' input")
+            
+            # Check for broken connections (inputs referencing non-existent nodes)
+            for input_name, input_value in inputs.items():
+                if isinstance(input_value, list) and len(input_value) >= 1:
+                    referenced_node = str(input_value[0])
+                    if referenced_node not in self.workflow_json:
+                        issues.append(f"Node {node_id} ({class_type}) input '{input_name}' references non-existent node {referenced_node}")
+        
+        if issues:
+            logging.warning("=" * 60)
+            logging.warning("WORKFLOW VALIDATION ISSUES DETECTED")
+            logging.warning("=" * 60)
+            for issue in issues:
+                logging.warning(f"  - {issue}")
+            logging.warning("=" * 60)
+            logging.warning("The workflow may fail to execute. Check the workflow structure.")
+            return False
+        
+        logging.debug("Workflow validation passed")
+        return True
+
     def process(self):
         # Ensure all dependencies are met before processing
         self._ensure_dependencies()
+
+        # Clean UI-only nodes before processing
+        self._clean_ui_nodes()
+        
+        # Validate workflow structure
+        self._validate_workflow()
 
         self._inject_dynamic_inputs()
         payload = {"prompt": self.workflow_json}

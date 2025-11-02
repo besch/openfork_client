@@ -235,7 +235,7 @@ def get_standard_nodes_dynamic() -> set:
         response = requests.get("http://127.0.0.1:8188/object_info", timeout=5)
         if response.status_code == 200:
             object_info = response.json()
-            logger.info(f"✓ Loaded {len(object_info)} nodes from running ComfyUI instance")
+            logger.info(f"[OK] Loaded {len(object_info)} nodes from running ComfyUI instance")
             return set(object_info.keys())
     except Exception as e:
         logger.debug(f"Could not fetch live node list: {e}")
@@ -253,17 +253,12 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
     """
     # Hard mappings for nodes that are ACTUALLY custom nodes but hard to detect
     # NOTE: Do NOT include core nodes here (like StyleModelLoader, StyleModelApply which are now core)
+    # NOTE: UI-only nodes (MarkdownNote, ShowText, Note) should be skipped during execution, not mapped
     HARD_NODE_MAPPINGS = {
         # Wan Video
         "WanCameraImageToVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "WanCameraEmbedding": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "CreateVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
-        
-        # UI/Utility nodes (these ARE custom)
-        "MarkdownNote": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
-        "ShowText": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
-        "ShowText|pysssss": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
-        "String Literal": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
     }
 
     model_urls = set()
@@ -292,6 +287,9 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
     
     # Track unidentified nodes for debugging
     unidentified_nodes = set()
+    
+    # UI-only nodes that don't need dependencies
+    UI_ONLY_NODES = {"Note", "MarkdownNote", "ShowText", "PreviewBridge"}
 
     for node in nodes_to_process:
         node_type = node.get('type')
@@ -302,6 +300,11 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         # Skip UUID subgraphs
         if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', node_type):
             logger.debug(f"Skipping subgraph UUID: {node_type}")
+            continue
+        
+        # Skip UI-only nodes - they don't execute and don't need dependencies
+        if node_type in UI_ONLY_NODES:
+            logger.debug(f"Skipping UI-only node: {node_type}")
             continue
 
         # Skip CORE nodes early - this is the critical fix
@@ -314,14 +317,14 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         # 1. Check hard mappings FIRST (highest confidence)
         if node_type in HARD_NODE_MAPPINGS:
             found_repo_url = HARD_NODE_MAPPINGS[node_type]
-            logger.debug(f"Hard-mapped {node_type} → {found_repo_url}")
+            logger.debug(f"Hard-mapped {node_type} -> {found_repo_url}")
         
         # 2. Check explicit node lists in registry (exact match)
         if not found_repo_url:
             for reg_title, reg_value in custom_node_registry.items():
                 if node_type in reg_value.get('nodes', []) or node_type in reg_value.get('preemptions', []):
                     found_repo_url = reg_value.get('reference')
-                    logger.debug(f"Registry exact match: {node_type} → {found_repo_url}")
+                    logger.debug(f"Registry exact match: {node_type} -> {found_repo_url}")
                     break
 
         # 3. Fuzzy matching on title (be conservative - only distinctive prefixes)
@@ -332,7 +335,7 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
                 # Only match if the prefix is distinctive (3+ chars) and matches start of node name
                 if len(title_key) >= 3 and node_type.startswith(title_key):
                     found_repo_url = reg_value.get('reference')
-                    logger.debug(f"Prefix matched {node_type} → {found_repo_url} (via {title_key})")
+                    logger.debug(f"Prefix matched {node_type} -> {found_repo_url} (via {title_key})")
                     break
         
         if found_repo_url:
@@ -470,7 +473,7 @@ class WorkflowSynchronizer:
         return key
 
     def extract_inputs_from_litegraph(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
-        """Extracts user-editable inputs → JSON Schema for dynamic form."""
+        """Extracts user-editable inputs -> JSON Schema for dynamic form."""
         schema = {'type': 'object', 'properties': {}}
         props: Dict[str, Any] = schema['properties']
         counter: Dict[str, int] = {}
