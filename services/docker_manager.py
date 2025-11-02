@@ -50,6 +50,12 @@ class DockerManager:
         """Check if the ComfyUI container is currently running."""
         return self.get_container_name() is not None
     
+    def invalidate_node_cache(self):
+        """Invalidate the cached node information to force a refresh."""
+        self.installed_nodes_cache = set()
+        self.cache_timestamp = 0
+        logging.debug("Node cache invalidated")
+    
     def run_container(self, dependencies: Dict = None):
         """
         Start the ComfyUI container with optional dependencies.
