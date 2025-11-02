@@ -8,13 +8,11 @@ import requests
 import uuid
 from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
-from datetime import datetime
 
 # Add the parent directory (client) to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from config import Config
-import asyncio
 from supabase import create_client, Client
 
 
@@ -35,9 +33,17 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("h2").setLevel(logging.WARNING)
 
 # --- Helper Functions (adapted from ingest_workflow.py) ---
-
-
-_cached_standard_nodes: Optional[List[str]] = None
+def load_json_file(path: Path) -> Union[Dict, List, None]:
+    """Loads a JSON file from the given path."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning(f"File not found at {path}")
+        return None
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON in {path}")
+        return None
 
 def get_standard_nodes() -> List[str]:
     # FULL CORE LIST (500+ from ComfyUI 0.3.x / Oct 2025)
@@ -90,7 +96,7 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         "WanCameraEmbedding": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "CreateVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "UNETLoader": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
-        "MarkdownNote": "https://github.com/ltdrdata/ComfyUI-Documentation-Nodes",
+        "MarkdownNote": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
         # NEW: Flux Redux Style
         "StyleModelLoader": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",
         "StyleModelApply": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",
