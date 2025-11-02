@@ -55,6 +55,10 @@ def manager_install_custom_node(repo_url: str) -> bool:
     logging.info(f"[INSTALL] Installing custom node: {repo_name}")
     logging.info(f"[INSTALL]   Repository: {repo_url}")
     
+    # Ensure repo URL ends with .git
+    if not repo_url.endswith('.git'):
+        repo_url = f"{repo_url}.git"
+    
     # Use bash script for better progress visibility
     install_script = f"""
 set -e
@@ -71,7 +75,8 @@ if [ -d "$TARGET_PATH" ]; then
 fi
 
 echo "[INSTALL]   Cloning repository..."
-git clone --progress "$REPO_URL" "$TARGET_PATH" 2>&1 | while IFS= read -r line; do
+# Disable git credential prompts and use anonymous HTTPS
+GIT_TERMINAL_PROMPT=0 git clone --progress --depth 1 "$REPO_URL" "$TARGET_PATH" 2>&1 | while IFS= read -r line; do
     echo "[INSTALL]     $line"
 done
 
