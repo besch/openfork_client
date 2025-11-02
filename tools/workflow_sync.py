@@ -96,7 +96,8 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         "WanCameraEmbedding": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "CreateVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "UNETLoader": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
-        "MarkdownNote": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+        # NOTE: "Note" and "MarkdownNote" are CORE nodes, not custom nodes
+        # They should NOT be mapped to any custom node repository
         # NEW: Flux Redux Style
         "StyleModelLoader": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",
         "StyleModelApply": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",

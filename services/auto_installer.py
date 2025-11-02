@@ -6,7 +6,14 @@ import logging
 import subprocess
 import threading
 import time
+import requests
 from services.docker_manager import docker_manager
+
+# Known repository redirects/replacements
+REPO_REDIRECTS = {
+    "https://github.com/ltdrdata/ComfyUI-Documentation-Nodes": None,  # Deprecated/removed
+    "https://github.com/ltdrdata/ComfyUI-Documentation-Nodes.git": None,
+}
 
 def _stream_output(process, prefix=""):
     """Stream subprocess output in real-time to logging."""
@@ -33,6 +40,45 @@ def _stream_output(process, prefix=""):
     return stdout_thread, stderr_thread
 
 
+def validate_github_repo(repo_url: str) -> bool:
+    """
+    Validates that a GitHub repository exists by checking the API.
+    
+    Args:
+        repo_url: Git repository URL to validate
+        
+    Returns:
+        True if repository exists, False otherwise
+    """
+    try:
+        # Extract owner/repo from URL
+        # https://github.com/owner/repo or https://github.com/owner/repo.git
+        parts = repo_url.rstrip('/').replace('.git', '').split('github.com/')
+        if len(parts) < 2:
+            return False
+        
+        owner_repo = parts[1].strip('/')
+        
+        # Use GitHub API to check if repo exists
+        api_url = f"https://api.github.com/repos/{owner_repo}"
+        response = requests.head(api_url, timeout=10)
+        
+        if response.status_code == 200:
+            return True
+        elif response.status_code == 404:
+            logging.warning(f"Repository not found: {repo_url}")
+            return False
+        else:
+            # For rate limiting or other issues, assume it exists to not block installation
+            logging.warning(f"Could not validate {repo_url} (status {response.status_code}), assuming it exists")
+            return True
+            
+    except Exception as e:
+        logging.warning(f"Error validating repository {repo_url}: {e}")
+        # On error, assume repository exists to not block valid installations
+        return True
+
+
 def manager_install_custom_node(repo_url: str) -> bool:
     """
     Installs a custom node inside the running ComfyUI container with progress logging.
@@ -43,6 +89,23 @@ def manager_install_custom_node(repo_url: str) -> bool:
     Returns:
         True if installation succeeded, False otherwise
     """
+    # Check for known redirects/deprecated repos
+    normalized_url = repo_url.rstrip('/')
+    if normalized_url in REPO_REDIRECTS:
+        replacement = REPO_REDIRECTS[normalized_url]
+        if replacement is None:
+            logging.warning(f"[INSTALL] Repository {repo_url} is deprecated/removed. Skipping installation.")
+            return True  # Return True to not fail the job - this dependency is optional
+        else:
+            logging.info(f"[INSTALL] Redirecting {repo_url} to {replacement}")
+            repo_url = replacement
+    
+    # Validate repository exists before attempting installation
+    if not validate_github_repo(repo_url):
+        logging.error(f"[INSTALL] Repository does not exist: {repo_url}")
+        logging.info(f"[INSTALL] This may be a deprecated dependency. Skipping installation.")
+        return True  # Return True to not fail the job
+    
     container_name = docker_manager.get_container_name()
     
     if not container_name:

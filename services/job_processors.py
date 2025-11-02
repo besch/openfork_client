@@ -142,7 +142,7 @@ class DynamicJobProcessor:
     def _ensure_dependencies(self):
         """
         Checks for and triggers installation of missing custom node dependencies.
-        Now properly executes commands inside the Docker container.
+        Now properly handles optional/deprecated dependencies.
         """
         required_deps = self.workflow_template.get('custom_node_dependencies', [])
         if not required_deps:
@@ -154,8 +154,12 @@ class DynamicJobProcessor:
         installed_nodes_set = set(installed_nodes)
 
         missing_repos = []
+        optional_missing = []
+        
         for dep in required_deps:
             is_installed = False
+            is_optional = dep.get('optional', False)  # Support optional flag
+            
             for node_class_type in dep.get('nodes', []):
                 if node_class_type in installed_nodes_set:
                     is_installed = True
@@ -164,51 +168,75 @@ class DynamicJobProcessor:
             
             if not is_installed:
                 repo_url = dep.get('url')
-                logging.warning(f"  - Missing dependency: {repo_url}")
-                missing_repos.append(repo_url)
+                if is_optional:
+                    logging.info(f"  - Optional dependency missing: {repo_url} (will attempt to install)")
+                    optional_missing.append(repo_url)
+                else:
+                    logging.warning(f"  - Required dependency missing: {repo_url}")
+                    missing_repos.append(repo_url)
 
-        if not missing_repos:
+        all_missing = missing_repos + optional_missing
+        
+        if not all_missing:
             logging.info("All custom node dependencies are satisfied.")
             return
 
         # Install missing repositories
-        logging.info(f"Installing {len(missing_repos)} missing custom node(s)...")
+        logging.info(f"Installing {len(all_missing)} missing custom node(s)...")
         
-        failed_installs = []
-        for repo_url in set(missing_repos):  # Dedupe
+        failed_required = []
+        failed_optional = []
+        
+        for repo_url in set(all_missing):  # Dedupe
             success = manager_install_custom_node(repo_url)
+            
             if not success:
-                failed_installs.append(repo_url)
+                if repo_url in missing_repos:
+                    failed_required.append(repo_url)
+                else:
+                    failed_optional.append(repo_url)
+                    logging.warning(f"Optional dependency failed to install: {repo_url}")
         
-        if failed_installs:
-            logging.error(f"Failed to install {len(failed_installs)} custom node(s): {failed_installs}")
-            raise MissingDependenciesError(failed_installs)
+        # Only fail the job if required dependencies failed
+        if failed_required:
+            logging.error(f"Failed to install {len(failed_required)} required custom node(s): {failed_required}")
+            raise MissingDependenciesError(failed_required)
         
-        # Restart container to fully load new nodes
-        logging.info("Restarting ComfyUI container to load new custom nodes...")
-        if not docker_manager.restart_container():
-            logging.error("Failed to restart container after installing dependencies")
-            raise RuntimeError("Container restart failed after dependency installation")
+        if failed_optional:
+            logging.warning(f"Some optional dependencies failed to install: {failed_optional}")
+            logging.warning("Continuing job execution without optional dependencies...")
         
-        # Wait for ComfyUI to be ready after restart
-        logging.info("Waiting for ComfyUI to be ready after restart...")
-        if not self.comfyui_client.wait_for_ready(self.shutdown_event, timeout=180):
-            raise RuntimeError("ComfyUI did not become ready after dependency installation restart")
-        
-        # Verify all dependencies are now present
-        logging.info("Verifying newly installed dependencies...")
-        installed_nodes = self.comfyui_client.get_installed_nodes()
-        still_missing = []
-        
-        for dep in required_deps:
-            if not any(n in installed_nodes for n in dep.get('nodes', [])):
-                still_missing.append(dep['url'])
-        
-        if still_missing:
-            logging.error(f"Dependencies still missing after installation: {still_missing}")
-            raise MissingDependenciesError(still_missing)
-        
-        logging.info("All dependencies successfully installed and verified!")
+        # Only restart if we actually installed something successfully
+        if len(all_missing) > len(failed_required) + len(failed_optional):
+            # Restart container to fully load new nodes
+            logging.info("Restarting ComfyUI container to load new custom nodes...")
+            if not docker_manager.restart_container():
+                logging.error("Failed to restart container after installing dependencies")
+                raise RuntimeError("Container restart failed after dependency installation")
+            
+            # Wait for ComfyUI to be ready after restart
+            logging.info("Waiting for ComfyUI to be ready after restart...")
+            if not self.comfyui_client.wait_for_ready(self.shutdown_event, timeout=180):
+                raise RuntimeError("ComfyUI did not become ready after dependency installation restart")
+            
+            # Verify required dependencies are now present
+            logging.info("Verifying newly installed dependencies...")
+            installed_nodes = self.comfyui_client.get_installed_nodes()
+            still_missing_required = []
+            
+            for dep in required_deps:
+                if dep.get('optional', False):
+                    continue  # Skip optional deps in verification
+                if not any(n in installed_nodes for n in dep.get('nodes', [])):
+                    still_missing_required.append(dep['url'])
+            
+            if still_missing_required:
+                logging.error(f"Required dependencies still missing after installation: {still_missing_required}")
+                raise MissingDependenciesError(still_missing_required)
+            
+            logging.info("All required dependencies successfully installed and verified!")
+        else:
+            logging.info("No new dependencies were installed successfully, skipping restart.")
 
     def process(self):
         # Ensure all dependencies are met before processing
