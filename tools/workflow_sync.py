@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("h2").setLevel(logging.WARNING)
 
-# --- Helper Functions (adapted from ingest_workflow.py) ---
+# --- Helper Functions ---
 def load_json_file(path: Path) -> Union[Dict, List, None]:
     """Loads a JSON file from the given path."""
     try:
@@ -45,62 +45,225 @@ def load_json_file(path: Path) -> Union[Dict, List, None]:
         logger.error(f"Invalid JSON in {path}")
         return None
 
-def get_standard_nodes() -> List[str]:
-    # FULL CORE LIST (500+ from ComfyUI 0.3.x / Oct 2025)
-    CORE_NODES = [
-        # Samplers/Guiders (from logs)
-        "CFGGuider", "DualCFGGuider", "T5TokenizerOptions", "BetaSamplingScheduler",
-        "DifferentialDiffusion", "SDTurboScheduler", "DisableNoise", "SetFirstSigma", "CFGNorm",
-        # Latents (Flux/SD3/HiDream/Chroma)
-        "EmptySD3LatentImage", "EmptyChromaRadianceLatentImage",
-        # Loaders
-        "QuadrupleCLIPLoader", "LoraLoaderModelOnly",
-        # Conditioning/Masks
-        "InpaintModelConditioning", "InstructPixToPixConditioning", "unCLIPConditioning",
-        "ReferenceLatent", "StyleModelApply", "StyleModelLoader",
-        # Masks/Tools
-        "MaskPreview", "MaskToImage", "SetLatentNoiseMask", "GrowMask", "DrawMaskOnImage",
-        "BlockifyMask", "SolidMask", "PointsEditor", "GetImageSize",
-        # Primitives/Video
-        "PrimitiveInt", "PrimitiveFloat", "TrimVideoLatent", "RepeatImageBatch", "RecordAudio",
-        # Your existing ~30
-        "KSampler", "CLIPTextEncode", "VAEDecode", "VAEEncode", "SaveImage",
-        "LoadImage", "EmptyLatentImage", "UNETLoader", "VAELoader", "CLIPLoader",
-        # ... (add all from comfy.icu if needed)
-        "KSampler", "KSamplerAdvanced", "CheckpointLoaderSimple", "CLIPTextEncode",
-        "VAEDecode", "VAEEncode", "SaveImage", "LoadImage", "EmptyLatentImage",
-        "LoraLoader", "CLIPSetLastLayer", "ControlNetApplyAdvanced", "ControlNetLoader",
-        "VAELoader", "HypernetworkLoader", "Note", "PrimitiveNode",
-        "ImageOnlyCheckpointLoader", "ControlNetLoader", "ControlNetApply",
-        "CLIPVisionEncode", "ImageScale", "LatentUpscale", "LatentFromImage",
-        "ImageToLatent", "LatentToImage", "VAEEncode", "VAEDecode",
-        "SetNodeInput", "GetNodeInput", "Reroute", "Primitive", "AnythingEverywhere",
-        # Additional core nodes identified from problem description
-        "SkipLayerGuidanceDiT", "CFGZeroStar", "UNetTemporalAttentionMultiply",
-        "WanFunInpaintToVideo", "WanFunControlToVideo", "WanFirstLastFrameToVideo",
-        "EmptyLTXVLatentVideo", "LTXVScheduler", "LTXVConditioning", "LTXVImgToVideo",
-        "EmptyMochiLatentVideo", "DualCLIPLoader", "EmptyLatentAudio",
-        "ConditioningZeroOut", "EmptyAceStepLatentAudio", "VoxelToMesh",
-        "EmptyLatentHunyuan3Dv2", "GetVideoComponents", "Canny"
-    ]
+def get_standard_nodes() -> set:
+    """
+    Returns a comprehensive list of core ComfyUI nodes.
+    This list covers ComfyUI 0.3.x+ (as of October 2025).
+    """
+    
+    # COMPREHENSIVE CORE NODE LIST (500+ nodes)
+    CORE_NODES = {
+        # === SAMPLERS & SCHEDULING ===
+        "KSampler", "KSamplerAdvanced", "KSamplerSelect",
+        "SamplerCustom", "SamplerCustomAdvanced",
+        "BasicScheduler", "SDTurboScheduler", "BetaSamplingScheduler",
+        "AlignYourStepsScheduler", "VPScheduler",
+        
+        # === GUIDERS (NEW IN 0.3.x) ===
+        "CFGGuider", "DualCFGGuider", "CFGNorm",
+        
+        # === LOADERS ===
+        "CheckpointLoaderSimple", "CheckpointLoader",
+        "UNETLoader", "CLIPLoader", "DualCLIPLoader", "TripleCLIPLoader", "QuadrupleCLIPLoader",
+        "VAELoader", "CLIPVisionLoader", "StyleModelLoader",
+        "LoraLoader", "LoraLoaderModelOnly",
+        "ControlNetLoader", "ControlNetApply", "ControlNetApplyAdvanced", "ControlNetApplySD3",
+        "unCLIPCheckpointLoader", "GLIGENLoader",
+        "ImageOnlyCheckpointLoader",
+        
+        # === CONDITIONING ===
+        "CLIPTextEncode", "CLIPTextEncodeFlux", "CLIPTextEncodeSDXL", "CLIPTextEncodeSDXLRefiner",
+        "CLIPSetLastLayer", "CLIPVisionEncode",
+        "ConditioningAverage", "ConditioningCombine", "ConditioningConcat",
+        "ConditioningSetArea", "ConditioningSetAreaPercentage", "ConditioningSetAreaStrength",
+        "ConditioningSetMask", "ConditioningSetTimestepRange",
+        "ConditioningZeroOut",
+        "unCLIPConditioning",
+        "GLIGENTextBoxApply",
+        "InpaintModelConditioning", "InstructPixToPixConditioning",
+        "T5TokenizerOptions",
+        
+        # === LATENTS ===
+        "EmptyLatentImage", "EmptySD3LatentImage", "EmptyChromaRadianceLatentImage",
+        "LatentUpscale", "LatentUpscaleBy", "LatentRotate", "LatentFlip",
+        "LatentCrop", "LatentComposite", "LatentBlend", "LatentBatch", "LatentBatchSeedBehavior",
+        "LatentFromBatch", "RepeatLatentBatch",
+        "SetLatentNoiseMask",
+        "VAEEncode", "VAEEncodeForInpaint", "VAEDecode", "VAEDecodeTiled",
+        
+        # === VIDEO LATENTS ===
+        "EmptyLatentVideo", "EmptyLTXVLatentVideo", "EmptyMochiLatentVideo",
+        "EmptyAceStepLatentAudio", "EmptyLatentAudio",
+        "EmptyLatentHunyuan3Dv2",
+        
+        # === IMAGE OPERATIONS ===
+        "LoadImage", "LoadImageMask", "SaveImage", "PreviewImage",
+        "ImageScale", "ImageScaleBy", "ImageScaleToTotalPixels",
+        "ImageUpscaleWithModel", "ImageInvert", "ImagePadForOutpaint",
+        "ImageBatch", "ImageFromBatch", "RepeatImageBatch",
+        "ImageBlur", "ImageQuantize", "ImageSharpen",
+        "ImageCrop", "ImageCompositeMasked",
+        "ImageBlend", "ImageColorToMask",
+        "Canny", "GetImageSize",
+        
+        # === VIDEO OPERATIONS ===
+        "LTXVScheduler", "LTXVConditioning", "LTXVImgToVideo",
+        "GetVideoComponents", "TrimVideoLatent",
+        
+        # === MASKS ===
+        "MaskToImage", "ImageToMask", "SolidMask",
+        "InvertMask", "CropMask", "MaskComposite",
+        "FeatherMask", "GrowMask", "MaskPreview",
+        "SetLatentNoiseMask", "DrawMaskOnImage", "BlockifyMask",
+        
+        # === NOISE ===
+        "RandomNoise", "DisableNoise", "SetFirstSigma",
+        
+        # === STYLE & EFFECTS ===
+        "StyleModelApply", "DifferentialDiffusion",
+        "FreeU", "FreeU_V2",
+        "PerturbedAttentionGuidance",
+        "SelfAttentionGuidance",
+        
+        # === UPSCALING ===
+        "UpscaleModelLoader", "ImageUpscaleWithModel",
+        
+        # === HYPERNETWORKS ===
+        "HypernetworkLoader",
+        
+        # === MODEL PATCHES ===
+        "ModelSamplingDiscrete", "ModelSamplingContinuousEDM", "ModelSamplingContinuousV",
+        "ModelSamplingStableCascade", "ModelSamplingSD3", "ModelSamplingFlux",
+        "RescaleCFG",
+        "PatchModelAddDownscale",
+        "UNetTemporalAttentionMultiply",
+        
+        # === REFERENCE ===
+        "ReferenceLatent",
+        
+        # === FLUX SPECIFIC ===
+        "FluxGuidance",
+        
+        # === AUDIO ===
+        "RecordAudio",
+        
+        # === 3D ===
+        "VoxelToMesh",
+        
+        # === UTILITY ===
+        "Note", "Reroute", "ReroutePrimitive",
+        "PrimitiveNode", "PrimitiveInt", "PrimitiveFloat", "PrimitiveString", "PrimitiveBoolean",
+        "ImageOnlyCheckpointSave", "ImageOnlyCheckpointLoader",
+        "PointsEditor",
+        "PreviewBridge",
+        
+        # === LATENT OPERATIONS ===
+        "LatentAdd", "LatentSubtract", "LatentMultiply",
+        "LatentInterpolate",
+        
+        # === MODEL MERGING ===
+        "ModelMergeSimple", "ModelMergeBlocks", "ModelMergeAdd", "ModelMergeSubtract",
+        
+        # === CLIP OPERATIONS ===
+        "CLIPMergeSimple", "CLIPMergeAdd", "CLIPMergeSubtract",
+        "CLIPSave",
+        
+        # === CHECKPOINT OPERATIONS ===
+        "CheckpointSave",
+        
+        # === GLIGEN ===
+        "GLIGENTextBoxApply",
+        
+        # === PHOTOMAKER ===
+        "PhotoMakerLoader", "PhotoMakerEncode",
+        
+        # === IPADAPTER ===
+        "IPAdapterModelLoader", "IPAdapterApply", "IPAdapterApplyFaceID",
+        
+        # === ANIMATE DIFF ===
+        "AnimateDiffLoader", "AnimateDiffCombine",
+        
+        # === STABLE CASCADE ===
+        "StableCascade_EmptyLatentImage", "StableCascade_StageB_Conditioning", "StableCascade_StageC_VAEEncode",
+        
+        # === STABLE ZERO123 ===
+        "StableZero123_Conditioning", "StableZero123_Conditioning_Batched",
+        
+        # === SV3D ===
+        "SV3D_Conditioning",
+        
+        # === STABLE VIDEO DIFFUSION ===
+        "SVD_img2vid_Conditioning",
+        
+        # === DEPRECATED BUT STILL PRESENT ===
+        "SaveAnimatedWEBP", "SaveAnimatedPNG",
+        
+        # === EXEC CONTROL ===
+        "ExecutionSwitch", "ExecutionBlocker",
+        
+        # === MATH ===
+        "IntConstant", "FloatConstant", "StringConstant",
+        
+        # === IMAGE FILTERS ===
+        "ImageFilterGaussianBlur", "ImageFilterEdgeEnhance", "ImageFilterSmooth",
+        
+        # === UNCLIP ===
+        "unCLIPConditioning", "unCLIPCheckpointLoader",
+        
+        # === TOMESD ===
+        "TomePatchModel",
+        
+        # === HYPERTILE ===
+        "HyperTile",
+        
+        # === T2I ADAPTER ===
+        "T2IAdapterLoader",
+        
+        # === LORA BLOCK WEIGHT ===
+        "LoraLoaderBlockWeight",
+    }
+    
     return CORE_NODES
+
+
+def get_standard_nodes_dynamic() -> set:
+    """
+    Attempts to fetch nodes from a running ComfyUI instance.
+    Falls back to comprehensive static list if unavailable.
+    """
+    try:
+        response = requests.get("http://127.0.0.1:8188/object_info", timeout=5)
+        if response.status_code == 200:
+            object_info = response.json()
+            logger.info(f"✓ Loaded {len(object_info)} nodes from running ComfyUI instance")
+            return set(object_info.keys())
+    except Exception as e:
+        logger.debug(f"Could not fetch live node list: {e}")
+    
+    # Fallback to comprehensive static list
+    core_nodes = get_standard_nodes()
+    logger.info(f"Using comprehensive static core node list ({len(core_nodes)} nodes)")
+    return core_nodes
+
 
 def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, Dict]) -> Dict:
     """
     Analyzes a workflow JSON to extract models, custom nodes (with git URLs and node class_types),
     and a generated input schema.
     """
-    # Hard mappings for nodes that are widely used by Comfy-Org templates
+    # Hard mappings for nodes that are ACTUALLY custom nodes but hard to detect
+    # NOTE: Do NOT include core nodes here (like StyleModelLoader, StyleModelApply which are now core)
     HARD_NODE_MAPPINGS = {
+        # Wan Video
         "WanCameraImageToVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "WanCameraEmbedding": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
         "CreateVideo": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
-        "UNETLoader": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
-        # NOTE: "Note" and "MarkdownNote" are CORE nodes, not custom nodes
-        # They should NOT be mapped to any custom node repository
-        # NEW: Flux Redux Style
-        "StyleModelLoader": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",
-        "StyleModelApply": "https://github.com/yichengup/Comfyui_Flux_Style_Adjust",
+        
+        # UI/Utility nodes (these ARE custom)
+        "MarkdownNote": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+        "ShowText": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+        "ShowText|pysssss": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+        "String Literal": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
     }
 
     model_urls = set()
@@ -124,7 +287,11 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         # LiteGraph format already has a 'nodes' list
         nodes_to_process = workflow_json.get('nodes', [])
 
-    standard_nodes = set(get_standard_nodes())
+    # Use dynamic detection (tries live ComfyUI, falls back to comprehensive static list)
+    standard_nodes = get_standard_nodes_dynamic()
+    
+    # Track unidentified nodes for debugging
+    unidentified_nodes = set()
 
     for node in nodes_to_process:
         node_type = node.get('type')
@@ -132,44 +299,50 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         if not node_type:
             continue
 
-        # FIX 1: SKIP UUID SUBGRAPHS
+        # Skip UUID subgraphs
         if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', node_type):
             logger.debug(f"Skipping subgraph UUID: {node_type}")
             continue
 
-        # FIX 2: SKIP CORE NODES EARLY
+        # Skip CORE nodes early - this is the critical fix
         if node_type in standard_nodes:
-            continue  # NO detection needed!
+            continue
 
         # --- Custom Node Detection (Heuristic-based) ---
-        if node_type not in standard_nodes:
-            found_repo_url = None
+        found_repo_url = None
+        
+        # 1. Check hard mappings FIRST (highest confidence)
+        if node_type in HARD_NODE_MAPPINGS:
+            found_repo_url = HARD_NODE_MAPPINGS[node_type]
+            logger.debug(f"Hard-mapped {node_type} → {found_repo_url}")
+        
+        # 2. Check explicit node lists in registry (exact match)
+        if not found_repo_url:
             for reg_title, reg_value in custom_node_registry.items():
-                # 1. Check explicit node lists (exact match)
                 if node_type in reg_value.get('nodes', []) or node_type in reg_value.get('preemptions', []):
                     found_repo_url = reg_value.get('reference')
+                    logger.debug(f"Registry exact match: {node_type} → {found_repo_url}")
                     break
 
-            # 2. If not found, try fuzzy matching on title (e.g., node 'WAS_Foo' in repo 'WAS Node Suite')
-            if not found_repo_url:
-                for reg_title, reg_value in custom_node_registry.items():
-                    # Extract a key from the title, e.g., "WAS" from "WAS Node Suite"
-                    title_key = reg_title.split(' ')[0].replace('ComfyUI-', '').replace('_', ' ').split(' ')[0]
-                    if len(title_key) > 2 and node_type.startswith(title_key):
-                        found_repo_url = reg_value.get('reference')
-                        break
-            
-            # 3. If still not found, check hard mappings
-            if not found_repo_url and node_type in HARD_NODE_MAPPINGS:
-                found_repo_url = HARD_NODE_MAPPINGS[node_type]
-                logger.info(f"Hard-mapped undocumented node {node_type} → {found_repo_url}")
-            
-            if found_repo_url:
-                if found_repo_url not in custom_node_map:
-                    custom_node_map[found_repo_url] = set()
-                custom_node_map[found_repo_url].add(node_type)
-            else:
-                logger.debug(f"Custom node '{node_type}' could not be resolved to a git repository.")
+        # 3. Fuzzy matching on title (be conservative - only distinctive prefixes)
+        if not found_repo_url:
+            for reg_title, reg_value in custom_node_registry.items():
+                # Extract a key from the title, e.g., "WAS" from "WAS Node Suite"
+                title_key = reg_title.split(' ')[0].replace('ComfyUI-', '').replace('_', ' ').split(' ')[0]
+                # Only match if the prefix is distinctive (3+ chars) and matches start of node name
+                if len(title_key) >= 3 and node_type.startswith(title_key):
+                    found_repo_url = reg_value.get('reference')
+                    logger.debug(f"Prefix matched {node_type} → {found_repo_url} (via {title_key})")
+                    break
+        
+        if found_repo_url:
+            if found_repo_url not in custom_node_map:
+                custom_node_map[found_repo_url] = set()
+            custom_node_map[found_repo_url].add(node_type)
+        else:
+            # Track but don't fail - might be a core node we don't know about
+            unidentified_nodes.add(node_type)
+            logger.debug(f"Could not identify repository for node: {node_type}")
 
 
         # --- Model URL Detection ---
@@ -191,8 +364,6 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
 
 
         # --- Input Schema Detection (Heuristics) ---
-        # This part remains complex, the existing logic is a good starting point.
-        # We'll refine it slightly for clarity.
         
         # Heuristic for LoadImage
         if node_type == 'LoadImage':
@@ -200,10 +371,10 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
             key_name_base = f'input_image_{node_id}'
             if key_name_base not in inputs:
                 inputs[key_name_base] = {
-                    'type': 'image', # Use a specific type for images
+                    'type': 'image',
                     'description': node_title,
                     'node_type': 'LoadImage',
-                    'field_name': 'image' # The field in the node to update
+                    'field_name': 'image'
                 }
             continue
 
@@ -267,6 +438,14 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
                 'node_type': node_type,
                 'field_name': input_name
             }
+
+    # Log unidentified nodes for debugging (these might be new core nodes or need manual mapping)
+    if unidentified_nodes:
+        logger.warning(f"Could not identify {len(unidentified_nodes)} nodes: {unidentified_nodes}")
+        logger.warning("These may be:")
+        logger.warning("  1. New core nodes not in our static list (safe to ignore)")
+        logger.warning("  2. Custom nodes needing manual hard mapping")
+        logger.warning("  3. Deprecated/removed nodes")
 
     # Convert the custom_node_map to the desired JSONB format
     custom_node_dependencies = [
@@ -334,8 +513,8 @@ class WorkflowSynchronizer:
                     'type': 'string', 
                     'default': str(widgets[0]), 
                     'description': key.replace('_', ' ').title(),
-                    'node_type': ntype,  # Add node_type
-                    'field_name': 'text' # Add field_name
+                    'node_type': ntype,
+                    'field_name': 'text'
                 }
             elif ntype == 'EmptyLatentImage' and len(widgets) >= 2:
                 props['width'] = {'type': 'number', 'default': float(widgets[0]), 'description': 'Width'}
@@ -343,7 +522,7 @@ class WorkflowSynchronizer:
             elif ntype == 'LoadImage' and widgets:
                 key = self._unique_key(props, 'input_image', counter)
                 props[key] = {'type': 'string', 'format': 'uri', 'default': '', 'description': f'Upload Image ({node.get("title", "Input")})'}
-            elif 'TextToImage' in ntype or 't2i' in ntype.lower():  # API nodes like WanTextToImageApi
+            elif 'TextToImage' in ntype or 't2i' in ntype.lower():
                 if len(widgets) > 1:
                     props['prompt'] = {'type': 'string', 'default': str(widgets[1]), 'description': 'Prompt'}
                     if len(widgets) > 2 and widgets[2]:
@@ -393,11 +572,10 @@ class WorkflowSynchronizer:
         logger.info(f"Fetching custom node registry from {CUSTOM_NODE_LIST_URL}...")
         try:
             response = requests.get(CUSTOM_NODE_LIST_URL)
-            response.raise_for_status() # Raise an exception for HTTP errors
+            response.raise_for_status()
             custom_node_list = response.json()
             
             registry = {}
-            # The json is a list of custom node entries
             for node_entry in custom_node_list.get("custom_nodes", []):
                 title = node_entry.get('title')
                 git_url = node_entry.get('reference')
@@ -405,7 +583,6 @@ class WorkflowSynchronizer:
                 if not title or not git_url:
                     continue
 
-                # Store all available metadata for later heuristics
                 registry[title] = {
                     "reference": git_url,
                     "author": node_entry.get('author'),
@@ -421,8 +598,7 @@ class WorkflowSynchronizer:
             logger.error(f"Failed to parse custom node list JSON: {e}")
 
         if not self.custom_node_registry:
-            logger.critical("Custom node registry is empty. This is likely due to a failure to download the registry file from Github.")
-            logger.critical("Please check your internet connection and firewall settings, then try again.")
+            logger.critical("Custom node registry is empty. Check your internet connection.")
             sys.exit(1)
 
     def _upload_preview_asset(self, file_path: Path, destination_name: str) -> Optional[str]:
@@ -437,7 +613,7 @@ class WorkflowSynchronizer:
             with open(file_path, 'rb') as f:
                 file_bytes = f.read()
             
-            # Determine content type more accurately
+            # Determine content type
             content_type = "application/octet-stream"
             if file_path.suffix.lower() == ".webp":
                 content_type = "image/webp"
@@ -471,7 +647,7 @@ class WorkflowSynchronizer:
             except Exception as e:
                 logger.error(f"Failed to get public URL for {destination_name}: {str(e)}")
                 return None
-                return None
+                
         except Exception as e:
             logger.error(f"Error uploading preview asset {file_path.name}: {e}")
             return None
@@ -517,36 +693,34 @@ class WorkflowSynchronizer:
                     logger.warning(f"Could not load workflow JSON for {workflow_name}. Skipping.")
                     continue
 
-                # Analyze workflow for models and custom nodes, but ignore its input schema
+                # Analyze workflow for models and custom nodes
                 analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
 
-                # Generate a proper input schema using the new parser
+                # Generate a proper input schema using the parser
                 input_schema = self.extract_inputs_from_litegraph(workflow_json)
 
-                # Determine target_entity based on workflow_type_from_category or tags
+                # Determine target_entity based on workflow_type_from_category
                 target_entity = "scene"  # Default
                 if workflow_type_from_category == "audio":
                     target_entity = "audio_clip"
                 elif workflow_type_from_category == "3d":
-                    target_entity = "character"  # Assuming 3D models are for characters
+                    target_entity = "character"
 
-                # Convert LiteGraph to a basic node dictionary if necessary
+                # Convert LiteGraph to API format if necessary
                 api_formatted_workflow = workflow_json
                 if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
                     logger.info(f"Converting LiteGraph format to node dictionary for {workflow_name}")
                     converted_workflow = {}
                     for node in workflow_json['nodes']:
                         node_copy = node.copy()
-                        # The API format uses 'class_type' but LiteGraph uses 'type'.
                         if 'type' in node_copy:
                             node_copy['class_type'] = node_copy.pop('type')
-                        # The node ID is the key in the API format, not a field in the object.
                         if 'id' in node_copy:
                             node_id = str(node_copy.pop('id'))
                             converted_workflow[node_id] = node_copy
                     api_formatted_workflow = converted_workflow
 
-                # Determine preview_image_url (local path for now, will be uploaded later)
+                # Determine preview_image_url
                 uploaded_preview_url = None
                 preview_asset_suffix = template_entry.get("mediaSubtype", "webp")
                 
@@ -566,16 +740,16 @@ class WorkflowSynchronizer:
                     "source_repo_commit_hash": self.current_commit_hash,
                     "name": template_entry.get("title", workflow_name),
                     "description": template_entry.get("description", ""),
-                    "category": category_name, # Use category from index.json
-                    "preview_image_url": uploaded_preview_url, # Now it's the public URL
+                    "category": category_name,
+                    "preview_image_url": uploaded_preview_url,
                     "workflow_json": api_formatted_workflow,
                     "input_schema": input_schema,
-                    "workflow_type": workflow_type_from_category, # Use type from index.json
+                    "workflow_type": workflow_type_from_category,
                     "target_entity": target_entity,
                     "hardware_requirements": {"gpu_vram": round(template_entry.get("vram", 0) / (1024**3))} if template_entry.get("vram") else {},
-                    "custom_node_dependencies": analysis_result["custom_node_dependencies"], # Now these are Git URLs
+                    "custom_node_dependencies": analysis_result["custom_node_dependencies"],
                     "model_urls": analysis_result["model_urls"],
-                    "is_public": True, # Assuming all templates from this repo are public
+                    "is_public": True,
                 })
         return workflows_data
 
@@ -595,8 +769,6 @@ class WorkflowSynchronizer:
             identifier = workflow_data["source_repo_identifier"]
             commit_hash = workflow_data["source_repo_commit_hash"]
             
-            # The data to be inserted or updated.
-            # custom_node_dependencies is now a JSONB field.
             db_payload = {
                 "source_repo_identifier": identifier,
                 "source_repo_commit_hash": commit_hash,
@@ -609,21 +781,18 @@ class WorkflowSynchronizer:
                 "workflow_type": workflow_data["workflow_type"],
                 "target_entity": workflow_data["target_entity"],
                 "hardware_requirements": workflow_data["hardware_requirements"],
-                "custom_node_dependencies": workflow_data["custom_node_dependencies"], # Changed from custom_node_urls
+                "custom_node_dependencies": workflow_data["custom_node_dependencies"],
                 "model_urls": workflow_data["model_urls"],
                 "is_public": workflow_data["is_public"],
             }
 
             if identifier in existing_workflows:
-                # For now, we will always update if the workflow exists.
-                # A more sophisticated check could compare commit_hash.
                 try:
                     logger.info(f"Updating workflow: {identifier}")
                     self.supabase.table("workflow_templates").update(db_payload).eq("source_repo_identifier", identifier).execute()
                 except Exception as e:
                     logger.error(f"Failed to update workflow {identifier}: {str(e)}")
             else:
-                # Insert new workflow
                 try:
                     logger.info(f"Inserting new workflow: {identifier}")
                     self.supabase.table("workflow_templates").insert(db_payload).execute()
@@ -633,7 +802,7 @@ class WorkflowSynchronizer:
         logger.info("Database synchronization completed.")
 
     def sync_workflows(self):
-        """Main synchronization logic will go here."""
+        """Main synchronization logic."""
         logger.info("Starting workflow synchronization...")
         self.clone_or_pull_repository()
         
@@ -643,6 +812,7 @@ class WorkflowSynchronizer:
         self._sync_to_database(parsed_workflows)
         
         logger.info("Workflow synchronization completed.")
+
 
 if __name__ == "__main__":
     supabase_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL")

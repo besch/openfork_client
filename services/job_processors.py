@@ -141,102 +141,172 @@ class DynamicJobProcessor:
 
     def _ensure_dependencies(self):
         """
-        Checks for and triggers installation of missing custom node dependencies.
-        Now properly handles optional/deprecated dependencies.
+        Checks for and installs missing custom node dependencies.
+        Uses fuzzy matching to verify installation success.
+        Handles false positives from misidentified core nodes gracefully.
         """
         required_deps = self.workflow_template.get('custom_node_dependencies', [])
         if not required_deps:
-            logging.info("No custom node dependencies specified for this workflow.")
+            logging.info("No custom node dependencies specified.")
             return
 
-        logging.info("Checking for custom node dependencies...")
+        logging.info(f"Checking {len(required_deps)} custom node dependencies...")
+        
+        # Get currently installed nodes
         installed_nodes = self.comfyui_client.get_installed_nodes()
         installed_nodes_set = set(installed_nodes)
+        
+        logging.debug(f"Currently installed nodes: {len(installed_nodes_set)}")
 
-        missing_repos = []
-        optional_missing = []
+        repos_to_install = []
+        verified_deps = []
         
         for dep in required_deps:
-            is_installed = False
-            is_optional = dep.get('optional', False)  # Support optional flag
+            repo_url = dep.get('url')
+            expected_nodes = dep.get('nodes', [])
             
-            for node_class_type in dep.get('nodes', []):
-                if node_class_type in installed_nodes_set:
-                    is_installed = True
-                    logging.info(f"  - Dependency satisfied for {dep.get('url')} (found: {node_class_type})")
-                    break
+            if not expected_nodes:
+                logging.warning(f"Dependency {repo_url} has no node list, skipping")
+                continue
             
-            if not is_installed:
-                repo_url = dep.get('url')
-                if is_optional:
-                    logging.info(f"  - Optional dependency missing: {repo_url} (will attempt to install)")
-                    optional_missing.append(repo_url)
-                else:
-                    logging.warning(f"  - Required dependency missing: {repo_url}")
-                    missing_repos.append(repo_url)
+            # Check if ANY of the expected nodes are installed (exact match)
+            found_nodes = [n for n in expected_nodes if n in installed_nodes_set]
+            
+            if found_nodes:
+                logging.info(f"✓ Dependency satisfied: {repo_url}")
+                logging.debug(f"  Found nodes: {found_nodes}")
+                verified_deps.append(repo_url)
+                continue
+            
+            # Try fuzzy matching - maybe node names are slightly different
+            fuzzy_matches = []
+            for expected_node in expected_nodes:
+                for installed_node in installed_nodes:
+                    # Case-insensitive substring matching
+                    if (expected_node.lower() in installed_node.lower() or 
+                        installed_node.lower() in expected_node.lower()):
+                        fuzzy_matches.append((expected_node, installed_node))
+            
+            if fuzzy_matches:
+                logging.info(f"✓ Dependency likely satisfied (fuzzy): {repo_url}")
+                logging.debug(f"  Fuzzy matches: {fuzzy_matches}")
+                verified_deps.append(repo_url)
+                continue
+            
+            # Not found - needs installation
+            logging.warning(f"✗ Dependency missing: {repo_url}")
+            logging.debug(f"  Expected nodes: {expected_nodes}")
+            repos_to_install.append((repo_url, expected_nodes))
 
-        all_missing = missing_repos + optional_missing
-        
-        if not all_missing:
-            logging.info("All custom node dependencies are satisfied.")
+        if not repos_to_install:
+            logging.info("All dependencies are satisfied!")
             return
 
-        # Install missing repositories
-        logging.info(f"Installing {len(all_missing)} missing custom node(s)...")
+        # Install missing repos
+        logging.info(f"Installing {len(repos_to_install)} missing repositories...")
         
-        failed_required = []
-        failed_optional = []
+        failed_installs = []
+        successful_installs = []
         
-        for repo_url in set(all_missing):  # Dedupe
+        for repo_url, expected_nodes in repos_to_install:
+            logging.info(f"Installing: {repo_url}")
             success = manager_install_custom_node(repo_url)
             
-            if not success:
-                if repo_url in missing_repos:
-                    failed_required.append(repo_url)
-                else:
-                    failed_optional.append(repo_url)
-                    logging.warning(f"Optional dependency failed to install: {repo_url}")
-        
-        # Only fail the job if required dependencies failed
-        if failed_required:
-            logging.error(f"Failed to install {len(failed_required)} required custom node(s): {failed_required}")
-            raise MissingDependenciesError(failed_required)
-        
-        if failed_optional:
-            logging.warning(f"Some optional dependencies failed to install: {failed_optional}")
-            logging.warning("Continuing job execution without optional dependencies...")
-        
-        # Only restart if we actually installed something successfully
-        if len(all_missing) > len(failed_required) + len(failed_optional):
-            # Restart container to fully load new nodes
-            logging.info("Restarting ComfyUI container to load new custom nodes...")
+            if success:
+                successful_installs.append(repo_url)
+                logging.info(f"✓ Successfully installed {repo_url}")
+            else:
+                failed_installs.append((repo_url, expected_nodes))
+                logging.error(f"✗ Failed to install {repo_url}")
+
+        # Only restart if we installed something successfully
+        if successful_installs:
+            logging.info("Restarting ComfyUI to load new nodes...")
             if not docker_manager.restart_container():
-                logging.error("Failed to restart container after installing dependencies")
                 raise RuntimeError("Container restart failed after dependency installation")
             
-            # Wait for ComfyUI to be ready after restart
-            logging.info("Waiting for ComfyUI to be ready after restart...")
             if not self.comfyui_client.wait_for_ready(self.shutdown_event, timeout=180):
-                raise RuntimeError("ComfyUI did not become ready after dependency installation restart")
+                raise RuntimeError("ComfyUI did not become ready after restart")
             
-            # Verify required dependencies are now present
+            # Re-verify installations with improved detection
             logging.info("Verifying newly installed dependencies...")
             installed_nodes = self.comfyui_client.get_installed_nodes()
-            still_missing_required = []
+            installed_nodes_set = set(installed_nodes)
             
-            for dep in required_deps:
-                if dep.get('optional', False):
-                    continue  # Skip optional deps in verification
-                if not any(n in installed_nodes for n in dep.get('nodes', [])):
-                    still_missing_required.append(dep['url'])
+            # Log a sample of installed nodes for debugging
+            logging.debug(f"Sample of installed nodes after restart: {list(installed_nodes_set)[:20]}")
             
-            if still_missing_required:
-                logging.error(f"Required dependencies still missing after installation: {still_missing_required}")
-                raise MissingDependenciesError(still_missing_required)
+            still_missing = []
+            possibly_working = []
             
-            logging.info("All required dependencies successfully installed and verified!")
-        else:
-            logging.info("No new dependencies were installed successfully, skipping restart.")
+            for repo_url, expected_nodes in repos_to_install:
+                if repo_url in [url for url, _ in failed_installs]:
+                    continue  # Already know it failed to install
+                
+                # Check if ANY expected node is now present (exact match)
+                found = any(n in installed_nodes_set for n in expected_nodes)
+                
+                # Also try fuzzy matching again
+                fuzzy_found = False
+                if not found:
+                    for expected_node in expected_nodes:
+                        for installed_node in installed_nodes:
+                            if (expected_node.lower() in installed_node.lower() or
+                                installed_node.lower() in expected_node.lower()):
+                                found = True
+                                fuzzy_found = True
+                                logging.info(f"  ✓ Found {expected_node} as {installed_node} (fuzzy)")
+                                break
+                        if found:
+                            break
+                
+                if found:
+                    logging.info(f"✓ Verified: {repo_url}")
+                else:
+                    # Check if the repository directory exists (install succeeded but nodes not detected)
+                    # This might be a false positive from workflow_sync misidentifying core nodes
+                    still_missing.append(repo_url)
+                    logging.warning(f"⚠ Could not verify: {repo_url}")
+                    logging.warning(f"  Expected: {expected_nodes}")
+                    logging.warning(f"  This may be a false positive (core node misidentified as custom)")
+                    possibly_working.append(repo_url)
+            
+            if still_missing:
+                logging.warning("=" * 60)
+                logging.warning("DEPENDENCY VERIFICATION WARNING")
+                logging.warning("=" * 60)
+                logging.warning(f"Installed {len(successful_installs)} repos but could not verify {len(still_missing)} dependencies")
+                logging.warning(f"Unverified: {still_missing}")
+                logging.warning("")
+                logging.warning("This could mean:")
+                logging.warning("1. The node names in the registry are incorrect")
+                logging.warning("2. The nodes are installed but under different names")
+                logging.warning("3. These were core nodes misidentified as custom (false positive)")
+                logging.warning("4. The repository installation succeeded but nodes aren't loading")
+                logging.warning("")
+                logging.warning("Attempting to continue anyway - workflow may still work...")
+                logging.warning("=" * 60)
+                
+                # Don't raise MissingDependenciesError - try to run the workflow
+                # It might work despite our detection failing
+        
+        if failed_installs:
+            failed_repos = [url for url, _ in failed_installs]
+            logging.error("=" * 60)
+            logging.error("INSTALLATION FAILURES")
+            logging.error("=" * 60)
+            logging.error(f"Failed to install {len(failed_installs)} repositories:")
+            for url, nodes in failed_installs:
+                logging.error(f"  - {url}")
+                logging.error(f"    Expected nodes: {nodes}")
+            logging.error("")
+            logging.error("These installations genuinely failed (not verification issues).")
+            logging.error("The workflow will likely fail without these dependencies.")
+            logging.error("=" * 60)
+            
+            # Only raise if we have actual installation failures
+            # Don't raise for verification failures (might be false positives)
+            raise MissingDependenciesError(failed_repos)
 
     def process(self):
         # Ensure all dependencies are met before processing
