@@ -937,13 +937,25 @@ class WorkflowSynchronizer:
         return key
 
     def extract_inputs_from_litegraph(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
-        """Extracts user-editable inputs -> JSON Schema for dynamic form."""
+        """Extracts user-editable inputs -> JSON Schema for dynamic form with proper node_type and field_name."""
         schema = {'type': 'object', 'properties': {}}
         props: Dict[str, Any] = schema['properties']
         counter: Dict[str, int] = {}
         
         defs = workflow.get('definitions', {}).get('subgraphs', [])
+        
+        # Track which nodes we've processed to avoid duplicates
+        processed_nodes = set()
+        
+        # Build a map of all nodes by ID for quick lookup
+        all_nodes = {}
         for node in workflow['nodes']:
+            node_id = node.get('id')
+            if node_id is not None:
+                all_nodes[node_id] = node
+        
+        for node in workflow['nodes']:
+            node_id = node.get('id')
             ntype = node['type']
             widgets = node.get('widgets_values', [])
             title = node.get('title', '').lower()
@@ -953,6 +965,8 @@ class WorkflowSynchronizer:
                 uuid.UUID(ntype)  # Is UUID?
                 subgraph = next((s for s in defs if s['id'] == ntype), None)
                 if subgraph:
+                    # For subgraphs, we need to map inputs to the internal nodes
+                    # Get the subgraph's input definitions
                     for i, inp in enumerate(subgraph.get('inputs', [])):
                         name = inp['name'].lower().replace(' ', '_')
                         itype = inp['type'].lower()
@@ -960,17 +974,113 @@ class WorkflowSynchronizer:
                         
                         key = self._unique_key(props, name, counter)
                         
+                        # Try to find which internal node this connects to
+                        internal_link_id = inp.get('link')
+                        target_node_type = None
+                        target_field_name = None
+                        
+                        if internal_link_id:
+                            # Find the link in the subgraph
+                            for link in subgraph.get('links', []):
+                                if isinstance(link, list) and len(link) > 4 and link[0] == internal_link_id:
+                                    target_node_id = link[3]
+                                    target_slot = link[4]
+                                    
+                                    # Find the target node
+                                    for internal_node in subgraph.get('nodes', []):
+                                        if internal_node.get('id') == target_node_id:
+                                            target_node_type = internal_node.get('type')
+                                            
+                                            # Get the input name from the target node
+                                            node_inputs = internal_node.get('inputs', [])
+                                            if target_slot < len(node_inputs):
+                                                target_field_name = node_inputs[target_slot].get('name')
+                                            break
+                                    break
+                        
+                        # Fallback logic for when we can't determine the target node
+                        if not target_node_type or not target_field_name:
+                            if itype == 'image':
+                                target_node_type = 'LoadImage'
+                                target_field_name = 'image'
+                            elif itype in ['string', 'text'] or any(kw in name for kw in ['prompt', 'text', 'tags', 'lyrics']):
+                                target_node_type = 'CLIPTextEncode'
+                                target_field_name = 'text'
+                            elif name in ['width', 'height']:
+                                target_node_type = 'EmptySD3LatentImage'
+                                target_field_name = name
+                            elif name == 'batch_size':
+                                target_node_type = 'EmptySD3LatentImage'
+                                target_field_name = 'batch_size'
+                            elif name == 'steps':
+                                target_node_type = 'KSampler'
+                                target_field_name = 'steps'
+                            elif name == 'seed':
+                                target_node_type = 'KSampler'
+                                target_field_name = 'seed'
+                            else:
+                                # Generic fallback
+                                target_node_type = 'PrimitiveNode'
+                                target_field_name = name
+                        
                         if itype == 'image':
-                            props[key] = {'type': 'string', 'format': 'uri', 'default': '', 'description': f'Upload {name.title()}'}
-                        elif itype in ['string', 'text'] or 'prompt' in name or 'tags' in name or 'lyrics' in name:
-                            props[key] = {'type': 'string', 'default': str(default) if default else '', 'description': name.title()}
-                        elif itype in ['int', 'number', 'width', 'height', 'steps', 'seed', 'length', 'seconds']:
-                            props[key] = {'type': 'number', 'default': float(default) if default is not None else 512, 'description': name.title()}
+                            props[key] = {
+                                'type': 'string', 
+                                'format': 'uri', 
+                                'default': '', 
+                                'description': f'Upload {name.title()}',
+                                'node_type': target_node_type,
+                                'field_name': target_field_name
+                            }
+                        elif itype in ['string', 'text'] or any(kw in name for kw in ['prompt', 'text', 'tags', 'lyrics']):
+                            props[key] = {
+                                'type': 'string', 
+                                'default': str(default) if default else '', 
+                                'description': name.title(),
+                                'node_type': target_node_type,
+                                'field_name': target_field_name
+                            }
+                        elif itype in ['int', 'number'] or any(kw in name for kw in ['width', 'height', 'steps', 'seed', 'length', 'seconds', 'batch']):
+                            # Safe numeric conversion with fallback
+                            try:
+                                numeric_default = float(default) if default is not None and isinstance(default, (int, float)) else None
+                            except (ValueError, TypeError):
+                                numeric_default = None
+                            
+                            if numeric_default is None:
+                                # Set sensible defaults based on field name
+                                if 'width' in name or 'height' in name:
+                                    numeric_default = 512.0
+                                elif 'steps' in name:
+                                    numeric_default = 20.0
+                                elif 'seed' in name:
+                                    numeric_default = 0.0
+                                else:
+                                    numeric_default = 0.0
+                            
+                            props[key] = {
+                                'type': 'number', 
+                                'default': numeric_default, 
+                                'description': name.title(),
+                                'node_type': target_node_type,
+                                'field_name': target_field_name
+                            }
                         elif itype == 'boolean':
-                            props[key] = {'type': 'boolean', 'default': bool(default) if default is not None else False, 'description': name.title()}
+                            props[key] = {
+                                'type': 'boolean', 
+                                'default': bool(default) if default is not None else False, 
+                                'description': name.title(),
+                                'node_type': target_node_type,
+                                'field_name': target_field_name
+                            }
+                    processed_nodes.add(node_id)
                     continue
-            except ValueError:
+            except (ValueError, AttributeError):
                 pass
+            
+            # Skip if already processed
+            if node_id in processed_nodes:
+                continue
             
             # 2. REGULAR NODES
             if ntype == 'CLIPTextEncode' and widgets:
@@ -980,20 +1090,109 @@ class WorkflowSynchronizer:
                     'type': 'string', 
                     'default': str(widgets[0]), 
                     'description': key.replace('_', ' ').title(),
-                    'node_type': ntype,
+                    'node_type': 'CLIPTextEncode',
                     'field_name': 'text'
                 }
-            elif ntype == 'EmptyLatentImage' and len(widgets) >= 2:
-                props['width'] = {'type': 'number', 'default': float(widgets[0]), 'description': 'Width'}
-                props['height'] = {'type': 'number', 'default': float(widgets[1]), 'description': 'Height'}
+                processed_nodes.add(node_id)
+            elif ntype in ['EmptyLatentImage', 'EmptySD3LatentImage'] and len(widgets) >= 2:
+                # Safe numeric conversion for dimensions
+                try:
+                    width_val = float(widgets[0]) if isinstance(widgets[0], (int, float)) else 512
+                except (ValueError, TypeError):
+                    width_val = 512
+                
+                try:
+                    height_val = float(widgets[1]) if isinstance(widgets[1], (int, float)) else 512
+                except (ValueError, TypeError):
+                    height_val = 512
+                
+                if 'width' not in props:
+                    props['width'] = {
+                        'type': 'number', 
+                        'default': width_val, 
+                        'description': 'Width',
+                        'node_type': ntype,
+                        'field_name': 'width'
+                    }
+                if 'height' not in props:
+                    props['height'] = {
+                        'type': 'number', 
+                        'default': height_val, 
+                        'description': 'Height',
+                        'node_type': ntype,
+                        'field_name': 'height'
+                    }
+                if len(widgets) >= 3 and 'batch_size' not in props:
+                    try:
+                        batch_val = float(widgets[2]) if isinstance(widgets[2], (int, float)) else 1
+                    except (ValueError, TypeError):
+                        batch_val = 1
+                    props['batch_size'] = {
+                        'type': 'number',
+                        'default': batch_val,
+                        'description': 'Batch Size',
+                        'node_type': ntype,
+                        'field_name': 'batch_size'
+                    }
+                processed_nodes.add(node_id)
+            elif ntype == 'KSampler' and len(widgets) >= 3:
+                # KSampler typically has: seed, steps, cfg, sampler_name, scheduler, denoise
+                if 'seed' not in props and len(widgets) > 0:
+                    # Seed can be a number or "randomize"/"fixed"
+                    try:
+                        seed_val = float(widgets[0]) if isinstance(widgets[0], (int, float)) else 0
+                    except (ValueError, TypeError):
+                        seed_val = 0
+                    props['seed'] = {
+                        'type': 'number',
+                        'default': seed_val,
+                        'description': 'Seed',
+                        'node_type': 'KSampler',
+                        'field_name': 'seed'
+                    }
+                if 'steps' not in props and len(widgets) > 1:
+                    # Steps should be numeric, but validate
+                    try:
+                        steps_val = float(widgets[1]) if isinstance(widgets[1], (int, float)) else 20
+                    except (ValueError, TypeError):
+                        steps_val = 20
+                    props['steps'] = {
+                        'type': 'number',
+                        'default': steps_val,
+                        'description': 'Steps',
+                        'node_type': 'KSampler',
+                        'field_name': 'steps'
+                    }
+                processed_nodes.add(node_id)
             elif ntype == 'LoadImage' and widgets:
                 key = self._unique_key(props, 'input_image', counter)
-                props[key] = {'type': 'string', 'format': 'uri', 'default': '', 'description': f'Upload Image ({node.get("title", "Input")})'}
+                props[key] = {
+                    'type': 'string', 
+                    'format': 'uri', 
+                    'default': '', 
+                    'description': f'Upload Image ({node.get("title", "Input")})',
+                    'node_type': 'LoadImage',
+                    'field_name': 'image'
+                }
+                processed_nodes.add(node_id)
             elif 'TextToImage' in ntype or 't2i' in ntype.lower():
                 if len(widgets) > 1:
-                    props['prompt'] = {'type': 'string', 'default': str(widgets[1]), 'description': 'Prompt'}
+                    props['prompt'] = {
+                        'type': 'string', 
+                        'default': str(widgets[1]), 
+                        'description': 'Prompt',
+                        'node_type': ntype,
+                        'field_name': 'prompt'
+                    }
                     if len(widgets) > 2 and widgets[2]:
-                        props['negative_prompt'] = {'type': 'string', 'default': str(widgets[2]), 'description': 'Negative Prompt'}
+                        props['negative_prompt'] = {
+                            'type': 'string', 
+                            'default': str(widgets[2]), 
+                            'description': 'Negative Prompt',
+                            'node_type': ntype,
+                            'field_name': 'negative_prompt'
+                        }
+                processed_nodes.add(node_id)
         
         return schema
 

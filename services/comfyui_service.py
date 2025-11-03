@@ -248,9 +248,47 @@ class ComfyUIClient:
                 except Exception:
                     resp_json = {}
                 prompt_id = resp_json.get("prompt_id") or resp_json.get("data", {}).get("prompt_id")
+                
+                # NEW: Check for validation errors
+                if "error" in resp_json:
+                    error_info = resp_json["error"]
+                    logging.error("=" * 60)
+                    logging.error("COMFYUI VALIDATION ERROR")
+                    logging.error("=" * 60)
+                    logging.error(f"Error: {error_info}")
+                    logging.error("=" * 60)
+                    
+                    # Log the full workflow for debugging
+                    logging.error("WORKFLOW THAT FAILED:")
+                    logging.error(json.dumps(payload_prompt, indent=2))
+                    logging.error("=" * 60)
+                    
+                    raise RuntimeError(f"ComfyUI rejected workflow: {error_info}")
+                    
         except urllib.error.HTTPError as e:
             try:
                 detail = e.read().decode("utf-8")
+                # Try to parse as JSON for better error messages
+                try:
+                    error_json = json.loads(detail)
+                    if "error" in error_json:
+                        logging.error("=" * 60)
+                        logging.error("COMFYUI HTTP ERROR")
+                        logging.error("=" * 60)
+                        logging.error(f"Status: {e.code}")
+                        logging.error(f"Error: {error_json['error']}")
+                        
+                        # Log specific node errors if available
+                        if "node_errors" in error_json:
+                            logging.error("\nNode Errors:")
+                            for node_id, node_error in error_json["node_errors"].items():
+                                logging.error(f"  Node {node_id}:")
+                                logging.error(f"    {node_error}")
+                        
+                        logging.error("=" * 60)
+                        detail = json.dumps(error_json, indent=2)
+                except:
+                    pass
             except Exception:
                 detail = str(e)
             raise RuntimeError(f"ComfyUI /prompt returned HTTP {e.code}: {detail}")
