@@ -768,11 +768,50 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         "input_schema_properties": inputs
     }
 
+def clean_ui_metadata_from_workflow(workflow_json: dict) -> dict:
+    """
+    Remove UI-only metadata fields that shouldn't be in execution workflows.
+    
+    These fields are used by the ComfyUI web interface but break execution:
+    - widget_ue_connectable: Unreal Engine integration metadata
+    - widget_control_after_generate: UI control metadata
+    - widget_control_filter_list: UI filtering metadata
+    """
+    if not isinstance(workflow_json, dict):
+        return workflow_json
+    
+    UI_METADATA_FIELDS = {
+        'widget_ue_connectable',
+        'widget_control_after_generate',
+        'widget_control_filter_list',
+    }
+    
+    cleaned_count = 0
+    
+    for node_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+        
+        # Remove UI metadata fields
+        for ui_field in UI_METADATA_FIELDS:
+            if ui_field in inputs:
+                del inputs[ui_field]
+                cleaned_count += 1
+    
+    if cleaned_count > 0:
+        logger.info(f"Cleaned {cleaned_count} UI metadata fields from workflow")
+    
+    return workflow_json
 
 def convert_litegraph_to_api(workflow_json: dict, workflow_name: str) -> dict:
     """
     Convert LiteGraph format workflow to ComfyUI API format.
     Ensures all required node inputs are properly preserved.
+    CRITICAL: Normalizes model dictionaries to simple filenames.
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
@@ -857,11 +896,12 @@ def convert_litegraph_to_api(workflow_json: dict, workflow_name: str) -> dict:
             
             input_name = unconnected_inputs[i]
             
-            # Extract values from model dictionaries
+            # CRITICAL FIX: Extract values from model dictionaries
             if isinstance(widget_value, dict):
                 if 'name' in widget_value:
+                    # This is a model dictionary - extract just the filename
                     api_inputs[input_name] = widget_value['name']
-                    logger.debug(f"Node {node_id} ({node_type}): {input_name} = {widget_value['name']}")
+                    logger.debug(f"Node {node_id} ({node_type}): {input_name} = {widget_value['name']} (extracted from dict)")
                 else:
                     logger.warning(f"Unknown dict in {node_type}.{input_name}: {widget_value}")
                     api_inputs[input_name] = str(widget_value)
@@ -891,9 +931,20 @@ def convert_litegraph_to_api(workflow_json: dict, workflow_name: str) -> dict:
                 api_inputs['filename_prefix'] = "ComfyUI"
             logger.debug(f"Node {node_id} (SaveImage): Added filename_prefix = {api_inputs['filename_prefix']}")
         
-        # === STEP 4: Add properties if present ===
+        # === STEP 4: Add properties if present (BUT SKIP UI-ONLY PROPERTIES) ===
+        UI_ONLY_PROPERTIES = {
+            'widget_ue_connectable',
+            'widget_control_after_generate',
+            'widget_control_filter_list',
+        }
+        
         if 'properties' in node and isinstance(node['properties'], dict):
             for prop_name, prop_value in node['properties'].items():
+                # Skip UI-only properties
+                if prop_name in UI_ONLY_PROPERTIES:
+                    logger.debug(f"Skipping UI-only property {prop_name} in node {node_id}")
+                    continue
+                
                 if prop_name not in api_inputs:
                     api_inputs[prop_name] = prop_value
         
@@ -907,6 +958,27 @@ def convert_litegraph_to_api(workflow_json: dict, workflow_name: str) -> dict:
         }
     
     logger.info(f"[Ok] Converted {len(converted_workflow)} nodes to API format")
+    
+    # === STEP 6: FINAL PASS - Normalize any remaining model dicts ===
+    for node_id, node_data in converted_workflow.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+        
+        for input_name, value in list(inputs.items()):
+            # Skip node references
+            if isinstance(value, list) and len(value) >= 2 and isinstance(value[1], int):
+                continue
+            
+            # Normalize any remaining dicts
+            if isinstance(value, dict) and 'name' in value:
+                inputs[input_name] = value['name']
+                logger.warning(
+                    f"Found dict in final pass for {node_id}.{input_name}, normalized to: {value['name']}"
+                )
     
     # Validate connections
     for node_id, node_data in converted_workflow.items():
@@ -924,7 +996,6 @@ def convert_litegraph_to_api(workflow_json: dict, workflow_name: str) -> dict:
                 logger.error(f"SaveImage node {node_id} missing 'filename_prefix' input!")
     
     return converted_workflow
-
 
 class WorkflowSynchronizer:
     def _unique_key(self, props: Dict, base: str, counter: Dict) -> str:
@@ -1367,6 +1438,9 @@ class WorkflowSynchronizer:
 
                 # === STEP 2: CONVERT TO API FORMAT (FIXED) ===
                 api_formatted_workflow = convert_litegraph_to_api(workflow_json, workflow_name)
+
+                # === STEP 2.5: CLEAN UI METADATA ===
+                api_formatted_workflow = clean_ui_metadata_from_workflow(api_formatted_workflow)
 
                 # === STEP 3: VALIDATE NO SUBGRAPHS REMAIN ===
                 if isinstance(api_formatted_workflow, dict):

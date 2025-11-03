@@ -263,13 +263,97 @@ def remove_ui_only_nodes(workflow_json: dict) -> dict:
     
     return cleaned_workflow
 
+def normalize_model_references(workflow_json: dict) -> dict:
+    """
+    CRITICAL FIX: Clean up workflow for execution.
+    
+    1. Convert model dictionaries to simple filename strings
+    2. Remove UI-only metadata fields like widget_ue_connectable
+    
+    ComfyUI expects model inputs as strings (filenames), not dictionaries.
+    """
+    if not isinstance(workflow_json, dict):
+        return workflow_json
+    
+    logging.info("Normalizing workflow for execution...")
+    model_fixes = 0
+    metadata_removals = 0
+    
+    # UI-only input fields that should be removed
+    UI_METADATA_FIELDS = {
+        'widget_ue_connectable',  # Unreal Engine integration metadata
+        'widget_control_after_generate',  # UI control metadata
+        'widget_control_filter_list',  # UI control metadata
+        '_meta',  # Sometimes incorrectly placed in inputs
+    }
+    
+    for node_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+        
+        class_type = node_data.get('class_type', '')
+        
+        # Remove UI-only metadata fields
+        for ui_field in UI_METADATA_FIELDS:
+            if ui_field in inputs:
+                del inputs[ui_field]
+                metadata_removals += 1
+                logging.debug(f"Removed UI metadata {ui_field} from {node_id} ({class_type})")
+        
+        # Common model loader nodes and their model input names
+        MODEL_INPUTS = {
+            'CheckpointLoaderSimple': ['ckpt_name'],
+            'CheckpointLoader': ['ckpt_name'],
+            'UNETLoader': ['unet_name'],
+            'CLIPLoader': ['clip_name'],
+            'DualCLIPLoader': ['clip_name1', 'clip_name2'],
+            'TripleCLIPLoader': ['clip_name1', 'clip_name2', 'clip_name3'],
+            'VAELoader': ['vae_name'],
+            'LoraLoader': ['lora_name'],
+            'LoraLoaderModelOnly': ['lora_name'],
+            'ControlNetLoader': ['control_net_name'],
+            'UpscaleModelLoader': ['model_name'],
+            'StyleModelLoader': ['style_model_name'],
+        }
+        
+        # Check ALL remaining inputs for dict values (model references)
+        for input_name, value in list(inputs.items()):
+            # Skip node references (they're lists like ["123", 0])
+            if isinstance(value, list) and len(value) >= 2 and isinstance(value[1], int):
+                continue
+            
+            # Check if this is a model dictionary
+            if isinstance(value, dict) and 'name' in value:
+                # Extract just the filename
+                model_filename = value['name']
+                inputs[input_name] = model_filename
+                model_fixes += 1
+                logging.debug(
+                    f"Fixed model reference in {node_id} ({class_type}).{input_name}: "
+                    f"{value} -> {model_filename}"
+                )
+    
+    if model_fixes > 0:
+        logging.info(f"Fixed {model_fixes} model references")
+    if metadata_removals > 0:
+        logging.info(f"Removed {metadata_removals} UI metadata fields")
+    if model_fixes == 0 and metadata_removals == 0:
+        logging.debug("Workflow already clean")
+    
+    return workflow_json
+
 def clean_workflow_for_execution(workflow_json: dict) -> dict:
     """
     Prepares workflow for execution:
     0. Fixes node ID references (removes # prefixes) - CRITICAL FIX!
     1. Normalizes node IDs (removes # prefixes)
-    2. Removes UI-only nodes
-    3. Validates structure
+    2. Normalizes model references (dict -> string) - NEW FIX!
+    3. Removes UI-only nodes
+    4. Validates structure
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
@@ -284,14 +368,18 @@ def clean_workflow_for_execution(workflow_json: dict) -> dict:
     workflow_json = clean_workflow_references(workflow_json)
     logging.debug(f"Step 1: Normalized {len(workflow_json)} node IDs")
     
-    # Step 2: Remove UI-only nodes
+    # Step 2: Normalize model references (NEW!)
+    workflow_json = normalize_model_references(workflow_json)
+    logging.debug(f"Step 2: Normalized model references")
+    
+    # Step 3: Remove UI-only nodes
     original_count = len(workflow_json)
     workflow_json = remove_ui_only_nodes(workflow_json)
     removed_count = original_count - len(workflow_json)
     if removed_count > 0:
-        logging.info(f"Step 2: Removed {removed_count} UI-only nodes")
+        logging.info(f"Step 3: Removed {removed_count} UI-only nodes")
     
-    # Step 3: Validate structure
+    # Step 4: Validate structure
     is_valid, errors = validate_workflow_structure(workflow_json)
     if not is_valid:
         logging.error("=" * 60)
@@ -574,8 +662,78 @@ class DynamicJobProcessor:
         
         payload = {"prompt": self.workflow_json}
         
-        # DEBUG: Log the workflow structure before sending
+        # === DEBUG: Check for model dictionaries BEFORE sending ===
         logging.info("=" * 60)
+        logging.info("PRE-FLIGHT WORKFLOW CHECK:")
+        
+        # UI-only fields that should be removed
+        UI_METADATA_FIELDS = {
+            'widget_ue_connectable',
+            'widget_control_after_generate',
+            'widget_control_filter_list',
+            '_meta',
+        }
+        
+        issues_found = False
+        for node_id, node_data in self.workflow_json.items():
+            if isinstance(node_data, dict):
+                class_type = node_data.get('class_type', 'UNKNOWN')
+                inputs = node_data.get('inputs', {})
+                
+                if isinstance(inputs, dict):
+                    for input_name, input_value in inputs.items():
+                        # Skip node references
+                        if isinstance(input_value, list) and len(input_value) >= 2 and isinstance(input_value[1], int):
+                            continue
+                        
+                        # Check for dict values (should NOT exist!)
+                        if isinstance(input_value, dict):
+                            # Check if it's a UI metadata field (can be safely removed)
+                            if input_name in UI_METADATA_FIELDS:
+                                logging.warning(f"  [WARN] UI metadata in {node_id} ({class_type}).{input_name}: {input_value}")
+                            else:
+                                # This is a real problem (like model dicts)
+                                logging.error(f"  [ERROR] Found dict in {node_id} ({class_type}).{input_name}: {input_value}")
+                                issues_found = True
+        
+        if issues_found:
+            logging.error("=" * 60)
+            logging.error("CRITICAL ERROR: Invalid dictionaries found in workflow!")
+            logging.error("This will cause ComfyUI to reject the workflow.")
+            logging.error("Running emergency normalization...")
+            logging.error("=" * 60)
+            
+            # Emergency fix
+            self.workflow_json = normalize_model_references(self.workflow_json)
+            payload = {"prompt": self.workflow_json}
+            
+            # Re-check
+            logging.info("Re-checking after emergency normalization...")
+            issues_found = False
+            for node_id, node_data in self.workflow_json.items():
+                if isinstance(node_data, dict):
+                    inputs = node_data.get('inputs', {})
+                    if isinstance(inputs, dict):
+                        for input_name, input_value in inputs.items():
+                            if isinstance(input_value, list) and len(input_value) >= 2 and isinstance(input_value[1], int):
+                                continue
+                            if isinstance(input_value, dict):
+                                if input_name not in UI_METADATA_FIELDS:
+                                    logging.error(f"  [STILL BROKEN] {node_id}.{input_name}: {input_value}")
+                                    issues_found = True
+            
+            if issues_found:
+                logging.error("Emergency normalization FAILED. Aborting job.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
+            else:
+                logging.info("Emergency normalization SUCCESS!")
+        else:
+            logging.info("  [OK] Workflow is clean")
+        
+        logging.info("=" * 60)
+        
+        # Original logging
         logging.info("FINAL WORKFLOW STRUCTURE:")
         logging.info(f"Total nodes: {len(self.workflow_json)}")
         for node_id, node_data in self.workflow_json.items():
@@ -589,6 +747,12 @@ class DynamicJobProcessor:
                     for input_name, input_value in inputs.items():
                         if isinstance(input_value, list) and len(input_value) >= 1:
                             logging.info(f"    {input_name} -> Node {input_value[0]}")
+                        else:
+                            # Log value (truncated if long)
+                            value_str = str(input_value)
+                            if len(value_str) > 50:
+                                value_str = value_str[:50] + "..."
+                            logging.info(f"    {input_name} = {value_str}")
         logging.info("=" * 60)
         
         outputs = self._trigger_and_get_output(payload)
