@@ -20,410 +20,294 @@ UI_ONLY_NODES = {
     "PreviewBridge",  # Core preview
 }
 
-def flatten_litegraph(wf: dict) -> dict:
-    nodes = wf.get('nodes', [])
-    links = wf.get('links', [])
-    definitions = wf.get('definitions', {})
-    subgraph_map = {sg['id']: sg for sg in definitions.get('subgraphs', []) if isinstance(sg, dict) and 'id' in sg}
+def normalize_node_id(node_id) -> str:
+    """Normalize node ID by removing # prefix if present."""
+    node_id_str = str(node_id)
+    return node_id_str.lstrip('#')
 
-    flat_nodes = []
-    flat_links = []
-    node_map = {}
-    subgraph_instances = {}
-    max_node_id = max([n.get('id', 0) for n in nodes] if nodes else [0])
-    max_link_id = max([l[0] for l in links] if links else [0])
-    id_counter = max(max_node_id, max_link_id) + 1
-
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        old_id = node.get('id')
-        if old_id is None:
-            continue
-        node_type = node.get('type', 'Unknown')
-        is_subgraph = False
-        sg_def = None
-        try:
-            uuid.UUID(node_type)
-            is_subgraph = True
-            sg_def = subgraph_map.get(node_type)
-        except (ValueError, AttributeError):
-            pass
-
-        if not is_subgraph:
-            new_id = old_id
-            node_map[old_id] = new_id
-            flat_nodes.append(node.copy())
-            flat_nodes[-1]['id'] = new_id
-        else:
-            if not sg_def:
-                logging.warning(f"No definition for subgraph {node_type}")
-                continue
-
-            internal_wf = {
-                'nodes': sg_def.get('nodes', []),
-                'links': sg_def.get('links', []),
-                'definitions': definitions
-            }
-            internal_flat = flatten_litegraph(internal_wf)
-            internal_nodes = internal_flat['nodes']
-            internal_links = internal_flat['links']
-
-            internal_map = {}
-            for int_node in internal_nodes:
-                old_int_id = int_node['id']
-                new_int_id = id_counter
-                id_counter += 1
-                internal_map[old_int_id] = new_int_id
-                int_node['id'] = new_int_id
-
-            link_map = {}
-            for link in internal_links:
-                old_link_id = link[0]
-                new_link_id = id_counter
-                id_counter += 1
-                link_map[old_link_id] = new_link_id
-                link[0] = new_link_id
-                link[1] = internal_map[link[1]]
-                link[3] = internal_map[link[3]]
-
-            flat_nodes.extend(internal_nodes)
-            flat_links.extend(internal_links)
-
-            subgraph_instances[old_id] = {
-                'internal_map': internal_map,
-                'internal_links': internal_links,
-                'link_map': link_map,
-                'sg_def': sg_def,
-                'node': node
-            }
-
-    for link in links:
-        if not isinstance(link, list) or len(link) < 4:
-            continue
-        source_node = link[1]
-        target_node = link[3]
-        if source_node not in subgraph_instances and target_node not in subgraph_instances:
-            new_link = link.copy()
-            new_link[1] = node_map.get(source_node, source_node)
-            new_link[3] = node_map.get(target_node, target_node)
-            flat_links.append(new_link)
-
-    for link in links:
-        if not isinstance(link, list) or len(link) < 5:
-            continue
-        source_node = link[1]
-        source_slot = link[2]
-        target_node = link[3]
-        target_slot = link[4]
-
-        if target_node in subgraph_instances:
-            sg_inst = subgraph_instances[target_node]
-            sg_def = sg_inst['sg_def']
-            sg_inputs = sg_def.get('inputs', [])
-            if target_slot >= len(sg_inputs):
-                continue
-            sg_input = sg_inputs[target_slot]
-            internal_link_id = sg_input.get('link')
-            if internal_link_id is None:
-                continue
-            internal_link = next((l for l in sg_def.get('links', []) if l[0] == internal_link_id), None)
-            if internal_link:
-                internal_target_node_old = internal_link[3]
-                internal_target_slot = internal_link[4]
-                new_internal_target = sg_inst['internal_map'].get(internal_target_node_old)
-                if new_internal_target is None:
-                    continue
-                new_source = node_map.get(source_node, source_node)
-                new_link_id = id_counter
-                id_counter += 1
-                new_link = [new_link_id, new_source, source_slot, new_internal_target, internal_target_slot]
-                if len(link) > 5:
-                    new_link.append(link[5])
-                flat_links.append(new_link)
-
-        if source_node in subgraph_instances:
-            sg_inst = subgraph_instances[source_node]
-            sg_def = sg_inst['sg_def']
-            sg_outputs = sg_def.get('outputs', [])
-            if source_slot >= len(sg_outputs):
-                continue
-            sg_output = sg_outputs[source_slot]
-            internal_link_id = sg_output.get('link')
-            if internal_link_id is None:
-                continue
-            internal_link = next((l for l in sg_def.get('links', []) if l[0] == internal_link_id), None)
-            if internal_link:
-                internal_source_node_old = internal_link[1]
-                internal_source_slot = internal_link[2]
-                new_internal_source = sg_inst['internal_map'].get(internal_source_node_old)
-                if new_internal_source is None:
-                    continue
-                new_target = node_map.get(target_node, target_node)
-                new_link_id = id_counter
-                id_counter += 1
-                new_link = [new_link_id, new_internal_source, internal_source_slot, new_target, target_slot]
-                if len(link) > 5:
-                    new_link.append(link[5])
-                flat_links.append(new_link)
-
-    for sg_node_id, sg_inst in subgraph_instances.items():
-        node = sg_inst['node']
-        widgets = node.get('widgets_values', [])
-        sg_inputs = sg_inst['sg_def'].get('inputs', [])
-        for i, sg_input in enumerate(sg_inputs):
-            input_name = sg_input.get('name')
-            if input_name is None:
-                continue
-
-            is_connected = False
-            if 'inputs' in node and isinstance(node['inputs'], list):
-                for node_inp in node['inputs']:
-                    if isinstance(node_inp, dict) and node_inp.get('name') == input_name and node_inp.get('link') is not None:
-                        is_connected = True
-                        break
-
-            if not is_connected and i < len(widgets):
-                widget_value = widgets[i]
-                internal_link_id = sg_input.get('link')
-                if internal_link_id is None:
-                    continue
-
-                new_internal_link_id = sg_inst['link_map'].get(internal_link_id)
-                if new_internal_link_id:
-                    flat_links = [l for l in flat_links if l[0] != new_internal_link_id]
-
-                internal_link = next((l for l in sg_inst['sg_def'].get('links', []) if l[0] == internal_link_id), None)
-                if internal_link:
-                    internal_target_node_old = internal_link[3]
-                    internal_target_slot = internal_link[4]
-                    new_internal_target = sg_inst['internal_map'].get(internal_target_node_old)
-                    if new_internal_target is None:
-                        continue
-
-                    internal_node = next((n for n in flat_nodes if n['id'] == new_internal_target), None)
-                    if internal_node is None:
-                        continue
-
-                    if 'inputs' in internal_node and len(internal_node['inputs']) > internal_target_slot:
-                        internal_node['inputs'][internal_target_slot]['link'] = None
-
-                    current_widgets = internal_node.get('widgets_values', [])
-
-                    current_values = {}
-                    k = 0
-                    for s, inp in enumerate(internal_node.get('inputs', [])):
-                        if inp.get('link') is None:
-                            if k < len(current_widgets):
-                                current_values[s] = current_widgets[k]
-                            k += 1
-
-                    current_values[internal_target_slot] = widget_value
-
-                    new_unconnected = [s for s, inp in enumerate(internal_node.get('inputs', [])) if inp.get('link') is None]
-
-                    new_widgets = [current_values.get(s) for s in new_unconnected if s in current_values]
-
-                    internal_node['widgets_values'] = new_widgets
-
-    return {'nodes': flat_nodes, 'links': flat_links}
-
-def convert_litegraph_to_api(workflow_json: dict) -> dict:
+def fix_node_id_references(workflow_json: dict) -> dict:
     """
-    Convert LiteGraph format to API format with proper error handling.
+    CRITICAL FIX: Normalize all node IDs and references to remove # prefixes.
+    This fixes workflows that were incorrectly converted from LiteGraph format.
     
-    CRITICAL FIX: Removes UI-only nodes BEFORE building connections to prevent broken references.
-    """
-    if 'nodes' not in workflow_json or not isinstance(workflow_json.get('nodes'), list):
-        return workflow_json
-
-    logging.info("Converting LiteGraph format to API format...")
-
-    # First, flatten any subgraphs
-    flat = flatten_litegraph(workflow_json)
-    nodes_list = flat['nodes']
-    links_list = flat['links']
-
-    # === CRITICAL: Remove UI-only nodes FIRST ===
-    # Identify which nodes are UI-only and won't be in final workflow
-    ui_node_ids = set()
-    for node in nodes_list:
-        if isinstance(node, dict) and 'type' in node:
-            node_type = node.get('type', '')
-            node_id = str(node.get('id', ''))
-            if node_type in UI_ONLY_NODES:
-                ui_node_ids.add(node_id)
-                logging.debug(f"Marking UI-only node for removal: {node_id} ({node_type})")
-    
-    # Remove UI-only nodes from nodes list
-    nodes_list = [n for n in nodes_list if str(n.get('id', '')) not in ui_node_ids]
-    
-    # Remove links connected to UI-only nodes
-    original_link_count = len(links_list)
-    links_list = [
-        link for link in links_list 
-        if isinstance(link, list) and len(link) >= 4 
-        and str(link[1]) not in ui_node_ids  # source not UI-only
-        and str(link[3]) not in ui_node_ids  # target not UI-only
-    ]
-    
-    if len(links_list) < original_link_count:
-        logging.info(f"Removed {original_link_count - len(links_list)} links connected to UI-only nodes")
-    
-    if ui_node_ids:
-        logging.info(f"Removed {len(ui_node_ids)} UI-only nodes before conversion")
-
-    # Build link map (only valid links remain)
-    link_map = {}
-    for link in links_list:
-        if isinstance(link, list) and len(link) >= 5:
-            link_id = link[0]
-            source_node_id = str(link[1])
-            source_slot = link[2]
-            target_node_id = str(link[3])
-            target_slot = link[4]
-            link_map[str(link_id)] = (source_node_id, source_slot, target_node_id, target_slot)
-
-    # Build set of valid node IDs (UI-only nodes already removed)
-    valid_node_ids = set()
-    for node in nodes_list:
-        if isinstance(node, dict) and 'id' in node:
-            valid_node_ids.add(str(node.get('id')))
-    
-    logging.debug(f"Valid node IDs after cleanup: {len(valid_node_ids)} nodes")
-
-    api_workflow = {}
-
-    # Process each node
-    for node in nodes_list:
-        if not isinstance(node, dict):
-            continue
-
-        node_id = str(node.get('id', ''))
-        if not node_id:
-            continue
-
-        node_type = node.get('type', 'Unknown')
-        widgets = node.get('widgets_values', [])
-
-        api_inputs = {}
-
-        # Get all input names
-        all_input_names = []
-        connected_input_names = set()
-
-        if 'inputs' in node and isinstance(node['inputs'], list):
-            for inp in node['inputs']:
-                if not isinstance(inp, dict):
-                    continue
-
-                input_name = inp.get('name')
-                if not input_name:
-                    continue
-
-                all_input_names.append(input_name)
-
-                link_id = inp.get('link')
-                if link_id is not None:
-                    link_id_str = str(link_id)
-                    if link_id_str in link_map:
-                        source_node_id, source_slot, _, _ = link_map[link_id_str]
-                        
-                        # Validate that source node exists (should always be true now)
-                        if source_node_id in valid_node_ids:
-                            api_inputs[input_name] = [source_node_id, source_slot]
-                            connected_input_names.add(input_name)
-                        else:
-                            # This should never happen now, but keep as safety
-                            logging.error(
-                                f"CRITICAL: Node {node_id} ({node_type}) input '{input_name}' "
-                                f"references non-existent node {source_node_id}"
-                            )
-                    else:
-                        logging.warning(
-                            f"Node {node_id} ({node_type}) input '{input_name}' "
-                            f"references unknown link {link_id}. Skipping."
-                        )
-
-        # Map widget values to unconnected inputs
-        unconnected_inputs = [name for name in all_input_names if name not in connected_input_names]
-
-        for i, widget_value in enumerate(widgets):
-            if i >= len(unconnected_inputs):
-                break
-            input_name = unconnected_inputs[i]
-            if isinstance(widget_value, dict):
-                if 'name' in widget_value:
-                    api_inputs[input_name] = widget_value['name']
-                else:
-                    api_inputs[input_name] = widget_value
-            else:
-                api_inputs[input_name] = widget_value
-
-        # Add properties
-        if 'properties' in node and isinstance(node['properties'], dict):
-            for prop_name, prop_value in node['properties'].items():
-                if prop_name not in api_inputs:
-                    api_inputs[prop_name] = prop_value
-
-        api_workflow[node_id] = {
-            'class_type': node_type,
-            'inputs': api_inputs,
-            '_meta': {
-                'title': node.get('title', '')
-            }
-        }
-
-    # Final validation: Check for any remaining broken references (should be none)
-    broken_refs = []
-    for node_id, node_data in api_workflow.items():
-        inputs = node_data.get('inputs', {})
-        if isinstance(inputs, dict):
-            for input_name, input_value in inputs.items():
-                if isinstance(input_value, list) and len(input_value) >= 1:
-                    ref_node = str(input_value[0])
-                    if ref_node not in api_workflow:
-                        broken_refs.append((node_id, input_name, ref_node))
-    
-    if broken_refs:
-        logging.error("=" * 60)
-        logging.error("WORKFLOW CONVERSION ERROR: Broken node references detected")
-        logging.error("=" * 60)
-        for node_id, input_name, ref_node in broken_refs:
-            node_type = api_workflow[node_id].get('class_type', 'Unknown')
-            logging.error(
-                f"Node {node_id} ({node_type}) input '{input_name}' "
-                f"references non-existent node {ref_node}"
-            )
-        logging.error("=" * 60)
-        
-        # Remove broken connections
-        for node_id, input_name, ref_node in broken_refs:
-            logging.warning(f"Removing broken connection: {node_id}.{input_name} -> {ref_node}")
-            if node_id in api_workflow:
-                inputs = api_workflow[node_id].get('inputs', {})
-                if input_name in inputs:
-                    del inputs[input_name]
-    
-    logging.info(f"Converted {len(api_workflow)} nodes from LiteGraph to API format")
-    
-    if broken_refs:
-        logging.warning(f"Removed {len(broken_refs)} broken connections during conversion")
-    
-    return api_workflow
-
-def clean_workflow_for_execution(workflow_json: dict) -> dict:
-    """
-    Handles format conversion from LiteGraph to API format if needed.
-    UI-only nodes are now removed during conversion, so this just does format checking.
+    Changes:
+    1. Renames all node IDs (keys) to remove # prefix
+    2. Updates all references in inputs to use normalized IDs
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
     
-    # Convert LiteGraph to API format if needed (handles UI node removal internally)
-    if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
-        workflow_json = convert_litegraph_to_api(workflow_json)
+    logging.info("Fixing node ID references...")
     
+    # Step 1: Build mapping of old IDs to normalized IDs
+    id_mapping = {}
+    for old_id in workflow_json.keys():
+        normalized_id = normalize_node_id(old_id)
+        if old_id != normalized_id:
+            id_mapping[old_id] = normalized_id
+            logging.debug(f"Will rename node: {old_id} -> {normalized_id}")
+    
+    # Step 2: Create new workflow with normalized node IDs
+    fixed_workflow = {}
+    
+    for old_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        # Use normalized ID as the key
+        new_id = normalize_node_id(old_id)
+        node_copy = node_data.copy()
+        
+        # Step 3: Fix all references in inputs
+        inputs = node_copy.get('inputs', {})
+        if isinstance(inputs, dict):
+            fixed_inputs = {}
+            
+            for input_name, input_value in inputs.items():
+                # Check if this is a node reference [node_id, slot]
+                if isinstance(input_value, list) and len(input_value) >= 1:
+                    ref_node_id = input_value[0]
+                    normalized_ref = normalize_node_id(ref_node_id)
+                    
+                    # Create fixed reference
+                    fixed_value = [normalized_ref] + input_value[1:]
+                    fixed_inputs[input_name] = fixed_value
+                    
+                    if str(ref_node_id) != normalized_ref:
+                        logging.debug(
+                            f"Fixed reference in {new_id}.{input_name}: {ref_node_id} -> {normalized_ref}"
+                        )
+                else:
+                    # Not a reference, keep as-is
+                    fixed_inputs[input_name] = input_value
+            
+            node_copy['inputs'] = fixed_inputs
+        
+        fixed_workflow[new_id] = node_copy
+    
+    if id_mapping:
+        logging.info(f"Fixed {len(id_mapping)} node IDs with # prefix")
+    
+    return fixed_workflow
+
+def clean_workflow_references(workflow_json: dict) -> dict:
+    """
+    Clean up node references in API format workflow to ensure consistency.
+    Removes # prefixes and ensures all references use the same format.
+    """
+    if not isinstance(workflow_json, dict):
+        return workflow_json
+    
+    # First pass: normalize all node IDs (keys)
+    normalized_workflow = {}
+    old_to_new_id = {}
+    
+    for node_id, node_data in workflow_json.items():
+        normalized_id = normalize_node_id(node_id)
+        old_to_new_id[node_id] = normalized_id
+        old_to_new_id[normalize_node_id(node_id)] = normalized_id  # Handle both forms
+        normalized_workflow[normalized_id] = node_data
+    
+    # Second pass: normalize all references in inputs
+    for node_id, node_data in normalized_workflow.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+        
+        for input_name, input_value in inputs.items():
+            # Check if this is a node reference [node_id, slot]
+            if isinstance(input_value, list) and len(input_value) >= 1:
+                ref_node_id = input_value[0]
+                normalized_ref = normalize_node_id(ref_node_id)
+                
+                # Update the reference to use normalized ID
+                if normalized_ref != ref_node_id:
+                    input_value[0] = normalized_ref
+                    logging.debug(f"Normalized reference: {ref_node_id} -> {normalized_ref}")
+    
+    return normalized_workflow
+
+# Replace the validate_workflow_structure function in job_processors.py with this:
+
+def validate_workflow_structure(workflow_json: dict) -> tuple[bool, list[str]]:
+    """
+    Validates workflow structure and returns (is_valid, list_of_errors).
+    
+    CRITICAL FIX: Properly detect node references vs. regular values.
+    - A node reference is a list like [node_id, slot_index] where slot_index is an integer
+    - Everything else (strings, numbers, dicts, bools, other lists) is a VALUE
+    """
+    if not isinstance(workflow_json, dict) or not workflow_json:
+        return False, ["Workflow is empty or not a dict"]
+    
+    errors = []
+    warnings = []
+    
+    # Build set of valid node IDs (all as strings)
+    valid_node_ids = set(str(node_id) for node_id in workflow_json.keys())
+    
+    for node_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            errors.append(f"Node {node_id} is not a dictionary")
+            continue
+        
+        class_type = node_data.get('class_type', '')
+        if not class_type:
+            errors.append(f"Node {node_id} is missing class_type")
+            continue
+        
+        # Skip UI-only nodes in validation (they should be removed but check anyway)
+        if class_type in UI_ONLY_NODES:
+            warnings.append(f"Found UI-only node {node_id} ({class_type}) - should have been removed")
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            warnings.append(f"Node {node_id} ({class_type}) has invalid inputs")
+            continue
+        
+        # Check for broken node references
+        for input_name, input_value in inputs.items():
+            # CRITICAL: A node reference in ComfyUI API format is ALWAYS: [node_id, slot_index]
+            # where node_id is a string/int and slot_index is an integer
+            # Examples:
+            #   ["123", 0] - valid reference to node 123, slot 0
+            #   [123, 0] - valid reference to node 123, slot 0
+            #   "model.safetensors" - NOT a reference, it's a string value
+            #   {"name": "model.safetensors"} - NOT a reference, it's a dict value
+            #   [1, 2, 3] - NOT a reference (slot_index would be 2, which is valid, but this is a list of values)
+            
+            if isinstance(input_value, list) and len(input_value) >= 2:
+                potential_node_id = str(input_value[0])
+                potential_slot = input_value[1]
+                
+                # Validate: second element MUST be an integer for this to be a reference
+                if isinstance(potential_slot, int):
+                    # This is a proper node reference format: [node_id, slot_index]
+                    # Verify the referenced node exists
+                    if potential_node_id not in valid_node_ids:
+                        errors.append(
+                            f"Node {node_id} ({class_type}) input '{input_name}' "
+                            f"references non-existent node '{potential_node_id}'"
+                        )
+                # else: second element is not an integer, so this is just a list of values
+            
+            # For all other types (strings, numbers, dicts, bools, single-element lists):
+            # These are VALUES, not node references. No validation needed.
+            # Examples:
+            #   "qwen_image_fp8.safetensors" - model filename (string value)
+            #   512 - width parameter (number value)
+            #   {"name": "model.safetensors", "url": "..."} - model config (dict value)
+            #   True - boolean parameter
+            #   ["option1", "option2"] - list of options (list value, not a reference)
+    
+    if warnings:
+        for warning in warnings:
+            logging.warning(f"[VALIDATION WARNING] {warning}")
+    
+    return len(errors) == 0, errors
+
+def remove_ui_only_nodes(workflow_json: dict) -> dict:
+    """
+    Remove UI-only nodes from API format workflow.
+    Also removes any connections to/from these nodes.
+    """
+    if not isinstance(workflow_json, dict):
+        return workflow_json
+    
+    # Identify UI-only node IDs
+    ui_node_ids = set()
+    for node_id, node_data in workflow_json.items():
+        if isinstance(node_data, dict):
+            class_type = node_data.get('class_type', '')
+            if class_type in UI_ONLY_NODES:
+                ui_node_ids.add(node_id)
+                logging.debug(f"Marking UI-only node for removal: {node_id} ({class_type})")
+    
+    if not ui_node_ids:
+        return workflow_json
+    
+    logging.info(f"Removing {len(ui_node_ids)} UI-only nodes: {ui_node_ids}")
+    
+    # Create new workflow without UI-only nodes
+    cleaned_workflow = {}
+    
+    for node_id, node_data in workflow_json.items():
+        if node_id in ui_node_ids:
+            continue
+        
+        # Keep node, but clean its inputs
+        node_copy = node_data.copy()
+        inputs = node_copy.get('inputs', {})
+        
+        if isinstance(inputs, dict):
+            cleaned_inputs = {}
+            for input_name, input_value in inputs.items():
+                # Check if this is a reference to a UI-only node
+                if isinstance(input_value, list) and len(input_value) >= 1:
+                    ref_node_id = str(input_value[0])
+                    if ref_node_id in ui_node_ids:
+                        logging.debug(
+                            f"Removing connection from {node_id}.{input_name} to UI-only node {ref_node_id}"
+                        )
+                        continue  # Skip this connection
+                
+                cleaned_inputs[input_name] = input_value
+            
+            node_copy['inputs'] = cleaned_inputs
+        
+        cleaned_workflow[node_id] = node_copy
+    
+    return cleaned_workflow
+
+def clean_workflow_for_execution(workflow_json: dict) -> dict:
+    """
+    Prepares workflow for execution:
+    0. Fixes node ID references (removes # prefixes) - CRITICAL FIX!
+    1. Normalizes node IDs (removes # prefixes)
+    2. Removes UI-only nodes
+    3. Validates structure
+    """
+    if not isinstance(workflow_json, dict):
+        return workflow_json
+    
+    logging.info("Cleaning workflow for execution...")
+    
+    # Step 0: Fix node ID references FIRST (CRITICAL!)
+    workflow_json = fix_node_id_references(workflow_json)
+    logging.debug(f"Step 0: Fixed node ID references")
+    
+    # Step 1: Normalize node IDs and references
+    workflow_json = clean_workflow_references(workflow_json)
+    logging.debug(f"Step 1: Normalized {len(workflow_json)} node IDs")
+    
+    # Step 2: Remove UI-only nodes
+    original_count = len(workflow_json)
+    workflow_json = remove_ui_only_nodes(workflow_json)
+    removed_count = original_count - len(workflow_json)
+    if removed_count > 0:
+        logging.info(f"Step 2: Removed {removed_count} UI-only nodes")
+    
+    # Step 3: Validate structure
+    is_valid, errors = validate_workflow_structure(workflow_json)
+    if not is_valid:
+        logging.error("=" * 60)
+        logging.error("WORKFLOW VALIDATION FAILED")
+        logging.error("=" * 60)
+        for error in errors:
+            logging.error(f"  [ERROR] {error}")
+        logging.error("=" * 60)
+        logging.error(f"Workflow has {len(workflow_json)} nodes:")
+        for node_id, node_data in workflow_json.items():
+            class_type = node_data.get('class_type', 'UNKNOWN') if isinstance(node_data, dict) else 'INVALID'
+            logging.error(f"  - Node {node_id}: {class_type}")
+        logging.error("=" * 60)
+        raise ValueError(f"Workflow validation failed with {len(errors)} errors")
+    
+    logging.info(f"Workflow ready for execution: {len(workflow_json)} nodes")
     return workflow_json
 
 class MissingDependenciesError(Exception):
@@ -525,7 +409,7 @@ class DynamicJobProcessor:
         return value
 
     def _clean_ui_nodes(self):
-        """Clean and convert workflow format (UI nodes removed during conversion)."""
+        """Clean and prepare workflow for execution."""
         self.workflow_json = clean_workflow_for_execution(self.workflow_json)
 
     def _inject_dynamic_inputs(self):
@@ -568,10 +452,7 @@ class DynamicJobProcessor:
             logging.info(f"Successfully injected {injection_count} dynamic inputs into workflow.")
 
     def _ensure_dependencies(self):
-        """
-        IMPROVED: Checks for and installs missing custom node dependencies using cm-cli.
-        This is more reliable than manual git cloning.
-        """
+        """Check for and install missing custom node dependencies."""
         required_deps = self.workflow_template.get('custom_node_dependencies', [])
         if not required_deps:
             logging.info("No custom node dependencies specified.")
@@ -579,7 +460,6 @@ class DynamicJobProcessor:
 
         logging.info(f"Checking {len(required_deps)} custom node dependencies...")
         
-        # Get currently installed nodes
         installed_nodes = self.comfyui_client.get_installed_nodes()
         installed_nodes_set = set(installed_nodes)
         
@@ -596,7 +476,6 @@ class DynamicJobProcessor:
                 logging.warning(f"Dependency {repo_url} has no node list, skipping")
                 continue
             
-            # Check if ANY of the expected nodes are installed (exact match)
             found_nodes = [n for n in expected_nodes if n in installed_nodes_set]
             
             if found_nodes:
@@ -605,12 +484,13 @@ class DynamicJobProcessor:
                 verified_deps.append(repo_url)
                 continue
             
-            # Try fuzzy matching
             fuzzy_matches = []
             for expected_node in expected_nodes:
                 for installed_node in installed_nodes:
-                    if (expected_node.lower() in installed_node.lower() or 
-                        installed_node.lower() in expected_node.lower()):
+                    if (
+                        expected_node.lower() in installed_node.lower() or 
+                        installed_node.lower() in expected_node.lower()
+                    ):
                         fuzzy_matches.append((expected_node, installed_node))
             
             if fuzzy_matches:
@@ -619,7 +499,6 @@ class DynamicJobProcessor:
                 verified_deps.append(repo_url)
                 continue
             
-            # Not found - needs installation
             logging.warning(f"[MISSING] Dependency missing: {repo_url}")
             logging.debug(f"  Expected nodes: {expected_nodes}")
             repos_to_install.append((repo_url, expected_nodes))
@@ -628,16 +507,13 @@ class DynamicJobProcessor:
             logging.info("All dependencies are satisfied!")
             return
 
-        # Install missing repos using cm-cli
-        logging.info(f"Installing {len(repos_to_install)} missing repositories using cm-cli...")
+        logging.info(f"Installing {len(repos_to_install)} missing repositories...")
         
         failed_installs = []
         successful_installs = []
         
         for repo_url, expected_nodes in repos_to_install:
             logging.info(f"Installing: {repo_url}")
-            
-            # Use the improved cm-cli based installer
             success = manager_install_custom_node_via_cli(repo_url)
             
             if success:
@@ -647,7 +523,6 @@ class DynamicJobProcessor:
                 failed_installs.append((repo_url, expected_nodes))
                 logging.error(f"[ERROR] Failed to install {repo_url}")
 
-        # Only restart if we installed something successfully
         if successful_installs:
             logging.info("=" * 60)
             logging.info(f"Installed {len(successful_installs)} new custom nodes")
@@ -655,176 +530,67 @@ class DynamicJobProcessor:
             logging.info("=" * 60)
             
             if not docker_manager.restart_container():
-                raise RuntimeError("Container restart failed after dependency installation")
+                raise RuntimeError("Container restart failed")
             
-            # Wait for ComfyUI to be ready
             if not self.comfyui_client.wait_for_ready(self.shutdown_event, timeout=180):
                 raise RuntimeError("ComfyUI did not become ready after restart")
             
-            # CRITICAL: Run cm-cli fix to ensure all dependencies are installed
-            logging.info("Running cm-cli fix to install all node dependencies...")
+            logging.info("Running cm-cli fix...")
             fix_all_custom_node_dependencies()
             
-            # Give nodes time to initialize
-            logging.info("Waiting for nodes to initialize...")
             time.sleep(10)
             
-            # Trigger explicit node refresh
-            logging.info("Refreshing node cache...")
             self.comfyui_client.refresh_nodes()
             docker_manager.invalidate_node_cache()
             
-            # Wait a bit more after refresh
             time.sleep(5)
-            
-            # Re-verify installations
-            logging.info("Verifying newly installed dependencies...")
-            installed_nodes = self.comfyui_client.get_installed_nodes()
-            installed_nodes_set = set(installed_nodes)
-            
-            still_missing = []
-            
-            for repo_url, expected_nodes in repos_to_install:
-                if repo_url in [url for url, _ in failed_installs]:
-                    continue
-                
-                repo_name = get_node_name_from_url(repo_url)
-                
-                # Check if ANY expected node is now present
-                found = any(n in installed_nodes_set for n in expected_nodes)
-                
-                # Also try fuzzy matching
-                if not found:
-                    for expected_node in expected_nodes:
-                        for installed_node in installed_nodes:
-                            if (expected_node.lower() in installed_node.lower() or
-                                installed_node.lower() in expected_node.lower()):
-                                found = True
-                                logging.info(f"  [FUZZY] Found {expected_node} as {installed_node}")
-                                break
-                        if found:
-                            break
-                
-                if found:
-                    logging.info(f"[OK] Verified: {repo_url}")
-                else:
-                    still_missing.append(repo_url)
-                    logging.warning(f"[WARNING] Could not verify: {repo_url}")
-                    logging.warning(f"  Expected: {expected_nodes}")
-            
-            if still_missing:
-                logging.warning("=" * 60)
-                logging.warning("DEPENDENCY VERIFICATION WARNING")
-                logging.warning("=" * 60)
-                logging.warning(f"Could not verify {len(still_missing)} dependencies")
-                logging.warning(f"Unverified: {still_missing}")
-                logging.warning("")
-                logging.warning("This could mean:")
-                logging.warning("1. Node names in registry are incorrect")
-                logging.warning("2. Nodes installed under different names")
-                logging.warning("3. Core nodes misidentified as custom (false positive)")
-                logging.warning("4. Repository installed but nodes aren't loading")
-                logging.warning("")
-                logging.warning("Attempting to continue anyway - workflow may still work...")
-                logging.warning("=" * 60)
         
         if failed_installs:
             failed_repos = [url for url, _ in failed_installs]
-            logging.error("=" * 60)
-            logging.error("INSTALLATION FAILURES")
-            logging.error("=" * 60)
-            logging.error(f"Failed to install {len(failed_installs)} repositories:")
-            for url, nodes in failed_installs:
-                logging.error(f"  - {url}")
-                logging.error(f"    Expected nodes: {nodes}")
-            logging.error("")
-            logging.error("The workflow will likely fail without these dependencies.")
-            logging.error("=" * 60)
-            
+            logging.error(f"Failed to install {len(failed_installs)} repositories")
             raise MissingDependenciesError(failed_repos)
 
     def _validate_workflow(self):
-        """
-        IMPROVED: Validates the workflow before execution with better error messages.
-        """
-        issues = []
-        warnings = []
-        
-        # Check if workflow is empty
-        if not self.workflow_json:
-            issues.append("Workflow is empty")
+        """Validate workflow structure."""
+        is_valid, errors = validate_workflow_structure(self.workflow_json)
+        if not is_valid:
+            for error in errors:
+                logging.error(f"[VALIDATION] {error}")
             return False
-        
-        for node_id, node_data in self.workflow_json.items():
-            if not isinstance(node_data, dict):
-                warnings.append(f"Node {node_id} is not a dictionary")
-                continue
-            
-            class_type = node_data.get('class_type', '')
-            inputs = node_data.get('inputs', {})
-            
-            if not class_type:
-                issues.append(f"Node {node_id} is missing class_type")
-                continue
-            
-            # Check for nodes with missing required inputs
-            if not isinstance(inputs, dict):
-                warnings.append(f"Node {node_id} ({class_type}) has invalid inputs")
-                continue
-            
-            # Special checks for critical nodes
-            if class_type == 'SaveImage':
-                if 'images' not in inputs or inputs.get('images') is None:
-                    issues.append(f"Node {node_id} (SaveImage) is missing required 'images' input")
-            
-            # Check for broken connections
-            for input_name, input_value in inputs.items():
-                if isinstance(input_value, list) and len(input_value) >= 1:
-                    referenced_node = str(input_value[0])
-                    if referenced_node not in self.workflow_json:
-                        issues.append(
-                            f"Node {node_id} ({class_type}) input '{input_name}' "
-                            f"references non-existent node {referenced_node}"
-                        )
-        
-        if issues:
-            logging.error("=" * 60)
-            logging.error("WORKFLOW VALIDATION FAILED")
-            logging.error("=" * 60)
-            for issue in issues:
-                logging.error(f"  [ERROR] {issue}")
-            logging.error("=" * 60)
-            return False
-        
-        if warnings:
-            logging.warning("Workflow validation warnings:")
-            for warning in warnings:
-                logging.warning(f"  [WARNING] {warning}")
         
         logging.info("Workflow validation passed")
         return True
 
     def process(self):
-        # Ensure all dependencies are met before processing
         self._ensure_dependencies()
-
-        # Clean UI-only nodes before processing
         self._clean_ui_nodes()
         
-        # Validate workflow structure
         if not self._validate_workflow():
-            logging.error("Workflow validation failed. Aborting job.")
+            logging.error("Workflow validation failed")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
         self._inject_dynamic_inputs()
         
-        # Log the workflow for debugging
-        logging.debug(f"Final workflow for job {self.job_id}:")
-        logging.debug(f"Number of nodes: {len(self.workflow_json)}")
-        logging.debug(f"Node types: {[n.get('class_type', 'UNKNOWN') for n in self.workflow_json.values()]}")
-        
         payload = {"prompt": self.workflow_json}
+        
+        # DEBUG: Log the workflow structure before sending
+        logging.info("=" * 60)
+        logging.info("FINAL WORKFLOW STRUCTURE:")
+        logging.info(f"Total nodes: {len(self.workflow_json)}")
+        for node_id, node_data in self.workflow_json.items():
+            if isinstance(node_data, dict):
+                class_type = node_data.get('class_type', 'UNKNOWN')
+                logging.info(f"  Node {node_id}: {class_type}")
+                
+                # Log inputs to see references
+                inputs = node_data.get('inputs', {})
+                if isinstance(inputs, dict):
+                    for input_name, input_value in inputs.items():
+                        if isinstance(input_value, list) and len(input_value) >= 1:
+                            logging.info(f"    {input_name} -> Node {input_value[0]}")
+        logging.info("=" * 60)
+        
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
             return
@@ -836,14 +602,14 @@ class DynamicJobProcessor:
         if self.target_entity == 'scene' or self.workflow_type in ['wan-2.2-text-to-video', 'wan-2.2-image-to-video']:
             video_info = find_video_in_output(outputs)
             if not video_info:
-                logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
+                logging.error(f"No video output found for job {self.job_id}")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
             video_filename, subfolder = video_info
             temp_host_path = self._copy_file_from_container(video_filename, subfolder)
             if not temp_host_path:
-                logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+                logging.error(f"Failed to copy video from container")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
@@ -856,24 +622,23 @@ class DynamicJobProcessor:
                         os.remove(thumbnail_local_path)
                     duration = get_video_duration(temp_host_path)
                 else:
-                    logging.error(f"Video upload failed for job {self.job_id}.")
+                    logging.error(f"Video upload failed")
                     self.orchestrator_service.update_job_status(self.job_id, 'failed')
                     return
             finally:
-                logging.info(f"Cleaning up temporary file: {temp_host_path}")
                 os.remove(temp_host_path)
 
         elif self.target_entity == 'audio_clip' or self.workflow_type in ['hunyuan_video_foley', 'vibevoice', 'vibevoice_multi_clone', 'diffrhythm']:
             audio_info = find_audio_in_output(outputs)
             if not audio_info:
-                logging.error(f"Workflow for job {self.job_id} completed, but no audio file found.")
+                logging.error(f"No audio output found for job {self.job_id}")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
             audio_filename, subfolder = audio_info
             temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
             if not temp_host_path:
-                logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+                logging.error(f"Failed to copy audio from container")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
@@ -882,24 +647,23 @@ class DynamicJobProcessor:
                 if output_path:
                     duration = get_audio_duration(temp_host_path)
                 else:
-                    logging.error(f"Audio upload failed for job {self.job_id}.")
+                    logging.error(f"Audio upload failed")
                     self.orchestrator_service.update_job_status(self.job_id, 'failed')
                     return
             finally:
-                logging.info(f"Cleaning up temporary file: {temp_host_path}")
                 os.remove(temp_host_path)
 
         elif self.target_entity == 'character' or self.workflow_type == 'qwen':
             image_info = find_image_in_output(outputs)
             if not image_info:
-                logging.error(f"Workflow for job {self.job_id} completed, but no image file found.")
+                logging.error(f"No image output found for job {self.job_id}")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
             image_filename, subfolder = image_info
             temp_host_path = self._copy_file_from_container(image_filename, subfolder)
             if not temp_host_path:
-                logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+                logging.error(f"Failed to copy image from container")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
                 return
 
@@ -908,15 +672,11 @@ class DynamicJobProcessor:
                 if output_path:
                     thumbnail_path = output_path
                 else:
-                    logging.error(f"Image upload failed for job {self.job_id}.")
+                    logging.error(f"Image upload failed")
                     self.orchestrator_service.update_job_status(self.job_id, 'failed')
                     return
             finally:
-                logging.info(f"Cleaning up temporary file: {temp_host_path}")
                 os.remove(temp_host_path)
-
-        else:
-            logging.warning(f"Job {self.job_id} completed, but no specific output handling for workflow_type: {self.workflow_type} and target_entity: {self.target_entity}. Marking as completed without asset upload.")
 
         self.orchestrator_service.update_job_status(
             self.job_id, 

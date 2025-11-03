@@ -45,6 +45,11 @@ def load_json_file(path: Path) -> Union[Dict, List, None]:
         logger.error(f"Invalid JSON in {path}")
         return None
 
+
+def normalize_node_id(node_id) -> str:
+    """Normalize node ID by converting to string and removing # prefix."""
+    return str(node_id).lstrip('#')
+
 def get_standard_nodes() -> set:
     """
     Returns a comprehensive list of core ComfyUI nodes.
@@ -999,32 +1004,31 @@ class WorkflowSynchronizer:
                     logger.warning(f"Could not load workflow JSON for {workflow_name}. Skipping.")
                     continue
 
-                # === CONVERT LITEGRAPH TO API FORMAT ===
+                # === STEP 1: FLATTEN SUBGRAPHS (if LiteGraph format) ===
+                original_workflow = workflow_json
+                if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
+                    logger.info(f"Flattening subgraphs for {workflow_name}...")
+                    workflow_json = flatten_litegraph(workflow_json)
+                    logger.info(f"Flattened: {len(original_workflow.get('nodes', []))} -> {len(workflow_json.get('nodes', []))} nodes")
+
+                # === STEP 2: CONVERT TO API FORMAT ===
                 api_formatted_workflow = workflow_json
 
-                # Detect LiteGraph format: has 'nodes' as a list
+                # Detect LiteGraph format: has 'nodes' as a list (even after flattening)
                 if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
-                    logger.info(f"Converting LiteGraph format to API format for {workflow_name}")
+                    logger.info(f"Converting flattened LiteGraph to API format for {workflow_name}")
                     
                     nodes_list = workflow_json['nodes']
                     links_list = workflow_json.get('links', [])
-                    definitions = workflow_json.get('definitions', {})
-                    subgraphs = definitions.get('subgraphs', []) if isinstance(definitions, dict) else []
                     
-                    # Build subgraph lookup by UUID
-                    subgraph_map = {}
-                    for sg in subgraphs:
-                        if isinstance(sg, dict) and 'id' in sg:
-                            subgraph_map[sg['id']] = sg
-                    
-                    # Build link lookup: link_id -> (source_node_id, source_slot, target_node_id, target_slot)
+                    # Build link lookup
                     link_map = {}
                     for link in links_list:
                         if isinstance(link, list) and len(link) >= 5:
                             link_id = link[0]
-                            source_node_id = str(link[1])
+                            source_node_id = normalize_node_id(link[1])
                             source_slot = link[2]
-                            target_node_id = str(link[3])
+                            target_node_id = normalize_node_id(link[3])
                             target_slot = link[4]
                             link_map[link_id] = (source_node_id, source_slot, target_node_id, target_slot)
                     
@@ -1034,117 +1038,86 @@ class WorkflowSynchronizer:
                         if not isinstance(node, dict):
                             continue
                         
-                        node_id = str(node.get('id', ''))
+                        node_id = normalize_node_id(node.get('id', ''))
                         if not node_id:
                             continue
                             
                         node_type = node.get('type', 'Unknown')
                         widgets = node.get('widgets_values', [])
                         
-                        # === CHECK IF SUBGRAPH (UUID TYPE) ===
-                        is_subgraph = False
-                        subgraph_def = None
+                        # === CRITICAL: After flattening, ALL nodes should be regular nodes ===
+                        # If we still see a UUID, something went wrong with flattening
                         try:
-                            # Try parsing as UUID
                             uuid.UUID(node_type)
-                            is_subgraph = True
-                            subgraph_def = subgraph_map.get(node_type)
-                            if subgraph_def:
-                                logger.debug(f"Node {node_id} is subgraph {node_type}")
+                            logger.error(f"Found subgraph UUID after flattening: {node_type} in node {node_id}")
+                            logger.error(f"This indicates flatten_litegraph() failed to expand this subgraph")
+                            logger.error(f"Skipping workflow {workflow_name}")
+                            continue
                         except (ValueError, AttributeError):
-                            pass
+                            pass  # Good - it's a regular node
                         
                         api_inputs = {}
                         
-                        # === HANDLE SUBGRAPHS ===
-                        if is_subgraph and subgraph_def:
-                            # Subgraphs have explicit input definitions
-                            subgraph_inputs = subgraph_def.get('inputs', [])
-                            
-                            for i, sg_input in enumerate(subgraph_inputs):
-                                if not isinstance(sg_input, dict):
+                        # Build input connections
+                        all_input_names = []
+                        connected_input_names = set()
+                        
+                        if 'inputs' in node and isinstance(node['inputs'], list):
+                            for inp in node['inputs']:
+                                if not isinstance(inp, dict):
                                     continue
-                                    
-                                input_name = sg_input.get('name')
+                                
+                                input_name = inp.get('name')
                                 if not input_name:
                                     continue
                                 
-                                # Check if this input is connected via link
-                                is_connected = False
-                                if 'inputs' in node and isinstance(node['inputs'], list):
-                                    for node_inp in node['inputs']:
-                                        if isinstance(node_inp, dict) and node_inp.get('name') == input_name:
-                                            link_id = node_inp.get('link')
-                                            if link_id is not None and link_id in link_map:
-                                                source_node_id, source_slot, _, _ = link_map[link_id]
-                                                api_inputs[input_name] = [source_node_id, source_slot]
-                                                is_connected = True
-                                                break
+                                all_input_names.append(input_name)
                                 
-                                # If not connected, get value from widgets
-                                if not is_connected and i < len(widgets):
-                                    widget_value = widgets[i]
-                                    
-                                    # Handle dict format for model files: {'name': 'model.safetensors', 'url': '...'}
-                                    if isinstance(widget_value, dict):
-                                        if 'name' in widget_value:
-                                            api_inputs[input_name] = widget_value['name']
-                                        else:
-                                            # Keep dict as-is if no 'name' field
-                                            api_inputs[input_name] = widget_value
-                                    else:
-                                        # Use value directly
-                                        api_inputs[input_name] = widget_value
+                                # Check if connected
+                                link_id = inp.get('link')
+                                if link_id is not None and link_id in link_map:
+                                    source_node_id, source_slot, _, _ = link_map[link_id]
+                                    api_inputs[input_name] = [source_node_id, source_slot]
+                                    connected_input_names.add(input_name)
                         
-                        # === HANDLE REGULAR NODES ===
-                        else:
-                            # Step 1: Get ALL input names from the node definition
-                            all_input_names = []
-                            connected_input_names = set()
+                        # Map widgets to UNCONNECTED inputs
+                        unconnected_inputs = [name for name in all_input_names if name not in connected_input_names]
+
+                        for i, widget_value in enumerate(widgets):
+                            if i >= len(unconnected_inputs):
+                                break
                             
-                            if 'inputs' in node and isinstance(node['inputs'], list):
-                                for inp in node['inputs']:
-                                    if not isinstance(inp, dict):
-                                        continue
-                                    
-                                    input_name = inp.get('name')
-                                    if not input_name:
-                                        continue
-                                    
-                                    all_input_names.append(input_name)
-                                    
-                                    # Check if connected
-                                    link_id = inp.get('link')
-                                    if link_id is not None and link_id in link_map:
-                                        source_node_id, source_slot, _, _ = link_map[link_id]
-                                        api_inputs[input_name] = [source_node_id, source_slot]
-                                        connected_input_names.add(input_name)
+                            input_name = unconnected_inputs[i]
                             
-                            # Step 2: Map widgets to UNCONNECTED inputs
-                            unconnected_inputs = [name for name in all_input_names if name not in connected_input_names]
-                            
-                            for i, widget_value in enumerate(widgets):
-                                if i >= len(unconnected_inputs):
-                                    # More widgets than unconnected inputs - shouldn't happen but skip
-                                    break
-                                
-                                input_name = unconnected_inputs[i]
-                                
-                                # Handle dict format for model files
-                                if isinstance(widget_value, dict):
-                                    if 'name' in widget_value:
-                                        api_inputs[input_name] = widget_value['name']
-                                    else:
-                                        api_inputs[input_name] = widget_value
+                            # CRITICAL FIX: Extract values from model dictionaries
+                            if isinstance(widget_value, dict):
+                                # Model loaders use dicts with 'name', 'url', 'directory' fields
+                                # ComfyUI only needs the 'name' field (the filename)
+                                if 'name' in widget_value:
+                                    api_inputs[input_name] = widget_value['name']
+                                    logger.debug(f"Extracted model name: {widget_value['name']}")
                                 else:
-                                    # Use value directly (int, float, str, bool)
-                                    api_inputs[input_name] = widget_value
-                            
-                            # Step 3: Add properties if present (rare)
-                            if 'properties' in node and isinstance(node['properties'], dict):
-                                for prop_name, prop_value in node['properties'].items():
-                                    if prop_name not in api_inputs:
-                                        api_inputs[prop_name] = prop_value
+                                    # Unknown dict format
+                                    logger.warning(f"Unknown dict in {node_type}.{input_name}: {widget_value}")
+                                    api_inputs[input_name] = str(widget_value)
+                            elif isinstance(widget_value, list):
+                                # Lists might contain model dicts too
+                                processed_list = []
+                                for item in widget_value:
+                                    if isinstance(item, dict) and 'name' in item:
+                                        processed_list.append(item['name'])
+                                    else:
+                                        processed_list.append(item)
+                                api_inputs[input_name] = processed_list
+                            else:
+                                # Plain value (string, number, bool)
+                                api_inputs[input_name] = widget_value
+                        
+                        # Add properties if present
+                        if 'properties' in node and isinstance(node['properties'], dict):
+                            for prop_name, prop_value in node['properties'].items():
+                                if prop_name not in api_inputs:
+                                    api_inputs[prop_name] = prop_value
                         
                         # Build final node
                         converted_workflow[node_id] = {
@@ -1156,13 +1129,30 @@ class WorkflowSynchronizer:
                         }
                     
                     api_formatted_workflow = converted_workflow
-                    logger.info(f"✓ Converted {len(converted_workflow)} nodes from LiteGraph to API format")
+                    logger.info(f"✓ Converted {len(converted_workflow)} nodes to API format")
+
+                # === STEP 3: VALIDATE NO SUBGRAPHS REMAIN ===
+                if isinstance(api_formatted_workflow, dict):
+                    subgraph_found = False
+                    for node_id, node_data in api_formatted_workflow.items():
+                        if isinstance(node_data, dict):
+                            class_type = node_data.get('class_type', '')
+                            try:
+                                uuid.UUID(class_type)
+                                logger.error(f"ERROR: Subgraph UUID found in final workflow: {class_type}")
+                                subgraph_found = True
+                            except (ValueError, AttributeError):
+                                pass
+                    
+                    if subgraph_found:
+                        logger.error(f"Skipping workflow {workflow_name} due to unresolved subgraphs")
+                        continue
 
                 # === ANALYZE WORKFLOW (uses original LiteGraph for custom nodes) ===
-                analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
+                analysis_result = analyze_workflow_json(original_workflow, self.custom_node_registry)
 
                 # === GENERATE INPUT SCHEMA (uses original LiteGraph format) ===
-                input_schema = self.extract_inputs_from_litegraph(workflow_json)
+                input_schema = self.extract_inputs_from_litegraph(original_workflow)
 
                 # === DETERMINE TARGET ENTITY ===
                 target_entity = "scene"  # Default
@@ -1194,7 +1184,7 @@ class WorkflowSynchronizer:
                     "description": template_entry.get("description", ""),
                     "category": category_name,
                     "preview_image_url": uploaded_preview_url,
-                    "workflow_json": api_formatted_workflow,  # ← Use converted API format
+                    "workflow_json": api_formatted_workflow,
                     "input_schema": input_schema,
                     "workflow_type": workflow_type_from_category,
                     "target_entity": target_entity,
@@ -1204,7 +1194,7 @@ class WorkflowSynchronizer:
                     "is_public": True,
                 })
 
-            return workflows_data
+        return workflows_data
 
     def _sync_to_database(self, parsed_workflows: List[Dict[str, Any]]):
         """Synchronizes the parsed workflows to the Supabase database."""
