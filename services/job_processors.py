@@ -346,6 +346,85 @@ def normalize_model_references(workflow_json: dict) -> dict:
     
     return workflow_json
 
+def find_image_source_node(workflow_json: dict) -> str:
+    """
+    Find a node that produces images that can be connected to SaveImage.
+    Returns the node ID of the first image-producing node found.
+    """
+    # List of node types that produce images
+    image_producing_nodes = {
+        'VAEDecode', 'SaveImage', 'PreviewImage', 'ImageUpscaleWithModel',
+        'CLIPVisionEncode', 'MaskToImage', 'LatentComposite', 'LatentBlend',
+        'ImageCompositeMasked', 'ImageBlend', 'ImageInvert', 'ImageQuantize',
+        'ImageSharpen', 'ImageBlur', 'Canny', 'ImageColorToMask'
+    }
+    
+    for node_id, node_data in workflow_json.items():
+        if isinstance(node_data, dict):
+            class_type = node_data.get('class_type', '')
+            if class_type in image_producing_nodes and class_type != 'SaveImage':
+                return str(node_id)
+    
+    # If no specific image source found, look for any node with outputs
+    # that might produce images (this is a fallback)
+    for node_id in workflow_json.keys():
+        if node_id != '60':  # Don't return the SaveImage node itself
+            return str(node_id)
+    
+    return None
+
+def fix_broken_node_references(workflow_json: dict) -> dict:
+    """
+    Fix broken node references instead of removing them completely.
+    This handles cases where nodes reference non-existent nodes.
+    """
+    if not isinstance(workflow_json, dict):
+        return workflow_json
+    
+    valid_node_ids = set(str(node_id) for node_id in workflow_json.keys())
+    broken_references_fixed = 0
+    
+    for node_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+        
+        # Check each input for broken references
+        for input_name, input_value in list(inputs.items()):
+            if isinstance(input_value, list) and len(input_value) >= 2:
+                potential_node_id = str(input_value[0])
+                potential_slot = input_value[1]
+                
+                # If this looks like a reference but points to non-existent node
+                if potential_node_id not in valid_node_ids:
+                    class_type = node_data.get('class_type', 'UNKNOWN')
+                    logging.warning(f"Found broken reference in {node_id} ({class_type}).{input_name}: [{input_value[0]}, {input_value[1]}]")
+                    
+                    # For SaveImage nodes with broken images references, try to fix them
+                    if class_type == 'SaveImage' and input_name == 'images':
+                        # Find a proper image source node to connect to
+                        image_source_id = find_image_source_node(workflow_json)
+                        if image_source_id:
+                            # Fix the reference by connecting to the found image source
+                            inputs[input_name] = [image_source_id, 0]
+                            broken_references_fixed += 1
+                            logging.info(f"Fixed broken 'images' reference in SaveImage node {node_id}: connected to node {image_source_id}")
+                        else:
+                            logging.warning(f"Could not find image source for SaveImage node {node_id}, keeping original reference")
+                    else:
+                        # For other cases, remove the broken reference
+                        del inputs[input_name]
+                        broken_references_fixed += 1
+                        logging.info(f"Removed broken reference in {node_id} ({class_type}).{input_name}")
+    
+    if broken_references_fixed > 0:
+        logging.info(f"Fixed {broken_references_fixed} broken node references")
+    
+    return workflow_json
+
 def clean_workflow_for_execution(workflow_json: dict) -> dict:
     """
     Prepares workflow for execution:
@@ -353,7 +432,8 @@ def clean_workflow_for_execution(workflow_json: dict) -> dict:
     1. Normalizes node IDs (removes # prefixes)
     2. Normalizes model references (dict -> string) - NEW FIX!
     3. Removes UI-only nodes
-    4. Validates structure
+    4. Fix broken node references
+    5. Validates structure
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
@@ -379,19 +459,34 @@ def clean_workflow_for_execution(workflow_json: dict) -> dict:
     if removed_count > 0:
         logging.info(f"Step 3: Removed {removed_count} UI-only nodes")
     
-    # Step 4: Validate structure
+    # Step 4: Fix broken node references
+    workflow_json = fix_broken_node_references(workflow_json)
+    logging.debug(f"Step 4: Fixed broken node references")
+    
+    # Step 5: Validate structure
     is_valid, errors = validate_workflow_structure(workflow_json)
     if not is_valid:
         logging.error("=" * 60)
         logging.error("WORKFLOW VALIDATION FAILED")
         logging.error("=" * 60)
-        for error in errors:
-            logging.error(f"  [ERROR] {error}")
+        logging.error(f"Found {len(errors)} validation errors:")
+        for i, error in enumerate(errors, 1):
+            logging.error(f"  [{i}] {error}")
         logging.error("=" * 60)
         logging.error(f"Workflow has {len(workflow_json)} nodes:")
         for node_id, node_data in workflow_json.items():
             class_type = node_data.get('class_type', 'UNKNOWN') if isinstance(node_data, dict) else 'INVALID'
             logging.error(f"  - Node {node_id}: {class_type}")
+            
+            # Log inputs for each node
+            if isinstance(node_data, dict):
+                inputs = node_data.get('inputs', {})
+                if isinstance(inputs, dict):
+                    for input_name, input_value in inputs.items():
+                        value_str = str(input_value)
+                        if len(value_str) > 50:
+                            value_str = value_str[:50] + "..."
+                        logging.error(f"      {input_name}: {value_str}")
         logging.error("=" * 60)
         raise ValueError(f"Workflow validation failed with {len(errors)} errors")
     
@@ -506,6 +601,8 @@ class DynamicJobProcessor:
             return
 
         injection_count = 0
+        new_nodes_created = []  # Track LoadImage nodes for potential cleanup
+        
         for input_name, input_definition in self.input_schema['properties'].items():
             value = self._get_input_value(input_name, input_definition)
             if value is None:
@@ -521,23 +618,61 @@ class DynamicJobProcessor:
                 continue
 
             if input_definition.get('type') == 'image':
+                # CRITICAL FIX: Handle image inputs properly by creating LoadImage nodes
                 materialized_path = materialize_image_input(value, self.input_dir)
-                if materialized_path:
-                    value = os.path.basename(materialized_path)
-                else:
+                if not materialized_path:
                     logging.error(f"Failed to materialize image for input '{input_name}'. Skipping injection.")
                     continue
-
-            node = find_node_by_type_and_field(self.workflow_json, node_type, field_name)
-            if node:
-                set_node_property(node, field_name, value)
-                logging.info(f"Injected input '{input_name}' (value: {value}) into node {node_type} field {field_name}.")
+                
+                # Get filename without path for ComfyUI
+                image_filename = os.path.basename(materialized_path)
+                
+                # Find target node and check if it expects an image
+                target_node = find_node_by_type_and_field(self.workflow_json, node_type, field_name)
+                if not target_node:
+                    logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
+                    continue
+                
+                # Create a unique ID for the new LoadImage node
+                image_node_id = f"load_image_{len(new_nodes_created)}"
+                
+                # Create the LoadImage node
+                load_image_node = {
+                    "class_type": "LoadImage",
+                    "inputs": {
+                        "image": image_filename
+                    },
+                    "_meta": {
+                        "title": f"Load Image for {input_name}"
+                    }
+                }
+                
+                # Add the LoadImage node to the workflow
+                self.workflow_json[image_node_id] = load_image_node
+                new_nodes_created.append(image_node_id)
+                
+                # Set the target node to reference the new LoadImage node
+                # Images typically connect to input slot 0, but let's check the node type
+                input_slot = 0  # Default for most image inputs
+                set_node_property(target_node, field_name, [image_node_id, input_slot])
+                
+                logging.info(f"Created LoadImage node '{image_node_id}' for input '{input_name}' and connected to {node_type}.{field_name}")
                 injection_count += 1
+                
             else:
-                logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
+                # Handle non-image inputs (text, numbers, etc.) - use existing logic
+                node = find_node_by_type_and_field(self.workflow_json, node_type, field_name)
+                if node:
+                    set_node_property(node, field_name, value)
+                    logging.info(f"Injected input '{input_name}' (value: {value}) into node {node_type} field {field_name}.")
+                    injection_count += 1
+                else:
+                    logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
         
         if injection_count > 0:
             logging.info(f"Successfully injected {injection_count} dynamic inputs into workflow.")
+            if new_nodes_created:
+                logging.info(f"Created {len(new_nodes_created)} LoadImage nodes: {new_nodes_created}")
 
     def _ensure_dependencies(self):
         """Check for and install missing custom node dependencies."""
@@ -662,7 +797,7 @@ class DynamicJobProcessor:
         
         payload = {"prompt": self.workflow_json}
         
-        # === DEBUG: Check for model dictionaries BEFORE sending ===
+        # === COMPREHENSIVE DEBUG: Check for invalid data types BEFORE sending ===
         logging.info("=" * 60)
         logging.info("PRE-FLIGHT WORKFLOW CHECK:")
         
@@ -672,6 +807,13 @@ class DynamicJobProcessor:
             'widget_control_after_generate',
             'widget_control_filter_list',
             '_meta',
+        }
+        
+        # Fields that should NEVER have strings (these expect tensors/connections)
+        IMAGE_EXPECTED_FIELDS = {
+            'images', 'image', 'pixels', 'input_image', 'start_image', 'init_image',
+            'image1', 'image2', 'image3', 'reference_image', 'style_image',
+            'control_image', 'mask_image', 'background_image', 'foreground_image'
         }
         
         issues_found = False
@@ -686,6 +828,16 @@ class DynamicJobProcessor:
                         if isinstance(input_value, list) and len(input_value) >= 2 and isinstance(input_value[1], int):
                             continue
                         
+                        # CRITICAL: Check for strings in image-expected fields
+                        if (input_name.lower() in IMAGE_EXPECTED_FIELDS or
+                            any(field in input_name.lower() for field in IMAGE_EXPECTED_FIELDS)):
+                            if isinstance(input_value, str):
+                                logging.error(f"  [CRITICAL ERROR] String value in image field {node_id} ({class_type}).{input_name}: '{input_value}'")
+                                issues_found = True
+                            elif isinstance(input_value, dict):
+                                logging.error(f"  [CRITICAL ERROR] Dict value in image field {node_id} ({class_type}).{input_name}: {input_value}")
+                                issues_found = True
+                        
                         # Check for dict values (should NOT exist!)
                         if isinstance(input_value, dict):
                             # Check if it's a UI metadata field (can be safely removed)
@@ -695,6 +847,15 @@ class DynamicJobProcessor:
                                 # This is a real problem (like model dicts)
                                 logging.error(f"  [ERROR] Found dict in {node_id} ({class_type}).{input_name}: {input_value}")
                                 issues_found = True
+                        
+                        # Also check for strings in general (might be problematic)
+                        if isinstance(input_value, str) and len(input_value) > 100:
+                            logging.warning(f"  [WARN] Very long string in {node_id} ({class_type}).{input_name}: '{input_value[:100]}...'")
+                        
+                        # Check for numbers where strings might be expected
+                        if isinstance(input_value, (int, float)) and input_name in ['steps', 'width', 'height']:
+                            if not isinstance(input_value, (int, float)):
+                                logging.warning(f"  [WARN] Non-numeric value in numeric field {node_id} ({class_type}).{input_name}: {input_value}")
         
         if issues_found:
             logging.error("=" * 60)
@@ -733,9 +894,12 @@ class DynamicJobProcessor:
         
         logging.info("=" * 60)
         
-        # Original logging
+        # COMPREHENSIVE WORKFLOW STRUCTURE LOGGING
         logging.info("FINAL WORKFLOW STRUCTURE:")
         logging.info(f"Total nodes: {len(self.workflow_json)}")
+        
+        save_image_issues = []  # Track SaveImage issues
+        
         for node_id, node_data in self.workflow_json.items():
             if isinstance(node_data, dict):
                 class_type = node_data.get('class_type', 'UNKNOWN')
@@ -753,6 +917,20 @@ class DynamicJobProcessor:
                             if len(value_str) > 50:
                                 value_str = value_str[:50] + "..."
                             logging.info(f"    {input_name} = {value_str}")
+                            
+                            # CRITICAL: Check for problematic assignments
+                            if (class_type == 'SaveImage' and input_name == 'images' and isinstance(input_value, str)):
+                                save_image_issues.append(f"Node {node_id}: '{input_value}'")
+                                logging.error(f"  [CRITICAL ERROR] SaveImage has string in images field: {input_value}")
+        
+        # Summary of SaveImage issues
+        if save_image_issues:
+            logging.error("=" * 60)
+            logging.error("CRITICAL: SaveImage nodes with string images:")
+            for issue in save_image_issues:
+                logging.error(f"  - {issue}")
+            logging.error("=" * 60)
+        
         logging.info("=" * 60)
         
         outputs = self._trigger_and_get_output(payload)
