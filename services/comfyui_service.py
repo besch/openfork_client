@@ -17,19 +17,24 @@ class ComfyUIClient:
     def __init__(self, comfyui_ws_url: str):
         self.comfyui_ws_url = comfyui_ws_url
         self.http_base = self._http_base_from_ws(comfyui_ws_url)
-        self.supabase_client: Union[Client, None] = self._init_supabase_client()
+        self.supabase_client: Union[Client, None] = None
         self._health_check_cache = {'is_healthy': False, 'timestamp': 0}
         self._health_check_ttl = 10
         self._node_cache = {'nodes': [], 'timestamp': 0}
         self._node_cache_ttl = 60  # Cache nodes for 60 seconds
 
     def _init_supabase_client(self) -> Union[Client, None]:
+        """
+        NOTE: Real-time subscriptions are disabled in sync client.
+        We rely on polling for job cancellation checks instead.
+        """
         supabase_url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
         supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
         if not supabase_url or not supabase_key:
-            logging.warning("Supabase URL/key not set. Real-time cancellation will not work.")
+            logging.warning("Supabase URL/key not set. Job cancellation will use polling only.")
             return None
         try:
+            # Create client but don't use it for real-time
             return create_client(supabase_url, supabase_key)
         except Exception as e:
             logging.error(f"Failed to create Supabase client: {e}")
@@ -279,7 +284,10 @@ class ComfyUIClient:
                 break
 
     def get_workflow_output(self, prompt_id: str, job_id: str, orchestrator_service, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200, shutdown_event: threading.Event = None) -> Union[dict, None, str]:
-        """Get the output of a completed workflow by listening on WS in a separate thread."""
+        """
+        Get the output of a completed workflow by listening on WS in a separate thread.
+        Uses polling for cancellation checks (no real-time subscriptions).
+        """
         if not prompt_id:
             logging.warning("get_workflow_output called with empty prompt_id.")
             return None
@@ -303,34 +311,17 @@ class ComfyUIClient:
         all_node_outputs = {}
         executed_nodes = set()
 
-        job_cancellation_event = threading.Event()
-        subscription = None
-        if self.supabase_client:
-            try:
-                def on_update(payload):
-                    if payload.get('new', {}).get('status') == 'cancelled':
-                        logging.warning(f"Cancellation requested for job {job_id} via real-time.")
-                        job_cancellation_event.set()
-
-                subscription = self.supabase_client.table("dgn_jobs").on("UPDATE", on_update).filter("id", "eq", job_id).subscribe()
-            except Exception as e:
-                logging.error(f"Failed to subscribe to real-time job updates: {e}")
-
         try:
             while True:
                 if shutdown_event and shutdown_event.is_set():
                     logging.warning("Shutdown event received, interrupting workflow.")
                     return "interrupted"
 
-                if job_cancellation_event.is_set():
-                    self.interrupt_workflow()
-                    return "interrupted"
-
                 if (time.time() - start_ts) > timeout_sec:
                     logging.warning(f"Workflow timed out after {timeout_sec}s for prompt_id: {prompt_id}")
                     break
 
-                # Fallback polling
+                # Polling for cancellation (every 5 seconds)
                 if time.time() - last_poll_ts > 5:
                     last_poll_ts = time.time()
                     try:
@@ -381,11 +372,6 @@ class ComfyUIClient:
                             if isinstance(exec_info, dict) and exec_info.get("queue_remaining") == 0:
                                 break
         finally:
-            if subscription and self.supabase_client:
-                try:
-                    self.supabase_client.realtime.remove_channel(subscription)
-                except Exception as e:
-                    logging.error(f"Error unsubscribing: {e}")
             try:
                 ws.close()
             except Exception as e:
