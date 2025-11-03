@@ -246,6 +246,311 @@ def get_standard_nodes_dynamic() -> set:
     return core_nodes
 
 
+def flatten_litegraph(wf: dict) -> dict:
+    """
+    Recursively flattens a LiteGraph workflow by expanding all subgraphs.
+    
+    Handles edge cases:
+    - Links can be lists, dicts, or None
+    - Subgraphs can be nested
+    - Node IDs can be integers or strings
+    """
+    nodes = wf.get('nodes', [])
+    links = wf.get('links', [])
+    definitions = wf.get('definitions', {})
+    subgraph_map = {sg['id']: sg for sg in definitions.get('subgraphs', []) if isinstance(sg, dict) and 'id' in sg}
+
+    flat_nodes = []
+    flat_links = []
+    node_map = {}
+    subgraph_instances = {}
+    
+    # Helper function to safely get link ID
+    def get_link_id(link):
+        if isinstance(link, list) and len(link) > 0:
+            return link[0]
+        elif isinstance(link, dict):
+            return link.get('id', 0)
+        return 0
+    
+    # Helper function to safely get node ID
+    def get_node_id(node):
+        if isinstance(node, dict):
+            return node.get('id', 0)
+        return 0
+    
+    # Calculate max IDs safely
+    max_node_id = 0
+    if nodes:
+        node_ids = [get_node_id(n) for n in nodes if isinstance(n, dict)]
+        if node_ids:
+            max_node_id = max(node_ids)
+    
+    max_link_id = 0
+    if links:
+        link_ids = [get_link_id(l) for l in links if l is not None]
+        if link_ids:
+            max_link_id = max(link_ids)
+    
+    id_counter = max(max_node_id, max_link_id) + 1
+
+    # Process all nodes
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        
+        old_id = node.get('id')
+        if old_id is None:
+            continue
+        
+        node_type = node.get('type', 'Unknown')
+        is_subgraph = False
+        sg_def = None
+        
+        # Check if this is a subgraph node (UUID format)
+        try:
+            import uuid
+            uuid.UUID(str(node_type))
+            is_subgraph = True
+            sg_def = subgraph_map.get(node_type)
+        except (ValueError, AttributeError):
+            pass
+
+        if not is_subgraph:
+            # Regular node - just copy it
+            new_id = old_id
+            node_map[old_id] = new_id
+            flat_nodes.append(node.copy())
+            flat_nodes[-1]['id'] = new_id
+        else:
+            # Subgraph node - expand it
+            if not sg_def:
+                logging.warning(f"No definition for subgraph {node_type}")
+                continue
+
+            internal_wf = {
+                'nodes': sg_def.get('nodes', []),
+                'links': sg_def.get('links', []),
+                'definitions': definitions
+            }
+            
+            # Recursively flatten internal workflow
+            internal_flat = flatten_litegraph(internal_wf)
+            internal_nodes = internal_flat['nodes']
+            internal_links = internal_flat['links']
+
+            # Remap internal node IDs to avoid conflicts
+            internal_map = {}
+            for int_node in internal_nodes:
+                old_int_id = int_node['id']
+                new_int_id = id_counter
+                id_counter += 1
+                internal_map[old_int_id] = new_int_id
+                int_node['id'] = new_int_id
+
+            # Remap internal link IDs and node references
+            link_map = {}
+            for link in internal_links:
+                if not isinstance(link, list) or len(link) < 4:
+                    continue
+                
+                old_link_id = link[0]
+                new_link_id = id_counter
+                id_counter += 1
+                link_map[old_link_id] = new_link_id
+                
+                link[0] = new_link_id
+                link[1] = internal_map.get(link[1], link[1])
+                link[3] = internal_map.get(link[3], link[3])
+
+            flat_nodes.extend(internal_nodes)
+            flat_links.extend(internal_links)
+
+            subgraph_instances[old_id] = {
+                'internal_map': internal_map,
+                'internal_links': internal_links,
+                'link_map': link_map,
+                'sg_def': sg_def,
+                'node': node
+            }
+
+    # Process links (connections between regular nodes)
+    for link in links:
+        if not isinstance(link, list) or len(link) < 4:
+            continue
+        
+        source_node = link[1]
+        target_node = link[3]
+        
+        # If both nodes are regular (not subgraphs), just copy the link
+        if source_node not in subgraph_instances and target_node not in subgraph_instances:
+            new_link = link.copy()
+            new_link[1] = node_map.get(source_node, source_node)
+            new_link[3] = node_map.get(target_node, target_node)
+            flat_links.append(new_link)
+
+    # Process links connecting to/from subgraphs
+    for link in links:
+        if not isinstance(link, list) or len(link) < 5:
+            continue
+        
+        source_node = link[1]
+        source_slot = link[2]
+        target_node = link[3]
+        target_slot = link[4]
+
+        # Handle link TO a subgraph (external -> subgraph input)
+        if target_node in subgraph_instances:
+            sg_inst = subgraph_instances[target_node]
+            sg_def = sg_inst['sg_def']
+            sg_inputs = sg_def.get('inputs', [])
+            
+            if target_slot >= len(sg_inputs):
+                continue
+            
+            sg_input = sg_inputs[target_slot]
+            internal_link_id = sg_input.get('link')
+            
+            if internal_link_id is None:
+                continue
+            
+            # Find the internal link that corresponds to this input
+            internal_link = next(
+                (l for l in sg_def.get('links', []) if isinstance(l, list) and len(l) > 0 and l[0] == internal_link_id),
+                None
+            )
+            
+            if internal_link and len(internal_link) >= 5:
+                internal_target_node_old = internal_link[3]
+                internal_target_slot = internal_link[4]
+                new_internal_target = sg_inst['internal_map'].get(internal_target_node_old)
+                
+                if new_internal_target is None:
+                    continue
+                
+                new_source = node_map.get(source_node, source_node)
+                new_link_id = id_counter
+                id_counter += 1
+                
+                new_link = [new_link_id, new_source, source_slot, new_internal_target, internal_target_slot]
+                if len(link) > 5:
+                    new_link.append(link[5])
+                flat_links.append(new_link)
+
+        # Handle link FROM a subgraph (subgraph output -> external)
+        if source_node in subgraph_instances:
+            sg_inst = subgraph_instances[source_node]
+            sg_def = sg_inst['sg_def']
+            sg_outputs = sg_def.get('outputs', [])
+            
+            if source_slot >= len(sg_outputs):
+                continue
+            
+            sg_output = sg_outputs[source_slot]
+            internal_link_id = sg_output.get('link')
+            
+            if internal_link_id is None:
+                continue
+            
+            # Find the internal link that corresponds to this output
+            internal_link = next(
+                (l for l in sg_def.get('links', []) if isinstance(l, list) and len(l) > 0 and l[0] == internal_link_id),
+                None
+            )
+            
+            if internal_link and len(internal_link) >= 3:
+                internal_source_node_old = internal_link[1]
+                internal_source_slot = internal_link[2]
+                new_internal_source = sg_inst['internal_map'].get(internal_source_node_old)
+                
+                if new_internal_source is None:
+                    continue
+                
+                new_target = node_map.get(target_node, target_node)
+                new_link_id = id_counter
+                id_counter += 1
+                
+                new_link = [new_link_id, new_internal_source, internal_source_slot, new_target, target_slot]
+                if len(link) > 5:
+                    new_link.append(link[5])
+                flat_links.append(new_link)
+
+    # Handle widget values for subgraph inputs (unconnected inputs)
+    for sg_node_id, sg_inst in subgraph_instances.items():
+        node = sg_inst['node']
+        widgets = node.get('widgets_values', [])
+        sg_inputs = sg_inst['sg_def'].get('inputs', [])
+        
+        for i, sg_input in enumerate(sg_inputs):
+            input_name = sg_input.get('name')
+            if input_name is None:
+                continue
+
+            # Check if this input is connected externally
+            is_connected = False
+            if 'inputs' in node and isinstance(node['inputs'], list):
+                for node_inp in node['inputs']:
+                    if isinstance(node_inp, dict) and node_inp.get('name') == input_name and node_inp.get('link') is not None:
+                        is_connected = True
+                        break
+
+            # If not connected externally, propagate widget value internally
+            if not is_connected and i < len(widgets):
+                widget_value = widgets[i]
+                internal_link_id = sg_input.get('link')
+                
+                if internal_link_id is None:
+                    continue
+
+                # Remove the internal link and set the value as a widget
+                new_internal_link_id = sg_inst['link_map'].get(internal_link_id)
+                if new_internal_link_id:
+                    flat_links = [l for l in flat_links if not (isinstance(l, list) and len(l) > 0 and l[0] == new_internal_link_id)]
+
+                # Find the internal link to get the target node
+                internal_link = next(
+                    (l for l in sg_inst['sg_def'].get('links', []) if isinstance(l, list) and len(l) > 0 and l[0] == internal_link_id),
+                    None
+                )
+                
+                if internal_link and len(internal_link) >= 5:
+                    internal_target_node_old = internal_link[3]
+                    internal_target_slot = internal_link[4]
+                    new_internal_target = sg_inst['internal_map'].get(internal_target_node_old)
+                    
+                    if new_internal_target is None:
+                        continue
+
+                    # Find the internal node
+                    internal_node = next((n for n in flat_nodes if n['id'] == new_internal_target), None)
+                    if internal_node is None:
+                        continue
+
+                    # Disconnect the input
+                    if 'inputs' in internal_node and len(internal_node['inputs']) > internal_target_slot:
+                        internal_node['inputs'][internal_target_slot]['link'] = None
+
+                    # Get current widget values and their slot mappings
+                    current_widgets = internal_node.get('widgets_values', [])
+                    current_values = {}
+                    k = 0
+                    for s, inp in enumerate(internal_node.get('inputs', [])):
+                        if inp.get('link') is None:
+                            if k < len(current_widgets):
+                                current_values[s] = current_widgets[k]
+                            k += 1
+
+                    # Set the new value
+                    current_values[internal_target_slot] = widget_value
+
+                    # Rebuild widgets array in correct order
+                    new_unconnected = [s for s, inp in enumerate(internal_node.get('inputs', [])) if inp.get('link') is None]
+                    new_widgets = [current_values.get(s) for s in new_unconnected if s in current_values]
+
+                    internal_node['widgets_values'] = new_widgets
+
+    return {'nodes': flat_nodes, 'links': flat_links}
+
 def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, Dict]) -> Dict:
     """
     Analyzes a workflow JSON to extract models, custom nodes (with git URLs and node class_types),
@@ -279,8 +584,10 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
                 node_with_id['type'] = node_with_id.pop('class_type')
             nodes_to_process.append(node_with_id)
     else:
-        # LiteGraph format already has a 'nodes' list
-        nodes_to_process = workflow_json.get('nodes', [])
+        # For LiteGraph, flatten the workflow to resolve subgraphs
+        flat_wf = flatten_litegraph(workflow_json)
+        nodes_to_process = flat_wf.get('nodes', [])
+        logger.info(f"Flattened LiteGraph workflow, processing {len(nodes_to_process)} total nodes.")
 
     # Use dynamic detection (tries live ComfyUI, falls back to comprehensive static list)
     standard_nodes = get_standard_nodes_dynamic()
@@ -296,18 +603,13 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
         node_id = node.get('id')
         if not node_type:
             continue
-
-        # Skip UUID subgraphs
-        if re.match(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', node_type):
-            logger.debug(f"Skipping subgraph UUID: {node_type}")
-            continue
         
         # Skip UI-only nodes - they don't execute and don't need dependencies
         if node_type in UI_ONLY_NODES:
             logger.debug(f"Skipping UI-only node: {node_type}")
             continue
 
-        # Skip CORE nodes early - this is the critical fix
+        # Skip CORE nodes early
         if node_type in standard_nodes:
             continue
 
@@ -548,7 +850,8 @@ class WorkflowSynchronizer:
                 cwd=self.repo_path,
                 check=True,
                 capture_output=True,
-                text=True
+                text=True,
+                encoding='utf-8'
             )
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
@@ -696,48 +999,194 @@ class WorkflowSynchronizer:
                     logger.warning(f"Could not load workflow JSON for {workflow_name}. Skipping.")
                     continue
 
-                # Analyze workflow for models and custom nodes
+                # === CONVERT LITEGRAPH TO API FORMAT ===
+                api_formatted_workflow = workflow_json
+
+                # Detect LiteGraph format: has 'nodes' as a list
+                if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
+                    logger.info(f"Converting LiteGraph format to API format for {workflow_name}")
+                    
+                    nodes_list = workflow_json['nodes']
+                    links_list = workflow_json.get('links', [])
+                    definitions = workflow_json.get('definitions', {})
+                    subgraphs = definitions.get('subgraphs', []) if isinstance(definitions, dict) else []
+                    
+                    # Build subgraph lookup by UUID
+                    subgraph_map = {}
+                    for sg in subgraphs:
+                        if isinstance(sg, dict) and 'id' in sg:
+                            subgraph_map[sg['id']] = sg
+                    
+                    # Build link lookup: link_id -> (source_node_id, source_slot, target_node_id, target_slot)
+                    link_map = {}
+                    for link in links_list:
+                        if isinstance(link, list) and len(link) >= 5:
+                            link_id = link[0]
+                            source_node_id = str(link[1])
+                            source_slot = link[2]
+                            target_node_id = str(link[3])
+                            target_slot = link[4]
+                            link_map[link_id] = (source_node_id, source_slot, target_node_id, target_slot)
+                    
+                    converted_workflow = {}
+                    
+                    for node in nodes_list:
+                        if not isinstance(node, dict):
+                            continue
+                        
+                        node_id = str(node.get('id', ''))
+                        if not node_id:
+                            continue
+                            
+                        node_type = node.get('type', 'Unknown')
+                        widgets = node.get('widgets_values', [])
+                        
+                        # === CHECK IF SUBGRAPH (UUID TYPE) ===
+                        is_subgraph = False
+                        subgraph_def = None
+                        try:
+                            # Try parsing as UUID
+                            uuid.UUID(node_type)
+                            is_subgraph = True
+                            subgraph_def = subgraph_map.get(node_type)
+                            if subgraph_def:
+                                logger.debug(f"Node {node_id} is subgraph {node_type}")
+                        except (ValueError, AttributeError):
+                            pass
+                        
+                        api_inputs = {}
+                        
+                        # === HANDLE SUBGRAPHS ===
+                        if is_subgraph and subgraph_def:
+                            # Subgraphs have explicit input definitions
+                            subgraph_inputs = subgraph_def.get('inputs', [])
+                            
+                            for i, sg_input in enumerate(subgraph_inputs):
+                                if not isinstance(sg_input, dict):
+                                    continue
+                                    
+                                input_name = sg_input.get('name')
+                                if not input_name:
+                                    continue
+                                
+                                # Check if this input is connected via link
+                                is_connected = False
+                                if 'inputs' in node and isinstance(node['inputs'], list):
+                                    for node_inp in node['inputs']:
+                                        if isinstance(node_inp, dict) and node_inp.get('name') == input_name:
+                                            link_id = node_inp.get('link')
+                                            if link_id is not None and link_id in link_map:
+                                                source_node_id, source_slot, _, _ = link_map[link_id]
+                                                api_inputs[input_name] = [source_node_id, source_slot]
+                                                is_connected = True
+                                                break
+                                
+                                # If not connected, get value from widgets
+                                if not is_connected and i < len(widgets):
+                                    widget_value = widgets[i]
+                                    
+                                    # Handle dict format for model files: {'name': 'model.safetensors', 'url': '...'}
+                                    if isinstance(widget_value, dict):
+                                        if 'name' in widget_value:
+                                            api_inputs[input_name] = widget_value['name']
+                                        else:
+                                            # Keep dict as-is if no 'name' field
+                                            api_inputs[input_name] = widget_value
+                                    else:
+                                        # Use value directly
+                                        api_inputs[input_name] = widget_value
+                        
+                        # === HANDLE REGULAR NODES ===
+                        else:
+                            # Step 1: Get ALL input names from the node definition
+                            all_input_names = []
+                            connected_input_names = set()
+                            
+                            if 'inputs' in node and isinstance(node['inputs'], list):
+                                for inp in node['inputs']:
+                                    if not isinstance(inp, dict):
+                                        continue
+                                    
+                                    input_name = inp.get('name')
+                                    if not input_name:
+                                        continue
+                                    
+                                    all_input_names.append(input_name)
+                                    
+                                    # Check if connected
+                                    link_id = inp.get('link')
+                                    if link_id is not None and link_id in link_map:
+                                        source_node_id, source_slot, _, _ = link_map[link_id]
+                                        api_inputs[input_name] = [source_node_id, source_slot]
+                                        connected_input_names.add(input_name)
+                            
+                            # Step 2: Map widgets to UNCONNECTED inputs
+                            unconnected_inputs = [name for name in all_input_names if name not in connected_input_names]
+                            
+                            for i, widget_value in enumerate(widgets):
+                                if i >= len(unconnected_inputs):
+                                    # More widgets than unconnected inputs - shouldn't happen but skip
+                                    break
+                                
+                                input_name = unconnected_inputs[i]
+                                
+                                # Handle dict format for model files
+                                if isinstance(widget_value, dict):
+                                    if 'name' in widget_value:
+                                        api_inputs[input_name] = widget_value['name']
+                                    else:
+                                        api_inputs[input_name] = widget_value
+                                else:
+                                    # Use value directly (int, float, str, bool)
+                                    api_inputs[input_name] = widget_value
+                            
+                            # Step 3: Add properties if present (rare)
+                            if 'properties' in node and isinstance(node['properties'], dict):
+                                for prop_name, prop_value in node['properties'].items():
+                                    if prop_name not in api_inputs:
+                                        api_inputs[prop_name] = prop_value
+                        
+                        # Build final node
+                        converted_workflow[node_id] = {
+                            'class_type': node_type,
+                            'inputs': api_inputs,
+                            '_meta': {
+                                'title': node.get('title', '')
+                            }
+                        }
+                    
+                    api_formatted_workflow = converted_workflow
+                    logger.info(f"✓ Converted {len(converted_workflow)} nodes from LiteGraph to API format")
+
+                # === ANALYZE WORKFLOW (uses original LiteGraph for custom nodes) ===
                 analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
 
-                # Generate a proper input schema using the parser
+                # === GENERATE INPUT SCHEMA (uses original LiteGraph format) ===
                 input_schema = self.extract_inputs_from_litegraph(workflow_json)
 
-                # Determine target_entity based on workflow_type_from_category
+                # === DETERMINE TARGET ENTITY ===
                 target_entity = "scene"  # Default
                 if workflow_type_from_category == "audio":
                     target_entity = "audio_clip"
                 elif workflow_type_from_category == "3d":
                     target_entity = "character"
 
-                # Convert LiteGraph to API format if necessary
-                api_formatted_workflow = workflow_json
-                if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
-                    logger.info(f"Converting LiteGraph format to node dictionary for {workflow_name}")
-                    converted_workflow = {}
-                    for node in workflow_json['nodes']:
-                        node_copy = node.copy()
-                        if 'type' in node_copy:
-                            node_copy['class_type'] = node_copy.pop('type')
-                        if 'id' in node_copy:
-                            node_id = str(node_copy.pop('id'))
-                            converted_workflow[node_id] = node_copy
-                    api_formatted_workflow = converted_workflow
-
-                # Determine preview_image_url
+                # === UPLOAD PREVIEW ===
                 uploaded_preview_url = None
                 preview_asset_suffix = template_entry.get("mediaSubtype", "webp")
-                
+
                 # Check for workflow_name-1.suffix
                 preview_asset_path_1 = TEMPLATES_DIR / f"{workflow_name}-1.{preview_asset_suffix}"
                 if preview_asset_path_1.exists():
                     uploaded_preview_url = self._upload_preview_asset(preview_asset_path_1, f"{workflow_name}-1.{preview_asset_suffix}")
-                
+
                 # If -1 doesn't exist or failed, check for workflow_name.suffix
                 if not uploaded_preview_url:
                     preview_asset_path_no_num = TEMPLATES_DIR / f"{workflow_name}.{preview_asset_suffix}"
                     if preview_asset_path_no_num.exists():
                         uploaded_preview_url = self._upload_preview_asset(preview_asset_path_no_num, f"{workflow_name}.{preview_asset_suffix}")
 
+                # === BUILD WORKFLOW DATA ENTRY ===
                 workflows_data.append({
                     "source_repo_identifier": workflow_name,
                     "source_repo_commit_hash": self.current_commit_hash,
@@ -745,7 +1194,7 @@ class WorkflowSynchronizer:
                     "description": template_entry.get("description", ""),
                     "category": category_name,
                     "preview_image_url": uploaded_preview_url,
-                    "workflow_json": api_formatted_workflow,
+                    "workflow_json": api_formatted_workflow,  # ← Use converted API format
                     "input_schema": input_schema,
                     "workflow_type": workflow_type_from_category,
                     "target_entity": target_entity,
@@ -754,7 +1203,8 @@ class WorkflowSynchronizer:
                     "model_urls": analysis_result["model_urls"],
                     "is_public": True,
                 })
-        return workflows_data
+
+            return workflows_data
 
     def _sync_to_database(self, parsed_workflows: List[Dict[str, Any]]):
         """Synchronizes the parsed workflows to the Supabase database."""

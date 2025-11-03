@@ -1,31 +1,64 @@
 FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
+    python3-venv \
     git \
     wget \
     aria2 \
     unzip \
+    curl \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch with CUDA
-RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Create app directory
+WORKDIR /app
+
+# Install PyTorch with CUDA support
+RUN pip3 install --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
 
 # Clone ComfyUI
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
+
 WORKDIR /app/ComfyUI
 
-# Install requirements
-RUN pip3 install -r requirements.txt
+# Install ComfyUI requirements
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Install Manager
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager
+# Install ComfyUI Manager
+RUN cd custom_nodes && \
+    git clone https://github.com/ltdrdata/ComfyUI-Manager.git && \
+    cd ComfyUI-Manager && \
+    pip3 install --no-cache-dir -r requirements.txt
 
-# Copy entrypoint
+# CRITICAL: Ensure ComfyUI Manager's cm-cli is accessible
+# This makes the CLI tool available for programmatic installations
+RUN chmod +x /app/ComfyUI/custom_nodes/ComfyUI-Manager/cm-cli.py
+
+# Create necessary directories
+RUN mkdir -p /app/ComfyUI/models/checkpoints \
+    /app/ComfyUI/models/vae \
+    /app/ComfyUI/models/loras \
+    /app/ComfyUI/models/controlnet \
+    /app/ComfyUI/models/clip \
+    /app/ComfyUI/models/unet \
+    /app/ComfyUI/output \
+    /app/ComfyUI/input
+
+# Copy and setup entrypoint
 COPY ./entrypoint.sh /app/ComfyUI/entrypoint.sh
 RUN chmod +x /app/ComfyUI/entrypoint.sh
 
+# Set Python to unbuffered mode for better logging
+ENV PYTHONUNBUFFERED=1
+
 EXPOSE 8188
+
 ENTRYPOINT ["/app/ComfyUI/entrypoint.sh"]

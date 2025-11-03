@@ -1,11 +1,9 @@
 """
-Dynamic dependency installer for ComfyUI nodes running in Docker.
-Executes installation commands inside the container with real-time progress logging.
+Improved dependency installer using ComfyUI Manager's cm-cli for reliable installations.
+This approach is more robust than manual git cloning.
 """
 import logging
 import subprocess
-import threading
-import time
 import requests
 from services.docker_manager import docker_manager
 
@@ -15,51 +13,16 @@ REPO_REDIRECTS = {
     "https://github.com/ltdrdata/ComfyUI-Documentation-Nodes.git": None,
 }
 
-def _stream_output(process, prefix=""):
-    """Stream subprocess output in real-time to logging."""
-    def stream_stdout():
-        for line in iter(process.stdout.readline, b''):
-            if line:
-                decoded = line.decode('utf-8', errors='replace').rstrip()
-                if decoded:
-                    logging.info(f"{prefix}{decoded}")
-    
-    def stream_stderr():
-        for line in iter(process.stderr.readline, b''):
-            if line:
-                decoded = line.decode('utf-8', errors='replace').rstrip()
-                if decoded:
-                    logging.warning(f"{prefix}{decoded}")
-    
-    stdout_thread = threading.Thread(target=stream_stdout, daemon=True)
-    stderr_thread = threading.Thread(target=stream_stderr, daemon=True)
-    
-    stdout_thread.start()
-    stderr_thread.start()
-    
-    return stdout_thread, stderr_thread
-
-
 def validate_github_repo(repo_url: str) -> bool:
     """
     Validates that a GitHub repository exists by checking the API.
-    
-    Args:
-        repo_url: Git repository URL to validate
-        
-    Returns:
-        True if repository exists, False otherwise
     """
     try:
-        # Extract owner/repo from URL
-        # https://github.com/owner/repo or https://github.com/owner/repo.git
         parts = repo_url.rstrip('/').replace('.git', '').split('github.com/')
         if len(parts) < 2:
             return False
         
         owner_repo = parts[1].strip('/')
-        
-        # Use GitHub API to check if repo exists
         api_url = f"https://api.github.com/repos/{owner_repo}"
         response = requests.head(api_url, timeout=10)
         
@@ -69,220 +32,121 @@ def validate_github_repo(repo_url: str) -> bool:
             logging.warning(f"Repository not found: {repo_url}")
             return False
         else:
-            # For rate limiting or other issues, assume it exists to not block installation
             logging.warning(f"Could not validate {repo_url} (status {response.status_code}), assuming it exists")
             return True
             
     except Exception as e:
         logging.warning(f"Error validating repository {repo_url}: {e}")
-        # On error, assume repository exists to not block valid installations
         return True
 
 
-def manager_install_custom_node(repo_url: str) -> bool:
+def get_node_name_from_url(repo_url: str) -> str:
+    """Extract the repository name from a GitHub URL."""
+    return repo_url.rstrip('/').split('/')[-1].replace('.git', '')
+
+
+def is_custom_node_installed(node_name: str) -> bool:
     """
-    Installs a custom node inside the running ComfyUI container with progress logging.
+    Check if a custom node is installed using cm-cli.
+    """
+    container_name = docker_manager.get_container_name()
+    if not container_name:
+        return False
     
-    Args:
-        repo_url: Git repository URL of the custom node
-        
-    Returns:
-        True if installation succeeded, False otherwise
+    check_script = f"""
+cd /app/ComfyUI/custom_nodes/ComfyUI-Manager
+python3 cm-cli.py simple-show installed 2>/dev/null | grep -q "{node_name}"
+"""
+    
+    cmd = ["docker", "exec", container_name, "bash", "-c", check_script]
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logging.debug(f"Error checking if {node_name} is installed: {e}")
+        return False
+
+
+def manager_install_custom_node_via_cli(repo_url: str) -> bool:
     """
-    # Check for known redirects/deprecated repos
+    Install a custom node using ComfyUI Manager's cm-cli tool.
+    This is the most reliable method as it uses the same installation
+    logic as the ComfyUI Manager UI.
+    """
     normalized_url = repo_url.rstrip('/')
     if normalized_url in REPO_REDIRECTS:
         replacement = REPO_REDIRECTS[normalized_url]
         if replacement is None:
-            logging.warning(f"[INSTALL] Repository {repo_url} is deprecated/removed. Skipping installation.")
-            return True  # Return True to not fail the job - this dependency is optional
+            logging.warning(f"[INSTALL] Repository {repo_url} is deprecated/removed. Skipping.")
+            return True
         else:
             logging.info(f"[INSTALL] Redirecting {repo_url} to {replacement}")
             repo_url = replacement
     
-    # Validate repository exists before attempting installation
     if not validate_github_repo(repo_url):
         logging.error(f"[INSTALL] Repository does not exist: {repo_url}")
-        logging.info(f"[INSTALL] This may be a deprecated dependency. Skipping installation.")
-        return True  # Return True to not fail the job
+        return True  # Don't fail the job
     
     container_name = docker_manager.get_container_name()
-    
     if not container_name:
         logging.error("No active ComfyUI container found for node installation")
         return False
     
-    # Extract repo name for logging
-    repo_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
+    repo_name = get_node_name_from_url(repo_url)
     
-    logging.info(f"[INSTALL] Installing custom node: {repo_name}")
+    # Check if already installed
+    if is_custom_node_installed(repo_name):
+        logging.info(f"[INSTALL] [OK] {repo_name} is already installed")
+        return True
+    
+    logging.info(f"[INSTALL] Installing custom node via cm-cli: {repo_name}")
     logging.info(f"[INSTALL]   Repository: {repo_url}")
     
-    # Ensure repo URL ends with .git
-    if not repo_url.endswith('.git'):
-        repo_url = f"{repo_url}.git"
-    
-    # Use bash script with fallback to zip download
+    # Use cm-cli to install the node
     install_script = f"""
 set -e
-set -o pipefail
+cd /app/ComfyUI/custom_nodes/ComfyUI-Manager
 
-REPO_URL='{repo_url}'
-REPO_NAME='{repo_name}'
-TARGET_PATH="/app/ComfyUI/custom_nodes/$REPO_NAME"
+echo "[INSTALL] Installing {repo_name} using cm-cli..."
+python3 cm-cli.py install "{repo_url}" --mode remote 2>&1 | while IFS= read -r line; do
+    echo "[INSTALL]   $line"
+done
 
-echo "[INSTALL]   Checking if already installed..."
-if [ -d "$TARGET_PATH" ]; then
-    echo "[INSTALL]   [OK] Repository already exists at $TARGET_PATH"
+# Verify installation
+if python3 cm-cli.py simple-show installed 2>/dev/null | grep -q "{repo_name}"; then
+    echo "[INSTALL] [OK] {repo_name} installed successfully"
     exit 0
-fi
-
-echo "[INSTALL]   Attempting repository installation..."
-
-# Method 1: Try git clone with sanitized environment
-echo "[INSTALL]   Method 1: Trying git clone..."
-git_success=false
-
-(
-    # Create completely clean environment
-    cd /tmp
-    unset GIT_ASKPASS SSH_ASKPASS
-    export GIT_TERMINAL_PROMPT=0
-    export HOME=/tmp
-    
-    # Clone with no config files
-    if GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git clone --depth 1 "$REPO_URL" "/tmp/$REPO_NAME" 2>&1; then
-        mv "/tmp/$REPO_NAME" "$TARGET_PATH"
-        echo "[INSTALL]   [OK] Git clone succeeded"
-        exit 0
-    else
-        exit 1
-    fi
-) && git_success=true || git_success=false
-
-# Method 2: Fallback to zip download if git fails
-if [ "$git_success" = "false" ]; then
-    echo "[INSTALL]   Method 2: Falling back to zip download..."
-    
-    # Extract owner and repo from URL
-    REPO_PATH=$(echo "$REPO_URL" | sed 's|https://github.com/||' | sed 's|.git$||')
-    
-    # Try main branch first
-    ZIP_URL="https://github.com/$REPO_PATH/archive/refs/heads/main.zip"
-    echo "[INSTALL]   Downloading: $ZIP_URL"
-    
-    if wget -q -O /tmp/repo.zip "$ZIP_URL" 2>&1; then
-        echo "[INSTALL]   Extracting archive..."
-        unzip -q /tmp/repo.zip -d /tmp/ 2>&1
-        
-        # Find extracted directory (usually repo-main)
-        EXTRACTED_DIR=$(find /tmp -maxdepth 1 -type d -name "*-main" -o -name "$REPO_NAME-main" | head -n 1)
-        
-        if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
-            mv "$EXTRACTED_DIR" "$TARGET_PATH"
-            rm -f /tmp/repo.zip
-            echo "[INSTALL]   [OK] Downloaded and extracted successfully (main branch)"
-        else
-            # Try master branch as fallback
-            rm -f /tmp/repo.zip
-            ZIP_URL="https://github.com/$REPO_PATH/archive/refs/heads/master.zip"
-            echo "[INSTALL]   Trying master branch: $ZIP_URL"
-            
-            if wget -q -O /tmp/repo.zip "$ZIP_URL" 2>&1; then
-                echo "[INSTALL]   Extracting archive..."
-                unzip -q /tmp/repo.zip -d /tmp/ 2>&1
-                
-                EXTRACTED_DIR=$(find /tmp -maxdepth 1 -type d -name "*-master" -o -name "$REPO_NAME-master" | head -n 1)
-                
-                if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
-                    mv "$EXTRACTED_DIR" "$TARGET_PATH"
-                    rm -f /tmp/repo.zip
-                    echo "[INSTALL]   [OK] Downloaded and extracted successfully (master branch)"
-                else
-                    echo "[INSTALL]   [ERROR] Could not find extracted directory"
-                    rm -f /tmp/repo.zip
-                    exit 1
-                fi
-            else
-                echo "[INSTALL]   [ERROR] Failed to download repository from both main and master branches"
-                exit 1
-            fi
-        fi
-    else
-        echo "[INSTALL]   [ERROR] Failed to download from main branch, trying master..."
-        ZIP_URL="https://github.com/$REPO_PATH/archive/refs/heads/master.zip"
-        
-        if wget -q -O /tmp/repo.zip "$ZIP_URL" 2>&1; then
-            echo "[INSTALL]   Extracting archive..."
-            unzip -q /tmp/repo.zip -d /tmp/ 2>&1
-            
-            EXTRACTED_DIR=$(find /tmp -maxdepth 1 -type d -name "*-master" -o -name "$REPO_NAME-master" | head -n 1)
-            
-            if [ -n "$EXTRACTED_DIR" ] && [ -d "$EXTRACTED_DIR" ]; then
-                mv "$EXTRACTED_DIR" "$TARGET_PATH"
-                rm -f /tmp/repo.zip
-                echo "[INSTALL]   [OK] Downloaded and extracted successfully (master branch)"
-            else
-                echo "[INSTALL]   [ERROR] Could not find extracted directory"
-                rm -f /tmp/repo.zip
-                exit 1
-            fi
-        else
-            echo "[INSTALL]   [ERROR] Failed to download repository"
-            exit 1
-        fi
-    fi
-fi
-
-if [ ! -d "$TARGET_PATH" ]; then
-    echo "[INSTALL]   [ERROR] Installation failed - directory not created"
+else
+    echo "[INSTALL] [ERROR] {repo_name} installation verification failed"
     exit 1
 fi
-
-echo "[INSTALL]   [OK] Repository installed successfully"
-
-# Check for requirements
-REQ_FILE="$TARGET_PATH/requirements.txt"
-if [ -f "$REQ_FILE" ]; then
-    echo "[INSTALL]   Found requirements.txt, installing dependencies..."
-    pip3 install -q -r "$REQ_FILE" 2>&1 | while IFS= read -r line; do
-        if [[ "$line" == *"Requirement already satisfied"* ]]; then
-            : # Skip these to reduce noise
-        elif [[ "$line" == *"Successfully installed"* ]] || [[ "$line" == *"Collecting"* ]] || [[ "$line" == *"Downloading"* ]]; then
-            echo "[INSTALL]     $line"
-        fi
-    done
-    echo "[INSTALL]   [OK] Dependencies installed"
-else
-    echo "[INSTALL]   No requirements.txt found, skipping dependency installation"
-fi
-
-echo "[INSTALL]   [OK] Installation complete"
 """
     
-    cmd = [
-        "docker", "exec", container_name,
-        "bash", "-c", install_script
-    ]
+    cmd = ["docker", "exec", container_name, "bash", "-c", install_script]
     
     try:
-        # Use Popen for real-time output streaming
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=1
+            bufsize=1,
+            text=True,
+            encoding='utf-8',
+            errors='replace'
         )
         
         # Stream output in real-time
-        stdout_thread, stderr_thread = _stream_output(process)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                logging.info(line.rstrip())
         
-        # Wait for completion
         return_code = process.wait(timeout=600)
-        
-        # Wait for output threads to finish
-        stdout_thread.join(timeout=5)
-        stderr_thread.join(timeout=5)
         
         if return_code == 0:
             logging.info(f"[INSTALL] [OK] Successfully installed {repo_name}")
@@ -292,7 +156,7 @@ echo "[INSTALL]   [OK] Installation complete"
             return False
             
     except subprocess.TimeoutExpired:
-        logging.error(f"[INSTALL] [ERROR] Timeout installing {repo_name} (exceeded 10 minutes)")
+        logging.error(f"[INSTALL] [ERROR] Timeout installing {repo_name}")
         process.kill()
         return False
     except Exception as e:
@@ -300,15 +164,56 @@ echo "[INSTALL]   [OK] Installation complete"
         return False
 
 
+def fix_all_custom_node_dependencies() -> bool:
+    """
+    Run cm-cli fix to reinstall all dependencies for installed custom nodes.
+    This is useful after container restarts or when nodes fail to load.
+    """
+    container_name = docker_manager.get_container_name()
+    if not container_name:
+        logging.error("No active ComfyUI container found")
+        return False
+    
+    logging.info("[FIX] Running cm-cli fix to ensure all dependencies are installed...")
+    
+    fix_script = """
+cd /app/ComfyUI/custom_nodes/ComfyUI-Manager
+python3 cm-cli.py fix all 2>&1 | while IFS= read -r line; do
+    echo "[FIX]   $line"
+done
+"""
+    
+    cmd = ["docker", "exec", container_name, "bash", "-c", fix_script]
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            encoding='utf-8'
+        )
+        
+        if result.stdout:
+            for line in result.stdout.split('\n'):
+                if line.strip():
+                    logging.info(line)
+        
+        if result.returncode == 0:
+            logging.info("[FIX] [OK] Successfully fixed all custom node dependencies")
+            return True
+        else:
+            logging.warning(f"[FIX] [WARNING] Fix command completed with code {result.returncode}")
+            return True  # Don't fail - fix might report issues but still work
+            
+    except Exception as e:
+        logging.error(f"[FIX] [ERROR] Exception running fix: {e}", exc_info=True)
+        return False
+
+
 def manager_install_model(model_url: str) -> bool:
     """
-    Installs a model inside the running ComfyUI container with progress logging.
-    
-    Args:
-        model_url: URL to download the model from
-        
-    Returns:
-        True if installation succeeded, False otherwise
+    Install a model inside the running ComfyUI container.
     """
     container_name = docker_manager.get_container_name()
     
@@ -316,18 +221,14 @@ def manager_install_model(model_url: str) -> bool:
         logging.error("No active ComfyUI container found for model installation")
         return False
     
-    # Extract filename for logging
     import urllib.parse
     filename = urllib.parse.urlparse(model_url).path.split('/')[-1]
     
     logging.info(f"[DOWNLOAD] Downloading model: {filename}")
     logging.info(f"[DOWNLOAD]   URL: {model_url}")
     
-    # Bash script with progress bars
     download_script = f"""
 set -e
-set -o pipefail
-
 MODEL_URL='{model_url}'
 FILENAME='{filename}'
 
@@ -345,8 +246,6 @@ fi
 mkdir -p "$TARGET_DIR"
 TARGET_PATH="$TARGET_DIR/$FILENAME"
 
-echo "[DOWNLOAD]   Target: $TARGET_PATH"
-
 if [ -f "$TARGET_PATH" ]; then
     FILE_SIZE=$(du -h "$TARGET_PATH" | cut -f1)
     echo "[DOWNLOAD]   [OK] Model already exists ($FILE_SIZE)"
@@ -355,19 +254,11 @@ fi
 
 echo "[DOWNLOAD]   Starting download..."
 
-# Try aria2c first (much faster, shows progress)
+# Try aria2c first (faster)
 if command -v aria2c &> /dev/null; then
-    echo "[DOWNLOAD]   Using aria2c (multi-connection download)"
-    aria2c -x 16 -s 16 -k 1M \
-        --console-log-level=warn \
-        --summary-interval=2 \
-        -d "$TARGET_DIR" -o "$FILENAME" \
-        "$MODEL_URL" 2>&1 | while IFS= read -r line; do
-        # Filter for progress lines only
-        if [[ "$line" == *"("*"%)"* ]] || [[ "$line" == *"Download complete"* ]]; then
-            echo "[DOWNLOAD]     $line"
-        fi
-    done
+    aria2c -x 16 -s 16 -k 1M --console-log-level=warn --summary-interval=2 \
+        -d "$TARGET_DIR" -o "$FILENAME" "$MODEL_URL" 2>&1 | \
+        grep -E "%(|Download complete)" | while read line; do echo "[DOWNLOAD]     $line"; done
     EXIT_CODE=$?
     if [ $EXIT_CODE -eq 0 ]; then
         FILE_SIZE=$(du -h "$TARGET_PATH" | cut -f1)
@@ -376,61 +267,49 @@ if command -v aria2c &> /dev/null; then
     fi
 fi
 
-# Fallback to wget with progress bar
-echo "[DOWNLOAD]   Using wget (fallback)"
-wget --progress=bar:force \
-    -O "$TARGET_PATH" \
-    "$MODEL_URL" 2>&1 | while IFS= read -r line; do
-    if [[ "$line" == *"%"* ]]; then
-        echo "[DOWNLOAD]     $line"
-    fi
-done
+# Fallback to wget
+wget --progress=bar:force -O "$TARGET_PATH" "$MODEL_URL" 2>&1 | \
+    grep "%" | while read line; do echo "[DOWNLOAD]     $line"; done
 
 if [ $? -eq 0 ]; then
     FILE_SIZE=$(du -h "$TARGET_PATH" | cut -f1)
     echo "[DOWNLOAD]   [OK] Download complete ($FILE_SIZE)"
-    exit 0
 else
     echo "[DOWNLOAD]   [ERROR] Download failed"
     exit 1
 fi
 """
     
-    cmd = [
-        "docker", "exec", container_name,
-        "bash", "-c", download_script
-    ]
+    cmd = ["docker", "exec", container_name, "bash", "-c", download_script]
     
     try:
-        # Use Popen for real-time output streaming
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=1
+            bufsize=1,
+            text=True,
+            encoding='utf-8',
+            errors='replace'
         )
         
-        # Stream output in real-time
-        stdout_thread, stderr_thread = _stream_output(process)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                logging.info(line.rstrip())
         
-        # Wait for completion (30 minutes for large models)
         return_code = process.wait(timeout=1800)
-        
-        # Wait for output threads to finish
-        stdout_thread.join(timeout=5)
-        stderr_thread.join(timeout=5)
         
         if return_code == 0:
             logging.info(f"[DOWNLOAD] [OK] Successfully downloaded {filename}")
             return True
         else:
-            logging.error(f"[DOWNLOAD] [ERROR] Failed to download {filename} (exit code: {return_code})")
+            logging.error(f"[DOWNLOAD] [ERROR] Failed to download {filename}")
             return False
             
     except subprocess.TimeoutExpired:
-        logging.error(f"[DOWNLOAD] [ERROR] Timeout downloading {filename} (exceeded 30 minutes)")
+        logging.error(f"[DOWNLOAD] [ERROR] Timeout downloading {filename}")
         process.kill()
         return False
     except Exception as e:
-        logging.error(f"[DOWNLOAD] [ERROR] Exception downloading {filename}: {e}", exc_info=True)
+        logging.error(f"[DOWNLOAD] [ERROR] Exception: {e}", exc_info=True)
         return False

@@ -19,7 +19,9 @@ class ComfyUIClient:
         self.http_base = self._http_base_from_ws(comfyui_ws_url)
         self.supabase_client: Union[Client, None] = self._init_supabase_client()
         self._health_check_cache = {'is_healthy': False, 'timestamp': 0}
-        self._health_check_ttl = 10  # Cache health status for 10 seconds
+        self._health_check_ttl = 10
+        self._node_cache = {'nodes': [], 'timestamp': 0}
+        self._node_cache_ttl = 60  # Cache nodes for 60 seconds
 
     def _init_supabase_client(self) -> Union[Client, None]:
         supabase_url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
@@ -41,85 +43,126 @@ class ComfyUIClient:
 
     def check_health(self, use_cache: bool = True) -> bool:
         """
-        Check if ComfyUI server is healthy and responding.
-        
-        Args:
-            use_cache: If True, use cached health status if available
-            
-        Returns:
-            True if server is healthy, False otherwise
+        IMPROVED: More robust health check with retries.
         """
-        # Check cache first
         if use_cache:
             cache_age = time.time() - self._health_check_cache['timestamp']
             if cache_age < self._health_check_ttl:
                 return self._health_check_cache['is_healthy']
         
-        try:
-            # Try to get object_info as a health check
-            response = requests.get(f"{self.http_base}/object_info", timeout=5)
-            is_healthy = response.status_code == 200
-            
-            # Update cache
-            self._health_check_cache = {
-                'is_healthy': is_healthy,
-                'timestamp': time.time()
-            }
-            
-            return is_healthy
-            
-        except Exception as e:
-            logging.debug(f"Health check failed: {e}")
-            self._health_check_cache = {
-                'is_healthy': False,
-                'timestamp': time.time()
-            }
-            return False
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    f"{self.http_base}/object_info",
+                    timeout=5
+                )
+                is_healthy = response.status_code == 200
+                
+                if is_healthy:
+                    self._health_check_cache = {
+                        'is_healthy': True,
+                        'timestamp': time.time()
+                    }
+                    return True
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logging.debug(f"Health check attempt {attempt + 1} failed: {e}, retrying...")
+                    time.sleep(2)
+                else:
+                    logging.debug(f"Health check failed after {max_retries} attempts: {e}")
+        
+        self._health_check_cache = {
+            'is_healthy': False,
+            'timestamp': time.time()
+        }
+        return False
 
     def get_object_info(self) -> Union[Dict, None]:
-        """Fetches the raw object_info from the ComfyUI server."""
-        url = f"{self.http_base}/object_info"
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Failed to get object_info from ComfyUI: {e}")
-            return None
+        """
+        IMPROVED: Fetches object_info with retry logic.
+        """
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    f"{self.http_base}/object_info",
+                    timeout=10
+                )
+                response.raise_for_status()
+                return response.json()
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    logging.warning(f"Failed to get object_info (attempt {attempt + 1}): {e}")
+                    time.sleep(2)
+                else:
+                    logging.error(f"Failed to get object_info after {max_retries} attempts: {e}")
+        return None
 
-    def get_installed_nodes(self) -> List[str]:
-        """Returns a list of all installed node class_types."""
+    def get_installed_nodes(self, use_cache: bool = True) -> List[str]:
+        """
+        IMPROVED: Returns list of installed node class_types with caching.
+        """
+        if use_cache:
+            cache_age = time.time() - self._node_cache['timestamp']
+            if cache_age < self._node_cache_ttl and self._node_cache['nodes']:
+                logging.debug(f"Using cached node list ({len(self._node_cache['nodes'])} nodes)")
+                return self._node_cache['nodes']
+        
         object_info = self.get_object_info()
         if not object_info:
+            logging.warning("Could not fetch object_info, returning empty node list")
             return []
         
-        return list(object_info.keys())
+        nodes = list(object_info.keys())
+        
+        # Update cache
+        self._node_cache = {
+            'nodes': nodes,
+            'timestamp': time.time()
+        }
+        
+        logging.debug(f"Fetched {len(nodes)} installed nodes")
+        return nodes
+
+    def invalidate_node_cache(self):
+        """Invalidate the cached node information."""
+        self._node_cache = {'nodes': [], 'timestamp': 0}
+        logging.debug("Node cache invalidated")
 
     def refresh_nodes(self):
-        """Refresh ComfyUI's node cache."""
+        """
+        IMPROVED: Refresh ComfyUI's node cache and invalidate local cache.
+        """
         try:
-            requests.post(f"{self.http_base}/refresh", timeout=10)
-            time.sleep(3)
-            logging.info("Nodes refreshed")
-            # Invalidate health cache after refresh
+            # Invalidate local cache first
+            self.invalidate_node_cache()
+            
+            # Trigger ComfyUI's internal refresh
+            response = requests.post(f"{self.http_base}/refresh", timeout=10)
+            
+            # Wait for refresh to complete
+            time.sleep(5)
+            
+            # Verify refresh worked by fetching nodes
+            nodes = self.get_installed_nodes(use_cache=False)
+            logging.info(f"Nodes refreshed successfully. {len(nodes)} nodes available.")
+            
+            # Invalidate health cache too
             self._health_check_cache['timestamp'] = 0
+            
         except Exception as e:
             logging.warning(f"Could not request /refresh: {e}")
 
     def wait_for_ready(self, shutdown_event: threading.Event, timeout=180) -> bool:
         """
-        Waits for the ComfyUI server to be available and healthy.
-        
-        Args:
-            shutdown_event: Event to check for shutdown signal
-            timeout: Maximum time to wait in seconds
-            
-        Returns:
-            True if server became ready, False otherwise
+        IMPROVED: More robust ready check with better logging.
         """
         logging.info("Waiting for ComfyUI server to be ready...")
         start_time = time.time()
         attempt = 0
+        last_error = None
         
         while time.time() - start_time < timeout:
             if shutdown_event.is_set():
@@ -130,18 +173,32 @@ class ComfyUIClient:
             
             # Check health
             if self.check_health(use_cache=False):
-                logging.info(f"ComfyUI server is ready (took {int(time.time() - start_time)}s)")
-                return True
+                # Additional verification: try to get nodes
+                try:
+                    nodes = self.get_installed_nodes(use_cache=False)
+                    if len(nodes) > 0:
+                        elapsed = int(time.time() - start_time)
+                        logging.info(f"ComfyUI server is ready! {len(nodes)} nodes available (took {elapsed}s)")
+                        return True
+                    else:
+                        last_error = "Server responded but no nodes available"
+                except Exception as e:
+                    last_error = f"Error fetching nodes: {e}"
             
             # Log progress every 10 attempts
             if attempt % 10 == 0:
                 elapsed = int(time.time() - start_time)
-                logging.info(f"Still waiting for ComfyUI... ({elapsed}s elapsed)")
+                if last_error:
+                    logging.info(f"Still waiting for ComfyUI... ({elapsed}s elapsed) - Last error: {last_error}")
+                else:
+                    logging.info(f"Still waiting for ComfyUI... ({elapsed}s elapsed)")
             
             # Wait before retry
             shutdown_event.wait(2)
         
         logging.error(f"ComfyUI server did not become ready in {timeout} seconds.")
+        if last_error:
+            logging.error(f"Last error: {last_error}")
         return False
 
     def trigger_workflow(self, workflow_json: dict) -> str:

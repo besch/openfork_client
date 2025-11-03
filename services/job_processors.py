@@ -1,10 +1,15 @@
 import os
 import logging
+import uuid
 from typing import Union
 from services.docker_manager import docker_manager
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration
 from utils.comfyui_workflow_utils import find_node_by_type_and_field, set_node_property, materialize_image_input
-from services.auto_installer import manager_install_custom_node
+from services.auto_installer import (
+    manager_install_custom_node_via_cli,
+    fix_all_custom_node_dependencies,
+    get_node_name_from_url
+)
 import time
 
 # UI-only nodes that should be removed before execution
@@ -15,6 +20,300 @@ UI_ONLY_NODES = {
     "PreviewBridge",  # Core preview
 }
 
+def flatten_litegraph(wf: dict) -> dict:
+    nodes = wf.get('nodes', [])
+    links = wf.get('links', [])
+    definitions = wf.get('definitions', {})
+    subgraph_map = {sg['id']: sg for sg in definitions.get('subgraphs', []) if isinstance(sg, dict) and 'id' in sg}
+
+    flat_nodes = []
+    flat_links = []
+    node_map = {}
+    subgraph_instances = {}
+    max_node_id = max([n.get('id', 0) for n in nodes] if nodes else [0])
+    max_link_id = max([l[0] for l in links] if links else [0])
+    id_counter = max(max_node_id, max_link_id) + 1
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        old_id = node.get('id')
+        if old_id is None:
+            continue
+        node_type = node.get('type', 'Unknown')
+        is_subgraph = False
+        sg_def = None
+        try:
+            uuid.UUID(node_type)
+            is_subgraph = True
+            sg_def = subgraph_map.get(node_type)
+        except (ValueError, AttributeError):
+            pass
+
+        if not is_subgraph:
+            new_id = old_id
+            node_map[old_id] = new_id
+            flat_nodes.append(node.copy())
+            flat_nodes[-1]['id'] = new_id
+        else:
+            if not sg_def:
+                logging.warning(f"No definition for subgraph {node_type}")
+                continue
+
+            internal_wf = {
+                'nodes': sg_def.get('nodes', []),
+                'links': sg_def.get('links', []),
+                'definitions': definitions
+            }
+            internal_flat = flatten_litegraph(internal_wf)
+            internal_nodes = internal_flat['nodes']
+            internal_links = internal_flat['links']
+
+            internal_map = {}
+            for int_node in internal_nodes:
+                old_int_id = int_node['id']
+                new_int_id = id_counter
+                id_counter += 1
+                internal_map[old_int_id] = new_int_id
+                int_node['id'] = new_int_id
+
+            link_map = {}
+            for link in internal_links:
+                old_link_id = link[0]
+                new_link_id = id_counter
+                id_counter += 1
+                link_map[old_link_id] = new_link_id
+                link[0] = new_link_id
+                link[1] = internal_map[link[1]]
+                link[3] = internal_map[link[3]]
+
+            flat_nodes.extend(internal_nodes)
+            flat_links.extend(internal_links)
+
+            subgraph_instances[old_id] = {
+                'internal_map': internal_map,
+                'internal_links': internal_links,
+                'link_map': link_map,
+                'sg_def': sg_def,
+                'node': node
+            }
+
+    for link in links:
+        if not isinstance(link, list) or len(link) < 4:
+            continue
+        source_node = link[1]
+        target_node = link[3]
+        if source_node not in subgraph_instances and target_node not in subgraph_instances:
+            new_link = link.copy()
+            new_link[1] = node_map.get(source_node, source_node)
+            new_link[3] = node_map.get(target_node, target_node)
+            flat_links.append(new_link)
+
+    for link in links:
+        if not isinstance(link, list) or len(link) < 5:
+            continue
+        source_node = link[1]
+        source_slot = link[2]
+        target_node = link[3]
+        target_slot = link[4]
+
+        if target_node in subgraph_instances:
+            sg_inst = subgraph_instances[target_node]
+            sg_def = sg_inst['sg_def']
+            sg_inputs = sg_def.get('inputs', [])
+            if target_slot >= len(sg_inputs):
+                continue
+            sg_input = sg_inputs[target_slot]
+            internal_link_id = sg_input.get('link')
+            if internal_link_id is None:
+                continue
+            internal_link = next((l for l in sg_def.get('links', []) if l[0] == internal_link_id), None)
+            if internal_link:
+                internal_target_node_old = internal_link[3]
+                internal_target_slot = internal_link[4]
+                new_internal_target = sg_inst['internal_map'].get(internal_target_node_old)
+                if new_internal_target is None:
+                    continue
+                new_source = node_map.get(source_node, source_node)
+                new_link_id = id_counter
+                id_counter += 1
+                new_link = [new_link_id, new_source, source_slot, new_internal_target, internal_target_slot]
+                if len(link) > 5:
+                    new_link.append(link[5])
+                flat_links.append(new_link)
+
+        if source_node in subgraph_instances:
+            sg_inst = subgraph_instances[source_node]
+            sg_def = sg_inst['sg_def']
+            sg_outputs = sg_def.get('outputs', [])
+            if source_slot >= len(sg_outputs):
+                continue
+            sg_output = sg_outputs[source_slot]
+            internal_link_id = sg_output.get('link')
+            if internal_link_id is None:
+                continue
+            internal_link = next((l for l in sg_def.get('links', []) if l[0] == internal_link_id), None)
+            if internal_link:
+                internal_source_node_old = internal_link[1]
+                internal_source_slot = internal_link[2]
+                new_internal_source = sg_inst['internal_map'].get(internal_source_node_old)
+                if new_internal_source is None:
+                    continue
+                new_target = node_map.get(target_node, target_node)
+                new_link_id = id_counter
+                id_counter += 1
+                new_link = [new_link_id, new_internal_source, internal_source_slot, new_target, target_slot]
+                if len(link) > 5:
+                    new_link.append(link[5])
+                flat_links.append(new_link)
+
+    for sg_node_id, sg_inst in subgraph_instances.items():
+        node = sg_inst['node']
+        widgets = node.get('widgets_values', [])
+        sg_inputs = sg_inst['sg_def'].get('inputs', [])
+        for i, sg_input in enumerate(sg_inputs):
+            input_name = sg_input.get('name')
+            if input_name is None:
+                continue
+
+            is_connected = False
+            if 'inputs' in node and isinstance(node['inputs'], list):
+                for node_inp in node['inputs']:
+                    if isinstance(node_inp, dict) and node_inp.get('name') == input_name and node_inp.get('link') is not None:
+                        is_connected = True
+                        break
+
+            if not is_connected and i < len(widgets):
+                widget_value = widgets[i]
+                internal_link_id = sg_input.get('link')
+                if internal_link_id is None:
+                    continue
+
+                new_internal_link_id = sg_inst['link_map'].get(internal_link_id)
+                if new_internal_link_id:
+                    flat_links = [l for l in flat_links if l[0] != new_internal_link_id]
+
+                internal_link = next((l for l in sg_inst['sg_def'].get('links', []) if l[0] == internal_link_id), None)
+                if internal_link:
+                    internal_target_node_old = internal_link[3]
+                    internal_target_slot = internal_link[4]
+                    new_internal_target = sg_inst['internal_map'].get(internal_target_node_old)
+                    if new_internal_target is None:
+                        continue
+
+                    internal_node = next((n for n in flat_nodes if n['id'] == new_internal_target), None)
+                    if internal_node is None:
+                        continue
+
+                    if 'inputs' in internal_node and len(internal_node['inputs']) > internal_target_slot:
+                        internal_node['inputs'][internal_target_slot]['link'] = None
+
+                    current_widgets = internal_node.get('widgets_values', [])
+
+                    current_values = {}
+                    k = 0
+                    for s, inp in enumerate(internal_node.get('inputs', [])):
+                        if inp.get('link') is None:
+                            if k < len(current_widgets):
+                                current_values[s] = current_widgets[k]
+                            k += 1
+
+                    current_values[internal_target_slot] = widget_value
+
+                    new_unconnected = [s for s, inp in enumerate(internal_node.get('inputs', [])) if inp.get('link') is None]
+
+                    new_widgets = [current_values.get(s) for s in new_unconnected if s in current_values]
+
+                    internal_node['widgets_values'] = new_widgets
+
+    return {'nodes': flat_nodes, 'links': flat_links}
+
+def convert_litegraph_to_api(workflow_json: dict) -> dict:
+    if 'nodes' not in workflow_json or not isinstance(workflow_json.get('nodes'), list):
+        return workflow_json
+
+    logging.info("Converting LiteGraph format to API format...")
+
+    flat = flatten_litegraph(workflow_json)
+    nodes_list = flat['nodes']
+    links_list = flat['links']
+
+    link_map = {}
+    for link in links_list:
+        if isinstance(link, list) and len(link) >= 5:
+            link_id = link[0]
+            source_node_id = str(link[1])
+            source_slot = link[2]
+            target_node_id = str(link[3])
+            target_slot = link[4]
+            link_map[str(link_id)] = (source_node_id, source_slot, target_node_id, target_slot)
+
+    api_workflow = {}
+
+    for node in nodes_list:
+        if not isinstance(node, dict):
+            continue
+
+        node_id = str(node.get('id', ''))
+        if not node_id:
+            continue
+
+        node_type = node.get('type', 'Unknown')
+        widgets = node.get('widgets_values', [])
+
+        api_inputs = {}
+
+        all_input_names = []
+        connected_input_names = set()
+
+        if 'inputs' in node and isinstance(node['inputs'], list):
+            for inp in node['inputs']:
+                if not isinstance(inp, dict):
+                    continue
+
+                input_name = inp.get('name')
+                if not input_name:
+                    continue
+
+                all_input_names.append(input_name)
+
+                link_id = inp.get('link')
+                if link_id is not None:
+                    link_id_str = str(link_id)
+                    if link_id_str in link_map:
+                        source_node_id, source_slot, _, _ = link_map[link_id_str]
+                        api_inputs[input_name] = [source_node_id, source_slot]
+                        connected_input_names.add(input_name)
+
+        unconnected_inputs = [name for name in all_input_names if name not in connected_input_names]
+
+        for i, widget_value in enumerate(widgets):
+            if i >= len(unconnected_inputs):
+                break
+            input_name = unconnected_inputs[i]
+            if isinstance(widget_value, dict):
+                if 'name' in widget_value:
+                    api_inputs[input_name] = widget_value['name']
+                else:
+                    api_inputs[input_name] = widget_value
+            else:
+                api_inputs[input_name] = widget_value
+
+        if 'properties' in node and isinstance(node['properties'], dict):
+            for prop_name, prop_value in node['properties'].items():
+                if prop_name not in api_inputs:
+                    api_inputs[prop_name] = prop_value
+
+        api_workflow[node_id] = {
+            'class_type': node_type,
+            'inputs': api_inputs,
+            '_meta': {
+                'title': node.get('title', '')
+            }
+        }
+
+    logging.info(f"Converted {len(api_workflow)} nodes from LiteGraph to API format")
+    return api_workflow
 
 def clean_workflow_for_execution(workflow_json: dict) -> dict:
     """
@@ -23,9 +322,15 @@ def clean_workflow_for_execution(workflow_json: dict) -> dict:
     
     IMPORTANT: Only removes nodes that have NO outputs (not connected to anything).
     If a UI node is connected to other nodes, we keep it to avoid breaking the graph.
+    
+    Also handles format conversion from LiteGraph to API format if needed.
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
+    
+    # Convert LiteGraph to API format if needed
+    if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
+        workflow_json = convert_litegraph_to_api(workflow_json)
     
     # First, find all nodes that are used as inputs to other nodes
     referenced_nodes = set()
@@ -223,9 +528,8 @@ class DynamicJobProcessor:
 
     def _ensure_dependencies(self):
         """
-        Checks for and installs missing custom node dependencies.
-        Uses fuzzy matching to verify installation success.
-        Handles false positives from misidentified core nodes gracefully.
+        IMPROVED: Checks for and installs missing custom node dependencies using cm-cli.
+        This is more reliable than manual git cloning.
         """
         required_deps = self.workflow_template.get('custom_node_dependencies', [])
         if not required_deps:
@@ -238,7 +542,7 @@ class DynamicJobProcessor:
         installed_nodes = self.comfyui_client.get_installed_nodes()
         installed_nodes_set = set(installed_nodes)
         
-        logging.debug(f"Currently installed nodes: {len(installed_nodes_set)}")
+        logging.debug(f"Currently {len(installed_nodes_set)} nodes installed")
 
         repos_to_install = []
         verified_deps = []
@@ -260,11 +564,10 @@ class DynamicJobProcessor:
                 verified_deps.append(repo_url)
                 continue
             
-            # Try fuzzy matching - maybe node names are slightly different
+            # Try fuzzy matching
             fuzzy_matches = []
             for expected_node in expected_nodes:
                 for installed_node in installed_nodes:
-                    # Case-insensitive substring matching
                     if (expected_node.lower() in installed_node.lower() or 
                         installed_node.lower() in expected_node.lower()):
                         fuzzy_matches.append((expected_node, installed_node))
@@ -284,15 +587,17 @@ class DynamicJobProcessor:
             logging.info("All dependencies are satisfied!")
             return
 
-        # Install missing repos
-        logging.info(f"Installing {len(repos_to_install)} missing repositories...")
+        # Install missing repos using cm-cli
+        logging.info(f"Installing {len(repos_to_install)} missing repositories using cm-cli...")
         
         failed_installs = []
         successful_installs = []
         
         for repo_url, expected_nodes in repos_to_install:
             logging.info(f"Installing: {repo_url}")
-            success = manager_install_custom_node(repo_url)
+            
+            # Use the improved cm-cli based installer
+            success = manager_install_custom_node_via_cli(repo_url)
             
             if success:
                 successful_installs.append(repo_url)
@@ -303,40 +608,57 @@ class DynamicJobProcessor:
 
         # Only restart if we installed something successfully
         if successful_installs:
+            logging.info("=" * 60)
+            logging.info(f"Installed {len(successful_installs)} new custom nodes")
             logging.info("Restarting ComfyUI to load new nodes...")
+            logging.info("=" * 60)
+            
             if not docker_manager.restart_container():
                 raise RuntimeError("Container restart failed after dependency installation")
             
+            # Wait for ComfyUI to be ready
             if not self.comfyui_client.wait_for_ready(self.shutdown_event, timeout=180):
                 raise RuntimeError("ComfyUI did not become ready after restart")
             
-            # Re-verify installations with improved detection
+            # CRITICAL: Run cm-cli fix to ensure all dependencies are installed
+            logging.info("Running cm-cli fix to install all node dependencies...")
+            fix_all_custom_node_dependencies()
+            
+            # Give nodes time to initialize
+            logging.info("Waiting for nodes to initialize...")
+            time.sleep(10)
+            
+            # Trigger explicit node refresh
+            logging.info("Refreshing node cache...")
+            self.comfyui_client.refresh_nodes()
+            docker_manager.invalidate_node_cache()
+            
+            # Wait a bit more after refresh
+            time.sleep(5)
+            
+            # Re-verify installations
             logging.info("Verifying newly installed dependencies...")
             installed_nodes = self.comfyui_client.get_installed_nodes()
             installed_nodes_set = set(installed_nodes)
             
-            # Log a sample of installed nodes for debugging
-            logging.debug(f"Sample of installed nodes after restart: {list(installed_nodes_set)[:20]}")
-            
             still_missing = []
-            possibly_working = []
             
             for repo_url, expected_nodes in repos_to_install:
                 if repo_url in [url for url, _ in failed_installs]:
-                    continue  # Already know it failed to install
+                    continue
                 
-                # Check if ANY expected node is now present (exact match)
+                repo_name = get_node_name_from_url(repo_url)
+                
+                # Check if ANY expected node is now present
                 found = any(n in installed_nodes_set for n in expected_nodes)
                 
-                # Also try fuzzy matching again
-                fuzzy_found = False
+                # Also try fuzzy matching
                 if not found:
                     for expected_node in expected_nodes:
                         for installed_node in installed_nodes:
                             if (expected_node.lower() in installed_node.lower() or
                                 installed_node.lower() in expected_node.lower()):
                                 found = True
-                                fuzzy_found = True
                                 logging.info(f"  [FUZZY] Found {expected_node} as {installed_node}")
                                 break
                         if found:
@@ -345,32 +667,25 @@ class DynamicJobProcessor:
                 if found:
                     logging.info(f"[OK] Verified: {repo_url}")
                 else:
-                    # Check if the repository directory exists (install succeeded but nodes not detected)
-                    # This might be a false positive from workflow_sync misidentifying core nodes
                     still_missing.append(repo_url)
                     logging.warning(f"[WARNING] Could not verify: {repo_url}")
                     logging.warning(f"  Expected: {expected_nodes}")
-                    logging.warning(f"  This may be a false positive (core node misidentified as custom)")
-                    possibly_working.append(repo_url)
             
             if still_missing:
                 logging.warning("=" * 60)
                 logging.warning("DEPENDENCY VERIFICATION WARNING")
                 logging.warning("=" * 60)
-                logging.warning(f"Installed {len(successful_installs)} repos but could not verify {len(still_missing)} dependencies")
+                logging.warning(f"Could not verify {len(still_missing)} dependencies")
                 logging.warning(f"Unverified: {still_missing}")
                 logging.warning("")
                 logging.warning("This could mean:")
-                logging.warning("1. The node names in the registry are incorrect")
-                logging.warning("2. The nodes are installed but under different names")
-                logging.warning("3. These were core nodes misidentified as custom (false positive)")
-                logging.warning("4. The repository installation succeeded but nodes aren't loading")
+                logging.warning("1. Node names in registry are incorrect")
+                logging.warning("2. Nodes installed under different names")
+                logging.warning("3. Core nodes misidentified as custom (false positive)")
+                logging.warning("4. Repository installed but nodes aren't loading")
                 logging.warning("")
                 logging.warning("Attempting to continue anyway - workflow may still work...")
                 logging.warning("=" * 60)
-                
-                # Don't raise MissingDependenciesError - try to run the workflow
-                # It might work despite our detection failing
         
         if failed_installs:
             failed_repos = [url for url, _ in failed_installs]
@@ -382,55 +697,70 @@ class DynamicJobProcessor:
                 logging.error(f"  - {url}")
                 logging.error(f"    Expected nodes: {nodes}")
             logging.error("")
-            logging.error("These installations genuinely failed (not verification issues).")
             logging.error("The workflow will likely fail without these dependencies.")
             logging.error("=" * 60)
             
-            # Only raise if we have actual installation failures
-            # Don't raise for verification failures (might be false positives)
             raise MissingDependenciesError(failed_repos)
 
     def _validate_workflow(self):
         """
-        Validates the workflow before execution to catch common issues.
-        Returns True if valid, logs warnings for issues.
+        IMPROVED: Validates the workflow before execution with better error messages.
         """
         issues = []
+        warnings = []
+        
+        # Check if workflow is empty
+        if not self.workflow_json:
+            issues.append("Workflow is empty")
+            return False
         
         for node_id, node_data in self.workflow_json.items():
             if not isinstance(node_data, dict):
+                warnings.append(f"Node {node_id} is not a dictionary")
                 continue
             
             class_type = node_data.get('class_type', '')
             inputs = node_data.get('inputs', {})
             
-            # Check for nodes with missing required inputs
-            if not isinstance(inputs, dict):
+            if not class_type:
+                issues.append(f"Node {node_id} is missing class_type")
                 continue
             
-            # Special check for SaveImage - must have images input
+            # Check for nodes with missing required inputs
+            if not isinstance(inputs, dict):
+                warnings.append(f"Node {node_id} ({class_type}) has invalid inputs")
+                continue
+            
+            # Special checks for critical nodes
             if class_type == 'SaveImage':
                 if 'images' not in inputs or inputs.get('images') is None:
                     issues.append(f"Node {node_id} (SaveImage) is missing required 'images' input")
             
-            # Check for broken connections (inputs referencing non-existent nodes)
+            # Check for broken connections
             for input_name, input_value in inputs.items():
                 if isinstance(input_value, list) and len(input_value) >= 1:
                     referenced_node = str(input_value[0])
                     if referenced_node not in self.workflow_json:
-                        issues.append(f"Node {node_id} ({class_type}) input '{input_name}' references non-existent node {referenced_node}")
+                        issues.append(
+                            f"Node {node_id} ({class_type}) input '{input_name}' "
+                            f"references non-existent node {referenced_node}"
+                        )
         
         if issues:
-            logging.warning("=" * 60)
-            logging.warning("WORKFLOW VALIDATION ISSUES DETECTED")
-            logging.warning("=" * 60)
+            logging.error("=" * 60)
+            logging.error("WORKFLOW VALIDATION FAILED")
+            logging.error("=" * 60)
             for issue in issues:
-                logging.warning(f"  - {issue}")
-            logging.warning("=" * 60)
-            logging.warning("The workflow may fail to execute. Check the workflow structure.")
+                logging.error(f"  [ERROR] {issue}")
+            logging.error("=" * 60)
             return False
         
-        logging.debug("Workflow validation passed")
+        if warnings:
+            logging.warning("Workflow validation warnings:")
+            for warning in warnings:
+                logging.warning(f"  [WARNING] {warning}")
+        
+        logging.info("Workflow validation passed")
         return True
 
     def process(self):
@@ -441,9 +771,18 @@ class DynamicJobProcessor:
         self._clean_ui_nodes()
         
         # Validate workflow structure
-        self._validate_workflow()
+        if not self._validate_workflow():
+            logging.error("Workflow validation failed. Aborting job.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
 
         self._inject_dynamic_inputs()
+        
+        # Log the workflow for debugging
+        logging.debug(f"Final workflow for job {self.job_id}:")
+        logging.debug(f"Number of nodes: {len(self.workflow_json)}")
+        logging.debug(f"Node types: {[n.get('class_type', 'UNKNOWN') for n in self.workflow_json.values()]}")
+        
         payload = {"prompt": self.workflow_json}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:

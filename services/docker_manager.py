@@ -32,7 +32,8 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=10
+                timeout=10,
+                encoding='utf-8'
             )
             containers = result.stdout.strip().split('\n')
             if containers and containers[0]:
@@ -102,7 +103,8 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=600
+                timeout=600,
+                encoding='utf-8'
             )
             
             if result.stdout:
@@ -141,7 +143,7 @@ class DockerManager:
         
         try:
             cmd = ["docker-compose", "-f", self.compose_file, "stop"]
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60, encoding='utf-8')
             
             self.container_name = None
             self.is_running = False
@@ -174,7 +176,8 @@ class DockerManager:
                 check=True, 
                 capture_output=True, 
                 text=True,
-                timeout=120
+                timeout=120,
+                encoding='utf-8'
             )
             
             logging.info("Container restarted successfully")
@@ -218,7 +221,7 @@ class DockerManager:
         logging.debug(f"Copying from container: {source_in_container} -> {dest_on_host}")
         
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60)
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60, encoding='utf-8')
             logging.debug(f"Successfully copied file from container")
         except subprocess.CalledProcessError as e:
             logging.error(f"Failed to copy file from container: {e.stderr}")
@@ -251,7 +254,8 @@ class DockerManager:
                 capture_output=True, 
                 text=True, 
                 check=False,
-                timeout=timeout
+                timeout=timeout,
+                encoding='utf-8'
             )
             return result.returncode, result.stdout, result.stderr
         except subprocess.TimeoutExpired:
@@ -281,7 +285,8 @@ class DockerManager:
                 capture_output=True,
                 text=True,
                 check=True,
-                timeout=30
+                timeout=30,
+                encoding='utf-8'
             )
             return result.stdout
         except Exception as e:
