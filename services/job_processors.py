@@ -229,15 +229,51 @@ def flatten_litegraph(wf: dict) -> dict:
     return {'nodes': flat_nodes, 'links': flat_links}
 
 def convert_litegraph_to_api(workflow_json: dict) -> dict:
+    """
+    Convert LiteGraph format to API format with proper error handling.
+    
+    CRITICAL FIX: Removes UI-only nodes BEFORE building connections to prevent broken references.
+    """
     if 'nodes' not in workflow_json or not isinstance(workflow_json.get('nodes'), list):
         return workflow_json
 
     logging.info("Converting LiteGraph format to API format...")
 
+    # First, flatten any subgraphs
     flat = flatten_litegraph(workflow_json)
     nodes_list = flat['nodes']
     links_list = flat['links']
 
+    # === CRITICAL: Remove UI-only nodes FIRST ===
+    # Identify which nodes are UI-only and won't be in final workflow
+    ui_node_ids = set()
+    for node in nodes_list:
+        if isinstance(node, dict) and 'type' in node:
+            node_type = node.get('type', '')
+            node_id = str(node.get('id', ''))
+            if node_type in UI_ONLY_NODES:
+                ui_node_ids.add(node_id)
+                logging.debug(f"Marking UI-only node for removal: {node_id} ({node_type})")
+    
+    # Remove UI-only nodes from nodes list
+    nodes_list = [n for n in nodes_list if str(n.get('id', '')) not in ui_node_ids]
+    
+    # Remove links connected to UI-only nodes
+    original_link_count = len(links_list)
+    links_list = [
+        link for link in links_list 
+        if isinstance(link, list) and len(link) >= 4 
+        and str(link[1]) not in ui_node_ids  # source not UI-only
+        and str(link[3]) not in ui_node_ids  # target not UI-only
+    ]
+    
+    if len(links_list) < original_link_count:
+        logging.info(f"Removed {original_link_count - len(links_list)} links connected to UI-only nodes")
+    
+    if ui_node_ids:
+        logging.info(f"Removed {len(ui_node_ids)} UI-only nodes before conversion")
+
+    # Build link map (only valid links remain)
     link_map = {}
     for link in links_list:
         if isinstance(link, list) and len(link) >= 5:
@@ -248,8 +284,17 @@ def convert_litegraph_to_api(workflow_json: dict) -> dict:
             target_slot = link[4]
             link_map[str(link_id)] = (source_node_id, source_slot, target_node_id, target_slot)
 
+    # Build set of valid node IDs (UI-only nodes already removed)
+    valid_node_ids = set()
+    for node in nodes_list:
+        if isinstance(node, dict) and 'id' in node:
+            valid_node_ids.add(str(node.get('id')))
+    
+    logging.debug(f"Valid node IDs after cleanup: {len(valid_node_ids)} nodes")
+
     api_workflow = {}
 
+    # Process each node
     for node in nodes_list:
         if not isinstance(node, dict):
             continue
@@ -263,6 +308,7 @@ def convert_litegraph_to_api(workflow_json: dict) -> dict:
 
         api_inputs = {}
 
+        # Get all input names
         all_input_names = []
         connected_input_names = set()
 
@@ -282,9 +328,24 @@ def convert_litegraph_to_api(workflow_json: dict) -> dict:
                     link_id_str = str(link_id)
                     if link_id_str in link_map:
                         source_node_id, source_slot, _, _ = link_map[link_id_str]
-                        api_inputs[input_name] = [source_node_id, source_slot]
-                        connected_input_names.add(input_name)
+                        
+                        # Validate that source node exists (should always be true now)
+                        if source_node_id in valid_node_ids:
+                            api_inputs[input_name] = [source_node_id, source_slot]
+                            connected_input_names.add(input_name)
+                        else:
+                            # This should never happen now, but keep as safety
+                            logging.error(
+                                f"CRITICAL: Node {node_id} ({node_type}) input '{input_name}' "
+                                f"references non-existent node {source_node_id}"
+                            )
+                    else:
+                        logging.warning(
+                            f"Node {node_id} ({node_type}) input '{input_name}' "
+                            f"references unknown link {link_id}. Skipping."
+                        )
 
+        # Map widget values to unconnected inputs
         unconnected_inputs = [name for name in all_input_names if name not in connected_input_names]
 
         for i, widget_value in enumerate(widgets):
@@ -299,6 +360,7 @@ def convert_litegraph_to_api(workflow_json: dict) -> dict:
             else:
                 api_inputs[input_name] = widget_value
 
+        # Add properties
         if 'properties' in node and isinstance(node['properties'], dict):
             for prop_name, prop_value in node['properties'].items():
                 if prop_name not in api_inputs:
@@ -312,78 +374,57 @@ def convert_litegraph_to_api(workflow_json: dict) -> dict:
             }
         }
 
+    # Final validation: Check for any remaining broken references (should be none)
+    broken_refs = []
+    for node_id, node_data in api_workflow.items():
+        inputs = node_data.get('inputs', {})
+        if isinstance(inputs, dict):
+            for input_name, input_value in inputs.items():
+                if isinstance(input_value, list) and len(input_value) >= 1:
+                    ref_node = str(input_value[0])
+                    if ref_node not in api_workflow:
+                        broken_refs.append((node_id, input_name, ref_node))
+    
+    if broken_refs:
+        logging.error("=" * 60)
+        logging.error("WORKFLOW CONVERSION ERROR: Broken node references detected")
+        logging.error("=" * 60)
+        for node_id, input_name, ref_node in broken_refs:
+            node_type = api_workflow[node_id].get('class_type', 'Unknown')
+            logging.error(
+                f"Node {node_id} ({node_type}) input '{input_name}' "
+                f"references non-existent node {ref_node}"
+            )
+        logging.error("=" * 60)
+        
+        # Remove broken connections
+        for node_id, input_name, ref_node in broken_refs:
+            logging.warning(f"Removing broken connection: {node_id}.{input_name} -> {ref_node}")
+            if node_id in api_workflow:
+                inputs = api_workflow[node_id].get('inputs', {})
+                if input_name in inputs:
+                    del inputs[input_name]
+    
     logging.info(f"Converted {len(api_workflow)} nodes from LiteGraph to API format")
+    
+    if broken_refs:
+        logging.warning(f"Removed {len(broken_refs)} broken connections during conversion")
+    
     return api_workflow
 
 def clean_workflow_for_execution(workflow_json: dict) -> dict:
     """
-    Removes UI-only nodes from a workflow before execution.
-    These nodes are for documentation/display only and don't affect the workflow logic.
-    
-    IMPORTANT: Only removes nodes that have NO outputs (not connected to anything).
-    If a UI node is connected to other nodes, we keep it to avoid breaking the graph.
-    
-    Also handles format conversion from LiteGraph to API format if needed.
+    Handles format conversion from LiteGraph to API format if needed.
+    UI-only nodes are now removed during conversion, so this just does format checking.
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
     
-    # Convert LiteGraph to API format if needed
+    # Convert LiteGraph to API format if needed (handles UI node removal internally)
     if 'nodes' in workflow_json and isinstance(workflow_json.get('nodes'), list):
         workflow_json = convert_litegraph_to_api(workflow_json)
     
-    # First, find all nodes that are used as inputs to other nodes
-    referenced_nodes = set()
-    for node_id, node_data in workflow_json.items():
-        if not isinstance(node_data, dict):
-            continue
-        
-        inputs = node_data.get('inputs', {})
-        if isinstance(inputs, dict):
-            for input_name, input_value in inputs.items():
-                # Check if this input references another node
-                # Format is usually [node_id, slot_index] or just node_id
-                if isinstance(input_value, list) and len(input_value) >= 1:
-                    referenced_nodes.add(str(input_value[0]))
-                elif isinstance(input_value, str):
-                    # Sometimes it's just a string node_id
-                    referenced_nodes.add(input_value)
-    
-    cleaned = {}
-    removed_nodes = []
-    kept_connected_ui_nodes = []
-    
-    for node_id, node_data in workflow_json.items():
-        if not isinstance(node_data, dict):
-            cleaned[node_id] = node_data
-            continue
-        
-        class_type = node_data.get('class_type', '')
-        
-        # Only remove UI-only nodes if they're NOT referenced by other nodes
-        if class_type in UI_ONLY_NODES:
-            if str(node_id) in referenced_nodes:
-                # Keep it - something else needs it
-                cleaned[node_id] = node_data
-                kept_connected_ui_nodes.append((node_id, class_type))
-            else:
-                # Safe to remove - nothing uses it
-                removed_nodes.append((node_id, class_type))
-            continue
-        
-        cleaned[node_id] = node_data
-    
-    if removed_nodes:
-        logging.info(f"Removed {len(removed_nodes)} UI-only nodes before execution:")
-        for node_id, class_type in removed_nodes:
-            logging.debug(f"  - Node {node_id}: {class_type}")
-    
-    if kept_connected_ui_nodes:
-        logging.debug(f"Kept {len(kept_connected_ui_nodes)} UI nodes that are connected to the workflow:")
-        for node_id, class_type in kept_connected_ui_nodes:
-            logging.debug(f"  - Node {node_id}: {class_type} (has connections)")
-    
-    return cleaned
+    return workflow_json
 
 class MissingDependenciesError(Exception):
     """Custom exception for missing ComfyUI custom node dependencies."""
@@ -484,7 +525,7 @@ class DynamicJobProcessor:
         return value
 
     def _clean_ui_nodes(self):
-        """Remove UI-only nodes before execution."""
+        """Clean and convert workflow format (UI nodes removed during conversion)."""
         self.workflow_json = clean_workflow_for_execution(self.workflow_json)
 
     def _inject_dynamic_inputs(self):

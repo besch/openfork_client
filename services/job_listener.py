@@ -57,9 +57,9 @@ class JobListener:
             fix_result = fix_all_custom_node_dependencies()
             
             if fix_result:
-                logging.info("✓ Dependencies fixed successfully")
+                logging.info("[OK] Dependencies fixed successfully")
             else:
-                logging.warning("⚠ Dependency fix reported issues, but continuing...")
+                logging.warning("[WARNING] Dependency fix reported issues, but continuing...")
             
             # 2. Wait for nodes to initialize
             logging.info("Step 2/3: Waiting for nodes to initialize...")
@@ -71,7 +71,7 @@ class JobListener:
             
             # Verify we can fetch nodes
             nodes = self.client.comfyui_client.get_installed_nodes(use_cache=False)
-            logging.info(f"✓ Startup maintenance complete. {len(nodes)} nodes available.")
+            logging.info(f"[OK] Startup maintenance complete. {len(nodes)} nodes available.")
             logging.info("=" * 60)
             
             self.startup_fix_run = True
