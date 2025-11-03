@@ -8,13 +8,13 @@ import requests
 import uuid
 from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
-from converter import convert_litegraph_to_api
 
 # Add the parent directory (client) to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from config import Config
+from converter import convert_litegraph_to_api
 from supabase import create_client, Client
+from config import Config
+
 
 
 # --- Configuration ---
