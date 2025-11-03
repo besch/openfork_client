@@ -42,6 +42,10 @@ RUN cd custom_nodes && \
 # This makes the CLI tool available for programmatic installations
 RUN chmod +x /app/ComfyUI/custom_nodes/ComfyUI-Manager/cm-cli.py
 
+# Install workflow-to-api-converter-endpoint for proper workflow conversion
+RUN cd /app/ComfyUI/custom_nodes && \
+    git clone https://github.com/SethRobinson/comfyui-workflow-to-api-converter-endpoint
+
 # Create necessary directories
 RUN mkdir -p /app/ComfyUI/models/checkpoints \
     /app/ComfyUI/models/vae \

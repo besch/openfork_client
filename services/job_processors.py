@@ -12,6 +12,9 @@ from services.auto_installer import (
 )
 import time
 
+# Import logger for use in job processor
+logger = logging.getLogger(__name__)
+
 # UI-only nodes that should be removed before execution
 UI_ONLY_NODES = {
     "Note",  # Core UI node
@@ -19,6 +22,32 @@ UI_ONLY_NODES = {
     "ShowText",  # pythongosssss (sometimes)
     "PreviewBridge",  # Core preview
 }
+
+def track_node_references(workflow_json: dict) -> dict:
+    """
+    Build a mapping of which nodes reference which other nodes.
+    Returns a dict: {node_id: [list_of_nodes_that_reference_this_node]}
+    """
+    references = {}
+    for node_id in workflow_json.keys():
+        references[node_id] = []
+    
+    for node_id, node_data in workflow_json.items():
+        if not isinstance(node_data, dict):
+            continue
+        
+        inputs = node_data.get('inputs', {})
+        if not isinstance(inputs, dict):
+            continue
+        
+        for input_name, input_value in inputs.items():
+            # Check if this is a node reference [node_id, slot]
+            if isinstance(input_value, list) and len(input_value) >= 2:
+                ref_node_id = str(input_value[0])
+                if ref_node_id in references:
+                    references[ref_node_id].append(node_id)
+    
+    return references
 
 def normalize_node_id(node_id) -> str:
     """Normalize node ID by removing # prefix if present."""
@@ -136,7 +165,7 @@ def validate_workflow_structure(workflow_json: dict) -> tuple[bool, list[str]]:
     """
     Validates workflow structure and returns (is_valid, list_of_errors).
     
-    CRITICAL FIX: Properly detect node references vs. regular values.
+    CRITICAL FIX: Handle incomplete workflows (only SaveImage node) gracefully.
     - A node reference is a list like [node_id, slot_index] where slot_index is an integer
     - Everything else (strings, numbers, dicts, bools, other lists) is a VALUE
     """
@@ -148,6 +177,20 @@ def validate_workflow_structure(workflow_json: dict) -> tuple[bool, list[str]]:
     
     # Build set of valid node IDs (all as strings)
     valid_node_ids = set(str(node_id) for node_id in workflow_json.keys())
+    
+    # CRITICAL: Check for incomplete workflow (only SaveImage node)
+    if len(workflow_json) == 1:
+        only_node_id = list(workflow_json.keys())[0]
+        only_node_data = workflow_json[only_node_id]
+        if isinstance(only_node_data, dict):
+            class_type = only_node_data.get('class_type', '')
+            if class_type == 'SaveImage':
+                warnings.append(
+                    f"Incomplete workflow detected: Only SaveImage node {only_node_id} found with no source nodes. "
+                    f"Workflow will likely fail execution as SaveImage requires an 'images' input from upstream nodes."
+                )
+                # Don't fail validation for this case - it will be handled by the broken reference fixer
+                # and we want to let execution attempt proceed (it will fail gracefully)
     
     for node_id, node_data in workflow_json.items():
         if not isinstance(node_data, dict):
@@ -189,10 +232,18 @@ def validate_workflow_structure(workflow_json: dict) -> tuple[bool, list[str]]:
                     # This is a proper node reference format: [node_id, slot_index]
                     # Verify the referenced node exists
                     if potential_node_id not in valid_node_ids:
-                        errors.append(
-                            f"Node {node_id} ({class_type}) input '{input_name}' "
-                            f"references non-existent node '{potential_node_id}'"
-                        )
+                        # Special handling for SaveImage nodes - don't fail validation for broken images references
+                        # as these will be handled by fix_broken_node_references
+                        if class_type == 'SaveImage' and input_name == 'images':
+                            warnings.append(
+                                f"Node {node_id} ({class_type}) input '{input_name}' references non-existent node '{potential_node_id}' "
+                                f"- this will be handled by broken reference fixer"
+                            )
+                        else:
+                            errors.append(
+                                f"Node {node_id} ({class_type}) input '{input_name}' "
+                                f"references non-existent node '{potential_node_id}'"
+                            )
                 # else: second element is not an integer, so this is just a list of values
             
             # For all other types (strings, numbers, dicts, bools, single-element lists):
@@ -213,7 +264,8 @@ def validate_workflow_structure(workflow_json: dict) -> tuple[bool, list[str]]:
 def remove_ui_only_nodes(workflow_json: dict) -> dict:
     """
     Remove UI-only nodes from API format workflow.
-    Also removes any connections to/from these nodes.
+    Also removes any connections to/from these nodes and updates references.
+    CRITICAL FIX: Properly handle node reference updates when UI-only nodes are removed.
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
@@ -232,8 +284,12 @@ def remove_ui_only_nodes(workflow_json: dict) -> dict:
     
     logging.info(f"Removing {len(ui_node_ids)} UI-only nodes: {ui_node_ids}")
     
+    # CRITICAL: Build reference mapping BEFORE removing nodes
+    node_references = track_node_references(workflow_json)
+    
     # Create new workflow without UI-only nodes
     cleaned_workflow = {}
+    connections_removed = 0
     
     for node_id, node_data in workflow_json.items():
         if node_id in ui_node_ids:
@@ -253,6 +309,7 @@ def remove_ui_only_nodes(workflow_json: dict) -> dict:
                         logging.debug(
                             f"Removing connection from {node_id}.{input_name} to UI-only node {ref_node_id}"
                         )
+                        connections_removed += 1
                         continue  # Skip this connection
                 
                 cleaned_inputs[input_name] = input_value
@@ -260,6 +317,9 @@ def remove_ui_only_nodes(workflow_json: dict) -> dict:
             node_copy['inputs'] = cleaned_inputs
         
         cleaned_workflow[node_id] = node_copy
+    
+    if connections_removed > 0:
+        logging.info(f"Removed {connections_removed} broken connections to UI-only nodes")
     
     return cleaned_workflow
 
@@ -350,40 +410,80 @@ def find_image_source_node(workflow_json: dict) -> str:
     """
     Find a node that produces images that can be connected to SaveImage.
     Returns the node ID of the first image-producing node found.
+    CRITICAL FIX: Be more specific about image sources and handle edge cases.
     """
-    # List of node types that produce images
+    # List of node types that produce images (excluding SaveImage itself)
     image_producing_nodes = {
-        'VAEDecode', 'SaveImage', 'PreviewImage', 'ImageUpscaleWithModel',
+        'VAEDecode', 'PreviewImage', 'ImageUpscaleWithModel',
         'CLIPVisionEncode', 'MaskToImage', 'LatentComposite', 'LatentBlend',
         'ImageCompositeMasked', 'ImageBlend', 'ImageInvert', 'ImageQuantize',
-        'ImageSharpen', 'ImageBlur', 'Canny', 'ImageColorToMask'
+        'ImageSharpen', 'ImageBlur', 'Canny', 'ImageColorToMask',
+        # Add more image-producing nodes
+        'KSampler', 'KSamplerAdvanced', 'BasicScheduler', 'CFGGuider',
+        'ConditioningAverage', 'ConditioningCombine', 'ConditioningConcat',
+        'ImageScale', 'ImageScaleBy', 'ImageScaleToTotalPixels',
+        'ImageCrop', 'ImageBatch', 'ImageFromBatch', 'ImageFromBatch',
+        'ImageBlur', 'ImageQuantize', 'ImageSharpen', 'ImageCrop'
     }
     
+    # First pass: look for specific image-producing nodes (excluding SaveImage)
     for node_id, node_data in workflow_json.items():
         if isinstance(node_data, dict):
             class_type = node_data.get('class_type', '')
-            if class_type in image_producing_nodes and class_type != 'SaveImage':
+            if class_type in image_producing_nodes:
+                logging.debug(f"Found image-producing node: {node_id} ({class_type})")
                 return str(node_id)
     
-    # If no specific image source found, look for any node with outputs
-    # that might produce images (this is a fallback)
-    for node_id in workflow_json.keys():
-        if node_id != '60':  # Don't return the SaveImage node itself
-            return str(node_id)
+    # Second pass: look for any node that isn't UI-only or SaveImage itself
+    for node_id, node_data in workflow_json.items():
+        if isinstance(node_data, dict):
+            class_type = node_data.get('class_type', '')
+            # Skip SaveImage itself and UI-only nodes
+            if class_type not in UI_ONLY_NODES and class_type != 'SaveImage':
+                logging.debug(f"Fallback: using node {node_id} ({class_type}) as image source")
+                return str(node_id)
     
+    logging.warning("No suitable image source node found in workflow")
     return None
 
 def fix_broken_node_references(workflow_json: dict) -> dict:
     """
     Fix broken node references instead of removing them completely.
     This handles cases where nodes reference non-existent nodes.
+    CRITICAL FIX: Handle cases where workflow is incomplete (only SaveImage node).
+    ENHANCED: More aggressive handling of broken references.
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
     
     valid_node_ids = set(str(node_id) for node_id in workflow_json.keys())
     broken_references_fixed = 0
+    broken_references_removed = 0
     
+    # CRITICAL: Check if we have an incomplete workflow (only SaveImage node)
+    if len(workflow_json) == 1:
+        only_node_id = list(workflow_json.keys())[0]
+        only_node_data = workflow_json[only_node_id]
+        if isinstance(only_node_data, dict):
+            class_type = only_node_data.get('class_type', '')
+            if class_type == 'SaveImage':
+                logging.error("=" * 60)
+                logging.error("CRITICAL: Incomplete workflow detected!")
+                logging.error(f"Workflow contains only a SaveImage node ({only_node_id}) with no source nodes")
+                logging.error("This indicates the workflow template is corrupted or incomplete")
+                logging.error("=" * 60)
+                
+                # Check if SaveImage has inputs (likely from the conversion process)
+                inputs = only_node_data.get('inputs', {})
+                if 'images' in inputs and isinstance(inputs['images'], list):
+                    logging.warning(f"Removing broken 'images' reference from incomplete SaveImage node")
+                    del inputs['images']
+                    broken_references_removed += 1
+                
+                return workflow_json
+    
+    # ENHANCED: First pass - identify all broken references
+    broken_refs = []
     for node_id, node_data in workflow_json.items():
         if not isinstance(node_data, dict):
             continue
@@ -392,36 +492,47 @@ def fix_broken_node_references(workflow_json: dict) -> dict:
         if not isinstance(inputs, dict):
             continue
         
-        # Check each input for broken references
-        for input_name, input_value in list(inputs.items()):
+        for input_name, input_value in inputs.items():
             if isinstance(input_value, list) and len(input_value) >= 2:
                 potential_node_id = str(input_value[0])
                 potential_slot = input_value[1]
                 
-                # If this looks like a reference but points to non-existent node
                 if potential_node_id not in valid_node_ids:
-                    class_type = node_data.get('class_type', 'UNKNOWN')
-                    logging.warning(f"Found broken reference in {node_id} ({class_type}).{input_name}: [{input_value[0]}, {input_value[1]}]")
-                    
-                    # For SaveImage nodes with broken images references, try to fix them
-                    if class_type == 'SaveImage' and input_name == 'images':
-                        # Find a proper image source node to connect to
-                        image_source_id = find_image_source_node(workflow_json)
-                        if image_source_id:
-                            # Fix the reference by connecting to the found image source
-                            inputs[input_name] = [image_source_id, 0]
-                            broken_references_fixed += 1
-                            logging.info(f"Fixed broken 'images' reference in SaveImage node {node_id}: connected to node {image_source_id}")
-                        else:
-                            logging.warning(f"Could not find image source for SaveImage node {node_id}, keeping original reference")
-                    else:
-                        # For other cases, remove the broken reference
-                        del inputs[input_name]
-                        broken_references_fixed += 1
-                        logging.info(f"Removed broken reference in {node_id} ({class_type}).{input_name}")
+                    broken_refs.append((node_id, input_name, input_value, node_data.get('class_type', 'UNKNOWN')))
+    
+    # ENHANCED: Process broken references with better logic
+    for node_id, input_name, input_value, class_type in broken_refs:
+        logging.warning(f"Found broken reference in {node_id} ({class_type}).{input_name}: [{input_value[0]}, {input_value[1]}]")
+        
+        # For SaveImage nodes with broken images references
+        if class_type == 'SaveImage' and input_name == 'images':
+            # Find a proper image source node to connect to
+            image_source_id = find_image_source_node(workflow_json)
+            if image_source_id:
+                # Fix the reference by connecting to the found image source
+                inputs = workflow_json[node_id]['inputs']
+                inputs[input_name] = [image_source_id, 0]
+                broken_references_fixed += 1
+                logging.info(f"Fixed broken 'images' reference in SaveImage node {node_id}: connected to node {image_source_id}")
+            else:
+                # For incomplete workflows, remove the broken reference
+                inputs = workflow_json[node_id]['inputs']
+                if input_name in inputs:
+                    del inputs[input_name]
+                    broken_references_removed += 1
+                    logging.warning(f"Removed broken 'images' reference from SaveImage node {node_id} - no image source found")
+        else:
+            # For other cases, remove the broken reference
+            inputs = workflow_json[node_id]['inputs']
+            if input_name in inputs:
+                del inputs[input_name]
+                broken_references_removed += 1
+                logging.info(f"Removed broken reference in {node_id} ({class_type}).{input_name}")
     
     if broken_references_fixed > 0:
         logging.info(f"Fixed {broken_references_fixed} broken node references")
+    if broken_references_removed > 0:
+        logging.info(f"Removed {broken_references_removed} broken node references")
     
     return workflow_json
 
@@ -432,8 +543,9 @@ def clean_workflow_for_execution(workflow_json: dict) -> dict:
     1. Normalizes node IDs (removes # prefixes)
     2. Normalizes model references (dict -> string) - NEW FIX!
     3. Removes UI-only nodes
-    4. Fix broken node references
-    5. Validates structure
+    4. Validates structure (first pass to catch issues)
+    5. Fix broken node references
+    6. Validates structure (second pass to ensure fixes worked)
     """
     if not isinstance(workflow_json, dict):
         return workflow_json
@@ -459,17 +571,31 @@ def clean_workflow_for_execution(workflow_json: dict) -> dict:
     if removed_count > 0:
         logging.info(f"Step 3: Removed {removed_count} UI-only nodes")
     
-    # Step 4: Fix broken node references
+    # Step 4: CRITICAL FIX - Fix broken node references immediately after UI removal
     workflow_json = fix_broken_node_references(workflow_json)
-    logging.debug(f"Step 4: Fixed broken node references")
+    logging.debug(f"Step 4: Fixed broken node references after UI removal")
     
-    # Step 5: Validate structure
+    # Step 5: Validation pass to ensure workflow is clean
     is_valid, errors = validate_workflow_structure(workflow_json)
+    if not is_valid:
+        logging.warning(f"Validation found {len(errors)} issues - attempting final fixes")
+        for i, error in enumerate(errors[:5], 1):  # Log first 5 errors
+            logging.warning(f"  Issue {i}: {error}")
+        if len(errors) > 5:
+            logging.warning(f"  ... and {len(errors) - 5} more issues")
+        
+        # Step 5.5: Emergency broken reference fix attempt
+        workflow_json = fix_broken_node_references(workflow_json)
+        
+        # Re-validate after emergency fix
+        is_valid, errors = validate_workflow_structure(workflow_json)
+    
+    # Step 6: Final validation - if still not valid, fail
     if not is_valid:
         logging.error("=" * 60)
         logging.error("WORKFLOW VALIDATION FAILED")
         logging.error("=" * 60)
-        logging.error(f"Found {len(errors)} validation errors:")
+        logging.error(f"Found {len(errors)} validation errors after all fixes:")
         for i, error in enumerate(errors, 1):
             logging.error(f"  [{i}] {error}")
         logging.error("=" * 60)
@@ -525,6 +651,7 @@ class DynamicJobProcessor:
         self.job_inputs = self.job.get('inputs', {})
         self.workflow_type = self.workflow_template.get('workflow_type')
         self.target_entity = self.workflow_template.get('target_entity')
+        self.workflow_format = self.workflow_template.get('workflow_format', 'api')  # NEW FIELD!
 
     def _get_workflow_template(self):
         workflow_template_id = self.job.get('workflow_template_id')
@@ -594,6 +721,37 @@ class DynamicJobProcessor:
     def _clean_ui_nodes(self):
         """Clean and prepare workflow for execution."""
         self.workflow_json = clean_workflow_for_execution(self.workflow_json)
+        
+        # CRITICAL: Check for incomplete workflows after cleaning
+        if len(self.workflow_json) <= 1:
+            only_node_id = list(self.workflow_json.keys())[0] if self.workflow_json else "unknown"
+            only_node_data = self.workflow_json.get(only_node_id, {})
+            class_type = only_node_data.get('class_type', 'UNKNOWN') if isinstance(only_node_data, dict) else 'INVALID'
+            
+            if class_type == 'SaveImage':
+                logging.error("=" * 60)
+                logging.error("CRITICAL WORKFLOW ERROR:")
+                logging.error(f"Workflow template '{self.workflow_template.get('name', 'unknown')}' appears to be incomplete")
+                logging.error(f"After cleaning, only {len(self.workflow_json)} node(s) remain: {class_type}")
+                logging.error("This workflow template likely failed to convert properly or is corrupted")
+                logging.error(f"Expected: A complete workflow with image generation/saving nodes")
+                logging.error(f"Got: Only a SaveImage node with no source nodes")
+                logging.error("=" * 60)
+                
+                # Update job status to failed with clear error message
+                error_msg = (
+                    f"Workflow template is incomplete or corrupted. "
+                    f"Expected a complete workflow with image generation nodes, but only found '{class_type}' node. "
+                    f"This may indicate conversion failure or corrupted workflow template."
+                )
+                
+                self.orchestrator_service.update_job_status(self.job_id, 'failed', completion_metadata={
+                    'error_message': error_msg,
+                    'workflow_template_name': self.workflow_template.get('name'),
+                    'node_count': len(self.workflow_json),
+                    'nodes_found': [f"{node_id}: {data.get('class_type', 'INVALID')}" for node_id, data in self.workflow_json.items()]
+                })
+                raise ValueError(f"Workflow validation failed: {error_msg}")
 
     def _inject_dynamic_inputs(self):
         if not self.input_schema or not self.input_schema.get('properties'):
@@ -671,6 +829,153 @@ class DynamicJobProcessor:
         
         if injection_count > 0:
             logging.info(f"Successfully injected {injection_count} dynamic inputs into workflow.")
+            if new_nodes_created:
+                logging.info(f"Created {len(new_nodes_created)} LoadImage nodes: {new_nodes_created}")
+
+    def _inject_dynamic_inputs_litegraph(self):
+        """Inject inputs into LiteGraph format workflow."""
+        if not self.input_schema or not self.input_schema.get('properties'):
+            logging.info(f"No input schema defined for workflow {self.workflow_template.get('name')}. Skipping dynamic injection.")
+            return
+
+        injection_count = 0
+        new_nodes_created = []  # Track LoadImage nodes for potential cleanup
+        
+        for input_name, input_definition in self.input_schema['properties'].items():
+            value = self._get_input_value(input_name, input_definition)
+            if value is None:
+                if input_name in self.input_schema.get('required', []):
+                    logging.warning(f"Required input '{input_name}' missing for job {self.job_id}. Workflow might fail.")
+                continue
+
+            node_type = input_definition.get('node_type')
+            field_name = input_definition.get('field_name')
+
+            if not node_type or not field_name:
+                logging.warning(f"Input '{input_name}' in schema is missing 'node_type' or 'field_name'. Skipping.")
+                continue
+
+            if input_definition.get('type') == 'image':
+                # CRITICAL FIX: Handle image inputs properly by creating LoadImage nodes
+                materialized_path = materialize_image_input(value, self.input_dir)
+                if not materialized_path:
+                    logging.error(f"Failed to materialize image for input '{input_name}'. Skipping injection.")
+                    continue
+                
+                # Get filename without path for ComfyUI
+                image_filename = os.path.basename(materialized_path)
+                
+                # Find target node in LiteGraph nodes array
+                target_node = None
+                for node in self.workflow_json.get('nodes', []):
+                    if node.get('type') == node_type:
+                        # Check if this node has the target field
+                        inputs = node.get('inputs', [])
+                        if isinstance(inputs, list):
+                            for inp in inputs:
+                                if isinstance(inp, dict) and inp.get('name') == field_name:
+                                    target_node = node
+                                    break
+                        if target_node:
+                            break
+                
+                if not target_node:
+                    logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
+                    continue
+                
+                # Create a unique ID for the new LoadImage node
+                image_node_id = f"load_image_{len(new_nodes_created)}"
+                
+                # Create the LoadImage node in LiteGraph format
+                load_image_node = {
+                    "id": image_node_id,
+                    "type": "LoadImage",
+                    "pos": [100, 100],  # Default position
+                    "size": [248, 46],
+                    "flags": {},
+                    "order": len(self.workflow_json.get('nodes', [])),
+                    "mode": 0,
+                    "inputs": [],
+                    "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [1]}],
+                    "widgets_values": [image_filename],
+                    "properties": {"Node name for S&R": "LoadImage"},
+                    "widgets_order": ["image"]
+                }
+                
+                # Add the LoadImage node to the workflow
+                if 'nodes' not in self.workflow_json:
+                    self.workflow_json['nodes'] = []
+                self.workflow_json['nodes'].append(load_image_node)
+                new_nodes_created.append(image_node_id)
+                
+                # Set the target node to reference the new LoadImage node
+                # Find the input slot index for the target field
+                input_slot = 0  # Default for most image inputs
+                inputs = target_node.get('inputs', [])
+                if isinstance(inputs, list):
+                    for i, inp in enumerate(inputs):
+                        if isinstance(inp, dict) and inp.get('name') == field_name:
+                            input_slot = i
+                            break
+                
+                # Create a link between the new LoadImage node and the target node
+                link_id = len(self.workflow_json.get('links', []))
+                if 'links' not in self.workflow_json:
+                    self.workflow_json['links'] = []
+                
+                # Add the link
+                self.workflow_json['links'].append([
+                    link_id,          # link_id
+                    image_node_id,    # from_node_id
+                    0,                # from_slot
+                    target_node.get('id'),  # to_node_id
+                    input_slot,       # to_slot
+                    "IMAGE"           # type
+                ])
+                
+                logging.info(f"Created LoadImage node '{image_node_id}' for input '{input_name}' and connected to {node_type}.{field_name}")
+                injection_count += 1
+                
+            else:
+                # Handle non-image inputs (text, numbers, etc.)
+                # Find node in LiteGraph nodes array
+                target_node = None
+                for node in self.workflow_json.get('nodes', []):
+                    if node.get('type') == node_type:
+                        # Check if this node has the target field
+                        inputs = node.get('inputs', [])
+                        if isinstance(inputs, list):
+                            for inp in inputs:
+                                if isinstance(inp, dict) and inp.get('name') == field_name:
+                                    target_node = node
+                                    break
+                        if target_node:
+                            break
+                
+                if target_node:
+                    # Update widgets_values for the target node
+                    # Find the index of the field in widgets_values
+                    widgets_values = target_node.get('widgets_values', [])
+                    inputs = target_node.get('inputs', [])
+                    
+                    field_index = None
+                    for i, inp in enumerate(inputs):
+                        if isinstance(inp, dict) and inp.get('name') == field_name:
+                            field_index = i
+                            break
+                    
+                    if field_index is not None and field_index < len(widgets_values):
+                        widgets_values[field_index] = value
+                        target_node['widgets_values'] = widgets_values
+                        logging.info(f"Injected input '{input_name}' (value: {value}) into node {node_type} field {field_name}.")
+                        injection_count += 1
+                    else:
+                        logging.debug(f"Could not find widgets_values index for field {field_name} in node {node_type}")
+                else:
+                    logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
+        
+        if injection_count > 0:
+            logging.info(f"Successfully injected {injection_count} dynamic inputs into LiteGraph workflow.")
             if new_nodes_created:
                 logging.info(f"Created {len(new_nodes_created)} LoadImage nodes: {new_nodes_created}")
 
@@ -786,16 +1091,32 @@ class DynamicJobProcessor:
 
     def process(self):
         self._ensure_dependencies()
-        self._clean_ui_nodes()
         
-        if not self._validate_workflow():
-            logging.error("Workflow validation failed")
-            self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            return
-
-        self._inject_dynamic_inputs()
-        
-        payload = {"prompt": self.workflow_json}
+        # === HANDLE FORMAT ===
+        if self.workflow_format == 'litegraph':
+            logging.info("=" * 60)
+            logging.info("LITEGRAPH FORMAT WORKFLOW (has subgraphs)")
+            logging.info("Skipping cleaning/validation - ComfyUI will handle")
+            logging.info("=" * 60)
+            
+            # Inject inputs into LiteGraph format
+            self._inject_dynamic_inputs_litegraph()
+            
+            # Send directly
+            payload = {"prompt": self.workflow_json}
+            
+        else:  # API format
+            logging.info("API FORMAT WORKFLOW (no subgraphs)")
+            
+            # Clean and validate as before
+            self._clean_ui_nodes()
+            if not self._validate_workflow():
+                logging.error("Workflow validation failed")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
+            
+            self._inject_dynamic_inputs()
+            payload = {"prompt": self.workflow_json}
         
         # === COMPREHENSIVE DEBUG: Check for invalid data types BEFORE sending ===
         logging.info("=" * 60)

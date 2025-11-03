@@ -11,10 +11,10 @@ from pathlib import Path
 
 # Add the parent directory (client) to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from converter import convert_litegraph_to_api
 from supabase import create_client, Client
 from config import Config
-
+from services.workflow_converter_service import WorkflowConverterService, WorkflowConversionError
+from services.docker_manager import docker_manager
 
 
 # --- Configuration ---
@@ -24,6 +24,7 @@ LOCAL_REPO_PATH = Path(Config.ROOT_DIR) / REPO_DIR_NAME
 TEMPLATES_DIR = LOCAL_REPO_PATH / "templates"
 SCRIPTS_DIR = LOCAL_REPO_PATH / "scripts"
 CUSTOM_NODE_LIST_URL = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/custom-node-list.json"
+COMFYUI_BASE_URL = os.environ.get("COMFYUI_BASE_URL", "http://127.0.0.1:8188")
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -46,6 +47,101 @@ def load_json_file(path: Path) -> Union[Dict, List, None]:
         logger.error(f"Invalid JSON in {path}")
         return None
 
+def ensure_comfyui_running(max_wait: int = 60) -> bool:
+    """
+    Ensure ComfyUI container is running and ready before attempting conversion.
+    
+    Args:
+        max_wait: Maximum seconds to wait for ComfyUI to be ready
+        
+    Returns:
+        True if ComfyUI is ready, False otherwise
+    """
+    logger.info("Checking if ComfyUI container is running...")
+    
+    # Check if container is running
+    try:
+        if not docker_manager.is_container_running():
+            logger.info("ComfyUI container not running. Starting it...")
+            docker_manager.run_container(dependencies={'custom_node_urls': [], 'model_urls': []})
+    except Exception as e:
+        logger.error(f"Failed to start ComfyUI container: {e}")
+        return False
+    
+    # Wait for ComfyUI to be ready
+    import time
+    start_time = time.time()
+    
+    while time.time() - start_time < max_wait:
+        try:
+            response = requests.get(f"{COMFYUI_BASE_URL}/system_stats", timeout=5)
+            if response.status_code == 200:
+                logger.info("ComfyUI is ready!")
+                return True
+        except:
+            pass
+        
+        time.sleep(2)
+    
+    logger.error(f"ComfyUI did not become ready within {max_wait} seconds")
+    return False
+
+
+def ensure_converter_installed() -> bool:
+    """
+    Ensure workflow-to-api-converter-endpoint is installed in ComfyUI.
+    
+    Returns:
+        True if installed, False otherwise
+    """
+    logger.info("Checking if workflow-to-api-converter-endpoint is installed...")
+    
+    container_name = docker_manager.get_container_name()
+    if not container_name:
+        logger.error("No running ComfyUI container found")
+        return False
+    
+    # Check if the custom node directory exists
+    check_cmd = [
+        "bash", "-c",
+        "[ -d /app/ComfyUI/custom_nodes/comfyui-workflow-to-api-converter-endpoint ] && echo 'EXISTS' || echo 'NOT_FOUND'"
+    ]
+    
+    returncode, stdout, stderr = docker_manager.execute_in_container(check_cmd, timeout=10)
+    
+    if "EXISTS" in stdout:
+        logger.info("✅ workflow-to-api-converter-endpoint is already installed")
+        return True
+    
+    # Install the custom node
+    logger.info("Installing workflow-to-api-converter-endpoint...")
+    install_cmd = [
+        "bash", "-c",
+        "cd /app/ComfyUI/custom_nodes && "
+        "git clone https://github.com/SethRobinson/comfyui-workflow-to-api-converter-endpoint"
+    ]
+    
+    returncode, stdout, stderr = docker_manager.execute_in_container(install_cmd, timeout=60)
+    
+    if returncode == 0:
+        logger.info("✅ Successfully installed workflow-to-api-converter-endpoint")
+        
+        # Restart container to load the custom node
+        logger.info("Restarting ComfyUI to load the converter endpoint...")
+        docker_manager.restart_container()
+        
+        # Wait for ComfyUI to be ready
+        import time
+        time.sleep(10)
+        
+        if not ensure_comfyui_running(max_wait=60):
+            logger.error("ComfyUI did not restart successfully")
+            return False
+        
+        return True
+    else:
+        logger.error(f"Failed to install converter: {stderr}")
+        return False
 
 def normalize_node_id(node_id) -> str:
     """Normalize node ID by converting to string and removing # prefix."""
@@ -465,6 +561,207 @@ def analyze_workflow_json(workflow_json: Dict, custom_node_registry: Dict[str, D
 
 
 class WorkflowSynchronizer:
+    def __init__(self, supabase_url: str, supabase_key: str):
+        self.supabase: Client = create_client(supabase_url, supabase_key)
+        self.repo_path = LOCAL_REPO_PATH
+        self.current_commit_hash: Optional[str] = None
+        self.workflow_previews_bucket = "workflow-previews"
+        self.custom_node_registry: Dict[str, Dict] = {}
+        
+        # Initialize workflow converter
+        self.converter = WorkflowConverterService(comfyui_base_url=COMFYUI_BASE_URL)
+    
+    def sync_workflows(self):
+        """Main synchronization logic with proper conversion."""
+        logger.info("Starting workflow synchronization...")
+        
+        # Step 1: Ensure ComfyUI is running
+        if not ensure_comfyui_running():
+            logger.error("Cannot start ComfyUI - aborting sync")
+            return
+        
+        # Step 2: Ensure converter is installed
+        if not ensure_converter_installed():
+            logger.error("Cannot install workflow converter - aborting sync")
+            return
+        
+        # Step 3: Clone/pull repository
+        self.clone_or_pull_repository()
+        
+        # Step 4: Parse and convert workflows
+        parsed_workflows = self.parse_repository()
+        logger.info(f"Parsed and processed {len(parsed_workflows)} workflows")
+        
+        # Step 5: Sync to database
+        self._sync_to_database(parsed_workflows)
+        
+        logger.info("Workflow synchronization completed.")
+    
+    def _count_subgraphs(self, workflow: Dict) -> int:
+        """Count subgraph nodes (UUID types) in workflow."""
+        if 'nodes' not in workflow:
+            return 0
+        
+        count = 0
+        for node in workflow.get('nodes', []):
+            node_type = node.get('type', '')
+            if self._is_uuid(node_type):
+                count += 1
+        
+        return count
+    
+    def _is_uuid(self, value: str) -> bool:
+        """Check if string is a valid UUID."""
+        try:
+            uuid.UUID(value)
+            return True
+        except (ValueError, AttributeError, TypeError):
+            return False
+    
+    def _has_uuid_nodes_api_format(self, workflow: Dict) -> bool:
+        """Check if API format workflow still has UUID nodes (shouldn't happen)."""
+        if not isinstance(workflow, dict):
+            return False
+        
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict):
+                class_type = node_data.get('class_type', '')
+                if self._is_uuid(class_type):
+                    return True
+        
+        return False
+
+    def parse_repository(self) -> List[Dict[str, Any]]:
+        """
+        Parse repository and handle workflows properly:
+        - Detect subgraphs (UUID nodes)
+        - Store workflows with subgraphs in LiteGraph format
+        - Convert simple workflows to API format
+        """
+        workflows_data = []
+        index_file = TEMPLATES_DIR / "index.json"
+        
+        if not index_file.exists():
+            logger.error(f"Index file not found at {index_file}")
+            return []
+        
+        index_data = load_json_file(index_file)
+        if not isinstance(index_data, list):
+            logger.error(f"Invalid format for {index_file}")
+            return []
+        
+        self._get_custom_node_registry()
+        
+        for category_entry in index_data:
+            category_name = category_entry.get("category", "General")
+            workflow_type_from_category = category_entry.get("type", "unknown")
+            
+            if category_name == "CLOSED SOURCE MODELS":
+                logger.info(f"Skipping closed-source category: {category_name}")
+                continue
+            
+            for template_entry in category_entry.get("templates", []):
+                workflow_name = template_entry.get("name")
+                if not workflow_name:
+                    logger.warning(f"Skipping template with no name in category {category_name}")
+                    continue
+                
+                workflow_json_file = TEMPLATES_DIR / f"{workflow_name}.json"
+                if not workflow_json_file.exists():
+                    logger.warning(f"Workflow JSON not found: {workflow_name}")
+                    continue
+                
+                workflow_json = load_json_file(workflow_json_file)
+                if not workflow_json:
+                    logger.warning(f"Could not load workflow: {workflow_name}")
+                    continue
+                
+                # === CRITICAL: CHECK FOR SUBGRAPHS ===
+                subgraph_count = self._count_subgraphs(workflow_json)
+                
+                if subgraph_count > 0:
+                    logger.info(f"📦 {workflow_name}: {subgraph_count} subgraphs - keeping LiteGraph format")
+                    stored_workflow = workflow_json
+                    workflow_format = "litegraph"
+                else:
+                    logger.info(f"✅ {workflow_name}: No subgraphs - converting to API format")
+                    try:
+                        # Convert using ComfyUI's native converter
+                        stored_workflow = self.converter.convert_with_retry(
+                            workflow_json,
+                            max_retries=3,
+                            retry_delay=2
+                        )
+                        workflow_format = "api"
+                        
+                        # Validate conversion
+                        if not stored_workflow or len(stored_workflow) == 0:
+                            logger.error(f"❌ Conversion produced empty workflow: {workflow_name}")
+                            continue
+                        
+                        # Check for incomplete workflows
+                        if len(stored_workflow) <= 1:
+                            logger.warning(f"⚠️ Suspiciously small workflow after conversion: {workflow_name}")
+                            # Log the nodes for debugging
+                            for node_id, node_data in stored_workflow.items():
+                                class_type = node_data.get('class_type', 'UNKNOWN')
+                                logger.warning(f"  Node {node_id}: {class_type}")
+                        
+                        # Additional validation: check for UUID nodes (should not exist after conversion)
+                        if self._has_uuid_nodes_api_format(stored_workflow):
+                            logger.error(f"❌ {workflow_name}: UUID nodes found after conversion! Using LiteGraph instead")
+                            stored_workflow = workflow_json
+                            workflow_format = "litegraph"
+                        
+                    except WorkflowConversionError as e:
+                        logger.error(f"❌ {workflow_name}: Conversion failed - {e}")
+                        logger.info(f"   Falling back to LiteGraph format")
+                        stored_workflow = workflow_json
+                        workflow_format = "litegraph"
+                    except Exception as e:
+                        logger.error(f"❌ {workflow_name}: Unexpected error - {e}", exc_info=True)
+                        logger.info(f"   Falling back to LiteGraph format")
+                        stored_workflow = workflow_json
+                        workflow_format = "litegraph"
+                
+                # === ANALYZE WORKFLOW (use original) ===
+                analysis_result = analyze_workflow_json(workflow_json, self.custom_node_registry)
+                
+                # === GENERATE INPUT SCHEMA (use original) ===
+                input_schema = self.extract_inputs_from_litegraph(workflow_json)
+                
+                # === DETERMINE TARGET ENTITY ===
+                target_entity = "scene"
+                if workflow_type_from_category == "audio":
+                    target_entity = "audio_clip"
+                elif workflow_type_from_category == "3d":
+                    target_entity = "character"
+                
+                # === UPLOAD PREVIEW ===
+                uploaded_preview_url = self._upload_preview_asset_logic(template_entry, workflow_name)
+                
+                # === BUILD WORKFLOW DATA ===
+                workflows_data.append({
+                    "source_repo_identifier": workflow_name,
+                    "source_repo_commit_hash": self.current_commit_hash,
+                    "name": template_entry.get("title", workflow_name),
+                    "description": template_entry.get("description", ""),
+                    "category": category_name,
+                    "preview_image_url": uploaded_preview_url,
+                    "workflow_json": stored_workflow,
+                    "workflow_format": workflow_format,  # NEW FIELD!
+                    "input_schema": input_schema,
+                    "workflow_type": workflow_type_from_category,
+                    "target_entity": target_entity,
+                    "hardware_requirements": {"gpu_vram": round(template_entry.get("vram", 0) / (1024**3))} if template_entry.get("vram") else {},
+                    "custom_node_dependencies": analysis_result["custom_node_dependencies"],
+                    "model_urls": analysis_result["model_urls"],
+                    "is_public": True,
+                })
+        
+        return workflows_data
+    
+    
     def _unique_key(self, props: Dict, base: str, counter: Dict) -> str:
         key = base
         c = counter.get(base, 0)
@@ -734,12 +1031,6 @@ class WorkflowSynchronizer:
         
         return schema
 
-    def __init__(self, supabase_url: str, supabase_key: str):
-        self.supabase: Client = create_client(supabase_url, supabase_key)
-        self.repo_path = LOCAL_REPO_PATH
-        self.current_commit_hash: Optional[str] = None
-        self.workflow_previews_bucket = "workflow-previews"
-        self.custom_node_registry: Dict[str, Dict] = {}
 
     def _run_git_command(self, command: List[str]) -> str:
         """Runs a git command in the local repository directory."""
@@ -899,34 +1190,44 @@ class WorkflowSynchronizer:
                 # Store original workflow for analysis
                 original_workflow = workflow_json
 
-                # === STEP 1: CONVERT TO API FORMAT (USING PYTHON CONVERTER) ===
-                # Import and use the Python converter
-                import sys
-                import os
-                
-                # Add the current directory to sys.path to import the converter
-                current_dir = os.path.dirname(__file__)
-                parent_dir = os.path.dirname(current_dir)
-                if parent_dir not in sys.path:
-                    sys.path.insert(0, parent_dir)
-                
+                # === STEP 1: CONVERT TO API FORMAT (USING API-BASED CONVERTER) ===
                 try:
-                    logger.info(f"Converting {workflow_name} using Python converter...")
-                    api_formatted_workflow = convert_litegraph_to_api(workflow_json)
+                    logger.info(f"Converting {workflow_name} using API converter...")
+                    api_formatted_workflow = self.converter.convert_with_retry(workflow_json, max_retries=3, retry_delay=2)
                     
                     if api_formatted_workflow is not None:
-                        logger.info(f"Successfully converted {workflow_name} using Python converter")
+                        logger.info(f"Successfully converted {workflow_name} using API converter: {len(api_formatted_workflow)} nodes")
+                        
+                        # Check for incomplete workflows
+                        if isinstance(api_formatted_workflow, dict) and len(api_formatted_workflow) <= 1:
+                            only_node_id = list(api_formatted_workflow.keys())[0] if api_formatted_workflow else "unknown"
+                            only_node_data = api_formatted_workflow.get(only_node_id, {})
+                            class_type = only_node_data.get('class_type', 'UNKNOWN') if isinstance(only_node_data, dict) else 'INVALID'
+                            
+                            if class_type == 'SaveImage':
+                                logger.error("=" * 60)
+                                logger.error("CRITICAL WORKFLOW CONVERSION ERROR:")
+                                logger.error(f"Template '{workflow_name}' converted to incomplete workflow")
+                                logger.error(f"Expected: Complete workflow with generation and save nodes")
+                                logger.error(f"Got: Only {len(api_formatted_workflow)} node(s): {class_type}")
+                                logger.error("This indicates the workflow template is corrupted or conversion failed")
+                                logger.error("Skipping this workflow template to prevent execution failures")
+                                logger.error("=" * 60)
+                                
+                                # Skip this template - don't add incomplete workflows to database
+                                logger.warning(f"Skipping incomplete workflow template: {workflow_name}")
+                                continue
                     else:
-                        logger.warning(f"Python conversion failed for {workflow_name}")
+                        logger.warning(f"API conversion failed for {workflow_name}")
                         logger.info(f"Skipping workflow {workflow_name} - conversion failed")
                         continue
                 
-                except ImportError as e:
-                    logger.error(f"Failed to import Python converter for {workflow_name}: {e}")
-                    logger.info(f"Skipping workflow {workflow_name} - converter import failed")
+                except WorkflowConversionError as e:
+                    logger.error(f"Failed to convert {workflow_name} using API converter: {e}")
+                    logger.info(f"Skipping workflow {workflow_name} - conversion failed")
                     continue
                 except Exception as e:
-                    logger.error(f"Error in Python conversion for {workflow_name}: {e}")
+                    logger.error(f"Error in API conversion for {workflow_name}: {e}")
                     continue
 
                 # FIX: For Qwen-Image workflows, replace CLIPTextEncode with CLIPTextEncodeFlux for compatibility
