@@ -210,18 +210,51 @@ class ComfyUIClient:
         """Trigger a workflow in ComfyUI by HTTP POST /prompt and return the prompt ID."""
         client_id = str(uuid.uuid4())
 
-        if not (isinstance(workflow_json, dict) and "prompt" in workflow_json and isinstance(workflow_json["prompt"], dict)):
-            raise ValueError("Invalid workflow payload; expected a dict with a 'prompt' key containing the API graph.")
+        if not (isinstance(workflow_json, dict) and "prompt" in workflow_json):
+            raise ValueError("Invalid workflow payload; expected a dict with a 'prompt' key.")
+        
         payload_prompt = workflow_json["prompt"]
-
-        # Validate API graph structure
-        if not isinstance(payload_prompt, dict) or not payload_prompt:
-            raise ValueError("Invalid workflow payload; 'prompt' must be a non-empty dict of nodes.")
-        for k, node in payload_prompt.items():
-            if not isinstance(node, dict):
-                raise ValueError(f"Invalid node for id {k}: expected dict.")
-            if not node.get("class_type"):
-                raise ValueError(f"Invalid node for id {k}: missing 'class_type'.")
+        
+        # === CRITICAL FIX: ComfyUI /prompt endpoint ONLY accepts API format ===
+        # LiteGraph format must be converted first
+        
+        if isinstance(payload_prompt, dict) and 'nodes' in payload_prompt:
+            # This is LiteGraph format - ComfyUI CANNOT handle this!
+            raise ValueError(
+                "LiteGraph format workflows are not supported by ComfyUI's /prompt endpoint. "
+                "The workflow must be converted to API format first using the workflow converter service. "
+                "Please ensure workflows are converted during sync, not at execution time."
+            )
+        
+        elif isinstance(payload_prompt, dict):
+            # API format - validate structure
+            if not payload_prompt:
+                raise ValueError("Invalid workflow payload; 'prompt' must be a non-empty dict.")
+            
+            # Validate API graph structure
+            for k, node in payload_prompt.items():
+                if not isinstance(node, dict):
+                    raise ValueError(f"Invalid node for id {k}: expected dict, got {type(node).__name__}.")
+                if not node.get("class_type"):
+                    raise ValueError(f"Invalid node for id {k}: missing 'class_type'.")
+                
+                # CRITICAL: Check for UUID nodes (subgraphs not flattened)
+                class_type = node.get("class_type")
+                try:
+                    import uuid
+                    uuid.UUID(class_type)  # This will succeed if class_type is a UUID
+                    raise ValueError(
+                        f"Node {k} has UUID class_type '{class_type}'. "
+                        "This indicates the workflow contains unflattened subgraphs. "
+                        "The workflow must be properly converted to API format."
+                    )
+                except ValueError as e:
+                    if "UUID" in str(e) or "subgraph" in str(e):
+                        raise
+                    # Not a UUID, continue validation
+                    pass
+        else:
+            raise ValueError("Invalid workflow payload; 'prompt' must be a dict.")
 
         # Probe with retry to ensure ComfyUI is fully ready
         max_retries = 12
@@ -249,7 +282,7 @@ class ComfyUIClient:
                     resp_json = {}
                 prompt_id = resp_json.get("prompt_id") or resp_json.get("data", {}).get("prompt_id")
                 
-                # NEW: Check for validation errors
+                # Check for validation errors
                 if "error" in resp_json:
                     error_info = resp_json["error"]
                     logging.error("=" * 60)
@@ -268,7 +301,6 @@ class ComfyUIClient:
         except urllib.error.HTTPError as e:
             try:
                 detail = e.read().decode("utf-8")
-                # Try to parse as JSON for better error messages
                 try:
                     error_json = json.loads(detail)
                     if "error" in error_json:
@@ -278,7 +310,6 @@ class ComfyUIClient:
                         logging.error(f"Status: {e.code}")
                         logging.error(f"Error: {error_json['error']}")
                         
-                        # Log specific node errors if available
                         if "node_errors" in error_json:
                             logging.error("\nNode Errors:")
                             for node_id, node_error in error_json["node_errors"].items():

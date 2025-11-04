@@ -1,4 +1,6 @@
 .env
+.env.dev
+
 models
 comfyui-storage/models
 comfyui-storage/workflows

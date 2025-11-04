@@ -832,153 +832,6 @@ class DynamicJobProcessor:
             if new_nodes_created:
                 logging.info(f"Created {len(new_nodes_created)} LoadImage nodes: {new_nodes_created}")
 
-    def _inject_dynamic_inputs_litegraph(self):
-        """Inject inputs into LiteGraph format workflow."""
-        if not self.input_schema or not self.input_schema.get('properties'):
-            logging.info(f"No input schema defined for workflow {self.workflow_template.get('name')}. Skipping dynamic injection.")
-            return
-
-        injection_count = 0
-        new_nodes_created = []  # Track LoadImage nodes for potential cleanup
-        
-        for input_name, input_definition in self.input_schema['properties'].items():
-            value = self._get_input_value(input_name, input_definition)
-            if value is None:
-                if input_name in self.input_schema.get('required', []):
-                    logging.warning(f"Required input '{input_name}' missing for job {self.job_id}. Workflow might fail.")
-                continue
-
-            node_type = input_definition.get('node_type')
-            field_name = input_definition.get('field_name')
-
-            if not node_type or not field_name:
-                logging.warning(f"Input '{input_name}' in schema is missing 'node_type' or 'field_name'. Skipping.")
-                continue
-
-            if input_definition.get('type') == 'image':
-                # CRITICAL FIX: Handle image inputs properly by creating LoadImage nodes
-                materialized_path = materialize_image_input(value, self.input_dir)
-                if not materialized_path:
-                    logging.error(f"Failed to materialize image for input '{input_name}'. Skipping injection.")
-                    continue
-                
-                # Get filename without path for ComfyUI
-                image_filename = os.path.basename(materialized_path)
-                
-                # Find target node in LiteGraph nodes array
-                target_node = None
-                for node in self.workflow_json.get('nodes', []):
-                    if node.get('type') == node_type:
-                        # Check if this node has the target field
-                        inputs = node.get('inputs', [])
-                        if isinstance(inputs, list):
-                            for inp in inputs:
-                                if isinstance(inp, dict) and inp.get('name') == field_name:
-                                    target_node = node
-                                    break
-                        if target_node:
-                            break
-                
-                if not target_node:
-                    logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
-                    continue
-                
-                # Create a unique ID for the new LoadImage node
-                image_node_id = f"load_image_{len(new_nodes_created)}"
-                
-                # Create the LoadImage node in LiteGraph format
-                load_image_node = {
-                    "id": image_node_id,
-                    "type": "LoadImage",
-                    "pos": [100, 100],  # Default position
-                    "size": [248, 46],
-                    "flags": {},
-                    "order": len(self.workflow_json.get('nodes', [])),
-                    "mode": 0,
-                    "inputs": [],
-                    "outputs": [{"name": "IMAGE", "type": "IMAGE", "links": [1]}],
-                    "widgets_values": [image_filename],
-                    "properties": {"Node name for S&R": "LoadImage"},
-                    "widgets_order": ["image"]
-                }
-                
-                # Add the LoadImage node to the workflow
-                if 'nodes' not in self.workflow_json:
-                    self.workflow_json['nodes'] = []
-                self.workflow_json['nodes'].append(load_image_node)
-                new_nodes_created.append(image_node_id)
-                
-                # Set the target node to reference the new LoadImage node
-                # Find the input slot index for the target field
-                input_slot = 0  # Default for most image inputs
-                inputs = target_node.get('inputs', [])
-                if isinstance(inputs, list):
-                    for i, inp in enumerate(inputs):
-                        if isinstance(inp, dict) and inp.get('name') == field_name:
-                            input_slot = i
-                            break
-                
-                # Create a link between the new LoadImage node and the target node
-                link_id = len(self.workflow_json.get('links', []))
-                if 'links' not in self.workflow_json:
-                    self.workflow_json['links'] = []
-                
-                # Add the link
-                self.workflow_json['links'].append([
-                    link_id,          # link_id
-                    image_node_id,    # from_node_id
-                    0,                # from_slot
-                    target_node.get('id'),  # to_node_id
-                    input_slot,       # to_slot
-                    "IMAGE"           # type
-                ])
-                
-                logging.info(f"Created LoadImage node '{image_node_id}' for input '{input_name}' and connected to {node_type}.{field_name}")
-                injection_count += 1
-                
-            else:
-                # Handle non-image inputs (text, numbers, etc.)
-                # Find node in LiteGraph nodes array
-                target_node = None
-                for node in self.workflow_json.get('nodes', []):
-                    if node.get('type') == node_type:
-                        # Check if this node has the target field
-                        inputs = node.get('inputs', [])
-                        if isinstance(inputs, list):
-                            for inp in inputs:
-                                if isinstance(inp, dict) and inp.get('name') == field_name:
-                                    target_node = node
-                                    break
-                        if target_node:
-                            break
-                
-                if target_node:
-                    # Update widgets_values for the target node
-                    # Find the index of the field in widgets_values
-                    widgets_values = target_node.get('widgets_values', [])
-                    inputs = target_node.get('inputs', [])
-                    
-                    field_index = None
-                    for i, inp in enumerate(inputs):
-                        if isinstance(inp, dict) and inp.get('name') == field_name:
-                            field_index = i
-                            break
-                    
-                    if field_index is not None and field_index < len(widgets_values):
-                        widgets_values[field_index] = value
-                        target_node['widgets_values'] = widgets_values
-                        logging.info(f"Injected input '{input_name}' (value: {value}) into node {node_type} field {field_name}.")
-                        injection_count += 1
-                    else:
-                        logging.debug(f"Could not find widgets_values index for field {field_name} in node {node_type}")
-                else:
-                    logging.debug(f"Could not find node {node_type} with field {field_name} for input '{input_name}'. This may be normal if the workflow doesn't use this input.")
-        
-        if injection_count > 0:
-            logging.info(f"Successfully injected {injection_count} dynamic inputs into LiteGraph workflow.")
-            if new_nodes_created:
-                logging.info(f"Created {len(new_nodes_created)} LoadImage nodes: {new_nodes_created}")
-
     def _ensure_dependencies(self):
         """Check for and install missing custom node dependencies."""
         required_deps = self.workflow_template.get('custom_node_dependencies', [])
@@ -1080,6 +933,7 @@ class DynamicJobProcessor:
 
     def _validate_workflow(self):
         """Validate workflow structure."""
+        # All workflows are now API format - no need for format checking
         is_valid, errors = validate_workflow_structure(self.workflow_json)
         if not is_valid:
             for error in errors:
@@ -1090,35 +944,36 @@ class DynamicJobProcessor:
         return True
 
     def process(self):
+        """Process job - workflow is ALWAYS in API format now."""
         self._ensure_dependencies()
         
-        # === HANDLE FORMAT ===
-        if self.workflow_format == 'litegraph':
-            logging.info("=" * 60)
-            logging.info("LITEGRAPH FORMAT WORKFLOW (has subgraphs)")
-            logging.info("Skipping cleaning/validation - ComfyUI will handle")
-            logging.info("=" * 60)
-            
-            # Inject inputs into LiteGraph format
-            self._inject_dynamic_inputs_litegraph()
-            
-            # Send directly
-            payload = {"prompt": self.workflow_json}
-            
-        else:  # API format
-            logging.info("API FORMAT WORKFLOW (no subgraphs)")
-            
-            # Clean and validate as before
-            self._clean_ui_nodes()
-            if not self._validate_workflow():
-                logging.error("Workflow validation failed")
-                self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                return
-            
-            self._inject_dynamic_inputs()
-            payload = {"prompt": self.workflow_json}
+        # === VERIFY FORMAT ===
+        if self.workflow_format != 'api':
+            logger.error(f"❌ Workflow format is '{self.workflow_format}' but should be 'api'")
+            logger.error("   This indicates the workflow was not properly converted during sync")
+            logger.error("   Please re-run workflow_sync.py to fix this issue")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed', completion_metadata={
+                'error_message': f"Invalid workflow format: {self.workflow_format}. Expected 'api'."
+            })
+            return
         
-        # === COMPREHENSIVE DEBUG: Check for invalid data types BEFORE sending ===
+        # === WORKFLOW IS API FORMAT - PROCEED NORMALLY ===
+        logger.info(f"Processing API format workflow ({len(self.workflow_json)} nodes)")
+        
+        # Clean and validate
+        self._clean_ui_nodes()
+        if not self._validate_workflow():
+            logger.error("Workflow validation failed")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+        
+        # Inject inputs
+        self._inject_dynamic_inputs()
+        
+        # Create payload
+        payload = {"prompt": self.workflow_json}
+        
+        # === PRE-FLIGHT WORKFLOW CHECK (API FORMAT ONLY) ===
         logging.info("=" * 60)
         logging.info("PRE-FLIGHT WORKFLOW CHECK:")
         
@@ -1172,11 +1027,6 @@ class DynamicJobProcessor:
                         # Also check for strings in general (might be problematic)
                         if isinstance(input_value, str) and len(input_value) > 100:
                             logging.warning(f"  [WARN] Very long string in {node_id} ({class_type}).{input_name}: '{input_value[:100]}...'")
-                        
-                        # Check for numbers where strings might be expected
-                        if isinstance(input_value, (int, float)) and input_name in ['steps', 'width', 'height']:
-                            if not isinstance(input_value, (int, float)):
-                                logging.warning(f"  [WARN] Non-numeric value in numeric field {node_id} ({class_type}).{input_name}: {input_value}")
         
         if issues_found:
             logging.error("=" * 60)
@@ -1216,8 +1066,8 @@ class DynamicJobProcessor:
         logging.info("=" * 60)
         
         # COMPREHENSIVE WORKFLOW STRUCTURE LOGGING
-        logging.info("FINAL WORKFLOW STRUCTURE:")
-        logging.info(f"Total nodes: {len(self.workflow_json)}")
+        logging.info("FINAL WORKFLOW STRUCTURE (API FORMAT):")
+        logging.info(f"API format: {len(self.workflow_json)} nodes")
         
         save_image_issues = []  # Track SaveImage issues
         
