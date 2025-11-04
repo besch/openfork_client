@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='openfork_client',
+    name='client',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
