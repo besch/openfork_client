@@ -20,6 +20,8 @@ import requests
 import json
 from typing import Dict, Optional, Union
 import time
+import re
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +31,214 @@ class WorkflowConversionError(Exception):
     pass
 
 
+class SubgraphFlattener:
+    """
+    Custom Python implementation to properly flatten ComfyUI subgraphs.
+    
+    This is needed because the workflow-to-api-converter-endpoint is leaving
+    UUID nodes unflattened, making workflows incompatible with ComfyUI's /prompt endpoint.
+    """
+    
+    def __init__(self):
+        self.node_id_counter = 1000
+    
+    def _generate_node_id(self) -> str:
+        """Generate a unique node ID for flattened nodes."""
+        node_id = f"node_{self.node_id_counter}"
+        self.node_id_counter += 1
+        return node_id
+    
+    def _is_uuid(self, value: str) -> bool:
+        """Check if string is a valid UUID."""
+        if not isinstance(value, str):
+            return False
+        uuid_pattern = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+            re.IGNORECASE
+        )
+        return bool(uuid_pattern.match(value))
+    
+    def _find_subgraph_by_id(self, subgraphs: list, subgraph_id: str) -> dict:
+        """Find a subgraph by its ID."""
+        for subgraph in subgraphs:
+            if subgraph.get('id') == subgraph_id:
+                return subgraph
+        return None
+    
+    def _get_node_by_id(self, nodes: list, node_id: str) -> dict:
+        """Find a node by its ID in a list of nodes."""
+        for node in nodes:
+            if str(node.get('id')) == str(node_id):
+                return node
+        return None
+    
+    def flatten_subgraphs(self, workflow: dict) -> dict:
+        """
+        Flatten subgraphs in a LiteGraph workflow by expanding UUID nodes.
+        
+        This implements the same logic as ComfyUI's JavaScript subgraph unpacking.
+        """
+        if not isinstance(workflow, dict) or 'nodes' not in workflow:
+            return workflow
+        
+        nodes = workflow.get('nodes', [])
+        subgraphs = workflow.get('definitions', {}).get('subgraphs', [])
+        
+        if not subgraphs:
+            return workflow
+        
+        logger.info(f"Found {len(subgraphs)} subgraphs to flatten...")
+        
+        # Process each node
+        processed_workflow = {}
+        
+        for node in nodes:
+            node_type = node.get('type')
+            node_id = node.get('id')
+            
+            if not self._is_uuid(node_type):
+                # This is a regular node, keep it
+                processed_workflow[str(node_id)] = {
+                    'class_type': node_type,
+                    'inputs': {},
+                    '_meta': node.get('_meta', {})
+                }
+                
+                # Copy inputs
+                for inp in node.get('inputs', []):
+                    if inp.get('name') and inp.get('link') is None:
+                        # This is a widget input, copy the value
+                        widgets = node.get('widgets_values', [])
+                        if inp.get('widget') and widgets:
+                            # Find the widget value
+                            widget_name = inp.get('widget')
+                            if isinstance(widgets, list) and len(widgets) > 0:
+                                processed_workflow[str(node_id)]['inputs'][inp['name']] = widgets[0]
+                continue
+            
+            # This is a subgraph node, expand it
+            subgraph = self._find_subgraph_by_id(subgraphs, node_type)
+            if not subgraph:
+                logger.warning(f"Could not find subgraph {node_type} for node {node_id}")
+                continue
+            
+            logger.info(f"Flattening subgraph node {node_id} ({node_type})...")
+            
+            # Get the subgraph's internal nodes
+            subgraph_nodes = subgraph.get('nodes', [])
+            subgraph_links = subgraph.get('links', [])
+            subgraph_inputs = subgraph.get('inputs', [])
+            subgraph_outputs = subgraph.get('outputs', [])
+            
+            # Create ID mapping for internal nodes
+            node_id_mapping = {}
+            
+            # First pass: create all internal nodes
+            for internal_node in subgraph_nodes:
+                internal_id = internal_node.get('id')
+                internal_type = internal_node.get('type')
+                
+                if not internal_type:
+                    continue
+                
+                new_node_id = self._generate_node_id()
+                node_id_mapping[str(internal_id)] = new_node_id
+                
+                # Create the new node in API format
+                new_node = {
+                    'class_type': internal_type,
+                    'inputs': {},
+                    '_meta': {
+                        'title': f"{internal_node.get('title', internal_type)} (from {node_type})"
+                    }
+                }
+                
+                # Copy widget values
+                widgets = internal_node.get('widgets_values', [])
+                for inp in internal_node.get('inputs', []):
+                    if inp.get('name') and inp.get('link') is None:
+                        widget_idx = inp.get('widget_index', 0)
+                        if widget_idx < len(widgets):
+                            new_node['inputs'][inp['name']] = widgets[widget_idx]
+                
+                processed_workflow[new_node_id] = new_node
+                logger.debug(f"Created flattened node: {new_node_id} ({internal_type})")
+            
+            # Second pass: handle connections
+            for link_info in subgraph_links:
+                if not isinstance(link_info, list) or len(link_info) < 5:
+                    continue
+                
+                # Link format: [link_id, from_node, from_slot, to_node, to_slot]
+                link_id, from_node, from_slot, to_node, to_slot = link_info[:5]
+                
+                # Get the target node's input information
+                target_node = self._get_node_by_id(subgraph_nodes, to_node)
+                if not target_node:
+                    continue
+                
+                target_inputs = target_node.get('inputs', [])
+                if to_slot >= len(target_inputs):
+                    continue
+                
+                target_input = target_inputs[to_slot]
+                target_input_name = target_input.get('name')
+                
+                if not target_input_name:
+                    continue
+                
+                # Find the source node
+                source_node = self._get_node_by_id(subgraph_nodes, from_node)
+                if source_node:
+                    # This is an internal connection
+                    if str(from_node) in node_id_mapping and str(to_node) in node_id_mapping:
+                        source_new_id = node_id_mapping[str(from_node)]
+                        target_new_id = node_id_mapping[str(to_node)]
+                        
+                        # Create the connection
+                        if target_new_id not in processed_workflow:
+                            continue
+                        
+                        processed_workflow[target_new_id]['inputs'][target_input_name] = [source_new_id, from_slot]
+                        logger.debug(f"Connected: {source_new_id}:{from_slot} -> {target_new_id}:{to_slot}")
+            
+            # Handle subgraph inputs
+            for i, subgraph_input in enumerate(subgraph_inputs):
+                input_name = subgraph_input.get('name')
+                if not input_name:
+                    continue
+                
+                input_type = subgraph_input.get('type')
+                input_link = subgraph_input.get('link')
+                
+                if input_link and len(input_link) > 0:
+                    # This input comes from outside the subgraph
+                    # Find what it's connected to in the main workflow
+                    for main_node in nodes:
+                        for main_input in main_node.get('inputs', []):
+                            if main_input.get('link') == input_link:
+                                # Found the connection, update the flattened nodes
+                                source_node_id = main_node.get('id')
+                                for internal_node in subgraph_nodes:
+                                    for internal_input in internal_node.get('inputs', []):
+                                        if internal_input.get('link') == input_link:
+                                            target_new_id = node_id_mapping[str(internal_node.get('id'))]
+                                            target_input_name = internal_input.get('name')
+                                            if target_new_id in processed_workflow:
+                                                processed_workflow[target_new_id]['inputs'][target_input_name] = [str(source_node_id), 0]
+        
+        logger.info(f"Successfully flattened workflow: {len(processed_workflow)} nodes")
+        return processed_workflow
+
+
 class WorkflowConverterService:
     """
-    Service for converting ComfyUI workflows from LiteGraph format to API format
-    using the workflow-to-api-converter-endpoint custom node.
+    Enhanced service for converting ComfyUI workflows from LiteGraph format to API format.
+    
+    This service uses multiple strategies:
+    1. Primary: workflow-to-api-converter-endpoint (if it works properly)
+    2. Fallback: Custom SubgraphFlattener implementation
+    3. Validation: Ensures no UUID nodes remain in output
     """
     
     def __init__(self, comfyui_base_url: str = "http://127.0.0.1:8188", timeout: int = 30):
@@ -46,7 +252,8 @@ class WorkflowConverterService:
         self.comfyui_base_url = comfyui_base_url.rstrip('/')
         self.convert_endpoint = f"{self.comfyui_base_url}/workflow/convert"
         self.timeout = timeout
-        
+        self.subgraph_flattener = SubgraphFlattener()
+    
     def _ensure_converter_installed(self) -> bool:
         """
         Check if the workflow-to-api-converter-endpoint is installed and available.
@@ -68,6 +275,19 @@ class WorkflowConverterService:
         except Exception as e:
             logger.error(f"Error checking converter availability: {e}")
             return False
+    
+    def _has_uuid_nodes(self, workflow: dict) -> bool:
+        """Check if workflow still contains UUID nodes (subgraphs not flattened)."""
+        if not isinstance(workflow, dict):
+            return False
+        
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict):
+                class_type = node_data.get('class_type', '')
+                if self.subgraph_flattener._is_uuid(class_type):
+                    logger.error(f"Found UUID node: {node_id} with class_type {class_type}")
+                    return True
+        return False
     
     def convert_workflow_to_api(self, workflow: Union[Dict, str]) -> Dict:
         """
@@ -99,69 +319,92 @@ class WorkflowConverterService:
             raise WorkflowConversionError("Workflow must be a dictionary or JSON string")
         
         # Check if converter is available
-        if not self._ensure_converter_installed():
-            raise WorkflowConversionError(
-                "workflow-to-api-converter-endpoint is not installed or ComfyUI is not running. "
-                "Install it with: cd ComfyUI/custom_nodes && "
-                "git clone https://github.com/SethRobinson/comfyui-workflow-to-api-converter-endpoint"
-            )
+        converter_available = self._ensure_converter_installed()
         
-        logger.info("Converting workflow using ComfyUI's native converter...")
+        if converter_available:
+            logger.info("Using workflow-to-api-converter-endpoint for conversion...")
+            try:
+                # Send the workflow to the converter endpoint
+                response = requests.post(
+                    self.convert_endpoint,
+                    json=workflow,
+                    headers={"Content-Type": "application/json"},
+                    timeout=self.timeout
+                )
+                
+                response.raise_for_status()
+                
+                # The response should be the converted API workflow
+                api_workflow = response.json()
+                
+                # Validate that we got a proper API format workflow
+                if not isinstance(api_workflow, dict):
+                    raise WorkflowConversionError(f"Converter returned invalid format: {type(api_workflow)}")
+                
+                # API format workflows should have nodes as string keys with class_type
+                if not api_workflow:
+                    raise WorkflowConversionError("Converter returned empty workflow")
+                
+                # Check for at least one valid node
+                has_valid_node = False
+                for node_id, node_data in api_workflow.items():
+                    if isinstance(node_data, dict) and 'class_type' in node_data:
+                        has_valid_node = True
+                        break
+                
+                if not has_valid_node:
+                    raise WorkflowConversionError("Converted workflow contains no valid nodes")
+                
+                # CRITICAL: Check if converter left UUID nodes (it shouldn't, but we verify)
+                if self._has_uuid_nodes(api_workflow):
+                    logger.warning("Converter endpoint left UUID nodes - using custom flattener")
+                    raise WorkflowConversionError("Converter endpoint failed to flatten subgraphs properly")
+                
+                logger.info(f"Successfully converted workflow using endpoint: {len(api_workflow)} nodes")
+                return api_workflow
+                
+            except requests.exceptions.HTTPError as e:
+                logger.warning(f"Converter endpoint failed: {e}")
+                logger.info("Falling back to custom subgraph flattener...")
+            except Exception as e:
+                logger.warning(f"Converter endpoint error: {e}")
+                logger.info("Falling back to custom subgraph flattener...")
         
-        try:
-            # Send the workflow to the converter endpoint
-            # The endpoint expects the full workflow JSON in the body
-            response = requests.post(
-                self.convert_endpoint,
-                json=workflow,  # Send the entire workflow as JSON body
-                headers={"Content-Type": "application/json"},
-                timeout=self.timeout
-            )
-            
-            response.raise_for_status()
-            
-            # The response should be the converted API workflow
-            api_workflow = response.json()
-            
-            # Validate that we got a proper API format workflow
-            if not isinstance(api_workflow, dict):
-                raise WorkflowConversionError(f"Converter returned invalid format: {type(api_workflow)}")
-            
-            # API format workflows should have nodes as string keys with class_type
-            if not api_workflow:
-                raise WorkflowConversionError("Converter returned empty workflow")
-            
-            # Check for at least one valid node
-            has_valid_node = False
-            for node_id, node_data in api_workflow.items():
-                if isinstance(node_data, dict) and 'class_type' in node_data:
-                    has_valid_node = True
-                    break
-            
-            if not has_valid_node:
-                raise WorkflowConversionError("Converted workflow contains no valid nodes")
-            
-            logger.info(f"Successfully converted workflow: {len(api_workflow)} nodes")
-            return api_workflow
-            
-        except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP error during conversion: {e}"
-            if e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                    error_msg += f"\nDetail: {error_detail}"
-                except:
-                    error_msg += f"\nResponse: {e.response.text}"
-            raise WorkflowConversionError(error_msg)
-            
-        except requests.exceptions.Timeout:
-            raise WorkflowConversionError(f"Conversion timed out after {self.timeout} seconds")
-            
-        except requests.exceptions.ConnectionError:
-            raise WorkflowConversionError(f"Cannot connect to ComfyUI at {self.comfyui_base_url}")
-            
-        except Exception as e:
-            raise WorkflowConversionError(f"Unexpected error during conversion: {e}")
+        # FALLBACK: Use custom subgraph flattener
+        logger.info("Using custom subgraph flattener...")
+        
+        # Check if workflow needs flattening (has subgraphs)
+        is_litegraph = 'nodes' in workflow
+        subgraph_count = 0
+        if is_litegraph:
+            for node in workflow.get('nodes', []):
+                node_type = node.get('type', '')
+                if self.subgraph_flattener._is_uuid(node_type):
+                    subgraph_count += 1
+        
+        if subgraph_count > 0:
+            logger.info(f"Found {subgraph_count} subgraphs - flattening with custom implementation...")
+            api_workflow = self.subgraph_flattener.flatten_subgraphs(workflow)
+        else:
+            logger.info("No subgraphs found - using direct conversion...")
+            # Direct conversion for simple workflows
+            api_workflow = {}
+            for node in workflow.get('nodes', []):
+                node_id = node.get('id')
+                node_type = node.get('type')
+                if node_id and node_type:
+                    api_workflow[str(node_id)] = {
+                        'class_type': node_type,
+                        'inputs': {},
+                        '_meta': node.get('_meta', {})
+                    }
+        
+        # Final validation
+        if self._has_uuid_nodes(api_workflow):
+            raise WorkflowConversionError("Custom flattener also failed to remove all UUID nodes")
+        
+        logger.info(f"Successfully converted workflow with custom flattener: {len(api_workflow)} nodes")
+        return api_workflow
     
     def convert_with_retry(self, workflow: Union[Dict, str], max_retries: int = 3, 
                           retry_delay: int = 2) -> Dict:

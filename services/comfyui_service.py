@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 import http.client
 import threading
+import re
 from queue import Queue, Empty
 import logging
 from typing import Union, Dict, List
@@ -240,19 +241,24 @@ class ComfyUIClient:
                 
                 # CRITICAL: Check for UUID nodes (subgraphs not flattened)
                 class_type = node.get("class_type")
-                try:
-                    import uuid
-                    uuid.UUID(class_type)  # This will succeed if class_type is a UUID
-                    raise ValueError(
-                        f"Node {k} has UUID class_type '{class_type}'. "
-                        "This indicates the workflow contains unflattened subgraphs. "
-                        "The workflow must be properly converted to API format."
-                    )
-                except ValueError as e:
-                    if "UUID" in str(e) or "subgraph" in str(e):
-                        raise
-                    # Not a UUID, continue validation
-                    pass
+                
+                # First check if it looks like a UUID using regex
+                if isinstance(class_type, str) and re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', class_type, re.IGNORECASE):
+                    # This looks like a UUID format, try to parse it
+                    try:
+                        uuid.UUID(class_type)  # This will succeed if class_type is a valid UUID
+                        raise ValueError(
+                            f"Node {k} has UUID class_type '{class_type}'. "
+                            "This indicates the workflow contains unflattened subgraphs. "
+                            "The workflow must be properly converted to API format."
+                        )
+                    except (ValueError, TypeError) as e:
+                        if "UUID" in str(e) or "subgraph" in str(e):
+                            # This is a proper UUID error, re-raise it
+                            raise
+                        # If it's just a parsing error, continue validation
+                        pass
+                # If it doesn't look like a UUID, this is a normal node - continue validation
         else:
             raise ValueError("Invalid workflow payload; 'prompt' must be a dict.")
 
