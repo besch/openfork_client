@@ -238,12 +238,37 @@ class SubgraphFlattener:
                                             if target_new_id in processed_workflow:
                                                 processed_workflow[target_new_id]['inputs'][target_input_name] = [str(source_node_id), 0]
         
-        # POST-PROCESSING: Fix SaveImage nodes that might be missing required inputs
-        processed_workflow = self._fix_saveimage_nodes(processed_workflow, nodes, subgraphs)
+        # POST-PROCESSING: Fix missing connections for nodes within flattened subgraphs
+        processed_workflow = self._fix_missing_connections(processed_workflow, nodes, subgraphs)
         
         logger.info(f"Successfully flattened workflow: {len(processed_workflow)} nodes")
         return processed_workflow
-    def _fix_saveimage_nodes(self, workflow: dict, original_nodes: list, subgraphs: list) -> dict:
+    
+    def _fix_missing_connections(self, workflow: dict, original_nodes: list, subgraphs: list) -> dict:
+        """
+        Post-process workflow to fix missing connections for nodes from flattened subgraphs.
+        This specifically handles SaveImage, VAEDecode, KSampler, and other critical nodes.
+        """
+        fixes_applied = 0
+        
+        # Fix SaveImage nodes
+        saveimage_fixes = self._fix_saveimage_nodes(workflow)
+        fixes_applied += saveimage_fixes
+        
+        # Fix VAEDecode nodes
+        vaedecode_fixes = self._fix_vaedecode_nodes(workflow)
+        fixes_applied += vaedecode_fixes
+        
+        # Fix KSampler nodes
+        ksampler_fixes = self._fix_ksampler_nodes(workflow)
+        fixes_applied += ksampler_fixes
+        
+        if fixes_applied > 0:
+            logger.info(f"Applied {fixes_applied} total fixes for missing connections")
+        
+        return workflow
+    
+    def _fix_saveimage_nodes(self, workflow: dict) -> int:
         """
         Post-process workflow to ensure all SaveImage nodes have required inputs.
         This fixes cases where SaveImage nodes within subgraphs lose their connections or inputs.
@@ -311,7 +336,176 @@ class SubgraphFlattener:
         if fixes_applied > 0:
             logger.info(f"Applied {fixes_applied} fixes to SaveImage nodes")
         
-        return workflow
+        return fixes_applied
+    
+    def _fix_vaedecode_nodes(self, workflow: dict) -> int:
+        """
+        Post-process workflow to ensure all VAEDecode nodes have required inputs.
+        This fixes cases where VAEDecode nodes within subgraphs lose their VAE and samples connections.
+        """
+        logger.debug("Post-processing VAEDecode nodes...")
+        
+        # Find VAE nodes
+        vae_nodes = set()
+        sampler_nodes = set()
+        
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict):
+                class_type = node_data.get('class_type', '')
+                if class_type in ['VAEEncode', 'VAEDecode']:
+                    # These are VAE-related nodes
+                    vae_nodes.add(node_id)
+                elif class_type in ['KSampler', 'KSamplerAdvanced', 'LatentFromImage', 'LatentFromMask']:
+                    # These are nodes that produce samples/latents
+                    sampler_nodes.add(node_id)
+        
+        fixes_applied = 0
+        
+        # Process each VAEDecode node
+        for node_id, node_data in workflow.items():
+            if not isinstance(node_data, dict) or node_data.get('class_type') != 'VAEDecode':
+                continue
+            
+            inputs = node_data.get('inputs', {})
+            if not isinstance(inputs, dict):
+                inputs = {}
+                node_data['inputs'] = inputs
+            
+            # Find a VAE source
+            vae_source = None
+            for candidate_id in workflow.keys():
+                if candidate_id != node_id:
+                    candidate_class = workflow[candidate_id].get('class_type', '')
+                    if candidate_class in ['VAEEncode', 'LoadVAE']:
+                        vae_source = candidate_id
+                        break
+            
+            # Find a samples source
+            samples_source = None
+            for candidate_id in workflow.keys():
+                if candidate_id != node_id:
+                    candidate_class = workflow[candidate_id].get('class_type', '')
+                    if candidate_class in ['KSampler', 'KSamplerAdvanced', 'LatentFromImage', 'LatentFromMask']:
+                        samples_source = candidate_id
+                        break
+            
+            # Fix vae input
+            if 'vae' not in inputs and vae_source:
+                inputs['vae'] = [vae_source, 0]
+                fixes_applied += 1
+                logger.debug(f"Connected VAEDecode node {node_id} to VAE source {vae_source}")
+            
+            # Fix samples input
+            if 'samples' not in inputs and samples_source:
+                inputs['samples'] = [samples_source, 0]
+                fixes_applied += 1
+                logger.debug(f"Connected VAEDecode node {node_id} to samples source {samples_source}")
+        
+        if fixes_applied > 0:
+            logger.info(f"Applied {fixes_applied} fixes to VAEDecode nodes")
+        
+        return fixes_applied
+    
+    def _fix_ksampler_nodes(self, workflow: dict) -> int:
+        """
+        Post-process workflow to ensure all KSampler nodes have required inputs.
+        This fixes cases where KSampler nodes within subgraphs lose their connections.
+        KSampler requires: model, positive, negative, latent_image, sampler_name, scheduler, steps, cfg, seed, denoise
+        """
+        logger.debug("Post-processing KSampler nodes...")
+        
+        # Find all potential source nodes
+        model_nodes = set()           # CheckpointLoader, etc.
+        text_nodes = set()           # CLIPTextEncode
+        latent_nodes = set()         # EmptyLatentImage, etc.
+        
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict):
+                class_type = node_data.get('class_type', '')
+                if class_type in ['CheckpointLoader', 'CheckpointLoaderSimple', 'UNETLoader']:
+                    model_nodes.add(node_id)
+                elif class_type in ['CLIPTextEncode', 'CLIPTextEncodeSDXL', 'CLIPTextEncodeFlux']:
+                    text_nodes.add(node_id)
+                elif class_type in ['EmptyLatentImage', 'EmptySD3LatentImage', 'EmptyChromaRadianceLatentImage']:
+                    latent_nodes.add(node_id)
+        
+        fixes_applied = 0
+        
+        # Process each KSampler node
+        for node_id, node_data in workflow.items():
+            if not isinstance(node_data, dict) or node_data.get('class_type') not in ['KSampler', 'KSamplerAdvanced']:
+                continue
+            
+            inputs = node_data.get('inputs', {})
+            if not isinstance(inputs, dict):
+                inputs = {}
+                node_data['inputs'] = inputs
+            
+            # Find first available sources
+            model_source = next(iter(model_nodes), None)
+            positive_source = next(iter(text_nodes), None)
+            negative_source = next(iter(text_nodes), None)
+            latent_source = next(iter(latent_nodes), None)
+            
+            # Fix model input
+            if 'model' not in inputs and model_source:
+                inputs['model'] = [model_source, 0]
+                fixes_applied += 1
+                logger.debug(f"Connected KSampler node {node_id} to model source {model_source}")
+            
+            # Fix positive input
+            if 'positive' not in inputs and positive_source:
+                inputs['positive'] = [positive_source, 0]
+                fixes_applied += 1
+                logger.debug(f"Connected KSampler node {node_id} to positive source {positive_source}")
+            
+            # Fix negative input
+            if 'negative' not in inputs and negative_source:
+                inputs['negative'] = [negative_source, 0]
+                fixes_applied += 1
+                logger.debug(f"Connected KSampler node {node_id} to negative source {negative_source}")
+            
+            # Fix latent_image input
+            if 'latent_image' not in inputs and latent_source:
+                inputs['latent_image'] = [latent_source, 0]
+                fixes_applied += 1
+                logger.debug(f"Connected KSampler node {node_id} to latent source {latent_source}")
+            
+            # Set default values for required parameters
+            if 'sampler_name' not in inputs:
+                inputs['sampler_name'] = 'euler'
+                fixes_applied += 1
+                logger.debug(f"Added sampler_name to KSampler node {node_id}")
+            
+            if 'scheduler' not in inputs:
+                inputs['scheduler'] = 'normal'
+                fixes_applied += 1
+                logger.debug(f"Added scheduler to KSampler node {node_id}")
+            
+            if 'steps' not in inputs:
+                inputs['steps'] = 20
+                fixes_applied += 1
+                logger.debug(f"Added steps to KSampler node {node_id}")
+            
+            if 'cfg' not in inputs:
+                inputs['cfg'] = 8.0
+                fixes_applied += 1
+                logger.debug(f"Added cfg to KSampler node {node_id}")
+            
+            if 'seed' not in inputs:
+                inputs['seed'] = 0
+                fixes_applied += 1
+                logger.debug(f"Added seed to KSampler node {node_id}")
+            
+            if 'denoise' not in inputs:
+                inputs['denoise'] = 1.0
+                fixes_applied += 1
+                logger.debug(f"Added denoise to KSampler node {node_id}")
+        
+        if fixes_applied > 0:
+            logger.info(f"Applied {fixes_applied} fixes to KSampler nodes")
+        
+        return fixes_applied
 
 
 class WorkflowConverterService:
