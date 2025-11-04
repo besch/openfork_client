@@ -270,6 +270,6 @@ if __name__ == "__main__":
         print(f"   Nodes: {len(api_workflow)}")
         
     except FileNotFoundError:
-        print("❌ workflow.json not found")
+        print("[ERROR] workflow.json not found")
     except WorkflowConversionError as e:
-        print(f"❌ Conversion failed: {e}")
+        print(f"[ERROR] Conversion failed: {e}")

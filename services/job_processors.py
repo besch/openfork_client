@@ -949,7 +949,7 @@ class DynamicJobProcessor:
         
         # === VERIFY FORMAT ===
         if self.workflow_format != 'api':
-            logger.error(f"❌ Workflow format is '{self.workflow_format}' but should be 'api'")
+            logger.error(f"[ERROR] Workflow format is '{self.workflow_format}' but should be 'api'")
             logger.error("   This indicates the workflow was not properly converted during sync")
             logger.error("   Please re-run workflow_sync.py to fix this issue")
             self.orchestrator_service.update_job_status(self.job_id, 'failed', completion_metadata={

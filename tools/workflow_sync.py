@@ -690,7 +690,7 @@ class WorkflowSynchronizer:
                 
                 # === CHECK IF COMFYUI IS AVAILABLE ===
                 if not comfyui_available:
-                    logger.error(f"❌ {workflow_name}: ComfyUI not available - cannot convert")
+                    logger.error(f"[ERROR] {workflow_name}: ComfyUI not available - cannot convert")
                     logger.error("   All workflows must be converted to API format")
                     logger.error("   Please ensure ComfyUI is running before syncing workflows")
                     skipped_workflows += 1
@@ -720,18 +720,18 @@ class WorkflowSynchronizer:
                     
                     # === VALIDATE CONVERSION ===
                     if not stored_workflow:
-                        logger.error(f"❌ {workflow_name}: Conversion produced empty workflow")
+                        logger.error(f"[ERROR] {workflow_name}: Conversion produced empty workflow")
                         failed_workflows += 1
                         continue
                     
                     if not isinstance(stored_workflow, dict):
-                        logger.error(f"❌ {workflow_name}: Conversion produced invalid format: {type(stored_workflow)}")
+                        logger.error(f"[ERROR] {workflow_name}: Conversion produced invalid format: {type(stored_workflow)}")
                         failed_workflows += 1
                         continue
                     
                     # Check for suspiciously small workflows
                     if len(stored_workflow) <= 1:
-                        logger.error(f"❌ {workflow_name}: Workflow has only {len(stored_workflow)} nodes after conversion")
+                        logger.error(f"[ERROR] {workflow_name}: Workflow has only {len(stored_workflow)} nodes after conversion")
                         logger.error(f"   This usually means conversion failed or workflow is corrupt")
                         failed_workflows += 1
                         continue
@@ -749,7 +749,7 @@ class WorkflowSynchronizer:
                                 pass  # Not a UUID, this is good
                     
                     if has_uuid_nodes:
-                        logger.error(f"❌ {workflow_name}: UUID nodes found after conversion!")
+                        logger.error(f"[ERROR] {workflow_name}: UUID nodes found after conversion!")
                         logger.error(f"   Subgraphs were not properly flattened")
                         logger.error(f"   This workflow cannot be executed by ComfyUI's /prompt endpoint")
                         failed_workflows += 1
@@ -763,11 +763,11 @@ class WorkflowSynchronizer:
                     workflow_format = "api"
                     
                 except WorkflowConversionError as e:
-                    logger.error(f"❌ {workflow_name}: Conversion failed - {e}")
+                    logger.error(f"[ERROR] {workflow_name}: Conversion failed - {e}")
                     failed_workflows += 1
                     continue
                 except Exception as e:
-                    logger.error(f"❌ {workflow_name}: Unexpected error - {e}", exc_info=True)
+                    logger.error(f"[ERROR] {workflow_name}: Unexpected error - {e}", exc_info=True)
                     failed_workflows += 1
                     continue
                 
