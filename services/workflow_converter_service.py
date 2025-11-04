@@ -161,6 +161,17 @@ class SubgraphFlattener:
                         if widget_idx < len(widgets):
                             new_node['inputs'][inp['name']] = widgets[widget_idx]
                 
+                # ENHANCEMENT: Handle SaveImage nodes specifically
+                if internal_type == 'SaveImage':
+                    # Ensure SaveImage has a filename_prefix
+                    if 'filename_prefix' not in new_node['inputs']:
+                        new_node['inputs']['filename_prefix'] = 'output'
+                    
+                    # If there's no images input but there are widget values,
+                    # the first widget might be the filename
+                    if 'images' not in new_node['inputs'] and widgets:
+                        new_node['inputs']['filename_prefix'] = str(widgets[0])
+                
                 processed_workflow[new_node_id] = new_node
                 logger.debug(f"Created flattened node: {new_node_id} ({internal_type})")
             
@@ -227,8 +238,80 @@ class SubgraphFlattener:
                                             if target_new_id in processed_workflow:
                                                 processed_workflow[target_new_id]['inputs'][target_input_name] = [str(source_node_id), 0]
         
+        # POST-PROCESSING: Fix SaveImage nodes that might be missing required inputs
+        processed_workflow = self._fix_saveimage_nodes(processed_workflow, nodes, subgraphs)
+        
         logger.info(f"Successfully flattened workflow: {len(processed_workflow)} nodes")
         return processed_workflow
+    def _fix_saveimage_nodes(self, workflow: dict, original_nodes: list, subgraphs: list) -> dict:
+        """
+        Post-process workflow to ensure all SaveImage nodes have required inputs.
+        This fixes cases where SaveImage nodes within subgraphs lose their connections or inputs.
+        """
+        logger.debug("Post-processing SaveImage nodes...")
+        
+        # Find all image-producing nodes in the workflow
+        image_producers = set()
+        image_producer_types = {
+            'VAEDecode', 'PreviewImage', 'KSampler', 'KSamplerAdvanced', 'ImageUpscaleWithModel',
+            'CLIPVisionEncode', 'MaskToImage', 'LatentComposite', 'LatentBlend',
+            'ImageCompositeMasked', 'ImageBlend', 'ImageInvert', 'ImageQuantize',
+            'ImageSharpen', 'ImageBlur', 'Canny', 'ImageColorToMask', 'SaveImage'  # SaveImage can be chained
+        }
+        
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') in image_producer_types:
+                image_producers.add(node_id)
+        
+        # Find the first available image source for SaveImage nodes
+        first_image_source = None
+        for node_id in workflow.keys():
+            if node_id in image_producers:
+                # Skip SaveImage nodes when looking for image sources
+                node_class = workflow[node_id].get('class_type', '')
+                if node_class != 'SaveImage':
+                    first_image_source = node_id
+                    break
+        
+        fixes_applied = 0
+        
+        # Process each SaveImage node
+        for node_id, node_data in workflow.items():
+            if not isinstance(node_data, dict) or node_data.get('class_type') != 'SaveImage':
+                continue
+            
+            inputs = node_data.get('inputs', {})
+            if not isinstance(inputs, dict):
+                inputs = {}
+                node_data['inputs'] = inputs
+            
+            # Fix filename_prefix
+            if 'filename_prefix' not in inputs:
+                inputs['filename_prefix'] = 'output'
+                fixes_applied += 1
+                logger.debug(f"Added filename_prefix to SaveImage node {node_id}")
+            
+            # Fix images connection
+            if 'images' not in inputs:
+                if first_image_source:
+                    inputs['images'] = [first_image_source, 0]
+                    fixes_applied += 1
+                    logger.debug(f"Connected SaveImage node {node_id} to image source {first_image_source}")
+                else:
+                    # If no image source found, try to connect to any non-SaveImage node
+                    for candidate_id in workflow.keys():
+                        if candidate_id != node_id:
+                            candidate_class = workflow[candidate_id].get('class_type', '')
+                            if candidate_class not in ['SaveImage', 'Note', 'MarkdownNote']:
+                                inputs['images'] = [candidate_id, 0]
+                                fixes_applied += 1
+                                logger.debug(f"Fallback: Connected SaveImage node {node_id} to {candidate_id}")
+                                break
+        
+        if fixes_applied > 0:
+            logger.info(f"Applied {fixes_applied} fixes to SaveImage nodes")
+        
+        return workflow
 
 
 class WorkflowConverterService:
