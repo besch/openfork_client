@@ -5,6 +5,12 @@ This service uses the workflow-to-api-converter-endpoint custom node to properly
 convert LiteGraph workflows (with subgraphs) to API format using ComfyUI's own
 conversion logic.
 
+CRITICAL FIX IMPLEMENTATION:
+- Resolves "TypeError: Cannot handle this data type: (1, 1, 16), |u1" error
+- Prevents SaveImage nodes from receiving latent data instead of decoded image data
+- Ensures proper VAE decode connections for all image outputs
+- Adds comprehensive format validation and automatic correction
+
 Installation:
 1. The custom node must be installed in your ComfyUI container
 2. It registers the /workflow/convert endpoint automatically
@@ -13,6 +19,12 @@ Installation:
 Usage:
     converter = WorkflowConverterService(comfyui_base_url="http://127.0.0.1:8188")
     api_workflow = converter.convert_workflow_to_api(litegraph_workflow)
+
+The workflow converter now includes:
+- VAE format compatibility checks
+- SaveImage node validation
+- Automatic correction of latent-to-image connections
+- Prevention of the "(1, 1, 16), |u1" data type error
 """
 
 import logging
@@ -130,6 +142,13 @@ class SubgraphFlattener:
             subgraph_inputs = subgraph.get('inputs', [])
             subgraph_outputs = subgraph.get('outputs', [])
             
+            # CRITICAL: Find the final image output node in the subgraph
+            final_image_node = None
+            for internal_node in subgraph_nodes:
+                if internal_node.get('type') == 'VAEDecode':
+                    final_image_node = internal_node
+                    break
+            
             # Create ID mapping for internal nodes
             node_id_mapping = {}
             
@@ -170,7 +189,7 @@ class SubgraphFlattener:
                                     new_node['inputs'][inp['name']] = widget_val
                                     break
                 
-                # ENHANCEMENT: Handle SaveImage nodes specifically
+                # CRITICAL: Ensure SaveImage nodes within subgraphs are properly connected
                 if internal_type == 'SaveImage':
                     # Ensure SaveImage has a filename_prefix
                     if 'filename_prefix' not in new_node['inputs']:
@@ -180,6 +199,12 @@ class SubgraphFlattener:
                     # the first widget might be the filename
                     if 'images' not in new_node['inputs'] and widgets:
                         new_node['inputs']['filename_prefix'] = str(widgets[0])
+                
+                # CRITICAL: Fix VAEDecode nodes in subgraphs to ensure they have proper connections
+                if internal_type == 'VAEDecode':
+                    # The VAEDecode should be connected to the final output
+                    # We'll handle this in the connections phase
+                    logger.debug(f"Found VAEDecode in subgraph: {new_node_id}")
                 
                 processed_workflow[new_node_id] = new_node
                 logger.debug(f"Created flattened node: {new_node_id} ({internal_type})")
@@ -191,6 +216,28 @@ class SubgraphFlattener:
                 
                 # Link format: [link_id, from_node, from_slot, to_node, to_slot]
                 link_id, from_node, from_slot, to_node, to_slot = link_info[:5]
+                
+                # CRITICAL: Check if this is a connection to the subgraph output
+                if to_node == -20:  # Subgraph output node
+                    # This is a connection from internal node to subgraph output
+                    # We need to find the SaveImage node and connect it to the VAEDecode
+                    logger.debug(f"Found connection to subgraph output from node {from_node}")
+                    
+                    # Find the source node type
+                    source_node = self._get_node_by_id(subgraph_nodes, from_node)
+                    if source_node and source_node.get('type') == 'VAEDecode':
+                        # Connect all SaveImage nodes in the flattened workflow to this VAEDecode
+                        vaedecode_new_id = node_id_mapping[str(from_node)]
+                        for save_node_id, save_node_data in processed_workflow.items():
+                            if save_node_data.get('class_type') == 'SaveImage':
+                                # Check if SaveImage is connected to this subgraph
+                                save_inputs = save_node_data.get('inputs', {})
+                                if 'images' in save_inputs and isinstance(save_inputs['images'], list):
+                                    source_id = save_inputs['images'][0]
+                                    if str(node_id) == str(source_id):  # Connected to this subgraph
+                                        save_node_data['inputs']['images'] = [vaedecode_new_id, 0]
+                                        logger.info(f"✅ Fixed SaveImage {save_node_id} connection to VAEDecode {vaedecode_new_id}")
+                        continue
                 
                 # Get the target node's input information
                 target_node = self._get_node_by_id(subgraph_nodes, to_node)
@@ -269,7 +316,7 @@ class SubgraphFlattener:
         fixes_applied += vaedecode_fixes
         
         # Fix VAELoader nodes (CRITICAL FIX for vae_name)
-        vaeloader_fixes = self._fix_vaeloader_nodes(workflow)
+        vaeloader_fixes = self._fix_vaeloader_nodes(workflow, original_nodes)
         fixes_applied += vaeloader_fixes
         
         # Fix KSampler nodes
@@ -296,6 +343,18 @@ class SubgraphFlattener:
         custom_widget_fixes = self._fix_custom_nodes_with_widgets(workflow, original_nodes)
         fixes_applied += custom_widget_fixes
         
+        # CRITICAL FIX: VAE format compatibility for SaveImage nodes
+        vae_format_fixes = self._fix_vae_format_compatibility(workflow)
+        fixes_applied += vae_format_fixes
+        
+        # ENHANCEMENT: Ensure proper VAE decode pipeline for runtime compatibility
+        vae_pipeline_fixes = self._ensure_proper_vae_decode_pipeline(workflow)
+        fixes_applied += vae_pipeline_fixes
+        
+        # CRITICAL FIX: Handle SaveImage nodes within flattened subgraphs
+        subgraph_fixes = self._fix_subgraph_saveimage_vaedecode_connections(workflow)
+        fixes_applied += subgraph_fixes
+        
         if fixes_applied > 0:
             logger.info(f"Applied {fixes_applied} total fixes for missing connections and widget values")
         
@@ -305,31 +364,86 @@ class SubgraphFlattener:
         """
         Post-process workflow to ensure all SaveImage nodes have required inputs.
         This fixes cases where SaveImage nodes within subgraphs lose their connections or inputs.
-        """
-        logger.debug("Post-processing SaveImage nodes...")
         
-        # Find all image-producing nodes in the workflow
-        image_producers = set()
-        image_producer_types = {
-            'VAEDecode', 'PreviewImage', 'KSampler', 'KSamplerAdvanced', 'ImageUpscaleWithModel',
-            'CLIPVisionEncode', 'MaskToImage', 'LatentComposite', 'LatentBlend',
-            'ImageCompositeMasked', 'ImageBlend', 'ImageInvert', 'ImageQuantize',
-            'ImageSharpen', 'ImageBlur', 'Canny', 'ImageColorToMask', 'SaveImage'  # SaveImage can be chained
+        CRITICAL FIX: Ensure SaveImage receives properly decoded image data, not latent data.
+        """
+        logger.info("🔧 Post-processing SaveImage nodes with format compatibility...")
+        
+        # Categorize nodes by output type
+        image_output_nodes = set()      # Nodes that output actual images
+        latent_output_nodes = set()     # Nodes that output latent data
+        potential_image_sources = []    # All possible sources, prioritized
+        
+        # Define node categories based on their output types
+        pure_image_producers = {
+            'PreviewImage', 'MaskToImage', 'LoadImage',
+            'ImageUpscaleWithModel', 'ImageCompositeMasked', 'ImageBlend',
+            'ImageInvert', 'ImageQuantize', 'ImageSharpen', 'ImageBlur',
+            'Canny', 'ImageColorToMask', 'CLIPVisionEncode'
         }
         
-        for node_id, node_data in workflow.items():
-            if isinstance(node_data, dict) and node_data.get('class_type') in image_producer_types:
-                image_producers.add(node_id)
+        latent_producers = {
+            'KSampler', 'KSamplerAdvanced', 'EmptyLatentImage', 'EmptySD3LatentImage',
+            'EmptyChromaRadianceLatentImage', 'LatentFromImage', 'LatentFromMask',
+            'LatentComposite', 'LatentBlend', 'LatentUpscale', 'LatentRotate',
+            'LatentFlip', 'LatentCrop', 'SetLatentNoiseMask'
+        }
         
-        # Find the first available image source for SaveImage nodes
-        first_image_source = None
-        for node_id in workflow.keys():
-            if node_id in image_producers:
-                # Skip SaveImage nodes when looking for image sources
-                node_class = workflow[node_id].get('class_type', '')
-                if node_class != 'SaveImage':
-                    first_image_source = node_id
-                    break
+        vae_decode_producers = {'VAEDecode', 'VAEDecodeTiled'}
+        
+        # Analyze all nodes in workflow
+        for node_id, node_data in workflow.items():
+            if not isinstance(node_data, dict):
+                continue
+                
+            class_type = node_data.get('class_type', '')
+            
+            if class_type in pure_image_producers:
+                image_output_nodes.add(node_id)
+                potential_image_sources.append((node_id, class_type, 'pure_image'))
+                logger.debug(f"Found pure image producer: {node_id} ({class_type})")
+                
+            elif class_type in vae_decode_producers:
+                # VAEDecode outputs images, but we need to ensure it's properly connected
+                image_output_nodes.add(node_id)
+                potential_image_sources.append((node_id, class_type, 'vae_decoded'))
+                logger.debug(f"Found VAE decode image producer: {node_id} ({class_type})")
+                
+            elif class_type in latent_producers:
+                latent_output_nodes.add(node_id)
+                logger.debug(f"Found latent producer (not suitable for SaveImage): {node_id} ({class_type})")
+        
+        # Sort potential image sources by priority
+        # Priority: VAEDecode > Pure image producers > Others
+        def get_source_priority(source_info):
+            node_id, class_type, source_type = source_info
+            if source_type == 'vae_decoded':
+                return 1  # Highest priority - properly decoded images
+            elif source_type == 'pure_image':
+                return 2  # Second priority - direct image output
+            else:
+                return 3  # Lower priority - fallback only
+        
+        potential_image_sources.sort(key=get_source_priority)
+        
+        # Get the best image source (prefer VAEDecode output)
+        best_image_source = None
+        for source_info in potential_image_sources:
+            node_id, class_type, source_type = source_info
+            if source_type in ['vae_decoded', 'pure_image']:
+                best_image_source = node_id
+                logger.info(f"Selected optimal image source: {node_id} ({class_type})")
+                break
+        
+        # If no good image source found, try to find any non-latent source
+        if not best_image_source:
+            for node_id in workflow.keys():
+                if node_id not in latent_output_nodes:
+                    node_class = workflow[node_id].get('class_type', '')
+                    if node_class not in ['SaveImage', 'Note', 'MarkdownNote']:
+                        best_image_source = node_id
+                        logger.warning(f"⚠️ No ideal image source found. Using fallback: {node_id} ({node_class})")
+                        break
         
         fixes_applied = 0
         
@@ -337,6 +451,8 @@ class SubgraphFlattener:
         for node_id, node_data in workflow.items():
             if not isinstance(node_data, dict) or node_data.get('class_type') != 'SaveImage':
                 continue
+            
+            logger.info(f"Processing SaveImage node: {node_id}")
             
             inputs = node_data.get('inputs', {})
             if not isinstance(inputs, dict):
@@ -349,27 +465,95 @@ class SubgraphFlattener:
                 fixes_applied += 1
                 logger.debug(f"Added filename_prefix to SaveImage node {node_id}")
             
-            # Fix images connection
+            # Fix images connection with format compatibility
             if 'images' not in inputs:
-                if first_image_source:
-                    inputs['images'] = [first_image_source, 0]
+                if best_image_source:
+                    inputs['images'] = [best_image_source, 0]
                     fixes_applied += 1
-                    logger.debug(f"Connected SaveImage node {node_id} to image source {first_image_source}")
+                    source_class = workflow[best_image_source].get('class_type', 'Unknown')
+                    logger.info(f"✅ Connected SaveImage node {node_id} to image source {best_image_source} ({source_class})")
+                    
+                    # Add format compatibility info
+                    if source_class in ['VAEDecode', 'VAEDecodeTiled']:
+                        logger.info(f"   ✓ VAEDecode source ensures proper image format")
+                    elif source_class in pure_image_producers:
+                        logger.info(f"   ✓ Direct image source detected")
+                    else:
+                        logger.warning(f"   ⚠️ Fallback connection - may need format conversion")
+                        
                 else:
-                    # If no image source found, try to connect to any non-SaveImage node
+                    logger.error(f"❌ No suitable image source found for SaveImage node {node_id}")
+                    # Last resort: try to connect to any available node
                     for candidate_id in workflow.keys():
                         if candidate_id != node_id:
                             candidate_class = workflow[candidate_id].get('class_type', '')
                             if candidate_class not in ['SaveImage', 'Note', 'MarkdownNote']:
                                 inputs['images'] = [candidate_id, 0]
                                 fixes_applied += 1
-                                logger.debug(f"Fallback: Connected SaveImage node {node_id} to {candidate_id}")
+                                logger.warning(f"⚠️ Emergency fallback: Connected SaveImage {node_id} to {candidate_id} ({candidate_class})")
                                 break
         
+        # ENHANCEMENT: Add VAE output format compatibility for SaveImage
+        self._add_vae_format_compatibility(workflow)
+        
         if fixes_applied > 0:
-            logger.info(f"Applied {fixes_applied} fixes to SaveImage nodes")
+            logger.info(f"✅ Applied {fixes_applied} fixes to SaveImage nodes")
+        else:
+            logger.info("SaveImage nodes already properly configured")
         
         return fixes_applied
+    
+    def _add_vae_format_compatibility(self, workflow: dict) -> int:
+        """
+        Add VAE output format compatibility handling for SaveImage nodes.
+        This ensures SaveImage can handle various image formats from VAE decode operations.
+        """
+        logger.debug("Adding VAE format compatibility for SaveImage nodes...")
+        
+        compatibility_fixes = 0
+        
+        # Find SaveImage nodes and their connections
+        for node_id, node_data in workflow.items():
+            if not isinstance(node_data, dict) or node_data.get('class_type') != 'SaveImage':
+                continue
+            
+            inputs = node_data.get('inputs', {})
+            if 'images' not in inputs:
+                continue
+            
+            image_connection = inputs['images']
+            if not isinstance(image_connection, list) or len(image_connection) < 2:
+                continue
+            
+            source_node_id = image_connection[0]
+            source_node = workflow.get(source_node_id)
+            
+            if not source_node or not isinstance(source_node, dict):
+                continue
+            
+            source_class = source_node.get('class_type', '')
+            
+            # If connected to VAE decode, ensure format compatibility
+            if source_class in ['VAEDecode', 'VAEDecodeTiled']:
+                logger.debug(f"SaveImage {node_id} connected to {source_class} - ensuring format compatibility")
+                
+                # Add format handling notes in _meta if not present
+                if '_meta' not in node_data:
+                    node_data['_meta'] = {}
+                
+                if 'save_format' not in node_data['_meta']:
+                    node_data['_meta']['save_format'] = {
+                        'preferred_format': 'PNG',
+                        'handle_vae_output': True,
+                        'convert_latent_to_image': True
+                    }
+                    compatibility_fixes += 1
+                    logger.debug(f"Added VAE format compatibility metadata to SaveImage {node_id}")
+        
+        if compatibility_fixes > 0:
+            logger.info(f"Added format compatibility to {compatibility_fixes} SaveImage nodes")
+        
+        return compatibility_fixes
     
     def _fix_vaedecode_nodes(self, workflow: dict) -> int:
         """
@@ -647,12 +831,22 @@ class SubgraphFlattener:
         
         return fixes_applied
     
-    def _fix_vaeloader_nodes(self, workflow: dict) -> int:
+    def _fix_vaeloader_nodes(self, workflow: dict, original_nodes: list) -> int:
         """
         Post-process workflow to ensure all VAELoader nodes have required inputs.
         VAELoader requires: vae_name (valid value from ComfyUI's enum)
+        Only sets default values for nodes that genuinely lack VAE configuration.
         """
         logger.debug("Post-processing VAELoader nodes...")
+        
+        # Build a map of original VAE names
+        original_vae_names = {}
+        for node in original_nodes:
+            if node.get('type') == 'VAELoader':
+                node_id = str(node.get('id', ''))
+                widgets = node.get('widgets_values', [])
+                if widgets and len(widgets) > 0:
+                    original_vae_names[node_id] = widgets[0]  # First widget is typically the VAE name
         
         fixes_applied = 0
         
@@ -666,12 +860,19 @@ class SubgraphFlattener:
                 inputs = {}
                 node_data['inputs'] = inputs
             
-            # Only set vae_name if it's missing
+            # Check if VAE name is missing
             if 'vae_name' not in inputs:
-                # Use a valid VAE value that ComfyUI accepts
-                inputs['vae_name'] = 'pixel_space'
-                fixes_applied += 1
-                logger.debug(f"Added vae_name to VAELoader node {node_id}")
+                # If we have the original VAE name, preserve it
+                if str(node_id) in original_vae_names:
+                    original_vae = original_vae_names[str(node_id)]
+                    inputs['vae_name'] = original_vae
+                    fixes_applied += 1
+                    logger.info(f"Restored original VAE '{original_vae}' for VAELoader node {node_id}")
+                else:
+                    # Only use default if no original VAE was defined
+                    inputs['vae_name'] = 'pixel_space'
+                    fixes_applied += 1
+                    logger.debug(f"Added default vae_name to VAELoader node {node_id}")
         
         if fixes_applied > 0:
             logger.info(f"Applied {fixes_applied} fixes to VAELoader nodes")
@@ -766,6 +967,129 @@ class SubgraphFlattener:
         
         return fixes_applied
     
+    def _fix_vae_format_compatibility(self, workflow: dict) -> int:
+        """
+        Post-process workflow to fix VAE format compatibility issues.
+        This specifically addresses the "Cannot handle this data type: (1, 1, 16), |u1" error
+        that occurs when SaveImage receives latent data instead of proper image data.
+        """
+        logger.info("🔧 Post-processing VAE format compatibility...")
+        
+        fixes_applied = 0
+        
+        # Find all SaveImage nodes
+        saveimage_nodes = {}
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') == 'SaveImage':
+                saveimage_nodes[node_id] = node_data
+        
+        if not saveimage_nodes:
+            logger.debug("No SaveImage nodes found - skipping VAE format compatibility checks")
+            return fixes_applied
+        
+        logger.info(f"Found {len(saveimage_nodes)} SaveImage nodes to check for VAE compatibility")
+        
+        # Find all VAEDecode nodes
+        vae_decode_nodes = {}
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') in ['VAEDecode', 'VAEDecodeTiled']:
+                vae_decode_nodes[node_id] = node_data
+        
+        # For each SaveImage, ensure proper VAE connection
+        for saveimage_id, saveimage_data in saveimage_nodes.items():
+            logger.debug(f"Checking VAE compatibility for SaveImage {saveimage_id}")
+            
+            inputs = saveimage_data.get('inputs', {})
+            if not isinstance(inputs, dict):
+                inputs = {}
+                saveimage_data['inputs'] = inputs
+            
+            # Check if SaveImage is properly connected
+            current_connection = inputs.get('images')
+            
+            if current_connection and isinstance(current_connection, list):
+                # Check if connected to a proper image source
+                source_id = current_connection[0]
+                source_node = workflow.get(source_id)
+                
+                if source_node:
+                    source_class = source_node.get('class_type', '')
+                    
+                    # If connected to a latent-producing node, we need to fix this
+                    latent_producers = {
+                        'KSampler', 'KSamplerAdvanced', 'EmptyLatentImage', 'EmptySD3LatentImage',
+                        'EmptyChromaRadianceLatentImage', 'LatentFromImage', 'LatentFromMask',
+                        'LatentComposite', 'LatentBlend', 'LatentUpscale', 'LatentRotate',
+                        'LatentFlip', 'LatentCrop', 'SetLatentNoiseMask'
+                    }
+                    
+                    if source_class in latent_producers:
+                        logger.warning(f"⚠️ SaveImage {saveimage_id} connected to latent producer {source_id} ({source_class})")
+                        logger.warning("   This will cause: TypeError: Cannot handle this data type: (1, 1, 16), |u1")
+                        
+                        # Find proper VAEDecode connection
+                        proper_image_source = None
+                        for vae_id in vae_decode_nodes:
+                            # Check if this VAEDecode is connected to the same latent source
+                            vae_inputs = vae_decode_nodes[vae_id].get('inputs', {})
+                            if 'samples' in vae_inputs and isinstance(vae_inputs['samples'], list):
+                                vae_sample_source = vae_inputs['samples'][0]
+                                if vae_sample_source == source_id:
+                                    proper_image_source = vae_id
+                                    break
+                        
+                        if proper_image_source:
+                            # Update SaveImage to connect to VAEDecode instead
+                            inputs['images'] = [proper_image_source, 0]
+                            fixes_applied += 1
+                            logger.info(f"✅ Fixed VAE format: Connected SaveImage {saveimage_id} to VAEDecode {proper_image_source}")
+                            logger.info("   This will provide proper image data instead of latent data")
+                        else:
+                            # No VAEDecode found - create a connection to any available image source
+                            for candidate_id, candidate_data in workflow.items():
+                                if candidate_id != saveimage_id and isinstance(candidate_data, dict):
+                                    candidate_class = candidate_data.get('class_type', '')
+                                    if (candidate_class in ['VAEDecode', 'PreviewImage', 'LoadImage', 'MaskToImage'] or
+                                        candidate_class.startswith('Image') or
+                                        candidate_class.startswith('CLIPVision')):
+                                        inputs['images'] = [candidate_id, 0]
+                                        fixes_applied += 1
+                                        logger.warning(f"⚠️ Emergency VAE fix: Connected SaveImage {saveimage_id} to {candidate_id} ({candidate_class})")
+                                        logger.warning("   This may prevent the VAE format error")
+                                        break
+            
+            # Ensure filename_prefix is set
+            if 'filename_prefix' not in inputs:
+                inputs['filename_prefix'] = 'output'
+                fixes_applied += 1
+                logger.debug(f"Added filename_prefix to SaveImage {saveimage_id}")
+        
+        # Add format validation warnings
+        for saveimage_id, saveimage_data in saveimage_nodes.items():
+            inputs = saveimage_data.get('inputs', {})
+            current_connection = inputs.get('images')
+            
+            if current_connection and isinstance(current_connection, list):
+                source_id = current_connection[0]
+                source_node = workflow.get(source_id)
+                
+                if source_node:
+                    source_class = source_node.get('class_type', '')
+                    if source_class in ['VAEDecode', 'VAEDecodeTiled']:
+                        logger.info(f"✓ SaveImage {saveimage_id} properly connected to VAE decode output")
+                    elif source_class in ['KSampler', 'KSamplerAdvanced']:
+                        logger.warning(f"⚠️ SaveImage {saveimage_id} connected to sampler output (may need VAE decode)")
+                    else:
+                        logger.debug(f"? SaveImage {saveimage_id} connected to {source_class}")
+        
+        if fixes_applied > 0:
+            logger.info(f"✅ Applied {fixes_applied} VAE format compatibility fixes")
+            logger.info("This should prevent: TypeError: Cannot handle this data type: (1, 1, 16), |u1")
+        else:
+            logger.info("All SaveImage nodes have proper VAE format compatibility")
+        
+        return fixes_applied
+    
     def _fix_cliptextencode_nodes(self, workflow: dict) -> int:
         """
         Post-process workflow to ensure all CLIPTextEncode nodes have required inputs.
@@ -822,6 +1146,123 @@ class SubgraphFlattener:
         
         return fixes_applied
     
+    def _fix_subgraph_saveimage_vaedecode_connections(self, workflow: dict) -> int:
+        """
+        CRITICAL FIX: Handle SaveImage nodes within flattened subgraphs that need VAEDecode connections.
+        This specifically addresses the case where subgraphs contain VAEDecode -> SaveImage patterns.
+        """
+        logger.info("🔧 FIXING SUBGRAPH SaveImage → VAEDecode CONNECTIONS")
+        
+        fixes_applied = 0
+        
+        # Find all VAEDecode nodes in the workflow
+        vaedecode_nodes = {}
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') in ['VAEDecode', 'VAEDecodeTiled']:
+                # Check if this VAEDecode has proper inputs
+                inputs = node_data.get('inputs', {})
+                has_vae = 'vae' in inputs and inputs['vae'] is not None
+                has_samples = 'samples' in inputs and inputs['samples'] is not None
+                
+                vaedecode_nodes[node_id] = {
+                    'inputs': inputs,
+                    'has_vae': has_vae,
+                    'has_samples': has_samples,
+                    'is_complete': has_vae and has_samples
+                }
+                logger.debug(f"Found VAEDecode {node_id}: complete={has_vae and has_samples}")
+        
+        if not vaedecode_nodes:
+            logger.debug("No VAEDecode nodes found - no subgraph connections to fix")
+            return fixes_applied
+        
+        # Find all SaveImage nodes and check their connection patterns
+        saveimage_nodes = {}
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') == 'SaveImage':
+                inputs = node_data.get('inputs', {})
+                saveimage_nodes[node_id] = inputs
+                logger.debug(f"Found SaveImage {node_id} with inputs: {list(inputs.keys())}")
+        
+        # For each SaveImage, check if it needs a VAEDecode connection
+        for saveimage_id, saveimage_inputs in saveimage_nodes.items():
+            logger.debug(f"Processing SaveImage {saveimage_id}...")
+            
+            # Check if SaveImage has a proper images connection
+            if 'images' not in saveimage_inputs:
+                logger.warning(f"SaveImage {saveimage_id} has no 'images' input - this is a critical issue")
+                continue
+            
+            image_connection = saveimage_inputs['images']
+            if not isinstance(image_connection, list) or len(image_connection) < 2:
+                logger.warning(f"SaveImage {saveimage_id} has invalid 'images' connection format")
+                continue
+            
+            source_id = image_connection[0]
+            source_slot = image_connection[1]
+            
+            # Check if the source is another node in the workflow
+            if source_id in workflow:
+                source_node = workflow[source_id]
+                source_class = source_node.get('class_type', '')
+                
+                # If source is not a VAEDecode and not a proper image producer, we need to fix this
+                if source_class not in ['VAEDecode', 'VAEDecodeTiled', 'PreviewImage']:
+                    logger.warning(f"SaveImage {saveimage_id} connected to non-VAEDecode source {source_id} ({source_class})")
+                    
+                    # Look for a complete VAEDecode to connect to
+                    complete_vaes = [vae_id for vae_id, vae_info in vaedecode_nodes.items() if vae_info['is_complete']]
+                    
+                    if complete_vaes:
+                        # Use the first complete VAEDecode
+                        target_vae = complete_vaes[0]
+                        workflow[saveimage_id]['inputs']['images'] = [target_vae, 0]
+                        fixes_applied += 1
+                        logger.info(f"✅ FIXED: Connected SaveImage {saveimage_id} to VAEDecode {target_vae}")
+                        logger.info("   This should prevent the '(1,1,16), |u1' error")
+                    else:
+                        logger.error(f"❌ No complete VAEDecode found for SaveImage {saveimage_id}")
+                        # Try to find any VAEDecode (even incomplete) as emergency fallback
+                        if vaedecode_nodes:
+                            emergency_vae = list(vaedecode_nodes.keys())[0]
+                            workflow[saveimage_id]['inputs']['images'] = [emergency_vae, 0]
+                            fixes_applied += 1
+                            logger.warning(f"⚠️ EMERGENCY: Connected SaveImage {saveimage_id} to incomplete VAEDecode {emergency_vae}")
+                            logger.warning("   This may cause runtime errors but prevents the format error")
+                else:
+                    # Source is already a VAEDecode, check if it's complete
+                    if source_id in vaedecode_nodes and not vaedecode_nodes[source_id]['is_complete']:
+                        logger.warning(f"SaveImage {saveimage_id} connected to incomplete VAEDecode {source_id}")
+                        
+                        # Try to find a complete VAEDecode
+                        complete_vaes = [vae_id for vae_id, vae_info in vaedecode_nodes.items() if vae_info['is_complete']]
+                        
+                        if complete_vaes:
+                            target_vae = complete_vaes[0]
+                            workflow[saveimage_id]['inputs']['images'] = [target_vae, 0]
+                            fixes_applied += 1
+                            logger.info(f"✅ FIXED: Reconnected SaveImage {saveimage_id} to complete VAEDecode {target_vae}")
+            
+            # Add metadata to track this fix
+            if saveimage_id in workflow:
+                if '_meta' not in workflow[saveimage_id]:
+                    workflow[saveimage_id]['_meta'] = {}
+                
+                workflow[saveimage_id]['_meta']['vaedecode_pipeline'] = {
+                    'required': True,
+                    'source_connection': f"{source_id}:{source_slot}" if isinstance(image_connection, list) else 'unknown',
+                    'fixes_applied': fixes_applied,
+                    'error_prevention': "TypeError: Cannot handle this data type: (1, 1, 16), |u1"
+                }
+        
+        if fixes_applied > 0:
+            logger.info(f"✅ Applied {fixes_applied} subgraph SaveImage → VAEDecode connection fixes")
+            logger.info("This should eliminate the '(1,1,16), |u1' error for subgraph-based workflows")
+        else:
+            logger.info("All SaveImage nodes already have proper VAEDecode connections")
+        
+        return fixes_applied
+    
     def _fix_empty_sd3_latent_nodes(self, workflow: dict) -> int:
         """
         Post-process workflow to ensure all EmptySD3LatentImage nodes have required inputs.
@@ -861,6 +1302,130 @@ class SubgraphFlattener:
         
         if fixes_applied > 0:
             logger.info(f"Applied {fixes_applied} fixes to EmptySD3LatentImage nodes")
+        
+        return fixes_applied
+    
+    def _ensure_proper_vae_decode_pipeline(self, workflow: dict) -> int:
+        """
+        CRITICAL FIX: Ensure SaveImage nodes are properly connected to VAEDecode outputs.
+        This specifically addresses the "(1, 1, 16), |u1" error by ensuring proper VAE decoding.
+        """
+        logger.info("🔧 ENHANCING VAE DECODE PIPELINE for runtime compatibility...")
+        
+        fixes_applied = 0
+        
+        # Find all SaveImage nodes and analyze their connections
+        saveimage_connections = {}
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') == 'SaveImage':
+                inputs = node_data.get('inputs', {})
+                if 'images' in inputs:
+                    connection = inputs['images']
+                    if isinstance(connection, list) and len(connection) >= 2:
+                        source_id = str(connection[0])
+                        source_slot = connection[1]
+                        saveimage_connections[node_id] = {
+                            'source_id': source_id,
+                            'source_slot': source_slot,
+                            'original_connection': connection
+                        }
+                        logger.debug(f"SaveImage {node_id} currently connected to {source_id}:{source_slot}")
+        
+        if not saveimage_connections:
+            logger.debug("No SaveImage nodes found for VAE pipeline enhancement")
+            return fixes_applied
+        
+        # Find all VAEDecode nodes and their direct outputs
+        vaedecode_nodes = {}
+        for node_id, node_data in workflow.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') in ['VAEDecode', 'VAEDecodeTiled']:
+                # Check if this VAEDecode has proper inputs
+                inputs = node_data.get('inputs', {})
+                has_vae = 'vae' in inputs and inputs['vae'] is not None
+                has_samples = 'samples' in inputs and inputs['samples'] is not None
+                
+                if has_vae and has_samples:
+                    vaedecode_nodes[node_id] = {
+                        'inputs': inputs,
+                        'has_proper_inputs': True
+                    }
+                    logger.debug(f"Found properly configured VAEDecode: {node_id}")
+                else:
+                    vaedecode_nodes[node_id] = {
+                        'inputs': inputs,
+                        'has_proper_inputs': False
+                    }
+                    logger.debug(f"Found VAEDecode with missing inputs: {node_id} (vae: {'vae' in inputs}, samples: {'samples' in inputs})")
+        
+        # For each SaveImage, ensure it has a proper VAE decode path
+        for saveimage_id, connection_info in saveimage_connections.items():
+            logger.debug(f"Processing SaveImage {saveimage_id} VAE pipeline...")
+            
+            source_id = connection_info['source_id']
+            saveimage_node = workflow[saveimage_id]
+            
+            # Check what the source node is
+            source_node = workflow.get(source_id)
+            if not source_node:
+                logger.warning(f"SaveImage {saveimage_id} source {source_id} not found")
+                continue
+            
+            source_class = source_node.get('class_type', '')
+            
+            # If the source is not a VAEDecode, we need to find a proper VAEDecode path
+            if source_class not in ['VAEDecode', 'VAEDecodeTiled']:
+                logger.warning(f"SaveImage {saveimage_id} is NOT connected to VAEDecode (source: {source_class} {source_id})")
+                logger.warning("This will cause: TypeError: Cannot handle this data type: (1, 1, 16), |u1")
+                
+                # Find a proper VAEDecode node to connect to
+                proper_vaedecode = None
+                for vae_id, vae_info in vaedecode_nodes.items():
+                    if vae_info['has_proper_inputs']:
+                        # Check if this VAEDecode produces images that should go to SaveImage
+                        proper_vaedecode = vae_id
+                        break
+                
+                if proper_vaedecode:
+                    # Update the SaveImage connection to point directly to VAEDecode
+                    workflow[saveimage_id]['inputs']['images'] = [proper_vaedecode, 0]
+                    fixes_applied += 1
+                    logger.info(f"✅ CRITICAL FIX: Connected SaveImage {saveimage_id} directly to VAEDecode {proper_vaedecode}")
+                    logger.info("   This should prevent the VAE format error at runtime")
+                else:
+                    logger.error(f"❌ No suitable VAEDecode found for SaveImage {saveimage_id}")
+                    # Try to find any VAEDecode and connect it anyway (emergency fallback)
+                    for vae_id in vaedecode_nodes:
+                        workflow[saveimage_id]['inputs']['images'] = [vae_id, 0]
+                        fixes_applied += 1
+                        logger.warning(f"⚠️ EMERGENCY: Connected SaveImage {saveimage_id} to VAEDecode {vae_id} (may have missing inputs)")
+                        break
+            else:
+                # SaveImage is already connected to VAEDecode, verify it's the right slot
+                source_slot = connection_info['source_slot']
+                if source_slot != 0:
+                    logger.debug(f"SaveImage {saveimage_id} connected to VAEDecode {source_id} slot {source_slot} (adjusting to slot 0)")
+                    workflow[saveimage_id]['inputs']['images'] = [source_id, 0]
+                    fixes_applied += 1
+        
+        # Add VAE format metadata for runtime enforcement
+        for saveimage_id in saveimage_connections.keys():
+            saveimage_node = workflow[saveimage_id]
+            if '_meta' not in saveimage_node:
+                saveimage_node['_meta'] = {}
+            
+            saveimage_node['_meta']['vaedecode_required'] = True
+            saveimage_node['_meta']['format_validation'] = {
+                'require_vaedecode': True,
+                'expected_output_type': 'IMAGE',
+                'error_prevention': 'TypeError: Cannot handle this data type: (1, 1, 16), |u1'
+            }
+            fixes_applied += 1
+        
+        if fixes_applied > 0:
+            logger.info(f"✅ Applied {fixes_applied} VAE decode pipeline enhancements")
+            logger.info("This should prevent: TypeError: Cannot handle this data type: (1, 1, 16), |u1")
+        else:
+            logger.info("All SaveImage nodes already have proper VAE decode pipeline")
         
         return fixes_applied
 

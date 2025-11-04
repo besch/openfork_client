@@ -718,6 +718,129 @@ class DynamicJobProcessor:
             value = input_definition['default']
         return value
 
+    def _validate_vae_format_before_execution(self):
+        """
+        CRITICAL: Validate VAE format compatibility BEFORE sending to ComfyUI.
+        This prevents the "(1, 1, 16), |u1" error by ensuring SaveImage nodes
+        are properly connected to image data, not latent data.
+        """
+        logging.info("🔍 VAE FORMAT PRE-EXECUTION VALIDATION")
+        logging.info("=" * 60)
+        
+        # Find all SaveImage nodes
+        saveimage_nodes = {}
+        for node_id, node_data in self.workflow_json.items():
+            if isinstance(node_data, dict) and node_data.get('class_type') == 'SaveImage':
+                saveimage_nodes[node_id] = node_data
+        
+        if not saveimage_nodes:
+            logging.info("No SaveImage nodes found - VAE validation passed")
+            logging.info("=" * 60)
+            return
+        
+        logging.info(f"Found {len(saveimage_nodes)} SaveImage node(s) to validate")
+        
+        # Find all VAEDecode and latent-producing nodes
+        vae_decode_nodes = set()
+        latent_producers = set()
+        image_producers = set()
+        
+        for node_id, node_data in self.workflow_json.items():
+            if isinstance(node_data, dict):
+                class_type = node_data.get('class_type', '')
+                
+                if class_type in ['VAEDecode', 'VAEDecodeTiled']:
+                    vae_decode_nodes.add(node_id)
+                elif class_type in ['KSampler', 'KSamplerAdvanced', 'EmptyLatentImage', 'EmptySD3LatentImage',
+                                   'EmptyChromaRadianceLatentImage', 'LatentFromImage', 'LatentFromMask',
+                                   'LatentComposite', 'LatentBlend', 'LatentUpscale', 'LatentRotate',
+                                   'LatentFlip', 'LatentCrop', 'SetLatentNoiseMask']:
+                    latent_producers.add(node_id)
+                elif class_type in ['PreviewImage', 'MaskToImage', 'LoadImage', 'ImageUpscaleWithModel',
+                                   'ImageCompositeMasked', 'ImageBlend', 'ImageInvert', 'ImageQuantize',
+                                   'ImageSharpen', 'ImageBlur', 'Canny', 'ImageColorToMask', 'CLIPVisionEncode']:
+                    image_producers.add(node_id)
+        
+        validation_failed = False
+        
+        # Check each SaveImage node for potential VAE format issues
+        for saveimage_id, saveimage_data in saveimage_nodes.items():
+            inputs = saveimage_data.get('inputs', {})
+            
+            if 'images' not in inputs:
+                logging.warning(f"SaveImage {saveimage_id} has no 'images' input connection")
+                continue
+            
+            image_connection = inputs['images']
+            if not isinstance(image_connection, list) or len(image_connection) < 2:
+                logging.warning(f"SaveImage {saveimage_id} has invalid 'images' connection format")
+                continue
+            
+            source_id = image_connection[0]
+            source_node = self.workflow_json.get(source_id)
+            
+            if not source_node:
+                logging.warning(f"SaveImage {saveimage_id} references non-existent source {source_id}")
+                continue
+            
+            source_class = source_node.get('class_type', '')
+            
+            # CRITICAL: Check for SaveImage connected to latent data (causes (1,1,16) error)
+            if source_id in latent_producers:
+                logging.error("=" * 70)
+                logging.error("🚨 CRITICAL VAE FORMAT ERROR - WILL CAUSE (1, 1, 16), |u1")
+                logging.error("=" * 70)
+                logging.error(f"SaveImage '{saveimage_id}' is connected to latent producer '{source_id}' ({source_class})")
+                logging.error("This DIRECTLY causes: TypeError: Cannot handle this data type: (1, 1, 16), |u1")
+                logging.error("=" * 70)
+                logging.error("SOLUTION REQUIRED:")
+                logging.error(f"1. Current connection: {source_class} (outputs latent data)")
+                logging.error(f"2. Required: Connect SaveImage to a VAEDecode or image-producing node")
+                
+                if vae_decode_nodes:
+                    logging.error(f"3. Available VAEDecode nodes: {list(vae_decode_nodes)}")
+                    logging.error("   Fix: Change connection to use one of these VAEDecode outputs")
+                else:
+                    logging.error("3. No VAEDecode nodes found in workflow")
+                    logging.error("   Fix: Add a VAEDecode node between sampler and SaveImage")
+                
+                if image_producers:
+                    logging.error(f"4. Available image-producing nodes: {list(image_producers)}")
+                    logging.error("   Alternative: Connect to any of these image-producing nodes")
+                
+                logging.error("=" * 70)
+                validation_failed = True
+            
+            elif source_id in image_producers:
+                logging.info(f"✅ SaveImage {saveimage_id} properly connected to image producer {source_id} ({source_class})")
+            
+            elif source_id in vae_decode_nodes:
+                logging.info(f"✅ SaveImage {saveimage_id} properly connected to VAEDecode {source_id} ({source_class})")
+            
+            else:
+                logging.warning(f"? SaveImage {saveimage_id} connected to {source_id} ({source_class}) - verify compatibility")
+        
+        logging.info("=" * 60)
+        
+        if validation_failed:
+            logging.error("❌ VAE FORMAT VALIDATION FAILED - Aborting execution")
+            logging.error("The workflow will fail at ComfyUI with PIL error: (1, 1, 16), |u1")
+            logging.error("Fix the SaveImage connections before retrying")
+            logging.error("=" * 60)
+            
+            # Abort the job
+            self.orchestrator_service.update_job_status(self.job_id, 'failed', completion_metadata={
+                'error_message': 'VAE format validation failed: SaveImage nodes connected to latent data producers. This will cause PIL error: (1, 1, 16), |u1',
+                'validation_type': 'vae_format_compatibility',
+                'saveimage_nodes': list(saveimage_nodes.keys()),
+                'vae_decode_nodes': list(vae_decode_nodes),
+                'latent_producers': list(latent_producers)
+            })
+            raise ValueError("VAE format validation failed: SaveImage must be connected to image data, not latent data")
+        else:
+            logging.info("✅ VAE FORMAT VALIDATION PASSED - Safe to execute")
+            logging.info("=" * 60)
+
     def _clean_ui_nodes(self):
         """Clean and prepare workflow for execution."""
         self.workflow_json = clean_workflow_for_execution(self.workflow_json)
@@ -969,6 +1092,9 @@ class DynamicJobProcessor:
         
         # Inject inputs
         self._inject_dynamic_inputs()
+        
+        # === CRITICAL: VAE FORMAT VALIDATION (BEFORE ComfyUI) ===
+        self._validate_vae_format_before_execution()
         
         # Create payload
         payload = {"prompt": self.workflow_json}
