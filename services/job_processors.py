@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import subprocess
 from typing import Union, Dict
@@ -38,13 +39,55 @@ class BaseJobProcessor(ABC):
         pass
 
     def _get_workflow_payload(self) -> Union[Dict, None]:
-        """Fetches the workflow from the orchestrator and returns it."""
-        workflow_data = self.orchestrator_service.get_workflow(self.workflow_name, self.cache_dir)
-        if not workflow_data:
-            logging.error(f"Failed to get workflow {self.workflow_name} for job {self.job_id}.")
+        """Loads the workflow from the local filesystem."""
+        
+        # Mapping from orchestrator-style name to local filename
+        workflow_filename_map = {
+            'HUNYUAN_VIDEO_FOLEY.json': 'hunyuan-video-foley.api.json',
+            'QWEN_TEXT_TO_IMAGE.json': 'qwen.api.json',
+            'VIBEVOICE_TTS.json': 'vibevoice.api.json',
+            'VIBEVOICE_TTS_MULTI_CLONE.json': 'vibevoice-multi-speaker-clone.api.json',
+            'DIFFRHYTHM_MUSIC_GENERATION.json': 'diffrhythm.api.json',
+            'WAN22_TEXT_TO_VIDEO.json': 'wan2.2-text-to-video.api.json',
+            'WAN22_IMAGE_TO_VIDEO.json': 'wan2.2-image-to-video.api.json',
+            'WAN22_LIGHTNING_TEXT_TO_VIDEO.json': 'wan2.2-text-to-video-lightning.api.json',
+            'WAN22_LIGHTNING_IMAGE_TO_VIDEO.json': 'wan2.2-image-to-video-lightning.api.json',
+            'FLUX_TEXT_TO_IMAGE.json': 'flux-text-to-image.api.json'
+        }
+        
+        local_filename = workflow_filename_map.get(self.workflow_name)
+        
+        if not local_filename:
+            logging.error(f"No local file mapping found for workflow: {self.workflow_name}. Falling back to orchestrator.")
+            workflow_data = self.orchestrator_service.get_workflow(self.workflow_name, self.cache_dir)
+            if not workflow_data:
+                logging.error(f"Failed to get workflow {self.workflow_name} from orchestrator for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return None
+            return workflow_data
+
+        # Construct the full path to the workflow file.
+        # Assumes self.root_dir is the 'client' directory.
+        workflow_path = os.path.join(self.root_dir, 'workflows', local_filename)
+        
+        logging.info(f"Loading local workflow for job {self.job_id} from: {workflow_path}")
+
+        try:
+            with open(workflow_path, 'r') as f:
+                workflow_data = json.load(f)
+            return workflow_data
+        except FileNotFoundError:
+            logging.error(f"Local workflow file not found: {workflow_path}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return None
-        return workflow_data
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from workflow file: {workflow_path}")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return None
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while loading local workflow {self.workflow_name}: {e}")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return None
 
     def _check_interruption(self, outputs):
         if outputs == "interrupted":

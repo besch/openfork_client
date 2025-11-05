@@ -3,6 +3,7 @@ import json
 import base64
 import copy
 import logging
+import random
 from datetime import datetime
 from typing import Union, Dict
 
@@ -54,6 +55,7 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
 def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, start_image_filename: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
+    Also randomizes seed for image-to-video generation.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -73,11 +75,17 @@ def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, 
                 datestr = datetime.now().strftime("%Y-%m-%d")
                 node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
 
+    # Randomize seed for KSamplerAdvanced nodes (typically node 57 for high noise)
+    if '57' in api_graph and 'inputs' in api_graph['57']:
+        api_graph['57']['inputs']['noise_seed'] = random.randint(0, 2**63 - 1)
+        logging.info(f"Randomized seed for image-to-video node 57: {api_graph['57']['inputs']['noise_seed']}")
+
     return api_graph
 
 def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
+    Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -92,6 +100,14 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: s
     else:
         logging.warning("Could not find negative prompt node 7 in text-to-video workflow")
 
+    # Randomize seed for node 57 (high noise sampler)
+    if '57' in api_graph and 'inputs' in api_graph['57']:
+        new_seed = random.randint(0, 2**63 - 1)
+        api_graph['57']['inputs']['noise_seed'] = new_seed
+        logging.info(f"Randomized seed for text-to-video node 57: {new_seed}")
+    else:
+        logging.warning("Could not find sampler node 57 to randomize seed")
+
     # Replace date token in filename_prefix for VHS_VideoCombine node
     for node in api_graph.values():
         if node.get("class_type") == "VHS_VideoCombine":
@@ -105,6 +121,7 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: s
 def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for Qwen.
+    Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -121,11 +138,18 @@ def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negat
     else:
         logging.warning("Could not find negative prompt node 7 in Qwen workflow")
 
+    # Randomize seed for node 3 (KSampler)
+    if '3' in api_graph and 'inputs' in api_graph['3']:
+        new_seed = random.randint(0, 2**63 - 1)
+        api_graph['3']['inputs']['seed'] = new_seed
+        logging.info(f"Randomized seed for Qwen node 3: {new_seed}")
+
     return api_graph
 
 def inject_prompt_into_flux_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for FLUX.
+    Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -142,11 +166,18 @@ def inject_prompt_into_flux_workflow(workflow_api_data: Dict, prompt: str, negat
     else:
         logging.warning("Could not find negative prompt node 6 in FLUX workflow")
 
+    # Randomize seed for node 3 (KSampler)
+    if '3' in api_graph and 'inputs' in api_graph['3']:
+        new_seed = random.randint(0, 2**63 - 1)
+        api_graph['3']['inputs']['seed'] = new_seed
+        logging.info(f"Randomized seed for FLUX node 3: {new_seed}")
+
     return api_graph
 
 def inject_video_and_prompt_into_foley_workflow(workflow_api_data: Dict, video_filename: str, prompt: str, negative_prompt: str):
     """
     Loads the Foley ComfyUI API-formatted workflow, injects video filename and prompts.
+    Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -156,6 +187,10 @@ def inject_video_and_prompt_into_foley_workflow(workflow_api_data: Dict, video_f
             node["inputs"]["video"] = video_filename
             node["inputs"]["text_prompt"] = prompt
             node["inputs"]["negative_prompt"] = negative_prompt
+            # Randomize seed
+            new_seed = random.randint(0, 2**31 - 1)
+            node["inputs"]["seed"] = new_seed
+            logging.info(f"Randomized seed for Foley workflow: {new_seed}")
 
     return api_graph
 
@@ -163,8 +198,12 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
     """
     Loads the VibeVoice ComfyUI API-formatted workflow, injects the prompt
     and ensures all required inputs for VibeVoiceSingleSpeakerNode are present.
+    Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Generate random seed
+    new_seed = random.randint(0, 2**31 - 1)
 
     # Find the VibeVoice node and explicitly set its inputs
     for node in api_graph.values():
@@ -176,13 +215,14 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
                 "attention_type": "auto",
                 "free_memory_after_generate": True,
                 "diffusion_steps": 10,
-                "seed": 0,
+                "seed": new_seed,
                 "cfg_scale": 3.5,
                 "use_sampling": False,
                 "temperature": 0.8,
                 "top_p": 0.95,
                 "quantize_llm": "full precision"
             }
+            logging.info(f"Randomized seed for VibeVoice: {new_seed}")
             break  # Assuming only one such node
 
     return api_graph
@@ -190,29 +230,41 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
 def inject_prompt_into_diffrhythm_workflow(workflow_api_data: Dict, prompt: str):
     """
     Loads the DiffRhythm ComfyUI API-formatted workflow, injects the prompt.
+    Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
-    # Inject prompt
+    # Generate random seed
+    new_seed = random.randint(0, 2**31 - 1)
+
+    # Inject prompt and seed
     for node in api_graph.values():
         if node["class_type"] == "DiffRhythmRun":
             node["inputs"]["lyrics_or_edit_lyrics"] = prompt
             node["inputs"]["edit"] = False
+            node["inputs"]["seed"] = new_seed
+            logging.info(f"Randomized seed for DiffRhythm: {new_seed}")
 
     return api_graph
 
 def inject_script_and_clones_into_vibevoice_workflow(workflow_api_data: Dict, script: str, clone_paths: list[str]):
     """
     Loads the VibeVoice ComfyUI API-formatted workflow, injects the script and clone paths.
+    Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Generate random seed
+    new_seed = random.randint(0, 2**31 - 1)
 
     # Inject script and clone paths
     for node in api_graph.values():
         if node["class_type"] == "VibeVoiceMultipleSpeakers":
             node["inputs"]["text"] = script
+            node["inputs"]["seed"] = new_seed
             for i, clone_path in enumerate(clone_paths):
                 node["inputs"][f"voice_{i+1}_clone_path"] = clone_path
+            logging.info(f"Randomized seed for VibeVoice multi-clone: {new_seed}")
 
     return api_graph
 
