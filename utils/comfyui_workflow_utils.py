@@ -78,7 +78,6 @@ def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, 
     # Randomize seed for KSamplerAdvanced nodes (typically node 57 for high noise)
     if '57' in api_graph and 'inputs' in api_graph['57']:
         api_graph['57']['inputs']['noise_seed'] = random.randint(0, 2**63 - 1)
-        logging.info(f"Randomized seed for image-to-video node 57: {api_graph['57']['inputs']['noise_seed']}")
 
     return api_graph
 
@@ -104,7 +103,6 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: s
     if '57' in api_graph and 'inputs' in api_graph['57']:
         new_seed = random.randint(0, 2**63 - 1)
         api_graph['57']['inputs']['noise_seed'] = new_seed
-        logging.info(f"Randomized seed for text-to-video node 57: {new_seed}")
     else:
         logging.warning("Could not find sampler node 57 to randomize seed")
 
@@ -142,7 +140,6 @@ def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negat
     if '3' in api_graph and 'inputs' in api_graph['3']:
         new_seed = random.randint(0, 2**63 - 1)
         api_graph['3']['inputs']['seed'] = new_seed
-        logging.info(f"Randomized seed for Qwen node 3: {new_seed}")
 
     return api_graph
 
@@ -170,7 +167,6 @@ def inject_prompt_into_flux_workflow(workflow_api_data: Dict, prompt: str, negat
     if '3' in api_graph and 'inputs' in api_graph['3']:
         new_seed = random.randint(0, 2**63 - 1)
         api_graph['3']['inputs']['seed'] = new_seed
-        logging.info(f"Randomized seed for FLUX node 3: {new_seed}")
 
     return api_graph
 
@@ -190,7 +186,6 @@ def inject_video_and_prompt_into_foley_workflow(workflow_api_data: Dict, video_f
             # Randomize seed
             new_seed = random.randint(0, 2**31 - 1)
             node["inputs"]["seed"] = new_seed
-            logging.info(f"Randomized seed for Foley workflow: {new_seed}")
 
     return api_graph
 
@@ -222,28 +217,32 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
                 "top_p": 0.95,
                 "quantize_llm": "full precision"
             }
-            logging.info(f"Randomized seed for VibeVoice: {new_seed}")
             break  # Assuming only one such node
 
     return api_graph
 
-def inject_prompt_into_diffrhythm_workflow(workflow_api_data: Dict, prompt: str):
+def inject_prompt_into_diffrhythm_workflow(
+    workflow_api_data: Dict, 
+    lyrics_or_edit_lyrics: str,
+    style_prompt: str
+):
     """
-    Loads the DiffRhythm ComfyUI API-formatted workflow, injects the prompt.
-    Also randomizes seed for varied outputs.
+    Loads the DiffRhythm ComfyUI API-formatted workflow.
+    
+    Args:
+        lyrics_or_edit_lyrics: Timestamped lyrics for vocals, or "" for instrumental
+        style_prompt: Musical style description (genre, tempo, instruments, vocal type)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
-
-    # Generate random seed
     new_seed = random.randint(0, 2**31 - 1)
 
-    # Inject prompt and seed
     for node in api_graph.values():
         if node["class_type"] == "DiffRhythmRun":
-            node["inputs"]["lyrics_or_edit_lyrics"] = prompt
+            node["inputs"]["lyrics_or_edit_lyrics"] = lyrics_or_edit_lyrics
+            node["inputs"]["style_prompt"] = style_prompt
             node["inputs"]["edit"] = False
             node["inputs"]["seed"] = new_seed
-            logging.info(f"Randomized seed for DiffRhythm: {new_seed}")
+            logging.info(f"DiffRhythm configured - Style: {style_prompt}, Has lyrics: {bool(lyrics_or_edit_lyrics)}, Seed: {new_seed}")
 
     return api_graph
 
@@ -264,7 +263,6 @@ def inject_script_and_clones_into_vibevoice_workflow(workflow_api_data: Dict, sc
             node["inputs"]["seed"] = new_seed
             for i, clone_path in enumerate(clone_paths):
                 node["inputs"][f"voice_{i+1}_clone_path"] = clone_path
-            logging.info(f"Randomized seed for VibeVoice multi-clone: {new_seed}")
 
     return api_graph
 
