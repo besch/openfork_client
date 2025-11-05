@@ -199,7 +199,8 @@ class FoleyJobProcessor(BaseJobProcessor):
             audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
             if audio_storage_path:
                 duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
+                completion_metadata = self.job.get('completion_metadata') or {}
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"Foley job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -276,7 +277,8 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
             audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
             if audio_storage_path:
                 duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
+                completion_metadata = self.job.get('completion_metadata') or {}
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"VibeVoice job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -330,7 +332,8 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
             audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
             if audio_storage_path:
                 duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
+                completion_metadata = self.job.get('completion_metadata') or {}
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"VibeVoice multi-clone job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -346,7 +349,23 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
 
-        wf_ready = inject_prompt_into_diffrhythm_workflow(workflow_data, self.positive_prompt)
+        # Parse enhanced prompt structure
+        lyrics_or_edit_lyrics = ""
+        style_prompt = self.positive_prompt
+        
+        try:
+            if self.positive_prompt:
+                parsed_prompt = json.loads(self.positive_prompt)
+                lyrics_or_edit_lyrics = parsed_prompt.get('lyrics_or_edit_lyrics', '')
+                style_prompt = parsed_prompt.get('style_prompt', self.positive_prompt)
+                logging.info(f"Parsed enhanced prompt - Lyrics: {len(lyrics_or_edit_lyrics)} chars, Style: {len(style_prompt)} chars")
+        except json.JSONDecodeError:
+            # Fallback to old behavior for backward compatibility
+            logging.warning(f"Failed to parse enhanced prompt structure for job {self.job_id}, using fallback")
+            lyrics_or_edit_lyrics = ""
+            style_prompt = self.positive_prompt
+
+        wf_ready = inject_prompt_into_diffrhythm_workflow(workflow_data, lyrics_or_edit_lyrics, style_prompt)
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
@@ -369,10 +388,19 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
             audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
             if audio_storage_path:
                 duration = get_audio_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=self.job.get('completion_metadata'))
+                completion_metadata = self.job.get('completion_metadata') or {}
+                completion_metadata.update({
+                    'lyrics_length': len(lyrics_or_edit_lyrics),
+                    'style_prompt_length': len(style_prompt),
+                    'has_lyrics': bool(lyrics_or_edit_lyrics.strip())
+                })
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"DiffRhythm job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        except Exception as e:
+            logging.error(f"Error processing DiffRhythm job {self.job_id}: {e}", exc_info=True)
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
