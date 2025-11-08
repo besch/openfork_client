@@ -104,7 +104,7 @@ class OrchestratorService:
         
         return response
 
-    def resolve_targets(self, targets: list[str]) -> list[str]:
+    def resolve_targets(self, targets: list[str], target_type: str = 'project') -> list[str]:
         """Resolves a list of target strings to UUIDs."""
         if not targets:
             return []
@@ -113,7 +113,7 @@ class OrchestratorService:
             response = self._make_request(
                 'post',
                 f"{self.orchestrator_url}/api/dgn/resolve-targets",
-                json={"targets": targets}
+                json={"targets": targets, "type": target_type}
             )
             response.raise_for_status()
             data = response.json()
@@ -150,7 +150,7 @@ class OrchestratorService:
                     return None
                 params["userId"] = user_id
             
-            if accept_policy == 'project' and allowed_ids:
+            if (accept_policy == 'project' or accept_policy == 'users') and allowed_ids:
                 params["allowedIds"] = ",".join(allowed_ids)
 
             response = self._make_request('get', base_url, params=params)

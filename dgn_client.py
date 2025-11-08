@@ -35,9 +35,10 @@ class DGNClient:
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
 
-        if self.accept_policy == 'project' and self.allowed_targets:
-            logging.info(f"Resolving targets: {self.allowed_targets}")
-            self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets)
+        if (self.accept_policy == 'project' or self.accept_policy == 'users') and self.allowed_targets:
+            target_type = 'project' if self.accept_policy == 'project' else 'user'
+            logging.info(f"Resolving {target_type} targets: {self.allowed_targets}")
+            self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets, target_type)
             logging.info(f"Resolved targets to IDs: {self.allowed_ids}")
 
     def load_config(self):
