@@ -35,7 +35,11 @@ class DGNClient:
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
 
-        if (self.accept_policy == 'project' or self.accept_policy == 'users') and self.allowed_targets:
+        if self.accept_policy == 'mine':
+            user_id = self.orchestrator_service._get_user_id_from_token()
+            if user_id:
+                self.allowed_ids.append(user_id)
+        elif (self.accept_policy == 'project' or self.accept_policy == 'users') and self.allowed_targets:
             target_type = 'project' if self.accept_policy == 'project' else 'user'
             logging.info(f"Resolving {target_type} targets: {self.allowed_targets}")
             self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets, target_type)
