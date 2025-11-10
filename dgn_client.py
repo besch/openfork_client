@@ -14,7 +14,8 @@ from services.job_processors import (
     ImageToVideoJobProcessor,
     DiffRhythmJobProcessor,
     TextToVideoLightningJobProcessor,
-    ImageToVideoLightningJobProcessor
+    ImageToVideoLightningJobProcessor,
+    VideoUpscalerJobProcessor
 )
 
 
@@ -62,6 +63,7 @@ class DGNClient:
             wt.get('WAN22_IMAGE_TO_VIDEO'): ImageToVideoJobProcessor,
             wt.get('WAN22_LIGHTNING_TEXT_TO_VIDEO'): TextToVideoLightningJobProcessor,
             wt.get('WAN22_LIGHTNING_IMAGE_TO_VIDEO'): ImageToVideoLightningJobProcessor,
+            wt.get('ESRGAN_UPSCALER'): VideoUpscalerJobProcessor,
         }
         # Filter out None keys in case a workflow type is missing from config
         self.processor_map = {k: v for k, v in self.processor_map.items() if k}

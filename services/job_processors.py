@@ -1,12 +1,11 @@
 import os
 import json
 import logging
-import subprocess
 from typing import Union, Dict
 from abc import ABC, abstractmethod
 from config import DEV_MODE
 from services.docker_manager import docker_manager
-from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration
+from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions
 from utils.comfyui_workflow_utils import (
     inject_prompt_and_image_into_workflow,
     inject_video_and_prompt_into_foley_workflow,
@@ -15,7 +14,8 @@ from utils.comfyui_workflow_utils import (
     inject_prompt_into_vibevoice_workflow,
     inject_script_and_clones_into_vibevoice_workflow,
     inject_prompt_into_diffrhythm_workflow,
-    materialize_start_image
+    materialize_start_image,
+    inject_video_into_upscaler_workflow
 )
 
 class BaseJobProcessor(ABC):
@@ -52,7 +52,8 @@ class BaseJobProcessor(ABC):
             'WAN22_IMAGE_TO_VIDEO.json': 'wan2.2-image-to-video.api.json',
             'WAN22_LIGHTNING_TEXT_TO_VIDEO.json': 'wan2.2-text-to-video-lightning.api.json',
             'WAN22_LIGHTNING_IMAGE_TO_VIDEO.json': 'wan2.2-image-to-video-lightning.api.json',
-            'FLUX_TEXT_TO_IMAGE.json': 'flux-text-to-image.api.json'
+            'FLUX_TEXT_TO_IMAGE.json': 'flux-text-to-image.api.json',
+            'REAL_ESRGAN_VIDEO_UPSCALE.json': 'real-esrgan-video-upscale.api.json'
         }
         
         local_filename = workflow_filename_map.get(self.workflow_name)
@@ -200,7 +201,7 @@ class FoleyJobProcessor(BaseJobProcessor):
             if audio_storage_path:
                 duration = get_audio_duration(temp_host_path)
                 completion_metadata = self.job.get('completion_metadata') or {}
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"Foley job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -238,7 +239,7 @@ class TextToImageJobProcessor(BaseJobProcessor):
         try:
             image_storage_path = self.orchestrator_service.upload_image_output(temp_host_path, self.job_id)
             if image_storage_path:
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=image_storage_path, thumbnail_path=image_storage_path, prompt=self.positive_prompt)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=image_storage_path, thumbnail_storage_path=image_storage_path, prompt=self.positive_prompt)
             else:
                 logging.error(f"Image upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -278,7 +279,7 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
             if audio_storage_path:
                 duration = get_audio_duration(temp_host_path)
                 completion_metadata = self.job.get('completion_metadata') or {}
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"VibeVoice job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -333,7 +334,7 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
             if audio_storage_path:
                 duration = get_audio_duration(temp_host_path)
                 completion_metadata = self.job.get('completion_metadata') or {}
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"VibeVoice multi-clone job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -394,7 +395,7 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
                     'style_prompt_length': len(style_prompt),
                     'has_lyrics': bool(lyrics_or_edit_lyrics.strip())
                 })
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
                 logging.error(f"DiffRhythm job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -447,7 +448,7 @@ class TextToVideoJobProcessor(BaseJobProcessor):
                     os.remove(thumbnail_local_path)
                 
                 duration = get_video_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
             else:
                 logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -517,9 +518,129 @@ class ImageToVideoJobProcessor(BaseJobProcessor):
                     os.remove(thumbnail_local_path)
                 
                 duration = get_video_duration(temp_host_path)
-                self.orchestrator_service.update_job_status(self.job_id, 'completed', output_path=video_storage_path, thumbnail_path=thumbnail_storage_path, duration_seconds=duration)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
             else:
                 logging.error(f"Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)
+            
+class VideoUpscalerJobProcessor(BaseJobProcessor):
+    workflow_name = 'REAL_ESRGAN_VIDEO_UPSCALE.json'
+
+    def process(self):
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        input_video_url = self.job.get('input_video_url')
+        if not input_video_url:
+            logging.error(f"Video upscaler job {self.job_id} missing 'input_video_url'.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
+        if not video_path:
+            logging.error(f"Failed to download input video for upscaler job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+        
+        video_filename = os.path.basename(video_path)
+
+        # Copy video to container input directory
+        try:
+            container_input_path = f"/opt/ComfyUI/input/{video_filename}"
+            docker_manager.copy_file_to_container(
+                service_type=self.client.active_service_type,
+                source_on_host=video_path,
+                dest_in_container=container_input_path
+            )
+            logging.info(f"Copied video to container: {container_input_path}")
+        except Exception as e:
+            logging.error(f"Failed to copy video to container for job {self.job_id}: {e}", exc_info=True)
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+        
+        # --- New Upscale Logic ---
+        try:
+            original_width, original_height = get_video_dimensions(video_path)
+            logging.info(f"Original video dimensions: {original_width}x{original_height}")
+        except Exception as e:
+            logging.warning(f"Could not get video dimensions for {video_path}: {e}. Falling back to default.")
+            original_width, original_height = 1920, 1080
+
+        job_inputs = self.job.get('inputs', {})
+        upscale_model = job_inputs.get('upscale_model', 'RealESRGAN_x4plus.pth')
+        frame_rate = job_inputs.get('frame_rate', 30)
+        upscale_factor = job_inputs.get('upscale_factor')
+        target_width = job_inputs.get('target_width')
+        target_height = job_inputs.get('target_height')
+
+        if target_width and target_height:
+            final_width = int(target_width)
+            final_height = int(target_height)
+            logging.info(f"Using explicit target dimensions: {final_width}x{final_height}")
+        elif upscale_factor:
+            final_width = int(original_width * float(upscale_factor))
+            final_height = int(original_height * float(upscale_factor))
+            logging.info(f"Using upscale factor {upscale_factor} to get dimensions: {final_width}x{final_height}")
+        else:
+            final_width = 1920
+            final_height = 1080
+            logging.info(f"No factor or dimensions provided. Falling back to default: {final_width}x{final_height}")
+        
+        wf_ready = inject_video_into_upscaler_workflow(
+            workflow_data, 
+            video_filename, 
+            upscale_model,
+            frame_rate,
+            final_width,
+            final_height
+        )
+        
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        video_info = find_video_in_output(outputs)
+        if not video_info:
+            logging.error(f"Upscaler workflow for job {self.job_id} completed, but no video file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_filename, subfolder = video_info
+        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+            if video_storage_path:
+                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                thumbnail_storage_path = None
+                
+                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                    os.remove(thumbnail_local_path)
+                
+                duration = get_video_duration(temp_host_path)
+                completion_metadata = self.job.get('completion_metadata') or {}
+                completion_metadata['upscale_model'] = upscale_model
+                
+                self.orchestrator_service.update_job_status(
+                    self.job_id, 
+                    'completed', 
+                    storage_path=video_storage_path, 
+                    thumbnail_storage_path=thumbnail_storage_path, 
+                    duration_seconds=duration,
+                    completion_metadata=completion_metadata
+                )
+            else:
+                logging.error(f"Video upscaler job {self.job_id} completed, but video upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")

@@ -285,14 +285,14 @@ class OrchestratorService:
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
 
-    def update_job_status(self, job_id: str, status: str, output_path: Union[str, None] = None, thumbnail_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None):
+    def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None):
         """Update the status of a job."""
         try:
             payload = {"status": status}
-            if output_path:
-                payload["storage_path"] = output_path
-            if thumbnail_path:
-                payload["thumbnail_storage_path"] = thumbnail_path
+            if storage_path:
+                payload["storage_path"] = storage_path
+            if thumbnail_storage_path:
+                payload["thumbnail_storage_path"] = thumbnail_storage_path
             if duration_seconds:
                 payload["duration_seconds"] = duration_seconds
             if completion_metadata:

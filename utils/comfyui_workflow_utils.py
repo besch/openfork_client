@@ -405,3 +405,55 @@ def verify_workflow_nodes(workflow: dict) -> bool:
             logging.error(f"Security Alert: Workflow contains a non-approved node: {node_type}")
             ok = False
     return ok
+
+def inject_video_into_upscaler_workflow(
+    workflow_api_data: Dict, 
+    video_filename: str,
+    upscale_model: str = "RealESRGAN_x4plus.pth",
+    frame_rate: int = 30,
+    target_width: int = 1920,
+    target_height: int = 1080
+):
+    """
+    Injects video filename and upscale settings into Real-ESRGAN workflow.
+    
+    Args:
+        workflow_api_data: The workflow JSON structure
+        video_filename: Name of the video file in input directory
+        upscale_model: Which Real-ESRGAN model to use
+        frame_rate: Output video frame rate
+        target_width: The final width of the video
+        target_height: The final height of the video
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Node 1: VHS_LoadVideo - inject video filename
+    if '1' in api_graph and api_graph['1']['class_type'] == 'VHS_LoadVideo':
+        api_graph['1']['inputs']['video'] = video_filename
+        logging.info(f"Injected video filename: {video_filename}")
+    
+    # Node 2: UpscaleModelLoader - inject model selection
+    if '2' in api_graph and api_graph['2']['class_type'] == 'UpscaleModelLoader':
+        api_graph['2']['inputs']['model_name'] = upscale_model
+        logging.info(f"Injected upscale model: {upscale_model}")
+
+    # Node 6: ImageScale - inject dimensions
+    if '6' in api_graph and api_graph['6']['class_type'] == 'ImageScale':
+        api_graph['6']['inputs']['width'] = target_width
+        api_graph['6']['inputs']['height'] = target_height
+        logging.info(f"Injected target dimensions: {target_width}x{target_height}")
+    
+    # Node 4: VHS_VideoCombine - inject frame rate and filename
+    if '4' in api_graph and api_graph['4']['class_type'] == 'VHS_VideoCombine':
+        api_graph['4']['inputs']['frame_rate'] = frame_rate
+        # Add timestamp to filename
+        datestr = datetime.now().strftime("%Y-%m-%d")
+        prefix = api_graph['4']['inputs'].get('filename_prefix', 'upscaled_video')
+        if '%date:yyyy-MM-dd%' in prefix:
+            prefix = prefix.replace('%date:yyyy-MM-dd%', datestr)
+        else:
+            prefix = f"{prefix}_{datestr}"
+        api_graph['4']['inputs']['filename_prefix'] = prefix
+        logging.info(f"Configured video output: {prefix} at {frame_rate}fps")
+
+    return api_graph

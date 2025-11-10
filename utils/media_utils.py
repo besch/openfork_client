@@ -120,3 +120,48 @@ def generate_placeholder_video(output_path: str, duration: int = 5) -> bool:
         if isinstance(e, subprocess.CalledProcessError):
             logging.error(f"ffmpeg stderr: {e.stderr.decode()}")
         return False
+
+
+def get_video_dimensions(video_path: str) -> tuple:
+    """
+    Get the width and height of a video file.
+    
+    Args:
+        video_path: Path to the video file
+        
+    Returns:
+        Tuple of (width, height)
+        
+    Raises:
+        RuntimeError if dimensions cannot be determined
+    """
+    import subprocess
+    import json
+    
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height',
+            '-of', 'json',
+            video_path
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(result.stdout)
+        
+        if 'streams' in data and len(data['streams']) > 0:
+            stream = data['streams'][0]
+            width = stream.get('width')
+            height = stream.get('height')
+            
+            if width and height:
+                return (width, height)
+        
+        raise RuntimeError("Could not extract dimensions from ffprobe output")
+        
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"ffprobe failed: {e.stderr}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to get video dimensions: {e}")

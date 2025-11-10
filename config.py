@@ -40,4 +40,5 @@ DOCKER_IMAGE_MAP = {
     "VIBEVOICE": f"{DOCKER_HUB_USERNAME}/openfork-vibevoice-rtx4060:latest",
     "DIFFRHYTHM": f"{DOCKER_HUB_USERNAME}/openfork-diffrhythm-rtx4060:latest",
     "WAN22_LIGHTNING": f"{DOCKER_HUB_USERNAME}/openfork-wan22-lightning-rtx4060:latest",
+    "ESRGAN_UPSCALER": f"{DOCKER_HUB_USERNAME}/openfork-realesrgan-upscaler-rtx4060:latest",
 }

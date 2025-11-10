@@ -141,7 +141,13 @@ class ComfyUIClient:
             try:
                 out = ws.recv()
                 q.put(out)
+            except websocket.WebSocketTimeoutException:
+                # This is expected if no message is received within the timeout.
+                # We just continue waiting for the next message.
+                logging.debug("WebSocket recv timed out, continuing to listen.")
+                continue
             except Exception as e:
+                logging.error(f"Exception in WebSocket reader thread: {e}")
                 q.put(e) # Signal error to the main thread
                 break
 
@@ -154,7 +160,13 @@ class ComfyUIClient:
         client_id = str(uuid.uuid4())
         ws = websocket.WebSocket()
         try:
-            ws.connect(self.comfyui_ws_url.format(client_id), timeout=600)
+            ws.connect(
+                self.comfyui_ws_url.format(client_id),
+                timeout=600,
+                ping_interval=20,
+                ping_timeout=10
+            )
+            ws.settimeout(60) # Set a 60-second timeout for recv operations
             logging.info(f"Successfully connected to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}")
         except Exception as e:
             logging.error(f"Failed to connect to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}: {e}")
@@ -171,16 +183,27 @@ class ComfyUIClient:
         executed_nodes = set()
 
         job_cancellation_event = threading.Event()
-        subscription = None
+        channel = None
         if self.supabase_client:
             try:
                 def on_update(payload):
                     if payload.get('new', {}).get('status') == 'cancelled':
                         logging.warning(f"Cancellation requested for job {job_id} via real-time. Interrupting workflow.")
                         job_cancellation_event.set()
+                
+                def on_subscription_change(status, error=None):
+                    if status == "SUBSCRIBED":
+                        logging.info(f"Successfully subscribed to real-time updates for job {job_id}.")
+                    else:
+                        logging.warning(f"Real-time subscription for job {job_id} status: {status} {error or ''}")
 
-                logging.info(f"Subscribing to real-time updates for job {job_id}")
-                subscription = self.supabase_client.table("dgn_jobs").on("UPDATE", on_update).filter("id", "eq", job_id).subscribe()
+                channel_name = f"dgn_job_{job_id}"
+                channel = self.supabase_client.channel(channel_name)
+                channel.on(
+                    "postgres_changes",
+                    {"event": "UPDATE", "schema": "public", "table": "dgn_jobs", "filter": f"id=eq.{job_id}"},
+                    on_update
+                ).subscribe(on_subscription_change)
             except Exception as e:
                 logging.error(f"Failed to subscribe to real-time job updates: {e}")
 
@@ -259,9 +282,9 @@ class ComfyUIClient:
                     else:
                         logging.info(f"Received WebSocket message of type: {mtype}. Data keys: {data.keys()}")
         finally:
-            if subscription and self.supabase_client:
+            if channel and self.supabase_client:
                 try:
-                    self.supabase_client.realtime.remove_channel(subscription)
+                    self.supabase_client.realtime.remove_channel(channel)
                     logging.info(f"Unsubscribed from real-time updates for job {job_id}")
                 except Exception as e:
                     logging.error(f"Error unsubscribing from real-time updates: {e}")
