@@ -33,12 +33,71 @@ ORCHESTRATOR_URL_DEV = os.getenv("ORCHESTRATOR_URL_DEV", "http://localhost:3000"
 # Maps a service type to a full Docker Hub image name.
 DOCKER_HUB_USERNAME = "beschiak"
 
+WORKFLOW_CONFIG = {
+    "WAN22_TEXT_TO_VIDEO": {
+        "service_name": "wan22",
+        "workflow_file": "wan22-text-to-video.api.json",
+        "docker_image_name": "openfork-wan22-rtx4060",
+        "processor": "WAN22TextToVideoJobProcessor"
+    },
+    "WAN22_IMAGE_TO_VIDEO": {
+        "service_name": "wan22",
+        "workflow_file": "wan22-image-to-video.api.json",
+        "docker_image_name": "openfork-wan22-rtx4060",
+        "processor": "WAN22ImageToVideoJobProcessor"
+    },
+    "WAN22_LIGHTNING_TEXT_TO_VIDEO": {
+        "service_name": "wan22-lightning",
+        "workflow_file": "wan22-text-to-video-lightning.api.json",
+        "docker_image_name": "openfork-wan22-lightning-rtx4060",
+        "processor": "TextToVideoLightningJobProcessor"
+    },
+    "WAN22_LIGHTNING_IMAGE_TO_VIDEO": {
+        "service_name": "wan22-lightning",
+        "workflow_file": "wan22-image-to-video-lightning.api.json",
+        "docker_image_name": "openfork-wan22-lightning-rtx4060",
+        "processor": "ImageToVideoLightningJobProcessor"
+    },
+    "HUNYUAN_VIDEO_FOLEY": {
+        "service_name": "foley",
+        "workflow_file": "hunyuan-video-foley.api.json",
+        "docker_image_name": "openfork-foley-rtx4060",
+        "processor": "FoleyJobProcessor"
+    },
+    "QWEN_TEXT_TO_IMAGE": {
+        "service_name": "qwen",
+        "workflow_file": "qwen.api.json",
+        "docker_image_name": "openfork-qwen-rtx4060",
+        "processor": "TextToImageJobProcessor"
+    },
+    "VIBEVOICE_TTS": {
+        "service_name": "vibevoice",
+        "workflow_file": "vibevoice.api.json",
+        "docker_image_name": "openfork-vibevoice-rtx4060",
+        "processor": "VibeVoiceJobProcessor"
+    },
+    "VIBEVOICE_TTS_MULTI_CLONE": {
+        "service_name": "vibevoice",
+        "workflow_file": "vibevoice-multi-speaker-clone.api.json",
+        "docker_image_name": "openfork-vibevoice-rtx4060",
+        "processor": "VibeVoiceMultiCloneJobProcessor"
+    },
+    "DIFFRHYTHM_MUSIC_GENERATION": {
+        "service_name": "diffrhythm",
+        "workflow_file": "diffrhythm.api.json",
+        "docker_image_name": "openfork-diffrhythm-rtx4060",
+        "processor": "DiffRhythmJobProcessor"
+    },
+    "ESRGAN_UPSCALER": {
+        "service_name": "esrgan-upscaler",
+        "workflow_file": "esrgan-video-upscale.api.json",
+        "docker_image_name": "openfork-realesrgan-upscaler-rtx4060",
+        "processor": "VideoUpscalerJobProcessor"
+    }
+}
+
+# Dynamically create DOCKER_IMAGE_MAP from WORKFLOW_CONFIG
 DOCKER_IMAGE_MAP = {
-    "WAN22": f"{DOCKER_HUB_USERNAME}/openfork-wan22-rtx4060:latest",
-    "FOLEY": f"{DOCKER_HUB_USERNAME}/openfork-foley-rtx4060:latest",
-    "QWEN": f"{DOCKER_HUB_USERNAME}/openfork-qwen-rtx4060:latest",
-    "VIBEVOICE": f"{DOCKER_HUB_USERNAME}/openfork-vibevoice-rtx4060:latest",
-    "DIFFRHYTHM": f"{DOCKER_HUB_USERNAME}/openfork-diffrhythm-rtx4060:latest",
-    "WAN22_LIGHTNING": f"{DOCKER_HUB_USERNAME}/openfork-wan22-lightning-rtx4060:latest",
-    "ESRGAN_UPSCALER": f"{DOCKER_HUB_USERNAME}/openfork-realesrgan-upscaler-rtx4060:latest",
+    config["service_name"]: f"{DOCKER_HUB_USERNAME}/{config['docker_image_name']}:latest"
+    for config in WORKFLOW_CONFIG.values()
 }

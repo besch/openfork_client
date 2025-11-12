@@ -2,21 +2,11 @@ import os
 import logging
 import threading
 
+from config import WORKFLOW_CONFIG, DOCKER_IMAGE_MAP
 from services.orchestrator_service import OrchestratorService
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
-from services.job_processors import (
-    FoleyJobProcessor,
-    TextToImageJobProcessor,
-    VibeVoiceJobProcessor,
-    VibeVoiceMultiCloneJobProcessor,
-    TextToVideoJobProcessor,
-    ImageToVideoJobProcessor,
-    DiffRhythmJobProcessor,
-    TextToVideoLightningJobProcessor,
-    ImageToVideoLightningJobProcessor,
-    VideoUpscalerJobProcessor
-)
+import services.job_processors as job_processors_module
 
 
 class DGNClient:
@@ -35,6 +25,8 @@ class DGNClient:
         self.accept_policy = accept_policy
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
+        
+        self.processor_map = self._build_processor_map()
 
         if self.accept_policy == 'mine':
             user_id = self.orchestrator_service._get_user_id_from_token()
@@ -46,41 +38,31 @@ class DGNClient:
             self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets, target_type)
             logging.info(f"Resolved targets to IDs: {self.allowed_ids}")
 
+    def _build_processor_map(self):
+        proc_map = {}
+        for workflow_type, config in WORKFLOW_CONFIG.items():
+            processor_name = config.get("processor")
+            if processor_name:
+                processor_class = getattr(job_processors_module, processor_name, None)
+                if processor_class:
+                    proc_map[workflow_type] = processor_class
+                else:
+                    logging.warning(f"Processor class '{processor_name}' not found for workflow '{workflow_type}'")
+        return proc_map
+
     def load_config(self):
         """Loads the configuration from the orchestrator."""
         self.config = self.orchestrator_service.get_dgn_config()
         if not self.config:
             raise RuntimeError("Failed to load DGN configuration from orchestrator.")
-
-        wt = self.config.get('workflow_types', {})
-        self.processor_map = {
-            wt.get('HUNYUAN_VIDEO_FOLEY'): FoleyJobProcessor,
-            wt.get('QWEN_TEXT_TO_IMAGE'): TextToImageJobProcessor,
-            wt.get('VIBEVOICE_TTS'): VibeVoiceJobProcessor,
-            wt.get('VIBEVOICE_TTS_MULTI_CLONE'): VibeVoiceMultiCloneJobProcessor,
-            wt.get('DIFFRHYTHM_MUSIC_GENERATION'): DiffRhythmJobProcessor,
-            wt.get('WAN22_TEXT_TO_VIDEO'): TextToVideoJobProcessor,
-            wt.get('WAN22_IMAGE_TO_VIDEO'): ImageToVideoJobProcessor,
-            wt.get('WAN22_LIGHTNING_TEXT_TO_VIDEO'): TextToVideoLightningJobProcessor,
-            wt.get('WAN22_LIGHTNING_IMAGE_TO_VIDEO'): ImageToVideoLightningJobProcessor,
-            wt.get('ESRGAN_UPSCALER'): VideoUpscalerJobProcessor,
-        }
-        # Filter out None keys in case a workflow type is missing from config
-        self.processor_map = {k: v for k, v in self.processor_map.items() if k}
-
-        docker_image_map = self.config.get('docker_image_map', {})
-        if docker_image_map:
-            docker_manager.set_docker_image_map(docker_image_map)
+        
+        docker_manager.set_docker_image_map(DOCKER_IMAGE_MAP)
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
-        """Maps a workflow type to a service type using the dynamic config."""
-        if not self.config or 'workflow_to_service_map' not in self.config:
-            raise ValueError("DGN configuration is not loaded or is invalid.")
-        
-        service_type = self.config['workflow_to_service_map'].get(workflow_type)
-        if not service_type:
+        """Maps a workflow type to a service type using the local config."""
+        if workflow_type not in WORKFLOW_CONFIG:
             raise ValueError(f"Unknown workflow type, cannot determine service: {workflow_type}")
-        return service_type
+        return WORKFLOW_CONFIG[workflow_type]["service_name"]
 
     def _get_job_processor(self, job, shutdown_event):
         workflow_type = job.get('workflow_type')

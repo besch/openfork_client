@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Union, Dict
 from abc import ABC, abstractmethod
-from config import DEV_MODE
+from config import DEV_MODE, WORKFLOW_CONFIG
 from services.docker_manager import docker_manager
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions
 from utils.comfyui_workflow_utils import (
@@ -31,44 +31,25 @@ class BaseJobProcessor(ABC):
         self.cache_dir = client.cache_dir
         self.positive_prompt = job.get('prompt') or ""
         self.negative_prompt = job.get('negative_prompt') or ""
+        self.workflow_type = job.get('workflow_type')
 
     @property
-    @abstractmethod
-    def workflow_name(self) -> str:
+    def workflow_file(self) -> str:
         """The filename of the workflow to be used for this processor."""
-        pass
+        if self.workflow_type in WORKFLOW_CONFIG:
+            return WORKFLOW_CONFIG[self.workflow_type]["workflow_file"]
+        raise ValueError(f"Workflow file not found for type {self.workflow_type}")
 
     def _get_workflow_payload(self) -> Union[Dict, None]:
         """Loads the workflow from the local filesystem."""
-        
-        # Mapping from orchestrator-style name to local filename
-        workflow_filename_map = {
-            'HUNYUAN_VIDEO_FOLEY.json': 'hunyuan-video-foley.api.json',
-            'QWEN_TEXT_TO_IMAGE.json': 'qwen.api.json',
-            'VIBEVOICE_TTS.json': 'vibevoice.api.json',
-            'VIBEVOICE_TTS_MULTI_CLONE.json': 'vibevoice-multi-speaker-clone.api.json',
-            'DIFFRHYTHM_MUSIC_GENERATION.json': 'diffrhythm.api.json',
-            'WAN22_TEXT_TO_VIDEO.json': 'wan2.2-text-to-video.api.json',
-            'WAN22_IMAGE_TO_VIDEO.json': 'wan2.2-image-to-video.api.json',
-            'WAN22_LIGHTNING_TEXT_TO_VIDEO.json': 'wan2.2-text-to-video-lightning.api.json',
-            'WAN22_LIGHTNING_IMAGE_TO_VIDEO.json': 'wan2.2-image-to-video-lightning.api.json',
-            'FLUX_TEXT_TO_IMAGE.json': 'flux-text-to-image.api.json',
-            'REAL_ESRGAN_VIDEO_UPSCALE.json': 'real-esrgan-video-upscale.api.json'
-        }
-        
-        local_filename = workflow_filename_map.get(self.workflow_name)
-        
-        if not local_filename:
-            logging.error(f"No local file mapping found for workflow: {self.workflow_name}. Falling back to orchestrator.")
-            workflow_data = self.orchestrator_service.get_workflow(self.workflow_name, self.cache_dir)
-            if not workflow_data:
-                logging.error(f"Failed to get workflow {self.workflow_name} from orchestrator for job {self.job_id}.")
-                self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                return None
-            return workflow_data
+        try:
+            local_filename = self.workflow_file
+        except ValueError as e:
+            logging.error(f"Cannot get workflow payload for job {self.job_id}: {e}")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return None
 
         # Construct the full path to the workflow file.
-        # Assumes self.root_dir is the 'client' directory.
         workflow_path = os.path.join(self.root_dir, 'workflows', local_filename)
         
         logging.info(f"Loading local workflow for job {self.job_id} from: {workflow_path}")
@@ -86,7 +67,7 @@ class BaseJobProcessor(ABC):
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return None
         except Exception as e:
-            logging.error(f"An unexpected error occurred while loading local workflow {self.workflow_name}: {e}")
+            logging.error(f"An unexpected error occurred while loading local workflow {local_filename}: {e}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return None
 
@@ -156,8 +137,6 @@ class BaseJobProcessor(ABC):
         pass
 
 class FoleyJobProcessor(BaseJobProcessor):
-    workflow_name = 'HUNYUAN_VIDEO_FOLEY.json'
-
     def process(self):
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -210,8 +189,6 @@ class FoleyJobProcessor(BaseJobProcessor):
             os.remove(temp_host_path)
 
 class TextToImageJobProcessor(BaseJobProcessor):
-    workflow_name = 'QWEN_TEXT_TO_IMAGE.json'
-
     def process(self):
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -248,8 +225,6 @@ class TextToImageJobProcessor(BaseJobProcessor):
             os.remove(temp_host_path)
 
 class VibeVoiceJobProcessor(BaseJobProcessor):
-    workflow_name = 'VIBEVOICE_TTS.json'
-
     def process(self):
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -288,8 +263,6 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
             os.remove(temp_host_path)
 
 class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
-    workflow_name = 'VIBEVOICE_TTS_MULTI_CLONE.json'
-
     def process(self):
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -343,8 +316,6 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
             os.remove(temp_host_path)
 
 class DiffRhythmJobProcessor(BaseJobProcessor):
-    workflow_name = 'DIFFRHYTHM_MUSIC_GENERATION.json'
-
     def process(self):
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -406,9 +377,7 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
 
-class TextToVideoJobProcessor(BaseJobProcessor):
-    workflow_name = 'WAN22_TEXT_TO_VIDEO.json'
-
+class WAN22TextToVideoJobProcessor(BaseJobProcessor):
     def process(self):
         if DEV_MODE:
             # Dev mode logic remains unchanged
@@ -456,9 +425,7 @@ class TextToVideoJobProcessor(BaseJobProcessor):
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
 
-class ImageToVideoJobProcessor(BaseJobProcessor):
-    workflow_name = 'WAN22_IMAGE_TO_VIDEO.json'
-
+class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
     def process(self):
         if DEV_MODE:
             # Dev mode logic remains unchanged
@@ -527,8 +494,6 @@ class ImageToVideoJobProcessor(BaseJobProcessor):
             os.remove(temp_host_path)
             
 class VideoUpscalerJobProcessor(BaseJobProcessor):
-    workflow_name = 'REAL_ESRGAN_VIDEO_UPSCALE.json'
-
     def process(self):
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -646,8 +611,8 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
 
-class TextToVideoLightningJobProcessor(TextToVideoJobProcessor):
+class TextToVideoLightningJobProcessor(WAN22TextToVideoJobProcessor):
     workflow_name = 'WAN22_LIGHTNING_TEXT_TO_VIDEO.json'
 
-class ImageToVideoLightningJobProcessor(ImageToVideoJobProcessor):
+class ImageToVideoLightningJobProcessor(WAN22ImageToVideoJobProcessor):
     workflow_name = 'WAN22_LIGHTNING_IMAGE_TO_VIDEO.json'
