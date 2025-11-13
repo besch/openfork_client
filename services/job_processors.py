@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Union, Dict
 from abc import ABC, abstractmethod
-from config import DEV_MODE, WORKFLOW_CONFIG
+from config import DEV_MODE
 from services.docker_manager import docker_manager
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions
 from utils.comfyui_workflow_utils import (
@@ -36,8 +36,8 @@ class BaseJobProcessor(ABC):
     @property
     def workflow_file(self) -> str:
         """The filename of the workflow to be used for this processor."""
-        if self.workflow_type in WORKFLOW_CONFIG:
-            return WORKFLOW_CONFIG[self.workflow_type]["workflow_file"]
+        if self.workflow_type in self.client.config:
+            return self.client.config[self.workflow_type]["workflow_file"]
         raise ValueError(f"Workflow file not found for type {self.workflow_type}")
 
     def _get_workflow_payload(self) -> Union[Dict, None]:

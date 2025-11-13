@@ -4,15 +4,13 @@ images from a Docker registry (e.g., Docker Hub).
 '''
 import docker
 import logging
-import subprocess
-from config import DOCKER_IMAGE_MAP
 from .docker_utils import docker_cp
 
 class DockerProdManager:
     def __init__(self):
         try:
             self.client = docker.from_env()
-            self.docker_image_map = DOCKER_IMAGE_MAP # Fallback to static config
+            self.docker_image_map = {} # Fallback to static config
         except docker.errors.DockerException:
             logging.error("Docker is not running. Please start Docker Desktop.")
             raise

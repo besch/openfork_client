@@ -7,7 +7,7 @@ import requests
 
 import os
 
-from config import CACHE_DIR, DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV, DOCKER_IMAGE_MAP
+from config import DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from dgn_client import DGNClient
 from services.docker_manager import docker_manager
 from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
@@ -44,11 +44,12 @@ def setup_client(args):
 
     client.load_config() # Fetch config from orchestrator
 
-    # Validate service argument against available services from config
-    available_services = [s['value'] for s in client.config.get('ui_services', [])]
-    if args.service not in available_services:
-        logging.error(f"Invalid service '{args.service}'. Available services: {', '.join(s for s in available_services if s != 'auto')}")
-        sys.exit(1)
+    # Validate service argument after loading config
+    if args.service != 'auto':
+        available_services = list(client.docker_image_map.keys())
+        if args.service not in available_services:
+            logging.error(f"Invalid service '{args.service}'. Available services from config: {', '.join(available_services)}")
+            sys.exit(1)
 
     provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
     if not provider_id:
@@ -108,9 +109,7 @@ def main():
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
     parser.add_argument('--refresh-token', type=str, required=True, help='Supabase Auth Refresh Token')
     
-    service_choices = list(DOCKER_IMAGE_MAP.keys()) + ['AUTO']
-    help_string = f'Service to run ({ ", ".join(service_choices)})'
-    parser.add_argument('--service', type=str, default='AUTO', help=help_string)
+    parser.add_argument('--service', type=str, default='auto', help='Service to run (e.g., wan22, foley). Default is "auto".')
 
     parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
     parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')

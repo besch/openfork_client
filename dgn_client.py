@@ -1,8 +1,8 @@
 import os
 import logging
 import threading
+import requests
 
-from config import WORKFLOW_CONFIG, DOCKER_IMAGE_MAP
 from services.orchestrator_service import OrchestratorService
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
@@ -11,6 +11,7 @@ import services.job_processors as job_processors_module
 
 class DGNClient:
     def __init__(self, orchestrator_url: str, root_dir: str, data_dir: str, access_token: str, refresh_token: str, accept_policy: str = 'all', allowed_targets: list[str] = None):
+        self.orchestrator_url = orchestrator_url
         self.orchestrator_service = OrchestratorService(orchestrator_url, access_token, refresh_token)
         self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
         self.root_dir = root_dir
@@ -21,12 +22,13 @@ class DGNClient:
         os.makedirs(self.cache_dir, exist_ok=True)
         self.active_service_type = None
         self.current_job = None
-        self.config = None
+        self.config = {}
+        self.docker_image_map = {}
         self.accept_policy = accept_policy
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
         
-        self.processor_map = self._build_processor_map()
+        self.processor_map = {}
 
         if self.accept_policy == 'mine':
             user_id = self.orchestrator_service._get_user_id_from_token()
@@ -40,7 +42,7 @@ class DGNClient:
 
     def _build_processor_map(self):
         proc_map = {}
-        for workflow_type, config in WORKFLOW_CONFIG.items():
+        for workflow_type, config in self.config.items():
             processor_name = config.get("processor")
             if processor_name:
                 processor_class = getattr(job_processors_module, processor_name, None)
@@ -51,16 +53,37 @@ class DGNClient:
         return proc_map
 
     def load_config(self):
-        """Loads the configuration from the local config file."""
-        self.config = WORKFLOW_CONFIG
-        logging.info("DGN configuration loaded from local config.py")
-        docker_manager.set_docker_image_map(DOCKER_IMAGE_MAP)
+        """Loads the configuration from the orchestrator."""
+        try:
+            config_url = f"{self.orchestrator_url}/api/config"
+            logging.info(f"Fetching DGN configuration from {config_url}")
+            response = requests.get(config_url)
+            response.raise_for_status()
+            
+            self.config = response.json()
+            
+            # Create a map from service_name to prod_image for docker_manager
+            unique_services = {
+                (config["service_name"], config["prod_image"])
+                for config in self.config.values() if 'service_name' in config and 'prod_image' in config
+            }
+            self.docker_image_map = {service_name: image for service_name, image in unique_services}
+
+            docker_manager.set_docker_image_map(self.docker_image_map)
+            
+            self.processor_map = self._build_processor_map()
+
+            logging.info("DGN configuration loaded successfully from orchestrator.")
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Failed to fetch configuration from orchestrator: {e}")
+            raise
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
-        """Maps a workflow type to a service type using the local config."""
-        if workflow_type not in WORKFLOW_CONFIG:
+        """Maps a workflow type to a service type using the loaded config."""
+        if workflow_type not in self.config:
             raise ValueError(f"Unknown workflow type, cannot determine service: {workflow_type}")
-        return WORKFLOW_CONFIG[workflow_type]["service_name"]
+        return self.config[workflow_type]["service_name"]
 
     def _get_job_processor(self, job, shutdown_event):
         workflow_type = job.get('workflow_type')
