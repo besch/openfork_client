@@ -51,11 +51,9 @@ class DGNClient:
         return proc_map
 
     def load_config(self):
-        """Loads the configuration from the orchestrator."""
-        self.config = self.orchestrator_service.get_dgn_config()
-        if not self.config:
-            raise RuntimeError("Failed to load DGN configuration from orchestrator.")
-        
+        """Loads the configuration from the local config file."""
+        self.config = WORKFLOW_CONFIG
+        logging.info("DGN configuration loaded from local config.py")
         docker_manager.set_docker_image_map(DOCKER_IMAGE_MAP)
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:

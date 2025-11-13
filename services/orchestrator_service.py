@@ -440,19 +440,3 @@ class OrchestratorService:
             # We can still return the data even if caching fails
             return workflow_data
 
-    def get_dgn_config(self) -> Union[Dict, None]:
-        """Fetches the DGN client configuration from the orchestrator."""
-        logging.info("Fetching DGN configuration from orchestrator...")
-        try:
-            url = f"{self.orchestrator_url}/api/dgn/config"
-            response = self._make_request('get', url)
-            response.raise_for_status()
-            config_data = response.json()
-            logging.info("Successfully fetched DGN configuration.")
-            return config_data
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error downloading DGN config: {e}")
-            return None
-        except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON from DGN config response: {response.text}")
-            return None
