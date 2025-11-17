@@ -14,19 +14,24 @@ import requests
 from supabase import create_client, Client
 
 class ComfyUIClient:
-    def __init__(self, comfyui_ws_url: str):
+    def __init__(self, comfyui_ws_url: str, access_token: str = None):
         self.comfyui_ws_url = comfyui_ws_url
         self.http_base = self._http_base_from_ws(comfyui_ws_url)
+        self.access_token = access_token
         self.supabase_client: Union[Client, None] = self._init_supabase_client()
 
     def _init_supabase_client(self) -> Union[Client, None]:
-        supabase_url = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
-        supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        supabase_url = os.environ.get("SUPABASE_URL")
+        supabase_key = os.environ.get("SUPABASE_ANON_KEY")
         if not supabase_url or not supabase_key:
             logging.warning("Supabase URL/key not set. Real-time cancellation will not work.")
             return None
         try:
-            return create_client(supabase_url, supabase_key)
+            client = create_client(supabase_url, supabase_key)
+            if hasattr(self, 'access_token') and self.access_token:
+                client.realtime.set_auth(self.access_token)
+                logging.info("Supabase real-time client authenticated.")
+            return client
         except Exception as e:
             logging.error(f"Failed to create Supabase client: {e}")
             return None

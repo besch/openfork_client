@@ -13,7 +13,7 @@ class DGNClient:
     def __init__(self, orchestrator_url: str, root_dir: str, data_dir: str, access_token: str, refresh_token: str, accept_policy: str = 'all', allowed_targets: list[str] = None):
         self.orchestrator_url = orchestrator_url
         self.orchestrator_service = OrchestratorService(orchestrator_url, access_token, refresh_token)
-        self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"))
+        self.comfyui_client = ComfyUIClient(os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"), access_token=access_token)
         self.root_dir = root_dir
         self.data_dir = data_dir
         self.cache_dir = os.path.join(data_dir, ".cache")
