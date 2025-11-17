@@ -4,6 +4,7 @@ import multiprocessing
 import sys
 import threading
 import requests
+import json
 
 import os
 
@@ -15,6 +16,38 @@ from services.heartbeat_manager import HeartbeatManager
 from services.job_listener import JobListener
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
+
+def listen_for_ipc_commands(client: DGNClient):
+    """
+    Listens for JSON commands from stdin (sent by the parent Electron process).
+    """
+    logging.info("IPC listener thread started.")
+    for line in sys.stdin:
+        if SHUTDOWN_EVENT.is_set():
+            break
+        try:
+            command = json.loads(line)
+            cmd_type = command.get("type")
+            payload = command.get("payload")
+
+            if cmd_type == "UPDATE_TOKENS":
+                logging.info("Received UPDATE_TOKENS command from main process.")
+                if payload and "access_token" in payload and "refresh_token" in payload:
+                    client.orchestrator_service.update_tokens(
+                        payload["access_token"],
+                        payload["refresh_token"]
+                    )
+                else:
+                    logging.warning("UPDATE_TOKENS command received with invalid payload.")
+            else:
+                logging.warning(f"Received unknown IPC command type: {cmd_type}")
+
+        except json.JSONDecodeError:
+            logging.warning(f"Could not decode IPC command from stdin: {line.strip()}")
+        except Exception as e:
+            logging.error(f"Error processing IPC command: {e}")
+    logging.info("IPC listener thread stopped.")
+
 
 def setup_client(args):
     determined_orchestrator_url = ORCHESTRATOR_URL_DEV if DEV_MODE else ORCHESTRATOR_URL_PROD
@@ -127,6 +160,10 @@ def main():
     provider_id = None
     try:
         client, provider_id = setup_client(args)
+
+        # Start the IPC listener thread
+        ipc_thread = threading.Thread(target=listen_for_ipc_commands, args=(client,), daemon=True)
+        ipc_thread.start()
 
         # If we are running a dedicated service, set it as active on the client.
         if args.service != 'auto':

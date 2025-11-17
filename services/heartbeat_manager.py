@@ -1,5 +1,7 @@
 import threading
 import logging
+import json
+from services.orchestrator_service import TokenExpiredError
 
 class HeartbeatManager:
     def __init__(self, orchestrator_service, provider_id, shutdown_event):
@@ -19,6 +21,10 @@ class HeartbeatManager:
         while not self.shutdown_event.is_set():
             try:
                 self.orchestrator_service.send_heartbeat(self.provider_id)
+            except TokenExpiredError:
+                # Notify the main process that the token has expired
+                print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                logging.warning("Heartbeat failed due to expired token. Notified main process.")
             except Exception as e:
                 logging.error(f"An error occurred in the heartbeat loop: {e}")
             # Wait for 60 seconds or until shutdown event is set

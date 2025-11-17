@@ -1,5 +1,7 @@
 import logging
+import json
 from services.docker_manager import docker_manager
+from services.orchestrator_service import TokenExpiredError
 
 class JobListener:
     def __init__(self, client, provider_id, shutdown_event):
@@ -31,6 +33,9 @@ class JobListener:
                         self.client.current_job = None
                 else:
                     logging.info("No new jobs.")
+            except TokenExpiredError:
+                print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                logging.warning("Could not fetch job due to expired token. Notified main process.")
             except Exception as e:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
@@ -80,6 +85,9 @@ class JobListener:
                         self.client.current_job = None
                 else:
                     logging.info("No new jobs found in this check.")
+            except TokenExpiredError:
+                print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                logging.warning("Could not fetch job due to expired token. Notified main process.")
             except Exception as e:
                 logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 

@@ -7,19 +7,17 @@ import threading
 from typing import Union, Dict
 from services.hardware_profiler import get_hardware_profile
 import os
-from supabase_auth import SyncGoTrueClient, AuthResponse
-from config import SUPABASE_URL, SUPABASE_ANON_KEY
+
+# Custom exception for handling expired tokens
+class TokenExpiredError(Exception):
+    """Raised when the API returns a 401 Unauthorized error."""
+    pass
 
 class OrchestratorService:
     def __init__(self, orchestrator_url: str, access_token: str, refresh_token: str):
         self.orchestrator_url = orchestrator_url
         self.access_token = access_token
         self.refresh_token = refresh_token
-        self.gotrue_client = SyncGoTrueClient(
-            url=f"{SUPABASE_URL}/auth/v1",
-            headers={"apiKey": SUPABASE_ANON_KEY},
-            auto_refresh_token=False # We will handle refresh manually
-        )
         self.token_update_lock = threading.Lock()
 
     def update_tokens(self, access_token: str, refresh_token: str):
@@ -29,78 +27,28 @@ class OrchestratorService:
             self.refresh_token = refresh_token
             logging.info("OrchestratorService tokens have been updated by the main process.")
 
-    def _refresh_access_token(self) -> bool:
+    def _make_request(self, method, url, auth_required=True, **kwargs) -> requests.Response:
         """
-        Refreshes the access token using the refresh token.
-        Communicates results back to the parent process via stdout.
-        """
-        # This lock prevents multiple threads from trying to refresh at the same time
-        with self.token_update_lock:
-            try:
-                logging.info("Access token expired or invalid. Attempting to refresh...")
-                response = self.gotrue_client.refresh_session(self.refresh_token)
-                
-                if isinstance(response, AuthResponse) and response.session and response.session.access_token:
-                    new_access_token = response.session.access_token
-                    # Supabase refresh tokens might be rotated. Always use the new one if provided.
-                    new_refresh_token = response.session.refresh_token or self.refresh_token
-                    
-                    self.access_token = new_access_token
-                    self.refresh_token = new_refresh_token
-                    
-                    # Communicate the new tokens back to Electron via stdout
-                    new_tokens = {
-                        "access_token": new_access_token,
-                        "refresh_token": new_refresh_token
-                    }
-                    # The flush ensures Electron receives the message immediately.
-                    print(f"DGN_CLIENT_TOKENS_REFRESHED: {json.dumps(new_tokens)}", flush=True)
-                    
-                    logging.info("Successfully refreshed access token and notified main process.")
-                    return True
-                else:
-                    logging.error(f"Failed to refresh access token. Response: {response}")
-                    # Signal failure to Electron
-                    print("DGN_CLIENT_AUTH_REFRESH_FAILED", flush=True)
-                    return False
-            except Exception as e:
-                logging.error(f"An exception occurred during token refresh: {e}")
-                # Signal failure to Electron
-                print("DGN_CLIENT_AUTH_REFRESH_FAILED", flush=True)
-                return False
-
-    def _make_request(self, method, url, retry_on_401=True, **kwargs) -> requests.Response:
-        """
-        Makes an HTTP request, handling token refresh and retry on 401 Unauthorized.
+        Makes an HTTP request, raising a custom error on 401 Unauthorized.
         """
         # Add a default timeout to all requests to prevent indefinite hangs
         kwargs.setdefault('timeout', 30)
 
         request_headers = kwargs.pop("headers", {}).copy()
-        request_headers['Authorization'] = f'Bearer {self.access_token}'
+        
+        if auth_required:
+            # Use the lock to ensure the token isn't being updated by another thread while we read it
+            with self.token_update_lock:
+                request_headers['Authorization'] = f'Bearer {self.access_token}'
+
         if 'Content-Type' not in request_headers and 'files' not in kwargs and 'data' not in kwargs and 'json' not in kwargs:
              request_headers['Content-Type'] = 'application/json'
         
         response = requests.request(method, url, headers=request_headers, **kwargs)
 
-        if response.status_code == 401 and retry_on_401:
-            logging.warning("Received 401 Unauthorized. Attempting to refresh token and retry.")
-            
-            # If the request has a file-like object in 'data', we need to be able to rewind it
-            original_data_pos = None
-            if 'data' in kwargs and hasattr(kwargs['data'], 'seek'):
-                original_data_pos = kwargs['data'].tell()
-
-            if self._refresh_access_token():
-                retry_headers = request_headers.copy()
-                retry_headers['Authorization'] = f'Bearer {self.access_token}'
-                logging.info("Retrying the request with the new access token.")
-
-                # Rewind file-like object before retrying
-                if original_data_pos is not None:
-                    kwargs['data'].seek(original_data_pos)
-
-                response = requests.request(method, url, headers=retry_headers, **kwargs)
+        if response.status_code == 401 and auth_required:
+            logging.warning("Received 401 Unauthorized. Notifying main process to refresh token.")
+            raise TokenExpiredError("Access token has expired.")
         
         return response
 
@@ -246,7 +194,7 @@ class OrchestratorService:
                 response = self._make_request(
                     'put',
                     upload_url,
-                    retry_on_401=False,
+                    auth_required=False,
                     data=f,
                     headers={'Content-Type': content_type}
                 )
