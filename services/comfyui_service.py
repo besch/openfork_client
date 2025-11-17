@@ -11,30 +11,12 @@ from queue import Queue, Empty
 import logging
 from typing import Union
 import requests
-from supabase import create_client, Client
 
 class ComfyUIClient:
     def __init__(self, comfyui_ws_url: str, access_token: str = None):
         self.comfyui_ws_url = comfyui_ws_url
         self.http_base = self._http_base_from_ws(comfyui_ws_url)
         self.access_token = access_token
-        self.supabase_client: Union[Client, None] = self._init_supabase_client()
-
-    def _init_supabase_client(self) -> Union[Client, None]:
-        supabase_url = os.environ.get("SUPABASE_URL")
-        supabase_key = os.environ.get("SUPABASE_ANON_KEY")
-        if not supabase_url or not supabase_key:
-            logging.warning("Supabase URL/key not set. Real-time cancellation will not work.")
-            return None
-        try:
-            client = create_client(supabase_url, supabase_key)
-            if hasattr(self, 'access_token') and self.access_token:
-                client.realtime.set_auth(self.access_token)
-                logging.info("Supabase real-time client authenticated.")
-            return client
-        except Exception as e:
-            logging.error(f"Failed to create Supabase client: {e}")
-            return None
 
     def _http_base_from_ws(self, ws_url: str) -> str:
         # ws://host:port/ws?... -> http://host:port
@@ -141,19 +123,22 @@ class ComfyUIClient:
         except Exception as e:
             logging.error(f"Failed to send interrupt request to ComfyUI: {e}")
 
-    def _ws_reader_thread(self, ws, q):
-        while True:
+    def _ws_reader_thread(self, ws, q, shutdown_event):
+        while not shutdown_event.is_set():
             try:
                 out = ws.recv()
                 q.put(out)
+            except websocket.WebSocketConnectionClosedException:
+                logging.info("WebSocket connection closed.")
+                break
             except websocket.WebSocketTimeoutException:
-                # This is expected if no message is received within the timeout.
-                # We just continue waiting for the next message.
                 logging.debug("WebSocket recv timed out, continuing to listen.")
                 continue
             except Exception as e:
-                logging.error(f"Exception in WebSocket reader thread: {e}")
-                q.put(e) # Signal error to the main thread
+                # Only log error if it's not a direct result of a clean shutdown
+                if not shutdown_event.is_set():
+                    logging.error(f"Exception in WebSocket reader thread: {e}")
+                    q.put(e) # Signal error to the main thread
                 break
 
     def get_workflow_output(self, prompt_id: str, job_id: str, orchestrator_service, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200, shutdown_event: threading.Event = None) -> Union[dict, None, str]:
@@ -164,6 +149,8 @@ class ComfyUIClient:
 
         client_id = str(uuid.uuid4())
         ws = websocket.WebSocket()
+        internal_shutdown_event = threading.Event()
+
         try:
             ws.connect(
                 self.comfyui_ws_url.format(client_id),
@@ -171,14 +158,14 @@ class ComfyUIClient:
                 ping_interval=20,
                 ping_timeout=10
             )
-            ws.settimeout(60) # Set a 60-second timeout for recv operations
+            ws.settimeout(10) # Set a shorter timeout for recv operations
             logging.info(f"Successfully connected to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}")
         except Exception as e:
             logging.error(f"Failed to connect to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}: {e}")
             raise RuntimeError(f"Failed to connect to ComfyUI WebSocket at {self.comfyui_ws_url}: {e}")
 
         q = Queue()
-        reader_thread = threading.Thread(target=self._ws_reader_thread, args=(ws, q), daemon=True)
+        reader_thread = threading.Thread(target=self._ws_reader_thread, args=(ws, q, internal_shutdown_event), daemon=True)
         reader_thread.start()
         logging.info("WebSocket reader thread started.")
 
@@ -187,46 +174,19 @@ class ComfyUIClient:
         all_node_outputs = {}
         executed_nodes = set()
 
-        job_cancellation_event = threading.Event()
-        channel = None
-        if self.supabase_client:
-            try:
-                def on_update(payload):
-                    if payload.get('new', {}).get('status') == 'cancelled':
-                        logging.warning(f"Cancellation requested for job {job_id} via real-time. Interrupting workflow.")
-                        job_cancellation_event.set()
-                
-                def on_subscription_change(status, error=None):
-                    if status == "SUBSCRIBED":
-                        logging.info(f"Successfully subscribed to real-time updates for job {job_id}.")
-                    else:
-                        logging.warning(f"Real-time subscription for job {job_id} status: {status} {error or ''}")
-
-                channel_name = f"dgn_job_{job_id}"
-                channel = self.supabase_client.channel(channel_name)
-                channel.on(
-                    "postgres_changes",
-                    {"event": "UPDATE", "schema": "public", "table": "dgn_jobs", "filter": f"id=eq.{job_id}"},
-                    on_update
-                ).subscribe(on_subscription_change)
-            except Exception as e:
-                logging.error(f"Failed to subscribe to real-time job updates: {e}")
-
         try:
             while True:
                 if shutdown_event and shutdown_event.is_set():
                     logging.warning("Shutdown event received, interrupting workflow output wait.")
-                    return "interrupted"
-
-                if job_cancellation_event.is_set():
                     self.interrupt_workflow()
                     return "interrupted"
 
                 if (time.time() - start_ts) > timeout_sec:
                     logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Breaking loop to fetch history.")
+                    self.interrupt_workflow()
                     break
 
-                # Fallback polling mechanism
+                # Polling mechanism for cancellation
                 if time.time() - last_poll_ts > 5:
                     last_poll_ts = time.time()
                     try:
@@ -239,10 +199,9 @@ class ComfyUIClient:
                         logging.error(f"Error checking for job cancellation (polling fallback): {e}")
 
                 try:
-                    out = q.get(timeout=1)  # Shorter timeout to allow event checks
-                    logging.debug(f"Received raw WebSocket message: {out}")
+                    out = q.get(timeout=1)
                     if isinstance(out, Exception):
-                        logging.error(f"Exception in WebSocket reader thread: {out}")
+                        logging.error(f"Exception received from WebSocket reader thread: {out}")
                         raise out
                 except Empty:
                     logging.debug("Queue empty, continuing to wait for messages.")
@@ -251,7 +210,6 @@ class ComfyUIClient:
                 if isinstance(out, str):
                     try:
                         message = json.loads(out)
-                        logging.debug(f"Parsed WebSocket message: {json.dumps(message, indent=2)}")
                     except Exception as e:
                         logging.error(f"Failed to parse WebSocket message as JSON: {out}. Error: {e}")
                         continue
@@ -262,14 +220,13 @@ class ComfyUIClient:
                         data = {}
 
                     if mtype == "executed" and data.get("prompt_id") == prompt_id:
-                        node_id = data.get("node") or data.get("node_id") or data.get("node_id_name")
+                        node_id = data.get("node")
                         if node_id is not None:
                             executed_nodes.add(str(node_id))
                             logging.info(f"Executed message for prompt_id {prompt_id}, node_id: {node_id}. Executed nodes count: {len(executed_nodes)}")
 
                         if "output" in data and node_id is not None:
                             all_node_outputs[str(node_id)] = data["output"]
-                            logging.info(f"Stored output for node_id {node_id}. Current all_node_outputs keys: {all_node_outputs.keys()}")
 
                         if terminal_node_ids:
                             need = {str(n) for n in terminal_node_ids}
@@ -278,26 +235,22 @@ class ComfyUIClient:
                                 break
 
                     elif mtype == "status":
-                        status = data.get("status") if isinstance(data, dict) else None
+                        status = data.get("status")
                         if isinstance(status, dict):
                             exec_info = status.get("exec_info", {})
                             if isinstance(exec_info, dict) and exec_info.get("queue_remaining") == 0:
                                 logging.info(f"ComfyUI queue is empty for prompt_id {prompt_id}. Breaking loop to fetch history.")
                                 break
                     else:
-                        logging.info(f"Received WebSocket message of type: {mtype}. Data keys: {data.keys()}")
+                        logging.debug(f"Received WebSocket message of type: {mtype}.")
         finally:
-            if channel and self.supabase_client:
-                try:
-                    self.supabase_client.realtime.remove_channel(channel)
-                    logging.info(f"Unsubscribed from real-time updates for job {job_id}")
-                except Exception as e:
-                    logging.error(f"Error unsubscribing from real-time updates: {e}")
+            internal_shutdown_event.set()
             try:
                 ws.close()
                 logging.info("WebSocket connection closed.")
             except Exception as e:
                 logging.error(f"Error closing WebSocket connection: {e}")
+            reader_thread.join(timeout=5)
 
         logging.info(f"Exiting get_workflow_output for prompt_id {prompt_id} due to loop completion. Fetching history for outputs.")
         history_outputs = self.fetch_history_outputs(prompt_id)
