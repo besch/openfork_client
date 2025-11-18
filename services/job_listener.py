@@ -46,51 +46,57 @@ class JobListener:
     def listen_for_jobs_auto(self):
         """Listen for jobs and dynamically start/stop containers."""
         logging.info("Entering auto job listening loop.")
-        while not self.shutdown_event.is_set():
-            logging.info("Top of auto-mode loop iteration.")
-            job = None
-            try:
-                logging.info("Auto mode: Checking for new jobs...")
-                job = self.orchestrator_service.get_next_job(
-                    provider_id=self.provider_id,
-                    accept_policy=self.client.accept_policy,
-                    allowed_ids=self.client.allowed_ids
-                )
+        try:
+            while not self.shutdown_event.is_set():
+                logging.info("Top of auto-mode loop iteration.")
+                job = None
+                try:
+                    logging.info("Auto mode: Checking for new jobs...")
+                    job = self.orchestrator_service.get_next_job(
+                        provider_id=self.provider_id,
+                        accept_policy=self.client.accept_policy,
+                        allowed_ids=self.client.allowed_ids
+                    )
 
-                if job and job.get('id'):
-                    self.client.current_job = job
-                    job_id = job['id']
-                    logging.info(f"Received job: {job_id}")
+                    if job and job.get('id'):
+                        self.client.current_job = job
+                        job_id = job['id']
+                        logging.info(f"Received job: {job_id}")
 
-                    workflow_type = job.get('workflow_type', 'image_to_video')
-                    service_type = self.client.get_service_type_for_workflow(workflow_type)
-                    self.client.active_service_type = service_type
-                    
-                    logging.info(f"Job requires service '{service_type}'. Starting container...")
-                    docker_manager.run_container(service_type=service_type)
-                    
-                    if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
-                        self.client._process_job(job, self.shutdown_event)
-                    else:
+                        workflow_type = job.get('workflow_type', 'image_to_video')
+                        service_type = self.client.get_service_type_for_workflow(workflow_type)
+                        self.client.active_service_type = service_type
+                        
+                        logging.info(f"Job requires service '{service_type}'. Starting container...")
+                        docker_manager.run_container(service_type=service_type)
+                        
+                        if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
+                            self.client._process_job(job, self.shutdown_event)
+                        else:
+                            if not self.shutdown_event.is_set():
+                                logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
+                                self.orchestrator_service.update_job_status(job_id, 'failed')
+
                         if not self.shutdown_event.is_set():
-                            logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
-                            self.orchestrator_service.update_job_status(job_id, 'failed')
+                            logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
+                            docker_manager.stop_container(service_type=service_type)
+                            self.client.active_service_type = None
+                            self.orchestrator_service.update_provider_status(self.provider_id, 'available')
+                            logging.info("Provider status set to available. Waiting for next job...")
+                            self.client.current_job = None
+                    else:
+                        logging.info("No new jobs found in this check.")
+                except TokenExpiredError:
+                    print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                    logging.warning("Could not fetch job due to expired token. Notified main process.")
+                except Exception as e:
+                    logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 
-                    if not self.shutdown_event.is_set():
-                        logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
-                        docker_manager.stop_container(service_type=service_type)
-                        self.client.active_service_type = None
-                        self.orchestrator_service.update_provider_status(self.provider_id, 'available')
-                        logging.info("Provider status set to available. Waiting for next job...")
-                        self.client.current_job = None
-                else:
-                    logging.info("No new jobs found in this check.")
-            except TokenExpiredError:
-                print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
-                logging.warning("Could not fetch job due to expired token. Notified main process.")
-            except Exception as e:
-                logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
-
-            if not (job and job.get('id')):
-                self.shutdown_event.wait(10)
-        logging.info("Shutdown event received. Exiting auto job listening loop.")
+                if not (job and job.get('id')):
+                    self.shutdown_event.wait(10)
+        finally:
+            logging.info("Shutdown event received or loop exited. Exiting auto job listening loop.")
+            if self.client.active_service_type:
+                logging.info(f"Ensuring container for service '{self.client.active_service_type}' is stopped.")
+                docker_manager.stop_container(service_type=self.client.active_service_type)
+                self.client.active_service_type = None

@@ -51,14 +51,14 @@ class DockerProdManager:
 
         try:
             container = self.client.containers.get(container_name)
-            if container.status == 'running':
-                logging.info(f"Container '{container_name}' is already running.")
-                return
-            else:
-                logging.info(f"Found a stopped container '{container_name}'. Removing it before starting a new one.")
-                container.remove(force=True)
+            logging.info(f"Found existing container '{container_name}' with status '{container.status}'. Removing it before starting a new one.")
+            container.remove(force=True)
         except docker.errors.NotFound:
-            pass
+            logging.info(f"No existing container named '{container_name}' found. Proceeding to create a new one.")
+            pass  # Container does not exist, which is fine.
+        except docker.errors.APIError as e:
+            logging.error(f"Error removing existing container '{container_name}': {e}. Attempting to continue.")
+            # Log the error but try to proceed. The run command will likely fail if removal did, but it's worth a try.
 
         self.pull_image(image_name)
 
@@ -84,15 +84,9 @@ class DockerProdManager:
         logging.info(f"Attempting to stop and remove container '{container_name}'...")
         try:
             container = self.client.containers.get(container_name)
-            if container.status == 'running':
-                logging.info(f"Container '{container_name}' is running. Stopping it now.")
-                container.stop()
-                logging.info(f"Container '{container_name}' stopped.")
-            
-            logging.info(f"Removing container '{container_name}'.")
-            container.remove()
+            logging.info(f"Container '{container_name}' found. Forcefully removing it.")
+            container.remove(force=True)
             logging.info(f"Container '{container_name}' removed.")
-
         except docker.errors.NotFound:
             logging.info(f"Container '{container_name}' not found. Nothing to stop.")
         except docker.errors.APIError as e:
