@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Union, Dict
 from abc import ABC, abstractmethod
+from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.docker_manager import docker_manager
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions
@@ -370,6 +371,8 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
             else:
                 logging.error(f"DiffRhythm job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        except TokenExpiredError:
+            raise  # Re-raise to be handled by the main loop
         except Exception as e:
             logging.error(f"Error processing DiffRhythm job {self.job_id}: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')

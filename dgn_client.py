@@ -3,7 +3,8 @@ import logging
 import threading
 import requests
 
-from services.orchestrator_service import OrchestratorService
+import json
+from services.orchestrator_service import OrchestratorService, TokenExpiredError
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 import services.job_processors as job_processors_module
@@ -98,6 +99,9 @@ class DGNClient:
         try:
             processor = self._get_job_processor(job, shutdown_event)
             processor.process()
+        except TokenExpiredError:
+            print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+            logging.warning(f"Auth expired during processing of job {job.get('id')}. Signaled main process.")
         except Exception as e:
             logging.error(f"An error occurred while processing job {job.get('id')}: {e}", exc_info=True)
             if job and job.get('id'):
