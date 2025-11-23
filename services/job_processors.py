@@ -602,6 +602,16 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
             final_width = int(target_width)
             final_height = int(target_height)
             logging.info(f"Using explicit target dimensions: {final_width}x{final_height}")
+        elif target_width:
+            ratio = float(target_width) / float(original_width)
+            final_width = int(target_width)
+            final_height = int(original_height * ratio)
+            logging.info(f"Using target width {target_width} and calculated height {final_height} to preserve aspect ratio.")
+        elif target_height:
+            ratio = float(target_height) / float(original_height)
+            final_height = int(target_height)
+            final_width = int(original_width * ratio)
+            logging.info(f"Using target height {target_height} and calculated width {final_width} to preserve aspect ratio.")
         elif upscale_factor:
             final_width = int(original_width * float(upscale_factor))
             final_height = int(original_height * float(upscale_factor))
