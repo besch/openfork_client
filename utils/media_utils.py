@@ -40,15 +40,19 @@ def generate_thumbnail(video_path: str, thumbnail_path: str) -> bool:
     """Generates a thumbnail for a video file."""
     command = [
         "ffmpeg",
+        "-y",
         "-i", video_path,
         "-ss", "00:00:01.000",
         "-vframes", "1",
         thumbnail_path
     ]
     try:
-        subprocess.run(command, check=True, capture_output=True)
+        subprocess.run(command, check=True, capture_output=True, timeout=60)
         logging.info(f"Thumbnail generated at {thumbnail_path}")
         return True
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout generating thumbnail for {video_path}")
+        return False
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         logging.error(f"Error generating thumbnail for {video_path}: {e}")
         if isinstance(e, subprocess.CalledProcessError):

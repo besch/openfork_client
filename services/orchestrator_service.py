@@ -75,7 +75,7 @@ class OrchestratorService:
             return resolved_ids
         except requests.exceptions.RequestException as e:
             logging.error(f"Error resolving targets: {e}")
-            if e.response:
+            if e.response is not None:
                 logging.error(f"Response content: {e.response.text}")
             return []
         except json.JSONDecodeError:
@@ -170,7 +170,7 @@ class OrchestratorService:
             return response.json()
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not get signed upload URL: {e}")
-            if e.response:
+            if e.response is not None:
                 logging.error(f"Response content: {e.response.text}")
             return None
         except json.JSONDecodeError:
@@ -204,7 +204,7 @@ class OrchestratorService:
             return storage_path
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not upload file to presigned URL: {e}")
-            if e.response:
+            if e.response is not None:
                 logging.error(f"Response content: {e.response.text}")
             return None
 
@@ -321,7 +321,7 @@ class OrchestratorService:
             logging.info(f"OrchestratorService: Provider {provider_id} deregistered successfully. Status: {response.status_code}")
         except requests.exceptions.RequestException as e:
             logging.error(f"OrchestratorService: Error deregistering provider {provider_id}: {e}")
-            if e.response:
+            if e.response is not None:
                 logging.error(f"OrchestratorService: Response content: {e.response.text}")
 
     def reset_interrupted_job(self, job_id: str):
@@ -336,7 +336,7 @@ class OrchestratorService:
             logging.info(f"Job {job_id} status reset successfully via API.")
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not reset job status for {job_id}: {e}")
-            if e.response:
+            if e.response is not None:
                 logging.error(f"Reset API response: {e.response.text}")
             raise
 
@@ -377,14 +377,25 @@ class OrchestratorService:
             logging.info(f"Successfully downloaded and cached workflow '{workflow_name}'.")
             return workflow_data
 
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error downloading workflow {workflow_name}: {e}")
-            return None
-        except json.JSONDecodeError:
-            logging.error(f"Failed to decode JSON from workflow response for {workflow_name}: {response.text}")
-            return None
         except IOError as e:
             logging.error(f"Error saving downloaded workflow {workflow_name} to cache: {e}")
             # We can still return the data even if caching fails
             return workflow_data
+
+    def submit_job(self, job_data: Dict) -> Union[str, None]:
+        """Submits a new job to the orchestrator."""
+        try:
+            response = self._make_request(
+                'post',
+                f"{self.orchestrator_url}/api/dgn/submit",
+                json=job_data
+            )
+            response.raise_for_status()
+            return response.json().get('job_id')
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error submitting job: {e}")
+            if e.response is not None:
+                logging.error(f"Response content: {e.response.text}")
+            return None
+
 

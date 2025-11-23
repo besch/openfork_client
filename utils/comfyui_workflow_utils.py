@@ -10,6 +10,28 @@ from typing import Union, Dict
 # Assuming OUTPUT_DIR, INPUT_DIR are passed or imported from config
 # from config import OUTPUT_DIR, INPUT_DIR
 
+
+def get_dimensions(aspect_ratio: str, default_width: int = 768, default_height: int = 432) -> tuple[int, int]:
+    """
+    Returns (width, height) based on the aspect ratio string.
+    Using smaller dimensions suitable for GPUs with less VRAM.
+    All dimensions are divisible by 16.
+    """
+    if aspect_ratio == "16:9":
+        return 768, 432  # 432p
+    elif aspect_ratio == "9:16":
+        return 432, 768
+    elif aspect_ratio == "1:1":
+        return 512, 512
+    elif aspect_ratio == "4:3":
+        return 640, 480  # 480p
+    elif aspect_ratio == "3:4":
+        return 480, 640
+    elif aspect_ratio == "21:9":
+        return 896, 384
+    else:
+        return default_width, default_height
+
 def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
     """
     Accepts:
@@ -52,7 +74,7 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
         logging.error(f"Failed to materialize start image: {e}")
     return None
 
-def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, start_image_filename: str):
+def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, start_image_filename: str, aspect_ratio: str = "16:9"):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
     Also randomizes seed for image-to-video generation.
@@ -68,6 +90,14 @@ def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, 
                 node["inputs"]["text"] = negative_prompt
         elif node["class_type"] == "LoadImage":
             node["inputs"]["image"] = start_image_filename
+        elif node["class_type"] == "WanImageToVideo":
+            width, height = get_dimensions(aspect_ratio)
+            node["inputs"]["width"] = width
+            node["inputs"]["height"] = height
+        elif node["class_type"] == "ImageResizeKJv2":
+            width, height = get_dimensions(aspect_ratio)
+            node["inputs"]["width"] = width
+            node["inputs"]["height"] = height
         elif node["class_type"] == "VHS_VideoCombine":
             # Replace date token in filename_prefix
             prefix = node["inputs"].get("filename_prefix", "")
@@ -81,7 +111,7 @@ def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, 
 
     return api_graph
 
-def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
+def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, aspect_ratio: str = "16:9"):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
     Also randomizes seed for varied outputs.
@@ -98,6 +128,13 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: s
         api_graph['7']['inputs']['text'] = negative_prompt
     else:
         logging.warning("Could not find negative prompt node 7 in text-to-video workflow")
+
+    # Inject dimensions into WanImageToVideo
+    for node in api_graph.values():
+        if node.get("class_type") == "WanImageToVideo":
+            width, height = get_dimensions(aspect_ratio)
+            node["inputs"]["width"] = width
+            node["inputs"]["height"] = height
 
     # Randomize seed for node 57 (high noise sampler)
     if '57' in api_graph and 'inputs' in api_graph['57']:
@@ -116,7 +153,7 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: s
 
     return api_graph
 
-def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str):
+def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, aspect_ratio: str = "1:1"):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for Qwen.
     Also randomizes seed for varied outputs.
@@ -135,6 +172,20 @@ def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negat
         api_graph['7']['inputs']['text'] = negative_prompt
     else:
         logging.warning("Could not find negative prompt node 7 in Qwen workflow")
+
+    # Inject dimensions into EmptySD3LatentImage (Node 58)
+    if '58' in api_graph and 'inputs' in api_graph['58']:
+        width, height = get_dimensions(aspect_ratio, default_width=1024, default_height=1024)
+        api_graph['58']['inputs']['width'] = width
+        api_graph['58']['inputs']['height'] = height
+    else:
+        # Fallback: search for EmptySD3LatentImage by class type
+        for node in api_graph.values():
+            if node.get("class_type") == "EmptySD3LatentImage":
+                width, height = get_dimensions(aspect_ratio, default_width=1024, default_height=1024)
+                node["inputs"]["width"] = width
+                node["inputs"]["height"] = height
+                break
 
     # Randomize seed for node 3 (KSampler)
     if '3' in api_graph and 'inputs' in api_graph['3']:

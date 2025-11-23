@@ -195,7 +195,9 @@ class TextToImageJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
 
-        wf_ready = inject_prompt_into_qwen_workflow(workflow_data, self.positive_prompt, self.negative_prompt)
+        inputs = self.job.get('inputs', {})
+        aspect_ratio = inputs.get('aspect_ratio', '1:1')
+        wf_ready = inject_prompt_into_qwen_workflow(workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio)
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
@@ -390,7 +392,9 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
             
-        wf_ready = inject_prompt_into_text_to_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt)
+        inputs = self.job.get('inputs', {})
+        aspect_ratio = inputs.get('aspect_ratio', '16:9')
+        wf_ready = inject_prompt_into_text_to_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio)
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
@@ -421,6 +425,30 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
                 
                 duration = get_video_duration(temp_host_path)
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
+
+                # Check for upscale chaining
+                workflow_config = self.job.get('inputs', {})
+                if workflow_config.get('upscale_enabled'):
+                    logging.info(f"Upscale enabled for job {self.job_id}. Submitting upscale job.")
+                    upscale_params = workflow_config.get('upscale_params', {})
+                    
+                    # Construct submit body
+                    submit_body = {
+                        "sceneId": self.job.get('scene_id'),
+                        "branchId": self.job.get('branch_id'),
+                        "model": "esrgan-upscaler", # WORKFLOW_TYPES.ESRGAN_UPSCALER
+                        "prompt": "Upscaling video",
+                        "input_storage_path": video_storage_path,
+                        "upscale_params": upscale_params,
+                        "originalJobId": self.job.get('id')
+                    }
+                    
+                    new_job_id = self.orchestrator_service.submit_job(submit_body)
+                    if new_job_id:
+                        logging.info(f"Successfully submitted upscale job: {new_job_id}")
+                    else:
+                        logging.error("Failed to submit upscale job.")
+
             else:
                 logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -458,7 +486,9 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
-        wf_ready = inject_prompt_and_image_into_workflow(workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename)
+        inputs = self.job.get('inputs', {})
+        aspect_ratio = inputs.get('aspect_ratio', '16:9')
+        wf_ready = inject_prompt_and_image_into_workflow(workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio)
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
@@ -489,6 +519,29 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
                 
                 duration = get_video_duration(temp_host_path)
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
+
+                # Check for upscale chaining
+                workflow_config = self.job.get('workflow', {})
+                if workflow_config.get('upscale_enabled'):
+                    logging.info(f"Upscale enabled for job {self.job_id}. Submitting upscale job.")
+                    upscale_params = workflow_config.get('upscale_params', {})
+                    
+                    # Construct submit body
+                    submit_body = {
+                        "sceneId": self.job.get('scene_id'),
+                        "branchId": self.job.get('branch_id'),
+                        "model": "esrgan-upscaler", # WORKFLOW_TYPES.ESRGAN_UPSCALER
+                        "prompt": "Upscaling video",
+                        "input_storage_path": video_storage_path,
+                        "upscale_params": upscale_params
+                    }
+                    
+                    new_job_id = self.orchestrator_service.submit_job(submit_body)
+                    if new_job_id:
+                        logging.info(f"Successfully submitted upscale job: {new_job_id}")
+                    else:
+                        logging.error("Failed to submit upscale job.")
+
             else:
                 logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
