@@ -41,9 +41,11 @@ def generate_thumbnail(video_path: str, thumbnail_path: str) -> bool:
     command = [
         "ffmpeg",
         "-y",
-        "-i", video_path,
         "-ss", "00:00:01.000",
+        "-i", video_path,
         "-vframes", "1",
+        "-nostdin",
+        "-v", "error",
         thumbnail_path
     ]
     try:
