@@ -253,37 +253,82 @@ def get_video_dimensions(video_path: str) -> tuple:
         logging.error(f"Failed to get video dimensions for {video_path}: {e}")
         raise RuntimeError(f"Failed to get video dimensions: {e}")
 
-def extract_last_frame(video_path: str, output_image_path: str) -> bool:
+def extract_last_frame(video_path: str, output_image_path: str, timeout: int = 60) -> bool:
     """
-    Extracts the last frame of a video to an image file.
+    Extracts the last frame from a video file using ffmpeg.
+
+    This function first tries to get the video duration using ffprobe.
+    If successful, it seeks to a point just before the end to extract the last frame.
+    This method is generally faster than seeking from the end (-sseof).
+
+    Args:
+        video_path (str): Path to the input video file.
+        output_image_path (str): Path to save the output image file.
+        timeout (int): Timeout in seconds for the ffmpeg command.
+
+    Returns:
+        bool: True if the frame was extracted successfully, False otherwise.
     """
     try:
-        cmd = [
+        # Get video duration using ffprobe
+        duration = get_video_duration(video_path)
+
+        if duration > 0:
+            # Seek to 0.5 seconds before the end
+            seek_position = max(0, duration - 0.5)
+            
+            logging.info(f"Extracting last frame from {video_path} using seek to {seek_position:.2f}s (duration: {duration:.2f}s)")
+
+            ffmpeg_cmd = [
+                'ffmpeg',
+                '-y',
+                '-nostdin',
+                '-ss', str(seek_position),
+                '-i', video_path,
+                '-frames:v', '1',
+                '-q:v', '2', # High quality
+                output_image_path
+            ]
+        else:
+            raise ValueError("Could not determine video duration.")
+
+    except (ValueError, RuntimeError) as e:
+        logging.warning(f"Could not get video duration ({e}), falling back to -sseof method.")
+        # Fallback to original method if ffprobe fails
+        ffmpeg_cmd = [
             'ffmpeg',
             '-y',
-            '-sseof', '-0.1', # Seek to 0.1 seconds from the end
+            '-nostdin',
+            '-sseof', '-0.1',
             '-i', video_path,
             '-frames:v', '1',
-            '-q:v', '2', # High quality jpeg
+            '-q:v', '2',
             output_image_path
         ]
-        
-        logging.info(f"Extracting last frame from {video_path} using -sseof -0.1")
-        subprocess.run(cmd, check=True, capture_output=True, timeout=60)
-        
-        if os.path.exists(output_image_path):
-            logging.info(f"Extracted last frame to {output_image_path}")
-            return True
-        else:
-            logging.error(f"ffmpeg ran but output file {output_image_path} not found")
-            return False
-            
-    except subprocess.TimeoutExpired:
+
+    try:
+        logging.info(f"Running ffmpeg command: {' '.join(ffmpeg_cmd)}")
+        process = subprocess.run(
+            ffmpeg_cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        logging.info(f"Successfully extracted last frame to {output_image_path}")
+        logging.debug(f"ffmpeg stdout: {process.stdout}")
+        logging.debug(f"ffmpeg stderr: {process.stderr}")
+        return True
+    except subprocess.TimeoutExpired as e:
         logging.error(f"Timeout extracting last frame from {video_path}")
+        if e.stdout:
+            logging.error(f"ffmpeg stdout on timeout: {e.stdout}")
+        if e.stderr:
+            logging.error(f"ffmpeg stderr on timeout: {e.stderr}")
         return False
     except subprocess.CalledProcessError as e:
-        logging.error(f"ffmpeg failed to extract last frame: {e.stderr}")
+        logging.error(f"ffmpeg error extracting last frame from {video_path}: {e.stderr}")
         return False
     except Exception as e:
-        logging.error(f"Failed to extract last frame: {e}")
+        logging.error(f"An unexpected error occurred during frame extraction: {e}")
         return False
