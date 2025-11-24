@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.docker_manager import docker_manager
-from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions
+from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions, get_video_framerate
 from utils.comfyui_workflow_utils import (
     inject_prompt_and_image_into_workflow,
     inject_video_and_prompt_into_foley_workflow,
@@ -584,50 +584,81 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
             return
         
         # --- New Upscale Logic ---
+        original_width = None
+        original_height = None
         try:
             original_width, original_height = get_video_dimensions(video_path)
             logging.info(f"Original video dimensions: {original_width}x{original_height}")
         except Exception as e:
-            logging.warning(f"Could not get video dimensions for {video_path}: {e}. Falling back to default.")
-            original_width, original_height = 1920, 1080
+            logging.error(f"Could not get video dimensions for {video_path}: {e}")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
 
         job_inputs = self.job.get('inputs', {})
         upscale_model = job_inputs.get('upscale_model', 'RealESRGAN_x4plus.pth')
-        frame_rate = job_inputs.get('frame_rate', 30)
+        
+        # Determine frame rate: prefer explicit input, otherwise detect from source, fallback to 30
+        input_frame_rate = job_inputs.get('frame_rate')
+        if input_frame_rate:
+            frame_rate = int(input_frame_rate)
+        else:
+            frame_rate = int(get_video_framerate(video_path))
+            logging.info(f"Detected source frame rate: {frame_rate}")
+
         upscale_factor = job_inputs.get('upscale_factor')
         target_width = job_inputs.get('target_width')
         target_height = job_inputs.get('target_height')
+        control_method = job_inputs.get('control_method', 'factor') # Default to factor if not specified
 
-        if target_width and target_height:
-            final_width = int(target_width)
-            final_height = int(target_height)
-            logging.info(f"Using explicit target dimensions: {final_width}x{final_height}")
-        elif target_width:
-            ratio = float(target_width) / float(original_width)
-            final_width = int(target_width)
-            final_height = int(original_height * ratio)
-            logging.info(f"Using target width {target_width} and calculated height {final_height} to preserve aspect ratio.")
-        elif target_height:
-            ratio = float(target_height) / float(original_height)
-            final_height = int(target_height)
-            final_width = int(original_width * ratio)
-            logging.info(f"Using target height {target_height} and calculated width {final_width} to preserve aspect ratio.")
-        elif upscale_factor:
-            final_width = int(original_width * float(upscale_factor))
-            final_height = int(original_height * float(upscale_factor))
-            logging.info(f"Using upscale factor {upscale_factor} to get dimensions: {final_width}x{final_height}")
+        final_width = None
+        final_height = None
+        scale_by = None
+
+        # If control method is 'dimensions', prioritize target dimensions
+        if control_method == 'dimensions':
+            if target_width and target_height:
+                final_width = int(target_width)
+                final_height = int(target_height)
+                logging.info(f"Using explicit target dimensions: {final_width}x{final_height}")
+            elif target_width:
+                ratio = float(target_width) / float(original_width)
+                final_width = int(target_width)
+                final_height = int(original_height * ratio)
+                logging.info(f"Using target width {target_width} and calculated height {final_height} to preserve aspect ratio.")
+            elif target_height:
+                ratio = float(target_height) / float(original_height)
+                final_height = int(target_height)
+                final_width = int(original_width * ratio)
+                logging.info(f"Using target height {target_height} and calculated width {final_width} to preserve aspect ratio.")
+            else:
+                 # Fallback if dimensions selected but none provided
+                 logging.warning("Control method is dimensions but no dimensions provided. Falling back to 2x upscale.")
+                 final_width = original_width * 2
+                 final_height = original_height * 2
+        
+        # If control method is 'factor' (or fallback), use upscale factor
         else:
-            final_width = 1920
-            final_height = 1080
-            logging.info(f"No factor or dimensions provided. Falling back to default: {final_width}x{final_height}")
+            if upscale_factor:
+                scale_by = float(upscale_factor)
+                logging.info(f"Using upscale factor {scale_by} with ImageScaleBy.")
+            else:
+                # Default to 2x if nothing specified
+                scale_by = 2.0
+                logging.info(f"No factor or dimensions provided. Defaulting to 2x upscale with ImageScaleBy.")
+        
+        # Ensure dimensions are even (required for some codecs) - ONLY if using explicit dimensions
+        if scale_by is None:
+            if final_width % 2 != 0: final_width += 1
+            if final_height % 2 != 0: final_height += 1
         
         wf_ready = inject_video_into_upscaler_workflow(
             workflow_data, 
             video_filename, 
             upscale_model,
             frame_rate,
-            final_width,
-            final_height
+            target_width=final_width,
+            target_height=final_height,
+            scale_by=scale_by
         )
         
         payload = {"prompt": wf_ready}

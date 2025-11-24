@@ -462,8 +462,9 @@ def inject_video_into_upscaler_workflow(
     video_filename: str,
     upscale_model: str = "RealESRGAN_x4plus.pth",
     frame_rate: int = 30,
-    target_width: int = 1920,
-    target_height: int = 1080
+    target_width: Union[int, None] = None,
+    target_height: Union[int, None] = None,
+    scale_by: Union[float, None] = None
 ):
     """
     Injects video filename and upscale settings into Real-ESRGAN workflow.
@@ -473,15 +474,20 @@ def inject_video_into_upscaler_workflow(
         video_filename: Name of the video file in input directory
         upscale_model: Which Real-ESRGAN model to use
         frame_rate: Output video frame rate
-        target_width: The final width of the video
-        target_height: The final height of the video
+        target_width: The final width of the video (optional if scale_by is used)
+        target_height: The final height of the video (optional if scale_by is used)
+        scale_by: Factor to scale the image by (optional, overrides width/height)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
     # Node 1: VHS_LoadVideo - inject video filename
     if '1' in api_graph and api_graph['1']['class_type'] == 'VHS_LoadVideo':
         api_graph['1']['inputs']['video'] = video_filename
-        logging.info(f"Injected video filename: {video_filename}")
+        # Force disable resizing to ensure original dimensions are used
+        api_graph['1']['inputs']['force_size'] = "Disabled"
+        api_graph['1']['inputs']['custom_width'] = 0
+        api_graph['1']['inputs']['custom_height'] = 0
+        logging.info(f"Injected video filename: {video_filename} and disabled force_size")
     
     # Node 2: UpscaleModelLoader - inject model selection
     if '2' in api_graph and api_graph['2']['class_type'] == 'UpscaleModelLoader':
@@ -489,10 +495,31 @@ def inject_video_into_upscaler_workflow(
         logging.info(f"Injected upscale model: {upscale_model}")
 
     # Node 6: ImageScale - inject dimensions
-    if '6' in api_graph and api_graph['6']['class_type'] == 'ImageScale':
-        api_graph['6']['inputs']['width'] = target_width
-        api_graph['6']['inputs']['height'] = target_height
-        logging.info(f"Injected target dimensions: {target_width}x{target_height}")
+    if '6' in api_graph:
+        if scale_by is not None:
+            # Use ImageScaleBy for factor-based scaling
+            api_graph['6']['class_type'] = 'ImageScaleBy'
+            api_graph['6']['inputs'] = {
+                'scale_by': scale_by,
+                'image': ['3', 0],
+                'upscale_method': 'lanczos'
+            }
+            logging.info(f"Using ImageScaleBy with factor: {scale_by}")
+        elif target_width is not None and target_height is not None:
+            # Ensure it's ImageScale
+            if api_graph['6']['class_type'] != 'ImageScale':
+                    api_graph['6']['class_type'] = 'ImageScale'
+            
+            api_graph['6']['inputs']['width'] = target_width
+            api_graph['6']['inputs']['height'] = target_height
+            # Ensure other inputs are correct
+            api_graph['6']['inputs']['upscale_method'] = 'lanczos'
+            api_graph['6']['inputs']['crop'] = 'disabled'
+            api_graph['6']['inputs']['image'] = ['3', 0]
+
+            logging.info(f"Injected target dimensions: {target_width}x{target_height}")
+        else:
+                logging.warning("No target dimensions or scale_by provided for upscale workflow. Using default/existing values.")
     
     # Node 4: VHS_VideoCombine - inject frame rate and filename
     if '4' in api_graph and api_graph['4']['class_type'] == 'VHS_VideoCombine':
