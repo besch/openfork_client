@@ -15,88 +15,11 @@ def get_audio_duration(file_path: str) -> float:
         file_path
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
         return float(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
-        logging.error(f"Error getting audio duration for {file_path}: {e}")
-        return 0.0
-
-def get_video_duration(file_path: str) -> float:
-    """Gets the duration of a video file using ffprobe."""
-    command = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        file_path
-    ]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        return float(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
-        logging.error(f"Error getting video duration for {file_path}: {e}")
-        return 0.0
-
-def generate_thumbnail(video_path: str, thumbnail_path: str) -> bool:
-    """Generates a thumbnail for a video file."""
-    command = [
-        "ffmpeg",
-        "-y",
-        "-ss", "00:00:01.000",
-        "-i", video_path,
-        "-vframes", "1",
-        "-nostdin",
-        "-v", "error",
-        thumbnail_path
-    ]
-    try:
-        subprocess.run(command, check=True, capture_output=True, timeout=60)
-        logging.info(f"Thumbnail generated at {thumbnail_path}")
-        return True
     except subprocess.TimeoutExpired:
-        logging.error(f"Timeout generating thumbnail for {video_path}")
-        return False
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        logging.error(f"Error generating thumbnail for {video_path}: {e}")
-        if isinstance(e, subprocess.CalledProcessError):
-            logging.error(f"ffmpeg stderr: {e.stderr.decode()}")
-        return False
-
-def find_video_in_output(outputs: dict) -> Union[tuple[str, str], None]:
-    """Finds the output video details from the ComfyUI workflow output."""
-    # Look for 'gifs' which is what VideoCombine nodes output
-    for node_id, node_output in outputs.items():
-        if 'gifs' in node_output:
-            for item in node_output['gifs']:
-                filename = item.get('filename')
-                subfolder = item.get('subfolder', '')
-                if filename and (item.get('format') == 'video/h264-mp4' or filename.endswith('.mp4')):
-                     return filename, subfolder
-    # Fallback for older formats or other nodes
-    for node_id, node_output in outputs.items():
-        if 'videos' in node_output:
-            for video in node_output['videos']:
-                filename = video.get('filename')
-                subfolder = video.get('subfolder')
-
-import subprocess
-import logging
-from typing import Union
-import os
-import json
-
-def get_audio_duration(file_path: str) -> float:
-    """Gets the duration of an audio file using ffprobe."""
-    command = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        file_path
-    ]
-    try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
-        return float(result.stdout.strip())
+        logging.error(f"Timeout getting audio duration for {file_path}")
+        return 0.0
     except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
         logging.error(f"Error getting audio duration for {file_path}: {e}")
         return 0.0
@@ -111,8 +34,11 @@ def get_video_duration(file_path: str) -> float:
         file_path
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
         return float(result.stdout.strip())
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout getting video duration for {file_path}")
+        return 0.0
     except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
         logging.error(f"Error getting video duration for {file_path}: {e}")
         return 0.0
@@ -130,7 +56,7 @@ def generate_thumbnail(video_path: str, thumbnail_path: str) -> bool:
         thumbnail_path
     ]
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=60)
+        subprocess.run(command, check=True, capture_output=True, timeout=120)
         logging.info(f"Thumbnail generated at {thumbnail_path}")
         return True
     except subprocess.TimeoutExpired:
@@ -199,9 +125,12 @@ def generate_placeholder_video(output_path: str, duration: int = 5) -> bool:
         output_path
     ]
     try:
-        subprocess.run(command, check=True, capture_output=True)
+        subprocess.run(command, check=True, capture_output=True, timeout=60)
         logging.info(f"Placeholder video generated at {output_path}")
         return True
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout generating placeholder video for {output_path}")
+        return False
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         logging.error(f"Error generating placeholder video for {output_path}: {e}")
         return False
@@ -218,7 +147,7 @@ def get_video_framerate(video_path: str) -> float:
             video_path
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
         data = json.loads(result.stdout)
         
         if 'streams' in data and len(data['streams']) > 0:
@@ -234,6 +163,9 @@ def get_video_framerate(video_path: str) -> float:
         
         return 30.0 # Default fallback
         
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout getting video framerate for {video_path}")
+        return 30.0
     except Exception as e:
         logging.error(f"Failed to get video framerate for {video_path}: {e}")
         return 30.0
@@ -261,7 +193,7 @@ def get_video_dimensions(video_path: str) -> tuple:
             video_path
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
         data = json.loads(result.stdout)
         
         if 'streams' in data and len(data['streams']) > 0:
@@ -311,6 +243,9 @@ def get_video_dimensions(video_path: str) -> tuple:
         
         raise RuntimeError("Could not extract dimensions from ffprobe output")
         
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout getting video dimensions for {video_path}")
+        raise RuntimeError(f"Timeout getting video dimensions")
     except subprocess.CalledProcessError as e:
         logging.error(f"ffprobe failed for {video_path}: {e.stderr}")
         raise RuntimeError(f"ffprobe failed: {e.stderr}")
@@ -323,26 +258,18 @@ def extract_last_frame(video_path: str, output_image_path: str) -> bool:
     Extracts the last frame of a video to an image file.
     """
     try:
-        # Get duration to seek to the end
-        duration = get_video_duration(video_path)
-        if duration <= 0:
-            logging.error(f"Invalid duration for {video_path}: {duration}")
-            return False
-            
-        # Seek to slightly before the end to ensure we get a frame
-        seek_time = max(0, duration - 0.1)
-        
         cmd = [
             'ffmpeg',
             '-y',
-            '-ss', str(seek_time),
+            '-sseof', '-0.1', # Seek to 0.1 seconds from the end
             '-i', video_path,
             '-frames:v', '1',
             '-q:v', '2', # High quality jpeg
             output_image_path
         ]
         
-        subprocess.run(cmd, check=True, capture_output=True)
+        logging.info(f"Extracting last frame from {video_path} using -sseof -0.1")
+        subprocess.run(cmd, check=True, capture_output=True, timeout=60)
         
         if os.path.exists(output_image_path):
             logging.info(f"Extracted last frame to {output_image_path}")
@@ -351,6 +278,9 @@ def extract_last_frame(video_path: str, output_image_path: str) -> bool:
             logging.error(f"ffmpeg ran but output file {output_image_path} not found")
             return False
             
+    except subprocess.TimeoutExpired:
+        logging.error(f"Timeout extracting last frame from {video_path}")
+        return False
     except subprocess.CalledProcessError as e:
         logging.error(f"ffmpeg failed to extract last frame: {e.stderr}")
         return False
