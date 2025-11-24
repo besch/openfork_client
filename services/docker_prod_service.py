@@ -4,6 +4,7 @@ images from a Docker registry (e.g., Docker Hub).
 '''
 import docker
 import logging
+import threading
 from .docker_utils import docker_cp
 
 class DockerProdManager:
@@ -92,12 +93,12 @@ class DockerProdManager:
         except docker.errors.APIError as e:
             logging.error(f"Failed to stop or remove container '{container_name}': {e}")
 
-    def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str):
+    def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str, shutdown_event: threading.Event):
         container_name = self.get_container_name(service_type)
         source_path = f"{container_name}:{source_in_container}"
-        docker_cp(source_path, dest_on_host)
+        docker_cp(source_path, dest_on_host, shutdown_event)
 
-    def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str):
+    def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str, shutdown_event: threading.Event):
         container_name = self.get_container_name(service_type)
         dest_path = f"{container_name}:{dest_in_container}"
-        docker_cp(source_on_host, dest_path)
+        docker_cp(source_on_host, dest_path, shutdown_event)

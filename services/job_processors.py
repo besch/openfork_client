@@ -98,7 +98,8 @@ class BaseJobProcessor(ABC):
             docker_manager.copy_file_from_container(
                 service_type=self.client.active_service_type,
                 source_in_container=source_in_container,
-                dest_on_host=dest_on_host
+                dest_on_host=dest_on_host,
+                shutdown_event=self.shutdown_event
             )
             if os.path.exists(dest_on_host):
                 logging.info(f"Successfully copied file to temporary host path: {dest_on_host}")
@@ -139,6 +140,11 @@ class BaseJobProcessor(ABC):
 
 class FoleyJobProcessor(BaseJobProcessor):
     def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for FoleyJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -191,6 +197,11 @@ class FoleyJobProcessor(BaseJobProcessor):
 
 class TextToImageJobProcessor(BaseJobProcessor):
     def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for TextToImageJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -229,6 +240,11 @@ class TextToImageJobProcessor(BaseJobProcessor):
 
 class VibeVoiceJobProcessor(BaseJobProcessor):
     def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for VibeVoiceJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -267,6 +283,11 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
 
 class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
     def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for VibeVoiceMultiCloneJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -320,6 +341,11 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
 
 class DiffRhythmJobProcessor(BaseJobProcessor):
     def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for DiffRhythmJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -392,6 +418,7 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
             
+        logging.info(f"DEBUG: self.job type: {type(self.job)}, value: {self.job}")
         inputs = self.job.get('inputs', {})
         aspect_ratio = inputs.get('aspect_ratio', '16:9')
         wf_ready = inject_prompt_into_text_to_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio)
@@ -462,6 +489,11 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
             # Dev mode logic remains unchanged
             return
 
+        if not self.job:
+            logging.error(f"Job object is None for WAN22ImageToVideoJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -479,7 +511,8 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
             docker_manager.copy_file_to_container(
                 service_type=self.client.active_service_type,
                 source_on_host=start_image_full_path,
-                dest_in_container=container_input_path
+                dest_in_container=container_input_path,
+                shutdown_event=self.shutdown_event
             )
         except Exception as e:
             logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
@@ -555,6 +588,11 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
             # Dev mode logic remains unchanged
             return
 
+        if not self.job:
+            logging.error(f"Job object is None for ImageToVideoFromLastFrameJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -586,7 +624,8 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
             docker_manager.copy_file_to_container(
                 service_type=self.client.active_service_type,
                 source_on_host=start_image_full_path,
-                dest_in_container=container_input_path
+                dest_in_container=container_input_path,
+                shutdown_event=self.shutdown_event
             )
         except Exception as e:
             logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
@@ -663,6 +702,11 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
 
 class VideoUpscalerJobProcessor(BaseJobProcessor):
     def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for VideoUpscalerJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
             return
@@ -687,7 +731,8 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
             docker_manager.copy_file_to_container(
                 service_type=self.client.active_service_type,
                 source_on_host=video_path,
-                dest_in_container=container_input_path
+                dest_in_container=container_input_path,
+                shutdown_event=self.shutdown_event
             )
             logging.info(f"Copied video to container: {container_input_path}")
         except Exception as e:
