@@ -317,3 +317,43 @@ def get_video_dimensions(video_path: str) -> tuple:
     except Exception as e:
         logging.error(f"Failed to get video dimensions for {video_path}: {e}")
         raise RuntimeError(f"Failed to get video dimensions: {e}")
+
+def extract_last_frame(video_path: str, output_image_path: str) -> bool:
+    """
+    Extracts the last frame of a video to an image file.
+    """
+    try:
+        # Get duration to seek to the end
+        duration = get_video_duration(video_path)
+        if duration <= 0:
+            logging.error(f"Invalid duration for {video_path}: {duration}")
+            return False
+            
+        # Seek to slightly before the end to ensure we get a frame
+        seek_time = max(0, duration - 0.1)
+        
+        cmd = [
+            'ffmpeg',
+            '-y',
+            '-ss', str(seek_time),
+            '-i', video_path,
+            '-frames:v', '1',
+            '-q:v', '2', # High quality jpeg
+            output_image_path
+        ]
+        
+        subprocess.run(cmd, check=True, capture_output=True)
+        
+        if os.path.exists(output_image_path):
+            logging.info(f"Extracted last frame to {output_image_path}")
+            return True
+        else:
+            logging.error(f"ffmpeg ran but output file {output_image_path} not found")
+            return False
+            
+    except subprocess.CalledProcessError as e:
+        logging.error(f"ffmpeg failed to extract last frame: {e.stderr}")
+        return False
+    except Exception as e:
+        logging.error(f"Failed to extract last frame: {e}")
+        return False

@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.docker_manager import docker_manager
-from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions, get_video_framerate
+from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions, get_video_framerate, extract_last_frame
 from utils.comfyui_workflow_utils import (
     inject_prompt_and_image_into_workflow,
     inject_video_and_prompt_into_foley_workflow,
@@ -549,6 +549,118 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
             
+class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
+    def process(self):
+        if DEV_MODE:
+            # Dev mode logic remains unchanged
+            return
+
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        inputs = self.job.get('inputs', {})
+        input_video_url = inputs.get('input_video_url')
+        if not input_video_url:
+            logging.error(f"Job {self.job_id} missing 'input_video_url' in inputs.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
+        if not video_path:
+            logging.error(f"Failed to download input video for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        # Extract last frame
+        start_image_filename = f"{self.job_id}_last_frame.jpg"
+        start_image_full_path = os.path.join(self.input_dir, start_image_filename)
+        
+        if not extract_last_frame(video_path, start_image_full_path):
+             logging.error(f"Failed to extract last frame for job {self.job_id}.")
+             self.orchestrator_service.update_job_status(self.job_id, 'failed')
+             return
+
+        try:
+            container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
+            docker_manager.copy_file_to_container(
+                service_type=self.client.active_service_type,
+                source_on_host=start_image_full_path,
+                dest_in_container=container_input_path
+            )
+        except Exception as e:
+            logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        inputs = self.job.get('inputs', {})
+        aspect_ratio = inputs.get('aspect_ratio', '16:9')
+        wf_ready = inject_prompt_and_image_into_workflow(workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio)
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        video_info = find_video_in_output(outputs)
+        if not video_info:
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_filename, subfolder = video_info
+        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+            if video_storage_path:
+                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                thumbnail_storage_path = None
+                
+                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                    os.remove(thumbnail_local_path)
+                
+                duration = get_video_duration(temp_host_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
+
+                # Check for upscale chaining
+                workflow_config = self.job.get('workflow', {})
+                if workflow_config.get('upscale_enabled'):
+                    logging.info(f"Upscale enabled for job {self.job_id}. Submitting upscale job.")
+                    upscale_params = workflow_config.get('upscale_params', {})
+                    
+                    # Construct submit body
+                    submit_body = {
+                        "sceneId": self.job.get('scene_id'),
+                        "branchId": self.job.get('branch_id'),
+                        "model": "esrgan-upscaler", # WORKFLOW_TYPES.ESRGAN_UPSCALER
+                        "prompt": "Upscaling video",
+                        "input_storage_path": video_storage_path,
+                        "upscale_params": upscale_params
+                    }
+                    
+                    new_job_id = self.orchestrator_service.submit_job(submit_body)
+                    if new_job_id:
+                        logging.info(f"Successfully submitted upscale job: {new_job_id}")
+                    else:
+                        logging.error("Failed to submit upscale job.")
+
+            else:
+                logging.error(f"Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)
+            # Also clean up source video and extracted frame
+            if os.path.exists(video_path):
+                os.remove(video_path)
+            if os.path.exists(start_image_full_path):
+                os.remove(start_image_full_path)
+
 class VideoUpscalerJobProcessor(BaseJobProcessor):
     def process(self):
         workflow_data = self._get_workflow_payload()
