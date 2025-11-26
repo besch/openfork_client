@@ -235,12 +235,22 @@ def inject_video_and_prompt_into_foley_workflow(workflow_api_data: Dict, video_f
             node["inputs"]["text_prompt"] = prompt
             node["inputs"]["negative_prompt"] = negative_prompt
             # Randomize seed
+
             new_seed = random.randint(0, 2**31 - 1)
             node["inputs"]["seed"] = new_seed
 
     return api_graph
 
-def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
+def inject_prompt_into_vibevoice_workflow(
+    workflow_api_data: Dict, 
+    prompt: str,
+    cfg_scale: float = 3.5,
+    diffusion_steps: int = 10,
+    temperature: float = 0.8,
+    top_p: float = 0.95,
+    seed: Union[int, None] = None,
+    voice_id: str = "Alice"
+):
     """
     Loads the VibeVoice ComfyUI API-formatted workflow, injects the prompt
     and ensures all required inputs for VibeVoiceSingleSpeakerNode are present.
@@ -248,8 +258,9 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
-    # Generate random seed
-    new_seed = random.randint(0, 2**31 - 1)
+    # Generate random seed if not provided
+    if seed is None:
+        seed = random.randint(0, 2**31 - 1)
 
     # Find the VibeVoice node and explicitly set its inputs
     for node in api_graph.values():
@@ -260,13 +271,14 @@ def inject_prompt_into_vibevoice_workflow(workflow_api_data: Dict, prompt: str):
                 "model": "VibeVoice-1.5B",
                 "attention_type": "auto",
                 "free_memory_after_generate": True,
-                "diffusion_steps": 10,
-                "seed": new_seed,
-                "cfg_scale": 3.5,
+                "diffusion_steps": diffusion_steps,
+                "seed": seed,
+                "cfg_scale": cfg_scale,
                 "use_sampling": False,
-                "temperature": 0.8,
-                "top_p": 0.95,
-                "quantize_llm": "full precision"
+                "temperature": temperature,
+                "top_p": top_p,
+                "quantize_llm": "full precision",
+                "voice": voice_id
             }
             break  # Assuming only one such node
 
@@ -297,21 +309,36 @@ def inject_prompt_into_diffrhythm_workflow(
 
     return api_graph
 
-def inject_script_and_clones_into_vibevoice_workflow(workflow_api_data: Dict, script: str, clone_paths: list[str]):
+def inject_script_and_clones_into_vibevoice_workflow(
+    workflow_api_data: Dict, 
+    script: str, 
+    clone_paths: list[str],
+    cfg_scale: float = 3.5,
+    diffusion_steps: int = 10,
+    temperature: float = 0.8,
+    top_p: float = 0.95,
+    seed: Union[int, None] = None
+):
     """
     Loads the VibeVoice ComfyUI API-formatted workflow, injects the script and clone paths.
     Also randomizes seed for varied outputs.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
-    # Generate random seed
-    new_seed = random.randint(0, 2**31 - 1)
+    # Generate random seed if not provided
+    if seed is None:
+        seed = random.randint(0, 2**31 - 1)
 
     # Inject script and clone paths
     for node in api_graph.values():
         if node["class_type"] == "VibeVoiceMultipleSpeakers":
             node["inputs"]["text"] = script
-            node["inputs"]["seed"] = new_seed
+            node["inputs"]["seed"] = seed
+            node["inputs"]["cfg_scale"] = cfg_scale
+            node["inputs"]["diffusion_steps"] = diffusion_steps
+            node["inputs"]["temperature"] = temperature
+            node["inputs"]["top_p"] = top_p
+            
             for i, clone_path in enumerate(clone_paths):
                 node["inputs"][f"voice_{i+1}_clone_path"] = clone_path
 

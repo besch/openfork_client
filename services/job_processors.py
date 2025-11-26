@@ -249,7 +249,24 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
 
-        wf_ready = inject_prompt_into_vibevoice_workflow(workflow_data, self.positive_prompt)
+        inputs = self.job.get('inputs', {})
+        cfg_scale = inputs.get('cfg_scale', 3.5)
+        diffusion_steps = inputs.get('diffusion_steps', 10)
+        temperature = inputs.get('temperature', 0.8)
+        top_p = inputs.get('top_p', 0.95)
+        seed = inputs.get('seed')
+        voice_id = inputs.get('voice_id', "Alice")
+
+        wf_ready = inject_prompt_into_vibevoice_workflow(
+            workflow_data, 
+            self.positive_prompt,
+            cfg_scale=cfg_scale,
+            diffusion_steps=diffusion_steps,
+            temperature=temperature,
+            top_p=top_p,
+            seed=seed,
+            voice_id=voice_id
+        )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
@@ -307,7 +324,23 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
                 return
             clone_paths.append(os.path.basename(clone_path))
 
-        wf_ready = inject_script_and_clones_into_vibevoice_workflow(workflow_data, self.positive_prompt, clone_paths)
+        inputs = self.job.get('inputs', {})
+        cfg_scale = inputs.get('cfg_scale', 3.5)
+        diffusion_steps = inputs.get('diffusion_steps', 10)
+        temperature = inputs.get('temperature', 0.8)
+        top_p = inputs.get('top_p', 0.95)
+        seed = inputs.get('seed')
+
+        wf_ready = inject_script_and_clones_into_vibevoice_workflow(
+            workflow_data, 
+            self.positive_prompt, 
+            clone_paths,
+            cfg_scale=cfg_scale,
+            diffusion_steps=diffusion_steps,
+            temperature=temperature,
+            top_p=top_p,
+            seed=seed
+        )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
