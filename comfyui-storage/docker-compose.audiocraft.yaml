@@ -1,0 +1,21 @@
+services:
+  comfyui-audiocraft:
+    build:
+      context: .
+      dockerfile: Dockerfile.audiocraft
+    container_name: comfyui-audiocraft-cu128
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./storage/ComfyUI/output:/opt/ComfyUI/output
+      - ./storage/ComfyUI/input:/opt/ComfyUI/input
+      - ./storage/ComfyUI/models/audiogen:/opt/ComfyUI/models/audiogen
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true

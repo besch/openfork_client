@@ -15,6 +15,7 @@ from utils.comfyui_workflow_utils import (
     inject_prompt_into_vibevoice_workflow,
     inject_script_and_clones_into_vibevoice_workflow,
     inject_prompt_into_diffrhythm_workflow,
+    inject_prompt_into_audiocraft_workflow,
     materialize_start_image,
     inject_video_into_upscaler_workflow
 )
@@ -137,6 +138,52 @@ class BaseJobProcessor(ABC):
     @abstractmethod
     def process(self):
         pass
+
+class AudioCraftJobProcessor(BaseJobProcessor):
+    def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for AudioCraftJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        inputs = self.job.get('inputs', {})
+        duration = inputs.get('duration_seconds', 5)
+
+        wf_ready = inject_prompt_into_audiocraft_workflow(workflow_data, self.positive_prompt, duration)
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        audio_info = find_audio_in_output(outputs)
+        if not audio_info:
+            logging.error(f"AudioCraft workflow for job {self.job_id} completed, but no audio file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        audio_filename, subfolder = audio_info
+        temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            audio_storage_path = self.orchestrator_service.upload_audio_output(temp_host_path, self.job_id)
+            if audio_storage_path:
+                duration = get_audio_duration(temp_host_path)
+                completion_metadata = self.job.get('completion_metadata') or {}
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
+            else:
+                logging.error(f"AudioCraft job {self.job_id} completed, but audio upload failed.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)
 
 class FoleyJobProcessor(BaseJobProcessor):
     def process(self):
