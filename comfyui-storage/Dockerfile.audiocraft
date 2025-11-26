@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y \
     python3.11 python3.11-venv python3.11-distutils python3.11-dev \
     curl git wget sed git-lfs \
     ffmpeg \
+    libavformat-dev libavcodec-dev libavdevice-dev \
+    libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
+    pkg-config \
     libgl1-mesa-glx libgl1-mesa-dri \
     libsndfile1 libsndfile1-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -44,9 +47,11 @@ RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requireme
 RUN git clone https://github.com/eigenpunk/ComfyUI-audio.git /opt/ComfyUI/custom_nodes/ComfyUI-audio
 
 # Install audio dependencies manually (avoiding requirements.txt with missing voicefixer)
-RUN python -m pip install audiocraft vall_e_x
-RUN python -m pip install git+https://github.com/rsxdalv/tortoise-tts.git@master
-RUN python -m pip install git+https://github.com/VOICeVIO/voicefixer.git@main
+RUN python -m pip install audiocraft
+RUN python -m pip install --pre vall_e_x
+RUN python -m pip install git+https://github.com/rsxdalv/tortoise-tts.git@e4711433b12bcd1086840649e1830ad5c3fa1a76#egg=tortoise-tts
+RUN python -m pip install --ignore-installed blinker
+RUN python -m pip install voicefixer
 
 # Install uv for ComfyUI-Manager
 RUN python -m pip install uv
