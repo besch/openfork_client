@@ -10,15 +10,13 @@
         "seed": 0,
         "sigma_min": 0.3,
         "sigma_max": 500,
-        "sampler_type": "dpmpp-3m-sde",
-        "device": "cuda"
+        "device": "auto"
       }
     },
     "2": {
-      "class_type": "SaveAudio",
+      "class_type": "AudioPlay",
       "inputs": {
-        "audio": ["1", 0],
-        "filename_prefix": "stable_audio_output"
+        "audio": ["1", 0]
       }
     }
   }

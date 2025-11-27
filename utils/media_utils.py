@@ -90,6 +90,7 @@ def find_video_in_output(outputs: dict) -> Union[tuple[str, str], None]:
 
 def find_audio_in_output(outputs: dict) -> Union[tuple[str, str], None]:
     """Finds the output audio details from the ComfyUI workflow output."""
+    # Standard ComfyUI audio output format (from SaveAudio nodes)
     for node_id, node_output in outputs.items():
         if 'audio' in node_output:
             for audio in node_output['audio']:
@@ -97,6 +98,61 @@ def find_audio_in_output(outputs: dict) -> Union[tuple[str, str], None]:
                 subfolder = audio.get('subfolder', '')
                 if filename:
                     return filename, subfolder
+    
+    # Check for StableAudio_ node's custom output format
+    # This node returns a file reference dict directly in the outputs
+    for node_id, node_output in outputs.items():
+        # StableAudio_ returns a tuple with a single dict: ({...},)
+        # When accessed through outputs, it appears as the first element
+        if isinstance(node_output, dict):
+            # Check if this looks like a StableAudio_ output
+            if 'filename' in node_output and 'type' in node_output:
+                filename = node_output.get('filename')
+                subfolder = node_output.get('subfolder', '')
+                if filename and node_output.get('type') == 'output':
+                    logging.info(f"Found StableAudio_ output: {filename} in subfolder '{subfolder}'")
+                    return filename, subfolder
+    
+    return None
+
+def find_audio_file_in_directory(output_dir: str, job_id: str = None) -> Union[tuple[str, str], None]:
+    """
+    Finds audio files in the output directory for workflows that save directly to disk.
+    Used by workflows like StableAudio_ that don't output through ComfyUI's standard format.
+    
+    Args:
+        output_dir: Path to the output directory to search
+        job_id: Optional job ID to filter files
+        
+    Returns:
+        Tuple of (filename, subfolder) if found, None otherwise
+    """
+    audio_extensions = ['.wav', '.flac', '.mp3', '.ogg', '.m4a']
+    try:
+        if os.path.exists(output_dir):
+            # Get all files sorted by modification time (most recent first)
+            files = []
+            for root, dirs, filenames in os.walk(output_dir):
+                for filename in filenames:
+                    if any(filename.lower().endswith(ext) for ext in audio_extensions):
+                        filepath = os.path.join(root, filename)
+                        files.append((filepath, os.path.getmtime(filepath)))
+            
+            if files:
+                # Sort by modification time, most recent first
+                files.sort(key=lambda x: x[1], reverse=True)
+                most_recent = files[0][0]
+                
+                # Get relative path components
+                rel_path = os.path.relpath(most_recent, output_dir)
+                subfolder = os.path.dirname(rel_path)
+                filename = os.path.basename(most_recent)
+                
+                logging.info(f"Found audio file in directory: {filename} (subfolder: {subfolder})")
+                return filename, subfolder
+    except Exception as e:
+        logging.warning(f"Error searching for audio files in output directory: {e}")
+    
     return None
 
 def find_image_in_output(outputs: dict) -> Union[tuple[str, str], None]:

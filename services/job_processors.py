@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.docker_manager import docker_manager
-from utils.media_utils import get_audio_duration, find_audio_in_output, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions, get_video_framerate, extract_last_frame
+from utils.media_utils import get_audio_duration, find_audio_in_output, find_audio_file_in_directory, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions, get_video_framerate, extract_last_frame
 from utils.comfyui_workflow_utils import (
     inject_prompt_and_image_into_workflow,
     inject_video_and_prompt_into_foley_workflow,
@@ -155,11 +155,23 @@ class StableAudioJobProcessor(BaseJobProcessor):
 
         wf_ready = inject_prompt_into_stable_audio_workflow(workflow_data, self.positive_prompt, duration)
         payload = {"prompt": wf_ready}
+
+        # StableAudio_ node pipes output to SaveAudio node for standard ComfyUI outputs
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
             return
 
+        # First try standard output format (in case the custom node is updated to support it)
         audio_info = find_audio_in_output(outputs)
+
+        # If not found in standard outputs, scan the output directory for audio files
+        if not audio_info:
+            logging.info(f"Audio not found in workflow outputs for job {self.job_id}, scanning output directory...")
+            # The output directory path on the host (Docker volume mount)
+            if self.client.active_service_type:
+                output_dir = docker_manager.get_output_dir_path(self.client.active_service_type)
+                audio_info = find_audio_file_in_directory(output_dir, self.job_id)
+            
         if not audio_info:
             logging.error(f"StableAudio workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
@@ -184,6 +196,7 @@ class StableAudioJobProcessor(BaseJobProcessor):
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
+
 
 class FoleyJobProcessor(BaseJobProcessor):
     def process(self):

@@ -6,6 +6,10 @@ import logging
 import random
 from datetime import datetime
 from typing import Union, Dict
+import random
+import logging
+import copy
+from datetime import datetime
 
 # Assuming OUTPUT_DIR, INPUT_DIR are passed or imported from config
 # from config import OUTPUT_DIR, INPUT_DIR
@@ -414,6 +418,20 @@ def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_
         else:
             logging.info(f"No 'ui' or 'gifs' found or not a dict/list in node_output for node {node_id}.")
 
+    # Check for audio files in output directory (for workflows that save directly to disk)
+    audio_extensions = ['.wav', '.flac', '.mp3', '.ogg', '.m4a']
+    try:
+        if os.path.exists(output_dir):
+            for filename in os.listdir(output_dir):
+                if any(filename.lower().endswith(ext) for ext in audio_extensions):
+                    file_path = os.path.join(output_dir, filename)
+                    logging.info(f"Audio file found: {file_path}. Attempting upload.")
+                    storage_path = upload_output_func(file_path, job_id)
+                    if storage_path:
+                        return storage_path
+    except Exception as e:
+        logging.warning(f"Error checking for audio files in output directory: {e}")
+
     logging.error(f"Workflow failed to produce outputs for job {job_id}. No valid output files found after checking all nodes.")
     return None
 
@@ -568,41 +586,49 @@ def inject_prompt_into_stable_audio_workflow(workflow_data, prompt, duration_sec
     Inject prompt and duration into Stable Audio workflow using comfyui-sound-lab's StableAudio_ node.
     
     Args:
-        workflow_data: The workflow JSON structure
-        prompt: Text prompt for audio generation
-        duration_seconds: Duration in seconds (default: 5)
+        workflow_data: The workflow JSON structure (dict with 'prompt' key containing nodes)
+        prompt: Text prompt for audio generation (e.g., "a dog barking")
+        duration_seconds: Duration in seconds (default: 5, max depends on model)
         seed: Random seed (optional, defaults to random if None)
     
     Returns:
-        Modified workflow data
-    """
-    import random
-    import logging
+        Modified workflow data (dict)
     
-    wf = workflow_data.get('prompt', {})
+    Example:
+        workflow = inject_prompt_into_stable_audio_workflow(
+            workflow_data=loaded_json,
+            prompt="thunderstorm with heavy rain",
+            duration_seconds=10,
+            seed=42
+        )
+    """
+    
+    # Deep copy to avoid modifying original
+    api_graph = copy.deepcopy(workflow_data.get('prompt', workflow_data))
     
     # Find the StableAudio_ node (usually node "1")
     stable_audio_node_id = None
-    for node_id, node in wf.items():
+    for node_id, node in api_graph.items():
         if node.get('class_type') == 'StableAudio_':
             stable_audio_node_id = node_id
             break
     
     if not stable_audio_node_id:
-        raise ValueError("StableAudio_ node not found in workflow")
+        raise ValueError("StableAudio_ node not found in workflow. Ensure the workflow contains a StableAudio_ node.")
     
     # Update the StableAudio_ node inputs
-    wf[stable_audio_node_id]['inputs']['prompt'] = prompt
-    wf[stable_audio_node_id]['inputs']['seconds'] = duration_seconds
+    api_graph[stable_audio_node_id]['inputs']['prompt'] = prompt
+    api_graph[stable_audio_node_id]['inputs']['seconds'] = duration_seconds
     
     # Set seed - use provided seed or generate random one
     if seed is None:
         seed = random.randint(0, 2**31 - 1)
-    wf[stable_audio_node_id]['inputs']['seed'] = seed
+    api_graph[stable_audio_node_id]['inputs']['seed'] = seed
     
     # Ensure device is set to 'auto' (accepts 'auto' or 'cpu' only)
-    wf[stable_audio_node_id]['inputs']['device'] = 'auto'
+    api_graph[stable_audio_node_id]['inputs']['device'] = 'auto'
+
+    logging.info(f"Stable Audio configured - Prompt: '{prompt}', Duration: {duration_seconds}s, Seed: {seed}")
     
-    logging.info(f"Stable Audio configured - Prompt: {prompt}, Duration: {duration_seconds}, Seed: {seed}")
-    
-    return wf
+    # Return just the node graph (consistent with other inject functions)
+    return api_graph
