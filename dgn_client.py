@@ -41,8 +41,15 @@ class DGNClient:
             self.allowed_ids = self.orchestrator_service.resolve_targets(self.allowed_targets, target_type)
             logging.info(f"Resolved targets to IDs: {self.allowed_ids}")
 
+
+
     def _build_processor_map(self):
         proc_map = {}
+        # Auto-register TextGenerationJobProcessor for 'text_generation' workflow
+        # This allows it to work even if not explicitly in the server config yet
+        if hasattr(job_processors_module, 'TextGenerationJobProcessor'):
+            proc_map['text_generation'] = job_processors_module.TextGenerationJobProcessor
+
         for workflow_type, config in self.config.items():
             processor_name = config.get("processor")
             if processor_name:

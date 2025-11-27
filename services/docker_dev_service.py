@@ -78,11 +78,16 @@ class DockerDevManager:
         source_path = f"{container_id}:{source_in_container}"
         docker_cp(source_path, dest_on_host, shutdown_event)
 
-    def run_container(self, service_type: str):
+    def run_container(self, service_type: str, ports: dict = None, force_restart: bool = True):
         compose_file = self._get_compose_file(service_type)
         logging.info(f"Starting container for service '{service_type}' using compose file: {compose_file}")
         # The command is structured to use a specific compose file and bring the service up
+        # docker-compose up is idempotent, so force_restart logic is less critical here, 
+        # but we could add --force-recreate if force_restart is True.
         command = ['docker-compose', '-f', compose_file, 'up', '--build', '-d']
+        if force_restart:
+            command.append('--force-recreate')
+            
         self._run_command(command)
 
     def stop_container(self, service_type: str):

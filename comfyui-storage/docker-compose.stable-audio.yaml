@@ -1,9 +1,9 @@
 services:
-  comfyui-audiocraft:
+  comfyui-stable.audio:
     build:
       context: .
-      dockerfile: Dockerfile.audiocraft
-    container_name: comfyui-audiocraft-cu128
+      dockerfile: Dockerfile.stable.audio
+    container_name: comfyui-stable.audio-cu128
     ports:
       - "8188:8188"
     volumes:

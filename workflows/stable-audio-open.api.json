@@ -1,0 +1,30 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "StableAudio_ModelLoader",
+      "inputs": {
+        "ckpt_name": "stable_audio_open_1.0.safetensors",
+        "t5_name": "t5_base.safetensors"
+      }
+    },
+    "2": {
+      "class_type": "StableAudio_Sampler",
+      "inputs": {
+        "model": ["1", 0],
+        "prompt": "a dog barking",
+        "negative_prompt": "",
+        "seconds_total": 5,
+        "steps": 100,
+        "cfg_scale": 7,
+        "seed": 0
+      }
+    },
+    "3": {
+      "class_type": "SaveAudio",
+      "inputs": {
+        "audio": ["2", 0],
+        "filename_prefix": "stable_audio_output"
+      }
+    }
+  }
+}

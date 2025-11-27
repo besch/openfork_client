@@ -309,30 +309,6 @@ def inject_prompt_into_diffrhythm_workflow(
 
     return api_graph
 
-def inject_prompt_into_audiocraft_workflow(
-    workflow_api_data: Dict, 
-    prompt: str,
-    duration_seconds: int
-):
-    """
-    Loads the AudioCraft ComfyUI API-formatted workflow.
-    
-    Args:
-        prompt: Text description of the sound effect.
-        duration_seconds: The duration of the generated audio in seconds.
-    """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-    new_seed = random.randint(0, 2**31 - 1)
-
-    for node in api_graph.values():
-        if node["class_type"] == "AudioGenGenerate":
-            node["inputs"]["prompt"] = prompt
-            node["inputs"]["duration_seconds"] = duration_seconds
-            node["inputs"]["seed"] = new_seed
-            logging.info(f"AudioCraft configured - Prompt: {prompt}, Duration: {duration_seconds}, Seed: {new_seed}")
-
-    return api_graph
-
 def inject_script_and_clones_into_vibevoice_workflow(
     workflow_api_data: Dict, 
     script: str, 
@@ -584,5 +560,29 @@ def inject_video_into_upscaler_workflow(
             prefix = f"{prefix}_{datestr}"
         api_graph['4']['inputs']['filename_prefix'] = prefix
         logging.info(f"Configured video output: {prefix} at {frame_rate}fps")
+
+    return api_graph
+
+def inject_prompt_into_stable_audio_workflow(
+    workflow_api_data: Dict, 
+    prompt: str,
+    duration_seconds: int
+):
+    """
+    Loads the Stable Audio Open ComfyUI API-formatted workflow.
+    
+    Args:
+        prompt: Text description of the sound effect.
+        duration_seconds: The duration of the generated audio in seconds.
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    new_seed = random.randint(0, 2**31 - 1)
+
+    for node in api_graph.values():
+        if node["class_type"] == "StableAudio_Sampler":
+            node["inputs"]["prompt"] = prompt
+            node["inputs"]["seconds_total"] = duration_seconds
+            node["inputs"]["seed"] = new_seed
+            logging.info(f"Stable Audio configured - Prompt: {prompt}, Duration: {duration_seconds}, Seed: {new_seed}")
 
     return api_graph

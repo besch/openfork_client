@@ -15,7 +15,7 @@ from utils.comfyui_workflow_utils import (
     inject_prompt_into_vibevoice_workflow,
     inject_script_and_clones_into_vibevoice_workflow,
     inject_prompt_into_diffrhythm_workflow,
-    inject_prompt_into_audiocraft_workflow,
+    inject_prompt_into_stable_audio_workflow,
     materialize_start_image,
     inject_video_into_upscaler_workflow
 )
@@ -139,10 +139,10 @@ class BaseJobProcessor(ABC):
     def process(self):
         pass
 
-class AudioCraftJobProcessor(BaseJobProcessor):
+class StableAudioJobProcessor(BaseJobProcessor):
     def process(self):
         if not self.job:
-            logging.error(f"Job object is None for AudioCraftJobProcessor. Cannot proceed.")
+            logging.error(f"Job object is None for StableAudioJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -153,7 +153,7 @@ class AudioCraftJobProcessor(BaseJobProcessor):
         inputs = self.job.get('inputs', {})
         duration = inputs.get('duration_seconds', 5)
 
-        wf_ready = inject_prompt_into_audiocraft_workflow(workflow_data, self.positive_prompt, duration)
+        wf_ready = inject_prompt_into_stable_audio_workflow(workflow_data, self.positive_prompt, duration)
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
         if not outputs:
@@ -161,7 +161,7 @@ class AudioCraftJobProcessor(BaseJobProcessor):
 
         audio_info = find_audio_in_output(outputs)
         if not audio_info:
-            logging.error(f"AudioCraft workflow for job {self.job_id} completed, but no audio file found.")
+            logging.error(f"StableAudio workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -179,7 +179,7 @@ class AudioCraftJobProcessor(BaseJobProcessor):
                 completion_metadata = self.job.get('completion_metadata') or {}
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
-                logging.error(f"AudioCraft job {self.job_id} completed, but audio upload failed.")
+                logging.error(f"StableAudio job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
@@ -950,3 +950,139 @@ class TextToVideoLightningJobProcessor(WAN22TextToVideoJobProcessor):
 
 class ImageToVideoLightningJobProcessor(WAN22ImageToVideoJobProcessor):
     workflow_name = 'WAN22_LIGHTNING_IMAGE_TO_VIDEO.json'
+
+
+
+class TextGenerationJobProcessor(BaseJobProcessor):
+    def process(self):
+        if not self.job:
+            logging.error(f"Job object is None for TextGenerationJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        # Container is already running (started by job listener)
+        # Wait for Ollama to be ready
+        api_base = os.getenv("LLM_API_BASE", "http://localhost:11434")
+        
+        import time
+        import requests
+        
+        logging.info(f"Waiting for Ollama service to be ready at {api_base}...")
+        
+        # Give Ollama a few seconds to initialize before first check
+        time.sleep(3)
+        
+        ready = False
+        for attempt in range(60):  # Wait up to 60 seconds for Ollama to start
+            if self.shutdown_event.is_set():
+                logging.info("Shutdown event received during Ollama readiness check.")
+                return
+            try:
+                # Use Ollama's native API endpoint to check readiness
+                # /api/tags lists available models and confirms the server is responding
+                response = requests.get(f"{api_base}/api/tags", timeout=2)
+                response.raise_for_status()
+                ready = True
+                logging.info(f"Ollama service is ready! (attempt {attempt + 1}/60)")
+                break
+            except requests.exceptions.RequestException as e:
+                if attempt % 10 == 0:  # Log every 10 attempts to avoid spam
+                    logging.debug(f"Ollama not ready yet (attempt {attempt + 1}/60): {e}")
+                time.sleep(1)
+        
+        if not ready:
+            logging.error(f"Ollama service failed to become ready within 60 seconds at {api_base}")
+            logging.error("Please check: 1) Container is running, 2) Port 11434 is mapped correctly, 3) No firewall blocking")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        # Get generation parameters
+        inputs = self.job.get('inputs', {})
+        model_name = inputs.get('model', 'llama3.1:8b')
+        system_prompt = inputs.get('system_prompt', "You are a helpful assistant.")
+        temperature = inputs.get('temperature', 0.7)
+        max_tokens = inputs.get('max_tokens', 2000)
+
+        logging.info(f"Generating text with model {model_name}...")
+        
+        # First, check if the model exists and pull if needed
+        try:
+            logging.info(f"Checking if model {model_name} is available...")
+            tags_response = requests.get(f"{api_base}/api/tags", timeout=5)
+            tags_response.raise_for_status()
+            tags_data = tags_response.json()
+            
+            available_models = [m.get('name', '') for m in tags_data.get('models', [])]
+            logging.info(f"Available models: {available_models}")
+            
+            if model_name not in available_models:
+                logging.info(f"Model {model_name} not found. Pulling it now...")
+                pull_payload = {"name": model_name, "stream": False}
+                pull_response = requests.post(f"{api_base}/api/pull", json=pull_payload, timeout=600)
+                pull_response.raise_for_status()
+                logging.info(f"Successfully pulled model {model_name}")
+            else:
+                logging.info(f"Model {model_name} is already available")
+        except Exception as e:
+            logging.error(f"Failed to verify/pull model {model_name}: {e}")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            # Use Ollama's /api/generate endpoint (available in all versions including 0.13.0)
+            # Combine system and user prompts into a single string
+            full_prompt = f"{system_prompt}\n\nUser: {self.positive_prompt}\n\nAssistant:"
+            
+            payload = {
+                "model": model_name,
+                "prompt": full_prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": max_tokens
+                }
+            }
+            
+            # Call Ollama's /api/generate endpoint
+            logging.info(f"Calling Ollama API at {api_base}/api/generate with model {model_name}")
+            response = requests.post(f"{api_base}/api/generate", json=payload, timeout=1200)
+            response.raise_for_status()
+            
+            result = response.json()
+            # Response format: {"model": "...", "response": "..."}
+            generated_text = result.get('response', '')
+            
+            if not generated_text:
+                logging.error(f"Ollama returned empty response. Full result: {result}")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
+            
+            logging.info(f"Generation complete. Length: {len(generated_text)} chars.")
+
+            # Save and upload output
+            output_filename = f"{self.job_id}_script.txt"
+            output_path = os.path.join(self.cache_dir, output_filename)
+            
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write(generated_text)
+
+            storage_path = self.orchestrator_service.upload_output(output_path, self.job_id, "text/plain")
+            
+            if storage_path:
+                self.orchestrator_service.update_job_status(
+                    self.job_id, 
+                    'completed', 
+                    storage_path=storage_path,
+                    completion_metadata={"model": model_name}
+                )
+            else:
+                logging.error("Failed to upload generated script.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+
+            # Cleanup
+            if os.path.exists(output_path):
+                os.remove(output_path)
+
+        except Exception as e:
+            logging.error(f"Text generation failed: {e}", exc_info=True)
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')

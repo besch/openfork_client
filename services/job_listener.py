@@ -1,4 +1,5 @@
 import logging
+import os
 import json
 from services.docker_manager import docker_manager
 from services.orchestrator_service import TokenExpiredError
@@ -70,12 +71,17 @@ class JobListener:
                         logging.info(f"Job requires service '{service_type}'. Starting container...")
                         docker_manager.run_container(service_type=service_type)
                         
-                        if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
-                            self.client._process_job(job, self.shutdown_event)
+                        # Text generation doesn't use ComfyUI, so skip the readiness check
+                        if service_type != 'text_generation':
+                            if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
+                                self.client._process_job(job, self.shutdown_event)
+                            else:
+                                if not self.shutdown_event.is_set():
+                                    logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
+                                    self.orchestrator_service.update_job_status(job_id, 'failed')
                         else:
-                            if not self.shutdown_event.is_set():
-                                logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
-                                self.orchestrator_service.update_job_status(job_id, 'failed')
+                            # For text_generation, directly process the job (no ComfyUI needed)
+                            self.client._process_job(job, self.shutdown_event)
 
                         if not self.shutdown_event.is_set():
                             logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")

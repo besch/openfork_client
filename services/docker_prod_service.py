@@ -46,30 +46,46 @@ class DockerProdManager:
                 logging.error(f"Failed to pull image '{image_name}': {e}")
                 raise
 
-    def run_container(self, service_type: str):
+    def run_container(self, service_type: str, ports: dict = None, force_restart: bool = True):
         image_name = self.get_image_name(service_type)
         container_name = self.get_container_name(service_type)
 
+        # Set service-specific default ports if not provided
+        if ports is None:
+            if service_type == 'text_generation':
+                ports = {'11434/tcp': 11434}  # Ollama port
+            else:
+                ports = {'8188/tcp': 8188}  # ComfyUI port (default)
+
         try:
             container = self.client.containers.get(container_name)
-            logging.info(f"Found existing container '{container_name}' with status '{container.status}'. Removing it before starting a new one.")
-            container.remove(force=True)
+            if force_restart:
+                logging.info(f"Found existing container '{container_name}' with status '{container.status}'. Removing it before starting a new one.")
+                container.remove(force=True)
+            else:
+                if container.status == 'running':
+                    logging.info(f"Container '{container_name}' is already running and force_restart is False. Skipping start.")
+                    return
+                else:
+                    logging.info(f"Container '{container_name}' exists but is '{container.status}'. Removing and restarting.")
+                    container.remove(force=True)
+
         except docker.errors.NotFound:
             logging.info(f"No existing container named '{container_name}' found. Proceeding to create a new one.")
             pass  # Container does not exist, which is fine.
         except docker.errors.APIError as e:
-            logging.error(f"Error removing existing container '{container_name}': {e}. Attempting to continue.")
+            logging.error(f"Error checking/removing existing container '{container_name}': {e}. Attempting to continue.")
             # Log the error but try to proceed. The run command will likely fail if removal did, but it's worth a try.
 
         self.pull_image(image_name)
 
-        logging.info(f"Starting container '{container_name}' from image '{image_name}'...")
+        logging.info(f"Starting container '{container_name}' from image '{image_name}' with ports {ports}...")
         try:
             self.client.containers.run(
                 image=image_name,
                 detach=True,
                 name=container_name,
-                ports={'8188/tcp': 8188},
+                ports=ports,
                 device_requests=[
                     docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
                 ],

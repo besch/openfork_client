@@ -1,0 +1,19 @@
+services:
+  ollama:
+    build:
+      context: .
+      dockerfile: Dockerfile.llama
+    container_name: ollama-llama3.1
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./storage/ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true

@@ -1,0 +1,7 @@
+FROM ollama/ollama:latest
+
+# Pre-pull llama3.1:8b model during build
+# The model will be persisted via volume mount at /root/.ollama
+RUN /bin/sh -c "ollama serve & pid=\$! && sleep 5 && ollama pull llama3.1:8b && kill \$pid"
+
+# Use Ollama's default entrypoint (ollama serve)

@@ -330,7 +330,7 @@ class OrchestratorService:
             logging.info(f"Requesting reset for job {job_id}")
             response = self._make_request(
                 'put',
-                f"{self.orchestrator_url}/api/dgn/job/{job_id}?action=reset"
+                f"{self.orchestrator_url}/api/dgn/job/reset?jobId={job_id}"
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status reset successfully via API.")
