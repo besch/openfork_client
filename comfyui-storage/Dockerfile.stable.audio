@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.4
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-ENV TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu121
+ENV TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
 
 RUN apt-get update && apt-get install -y \
     software-properties-common \
@@ -42,12 +42,15 @@ RUN echo "numpy<2.0.0" > /tmp/constraints.txt && \
     echo "pydantic>=2.0,<3.0" >> /tmp/constraints.txt
 ENV PIP_CONSTRAINT=/tmp/constraints.txt
 
-# Install PyTorch 2.3.1 with CUDA 12.1 (compatible with cuDNN 8)
-RUN python -m pip install --no-cache-dir \
-    torch==2.3.1+cu121 \
-    torchvision==0.18.1+cu121 \
-    torchaudio==2.3.1+cu121 \
-    --index-url https://download.pytorch.org/whl/cu121
+# Uninstall any existing PyTorch installation
+RUN python -m pip uninstall -y torch torchvision torchaudio || true
+
+# Install PyTorch 2.7.1 with CUDA 12.6
+RUN python -m pip install --force-reinstall --no-cache-dir --break-system-packages \
+    torch==2.7.1+cu126 \
+    torchvision==0.22.1+cu126 \
+    torchaudio==2.7.1+cu126 \
+    --extra-index-url https://download.pytorch.org/whl/cu126
 
 # Install xformers compatible with PyTorch 2.3.1
 RUN python -m pip install --no-cache-dir xformers==0.0.26.post1
@@ -90,7 +93,7 @@ RUN python -m pip install --no-cache-dir --no-deps transformers==4.45.0 && \
 RUN python -m pip install --force-reinstall --no-cache-dir "numpy>=1.24.0,<2.0.0"
 
 # Verify PyTorch can load and check versions
-RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); assert torch.__version__.startswith('2.3.'), f'Wrong PyTorch version'"
+RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
 RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}'); assert numpy.__version__.startswith('1.'), f'Wrong NumPy version'"
 RUN python -c "from transformers import Qwen2Tokenizer; print('✓ Qwen2Tokenizer available')"
 RUN python -c "import av; print(f'✓ PyAV available')"
@@ -109,6 +112,9 @@ RUN if [ -f /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt ]; then \
 RUN git clone https://github.com/shadowcz007/comfyui-sound-lab /opt/ComfyUI/custom_nodes/comfyui-sound-lab
 RUN cd /opt/ComfyUI/custom_nodes/comfyui-sound-lab && \
     python -m pip install -r requirements.txt
+
+# Install additional dependencies for Stable Audio
+RUN python -m pip install vector_quantize_pytorch
 
 # Install uv for ComfyUI-Manager
 RUN python -m pip install --no-cache-dir uv
@@ -135,50 +141,14 @@ RUN echo "=== Build-time Package Verification ===" && \
     python -c "import av; print(f'✓ PyAV: {av.__version__}')" && \
     echo "=== All checks passed ==="
 
-# Create models directories
-RUN mkdir -p /opt/ComfyUI/models/checkpoints
+# Create models directories - CORRECTED PATHS for comfyui-sound-lab
+RUN mkdir -p /opt/ComfyUI/models/stable_audio
 RUN mkdir -p /opt/ComfyUI/models/text_encoders
 
-# Download Stable Audio Open 1.0 models (optional - gracefully handles missing token)
-ARG HF_TOKEN=""
-RUN if [ -z "$HF_TOKEN" ]; then \
-        echo ""; \
-        echo "===================================================="; \
-        echo "WARNING: HF_TOKEN not provided during build"; \
-        echo "===================================================="; \
-        echo "Models were NOT downloaded. To use Stable Audio, either:"; \
-        echo ""; \
-        echo "Option 1: Rebuild with HF token"; \
-        echo "  docker build --build-arg HF_TOKEN=your_token_here \\"; \
-        echo "    -t beschiak/openfork-stable-audio-rtx4060:latest ."; \
-        echo ""; \
-        echo "Option 2: Download models manually"; \
-        echo "  - Accept model access at https://huggingface.co/stabilityai/stable-audio-open-1.0"; \
-        echo "  - Create './models' directory locally"; \
-        echo "  - Download model files to ./models"; \
-        echo "  - Mount at runtime: -v \$(pwd)/models:/opt/ComfyUI/models"; \
-        echo "===================================================="; \
-        echo ""; \
-    else \
-        echo "Downloading Stable Audio Open 1.0 models with provided HF_TOKEN..."; \
-        python3 -c " \
-import os; \
-from huggingface_hub import hf_hub_download, login; \
-import shutil; \
-token = os.environ.get('HF_TOKEN', ''); \
-login(token=token) if token else None; \
-print('✓ Authenticated with Hugging Face'); \
-hf_hub_download(repo_id='stabilityai/stable-audio-open-1.0', filename='model.safetensors', local_dir='/opt/ComfyUI/models/checkpoints', local_dir_use_symlinks=False); \
-src = '/opt/ComfyUI/models/checkpoints/model.safetensors'; dst = '/opt/ComfyUI/models/checkpoints/stable_audio_open_1.0.safetensors'; \
-shutil.move(src, dst) if os.path.exists(src) else None; \
-print('✓ Main model downloaded'); \
-hf_hub_download(repo_id='stabilityai/stable-audio-open-1.0', filename='text_encoder/model.safetensors', local_dir='/opt/ComfyUI/models/text_encoders', local_dir_use_symlinks=False); \
-src = '/opt/ComfyUI/models/text_encoders/text_encoder/model.safetensors'; dst = '/opt/ComfyUI/models/text_encoders/t5_base.safetensors'; \
-shutil.move(src, dst) if os.path.exists(src) else None; \
-print('✓ Text encoder downloaded'); \
-print('✓ All models ready!') \
-" || echo "WARNING: Model download failed - you can add models manually later"; \
-    fi
+# Copy Stable Audio Open 1.0 models from temp directory (downloaded locally with huggingface-cli)
+COPY temp-models/stable_audio/model.safetensors /opt/ComfyUI/models/stable_audio/
+COPY temp-models/text_encoders/text_encoder/model.safetensors /opt/ComfyUI/models/text_encoders/t5_base.safetensors
+RUN echo "✓ Stable Audio models copied from temp directory"
 
 # Create a startup script that shows versions and starts ComfyUI
 RUN echo '#!/bin/bash' > /opt/startup.sh && \

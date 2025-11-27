@@ -9,7 +9,8 @@ services:
     volumes:
       - ./storage/ComfyUI/output:/opt/ComfyUI/output
       - ./storage/ComfyUI/input:/opt/ComfyUI/input
-      - ./storage/ComfyUI/models/audiogen:/opt/ComfyUI/models/audiogen
+      - ./storage/ComfyUI/models/stable_audio:/opt/ComfyUI/models/stable_audio
+      - ./storage/ComfyUI/models/text_encoders:/opt/ComfyUI/models/text_encoders
     deploy:
       resources:
         reservations:

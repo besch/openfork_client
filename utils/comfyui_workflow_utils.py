@@ -563,26 +563,46 @@ def inject_video_into_upscaler_workflow(
 
     return api_graph
 
-def inject_prompt_into_stable_audio_workflow(
-    workflow_api_data: Dict, 
-    prompt: str,
-    duration_seconds: int
-):
+def inject_prompt_into_stable_audio_workflow(workflow_data, prompt, duration_seconds, seed=None):
     """
-    Loads the Stable Audio Open ComfyUI API-formatted workflow.
+    Inject prompt and duration into Stable Audio workflow using comfyui-sound-lab's StableAudio_ node.
     
     Args:
-        prompt: Text description of the sound effect.
-        duration_seconds: The duration of the generated audio in seconds.
+        workflow_data: The workflow JSON structure
+        prompt: Text prompt for audio generation
+        duration_seconds: Duration in seconds (default: 5)
+        seed: Random seed (optional, defaults to random if None)
+    
+    Returns:
+        Modified workflow data
     """
-    api_graph = copy.deepcopy(workflow_api_data["prompt"])
-    new_seed = random.randint(0, 2**31 - 1)
-
-    for node in api_graph.values():
-        if node["class_type"] == "StableAudio_Sampler":
-            node["inputs"]["prompt"] = prompt
-            node["inputs"]["seconds_total"] = duration_seconds
-            node["inputs"]["seed"] = new_seed
-            logging.info(f"Stable Audio configured - Prompt: {prompt}, Duration: {duration_seconds}, Seed: {new_seed}")
-
-    return api_graph
+    import random
+    import logging
+    
+    wf = workflow_data.get('prompt', {})
+    
+    # Find the StableAudio_ node (usually node "1")
+    stable_audio_node_id = None
+    for node_id, node in wf.items():
+        if node.get('class_type') == 'StableAudio_':
+            stable_audio_node_id = node_id
+            break
+    
+    if not stable_audio_node_id:
+        raise ValueError("StableAudio_ node not found in workflow")
+    
+    # Update the StableAudio_ node inputs
+    wf[stable_audio_node_id]['inputs']['prompt'] = prompt
+    wf[stable_audio_node_id]['inputs']['seconds'] = duration_seconds
+    
+    # Set seed - use provided seed or generate random one
+    if seed is None:
+        seed = random.randint(0, 2**31 - 1)
+    wf[stable_audio_node_id]['inputs']['seed'] = seed
+    
+    # Ensure device is set to 'auto' (accepts 'auto' or 'cpu' only)
+    wf[stable_audio_node_id]['inputs']['device'] = 'auto'
+    
+    logging.info(f"Stable Audio configured - Prompt: {prompt}, Duration: {duration_seconds}, Seed: {seed}")
+    
+    return wf
