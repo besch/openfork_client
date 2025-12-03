@@ -43,14 +43,15 @@ def get_video_duration(file_path: str) -> float:
         logging.error(f"Error getting video duration for {file_path}: {e}")
         return 0.0
 
-def generate_thumbnail(video_path: str, thumbnail_path: str) -> bool:
-    """Generates a thumbnail for a video file."""
+def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = 100) -> bool:
+    """Generates a thumbnail for a video file with specified width (default 100px)."""
     command = [
         "ffmpeg",
         "-y",
         "-ss", "00:00:01.000",
         "-i", video_path,
         "-vframes", "1",
+        "-vf", f"scale={width}:-1",  # Scale to specified width, maintain aspect ratio
         "-nostdin",
         "-v", "error",
         thumbnail_path

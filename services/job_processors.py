@@ -539,7 +539,7 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
                 thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
                 thumbnail_storage_path = None
                 
-                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
                     thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
                     os.remove(thumbnail_local_path)
                 
@@ -639,7 +639,7 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
                 thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
                 thumbnail_storage_path = None
                 
-                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
                     thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
                     os.remove(thumbnail_local_path)
                 
@@ -752,7 +752,7 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
                 thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
                 thumbnail_storage_path = None
                 
-                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
                     thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
                     os.remove(thumbnail_local_path)
                 
@@ -935,7 +935,7 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
                 thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
                 thumbnail_storage_path = None
                 
-                if generate_thumbnail(temp_host_path, thumbnail_local_path):
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
                     thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
                     os.remove(thumbnail_local_path)
                 
