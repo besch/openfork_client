@@ -130,27 +130,29 @@ class DGNClient:
         return ProcessorClass(self, job, shutdown_event)
 
     def _process_job(self, job, shutdown_event: threading.Event):
-        """Processes a single DGN job by delegating to a specific job processor."""
-        # This lock ensures that only one job is processed at a time by this client instance.
-        with self.processing_lock:
-            try:
-                self.current_job = job
-                processor = self._get_job_processor(job, shutdown_event)
-                processor.process()
-            except TokenExpiredError:
-                print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
-                logging.warning(
-                    f"Auth expired during processing of job {job.get('id')}. Signaled main process."
-                )
-            except Exception as e:
-                logging.error(
-                    f"An error occurred while processing job {job.get('id')}: {e}",
-                    exc_info=True,
-                )
-                if job and job.get("id"):
-                    self.orchestrator_service.update_job_status(job.get("id"), "failed")
-            finally:
-                self.current_job = None
+        """Processes a single DGN job by delegating to a specific job processor.
+        
+        Note: This method is now deprecated and kept for backward compatibility.
+        The job listener now handles processing directly to ensure proper locking.
+        """
+        try:
+            self.current_job = job
+            processor = self._get_job_processor(job, shutdown_event)
+            processor.process()
+        except TokenExpiredError:
+            print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+            logging.warning(
+                f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+            )
+        except Exception as e:
+            logging.error(
+                f"An error occurred while processing job {job.get('id')}: {e}",
+                exc_info=True,
+            )
+            if job and job.get("id"):
+                self.orchestrator_service.update_job_status(job.get("id"), "failed")
+        finally:
+            self.current_job = None
 
 
 if __name__ == "__main__":

@@ -16,24 +16,45 @@ class JobListener:
         while not self.shutdown_event.is_set():
             job = None
             try:
-                logging.info(f"Checking for new jobs for provider {self.provider_id}...")
-                job = self.orchestrator_service.get_next_job(
-                    provider_id=self.provider_id,
-                    accept_policy=self.client.accept_policy,
-                    allowed_ids=self.client.allowed_ids
-                )
+                # Acquire the processing lock BEFORE fetching a job to ensure
+                # only one job is acquired and processed at a time
+                with self.client.processing_lock:
+                    logging.info(f"Checking for new jobs for provider {self.provider_id}...")
+                    job = self.orchestrator_service.get_next_job(
+                        provider_id=self.provider_id,
+                        accept_policy=self.client.accept_policy,
+                        allowed_ids=self.client.allowed_ids
+                    )
 
-                if job and job.get('id'):
-                    self.client.current_job = job
-                    logging.info(f"Received job: {job['id']}")
-                    self.client._process_job(job, self.shutdown_event)
-                    
-                    if not self.shutdown_event.is_set():
-                        self.orchestrator_service.update_provider_status(self.provider_id, 'available')
-                        logging.info("Provider status set to available. Waiting for next job...")
-                        self.client.current_job = None
-                else:
-                    logging.info("No new jobs.")
+                    if job and job.get('id'):
+                        self.client.current_job = job
+                        logging.info(f"Received job: {job['id']}")
+                        
+                        # Process the job while holding the lock
+                        try:
+                            processor = self.client._get_job_processor(job, self.shutdown_event)
+                            processor.process()
+                        except TokenExpiredError:
+                            print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                            logging.warning(
+                                f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+                            )
+                            raise  # Re-raise to be caught by outer exception handler
+                        except Exception as e:
+                            logging.error(
+                                f"An error occurred while processing job {job.get('id')}: {e}",
+                                exc_info=True,
+                            )
+                            if job and job.get('id'):
+                                self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+                        finally:
+                            self.client.current_job = None
+                        
+                        if not self.shutdown_event.is_set():
+                            self.orchestrator_service.update_provider_status(self.provider_id, 'available')
+                            logging.info("Provider status set to available. Waiting for next job...")
+                    else:
+                        logging.info("No new jobs.")
             except TokenExpiredError:
                 print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
                 logging.warning("Could not fetch job due to expired token. Notified main process.")
@@ -52,46 +73,84 @@ class JobListener:
                 logging.info("Top of auto-mode loop iteration.")
                 job = None
                 try:
-                    logging.info("Auto mode: Checking for new jobs...")
-                    job = self.orchestrator_service.get_next_job(
-                        provider_id=self.provider_id,
-                        accept_policy=self.client.accept_policy,
-                        allowed_ids=self.client.allowed_ids
-                    )
+                    # Acquire the processing lock BEFORE fetching a job to ensure
+                    # only one job is acquired and processed at a time
+                    with self.client.processing_lock:
+                        logging.info("Auto mode: Checking for new jobs...")
+                        job = self.orchestrator_service.get_next_job(
+                            provider_id=self.provider_id,
+                            accept_policy=self.client.accept_policy,
+                            allowed_ids=self.client.allowed_ids
+                        )
 
-                    if job and job.get('id'):
-                        self.client.current_job = job
-                        job_id = job['id']
-                        logging.info(f"Received job: {job_id}")
+                        if job and job.get('id'):
+                            self.client.current_job = job
+                            job_id = job['id']
+                            logging.info(f"Received job: {job_id}")
 
-                        workflow_type = job.get('workflow_type', 'image_to_video')
-                        service_type = self.client.get_service_type_for_workflow(workflow_type)
-                        self.client.active_service_type = service_type
-                        
-                        logging.info(f"Job requires service '{service_type}'. Starting container...")
-                        docker_manager.run_container(service_type=service_type)
-                        
-                        # Text generation doesn't use ComfyUI, so skip the readiness check
-                        if service_type != 'text_generation':
-                            if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
-                                self.client._process_job(job, self.shutdown_event)
+                            workflow_type = job.get('workflow_type', 'image_to_video')
+                            service_type = self.client.get_service_type_for_workflow(workflow_type)
+                            self.client.active_service_type = service_type
+                            
+                            logging.info(f"Job requires service '{service_type}'. Starting container...")
+                            docker_manager.run_container(service_type=service_type)
+                            
+                            # Text generation doesn't use ComfyUI, so skip the readiness check
+                            if service_type != 'text_generation':
+                                if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
+                                    # Process the job while holding the lock
+                                    try:
+                                        processor = self.client._get_job_processor(job, self.shutdown_event)
+                                        processor.process()
+                                    except TokenExpiredError:
+                                        print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                                        logging.warning(
+                                            f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+                                        )
+                                        raise  # Re-raise to be caught by outer exception handler
+                                    except Exception as e:
+                                        logging.error(
+                                            f"An error occurred while processing job {job.get('id')}: {e}",
+                                            exc_info=True,
+                                        )
+                                        if job and job.get('id'):
+                                            self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+                                    finally:
+                                        self.client.current_job = None
+                                else:
+                                    if not self.shutdown_event.is_set():
+                                        logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
+                                        self.orchestrator_service.update_job_status(job_id, 'failed')
+                                        self.client.current_job = None
                             else:
-                                if not self.shutdown_event.is_set():
-                                    logging.error(f"ComfyUI for service '{service_type}' failed to start. Failing job.")
-                                    self.orchestrator_service.update_job_status(job_id, 'failed')
-                        else:
-                            # For text_generation, directly process the job (no ComfyUI needed)
-                            self.client._process_job(job, self.shutdown_event)
+                                # For text_generation, directly process the job (no ComfyUI needed)
+                                try:
+                                    processor = self.client._get_job_processor(job, self.shutdown_event)
+                                    processor.process()
+                                except TokenExpiredError:
+                                    print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                                    logging.warning(
+                                        f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+                                    )
+                                    raise  # Re-raise to be caught by outer exception handler
+                                except Exception as e:
+                                    logging.error(
+                                        f"An error occurred while processing job {job.get('id')}: {e}",
+                                        exc_info=True,
+                                    )
+                                    if job and job.get('id'):
+                                        self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+                                finally:
+                                    self.client.current_job = None
 
-                        if not self.shutdown_event.is_set():
-                            logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
-                            docker_manager.stop_container(service_type=service_type)
-                            self.client.active_service_type = None
-                            self.orchestrator_service.update_provider_status(self.provider_id, 'available')
-                            logging.info("Provider status set to available. Waiting for next job...")
-                            self.client.current_job = None
-                    else:
-                        logging.info("No new jobs found in this check.")
+                            if not self.shutdown_event.is_set():
+                                logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
+                                docker_manager.stop_container(service_type=service_type)
+                                self.client.active_service_type = None
+                                self.orchestrator_service.update_provider_status(self.provider_id, 'available')
+                                logging.info("Provider status set to available. Waiting for next job...")
+                        else:
+                            logging.info("No new jobs found in this check.")
                 except TokenExpiredError:
                     print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
                     logging.warning("Could not fetch job due to expired token. Notified main process.")
