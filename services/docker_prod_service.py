@@ -36,7 +36,8 @@ class DockerProdManager:
         try:
             logging.info(f"Checking for Docker image: {image_name}...")
             self.client.images.get(image_name)
-            logging.info(f"Image '{image_name}' found locally.")
+            logging.info(f"Image '{image_name}' found locally. Skipping pull.")
+            return
         except docker.errors.ImageNotFound:
             logging.info(f"Image '{image_name}' not found locally. Pulling from Docker Hub...")
             try:

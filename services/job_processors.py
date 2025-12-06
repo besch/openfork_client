@@ -19,6 +19,8 @@ from utils.comfyui_workflow_utils import (
     materialize_start_image,
     inject_video_into_upscaler_workflow
 )
+import random
+
 
 class BaseJobProcessor(ABC):
     def __init__(self, client, job, shutdown_event):
@@ -1015,6 +1017,12 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         system_prompt = inputs.get('system_prompt', "You are a helpful assistant.")
         temperature = inputs.get('temperature', 0.7)
         max_tokens = inputs.get('max_tokens', 2000)
+        
+        # Generate random seed if not provided
+        seed = inputs.get('seed')
+        if seed is None:
+            seed = random.randint(0, 2**31 - 1)
+            logging.info(f"No seed provided, using random seed: {seed}")
 
         logging.info(f"Generating text with model {model_name}...")
         
@@ -1052,7 +1060,8 @@ class TextGenerationJobProcessor(BaseJobProcessor):
                 "stream": False,
                 "options": {
                     "temperature": temperature,
-                    "num_predict": max_tokens
+                    "num_predict": max_tokens,
+                    "seed": seed
                 }
             }
             
