@@ -371,7 +371,8 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
 
-        voice_clone_urls = self.job.get('voice_clone_urls', [])
+        inputs = self.job.get('inputs', {})
+        voice_clone_urls = inputs.get('voice_clone_urls', [])
         if not voice_clone_urls:
             logging.error(f"VibeVoice multi-clone job {self.job_id} missing 'voice_clone_urls'.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')

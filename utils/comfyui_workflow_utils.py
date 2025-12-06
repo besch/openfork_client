@@ -335,16 +335,22 @@ def inject_script_and_clones_into_vibevoice_workflow(
 
     # Inject script and clone paths
     for node in api_graph.values():
-        if node["class_type"] == "VibeVoiceMultipleSpeakers":
+        if node["class_type"] == "VibeVoiceMultipleSpeakersNode":
             node["inputs"]["text"] = script
             node["inputs"]["seed"] = seed
             node["inputs"]["cfg_scale"] = cfg_scale
             node["inputs"]["diffusion_steps"] = diffusion_steps
             node["inputs"]["temperature"] = temperature
             node["inputs"]["top_p"] = top_p
+            # Required params defaults
+            if "model" not in node["inputs"]: node["inputs"]["model"] = "VibeVoice-1.5B"
+            if "attention_type" not in node["inputs"]: node["inputs"]["attention_type"] = "auto"
+            if "quantize_llm" not in node["inputs"]: node["inputs"]["quantize_llm"] = "full precision"
+            if "free_memory_after_generate" not in node["inputs"]: node["inputs"]["free_memory_after_generate"] = True
+            if "use_sampling" not in node["inputs"]: node["inputs"]["use_sampling"] = False
             
             for i, clone_path in enumerate(clone_paths):
-                node["inputs"][f"voice_{i+1}_clone_path"] = clone_path
+                node["inputs"][f"speaker{i+1}_voice"] = clone_path
 
     return api_graph
 
