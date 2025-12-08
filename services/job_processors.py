@@ -17,7 +17,9 @@ from utils.comfyui_workflow_utils import (
     inject_prompt_into_diffrhythm_workflow,
     inject_prompt_into_stable_audio_workflow,
     materialize_start_image,
-    inject_video_into_upscaler_workflow
+    inject_video_into_upscaler_workflow,
+    inject_prompt_into_ltx_video_workflow,
+    inject_prompt_and_image_into_ltx_video_workflow
 )
 import random
 
@@ -795,6 +797,132 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
                 os.remove(video_path)
             if os.path.exists(start_image_full_path):
                 os.remove(start_image_full_path)
+
+class LTXVideoTextToVideoJobProcessor(BaseJobProcessor):
+    def process(self):
+        if DEV_MODE:
+            return
+
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        inputs = self.job.get('inputs', {})
+        aspect_ratio = inputs.get('aspect_ratio', '16:9')
+        quality_preset = inputs.get('quality_preset', 'standard')
+        wf_ready = inject_prompt_into_ltx_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio, quality_preset)
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        video_info = find_video_in_output(outputs)
+        if not video_info:
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_filename, subfolder = video_info
+        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+            if video_storage_path:
+                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                thumbnail_storage_path = None
+                
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
+                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                    os.remove(thumbnail_local_path)
+                
+                duration = get_video_duration(temp_host_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
+            else:
+                logging.error(f"Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)
+
+class LTXVideoImageToVideoJobProcessor(BaseJobProcessor):
+    def process(self):
+        if DEV_MODE:
+            return
+
+        if not self.job:
+            logging.error(f"Job object is None for LTXVideoImageToVideoJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        start_image_filename = materialize_start_image(self.job, self.input_dir)
+        if not start_image_filename:
+            logging.error(f"Failed to materialize start image for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        start_image_full_path = os.path.join(self.input_dir, start_image_filename)
+
+        try:
+            container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
+            docker_manager.copy_file_to_container(
+                service_type=self.client.active_service_type,
+                source_on_host=start_image_full_path,
+                dest_in_container=container_input_path,
+                shutdown_event=self.shutdown_event
+            )
+        except Exception as e:
+            logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        inputs = self.job.get('inputs', {})
+        aspect_ratio = inputs.get('aspect_ratio', '16:9')
+        quality_preset = inputs.get('quality_preset', 'standard')
+        wf_ready = inject_prompt_and_image_into_ltx_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio, quality_preset)
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        video_info = find_video_in_output(outputs)
+        if not video_info:
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_filename, subfolder = video_info
+        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+            if video_storage_path:
+                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                thumbnail_storage_path = None
+                
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
+                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                    os.remove(thumbnail_local_path)
+                
+                duration = get_video_duration(temp_host_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
+            else:
+                logging.error(f"Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)
 
 class VideoUpscalerJobProcessor(BaseJobProcessor):
     def process(self):
