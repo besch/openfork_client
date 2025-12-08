@@ -82,11 +82,18 @@ class DockerProdManager:
 
         logging.info(f"Starting container '{container_name}' from image '{image_name}' with ports {ports}...")
         try:
+            # Determine command overrides based on service type
+            command = None
+            if service_type != 'text_generation': # ComfyUI services
+                # Add optimization flags for 8GB VRAM cards
+                command = ["python", "main.py", "--listen", "--lowvram", "--cpu-vae"]
+
             self.client.containers.run(
                 image=image_name,
                 detach=True,
                 name=container_name,
                 ports=ports,
+                command=command,
                 device_requests=[
                     docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
                 ],

@@ -160,22 +160,22 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: s
 def get_safe_ltx_resolution(aspect_ratio: str, quality_preset: str = "standard") -> tuple[int, int]:
     """
     Returns resolution (width, height) optimized for LTX Video.
-    For 'low_vram', limits resolution to safer bounds (e.g. max 512px short side or ~360p).
     """
     width, height = get_dimensions(aspect_ratio, default_width=768, default_height=512)
     
     if quality_preset == "low_vram":
-        # Scale down significantly for 8GB cards to avoid OOM
-        # Target ~288p-384p range which is safe for 8GB VRAM with LTX
+        # Optimization for 8GB cards with --lowvram and --cpu-vae enabled
+        # We can push to ~480p/512p now
         if aspect_ratio == "16:9":
-            return 512, 288 # Multiple of 32, very safe
+            return 768, 448 # ~448p, multiple of 32
         elif aspect_ratio == "9:16":
-            return 288, 512
+            return 448, 768
         elif aspect_ratio == "1:1":
-            return 384, 384
+            return 512, 512
+        elif aspect_ratio == "21:9":
+            return 832, 352
         else:
-             # Generic fallback: cap max dimension at 512
-             return 512, 512
+             return 640, 480
              
     return width, height
 
@@ -193,21 +193,27 @@ def inject_prompt_into_ltx_video_workflow(workflow_api_data: Dict, prompt: str, 
         api_graph['3']['inputs']['text'] = negative_prompt
 
     # Configuration based on quality_preset
-    frame_count = 49 # Default (Standard) - (6 * 8) + 1
+    frame_count = 121 # Default (Standard) - ~5 seconds
+    steps = 35 # Default steps
     width, height = get_safe_ltx_resolution(aspect_ratio, quality_preset)
     
     ckpt_name = "ltx-video-2b-v0.9.1.safetensors"
     
     if quality_preset == "low_vram":
-        # Aggressive optimization for 8GB VRAM
-        frame_count = 25 # (3 * 8) + 1
+        # Optimization for 8GB VRAM with flags
+        # 65 frames = ~2.7s @ 24fps
+        frame_count = 65 
+        steps = 30
+        
         # Try to use GGUF model if available (user must download it)
         ckpt_name = "ltx-video-2b-v0.9.1.safetensors" 
         # ckpt_name = "ltx-video-2b-v0.9.1-q4_k_m.gguf" # TODO: Uncomment if GGUF is verified present
 
+    elif quality_preset == "high_quality":
+        frame_count = 169 # ~7 seconds
+        steps = 50
+
     # Inject dimensions and frame count (batch_size) into EmptyLatentImage (Node 4)
-    # We switch to EmptyLTXVLatentVideo which is more appropriate, if we can.
-    # But since we are modifying the graph, we can just change the class_type.
     if '4' in api_graph: 
         # Prefer EmptyLTXVLatentVideo if possible for correct video latents
         api_graph['4']['class_type'] = "EmptyLTXVLatentVideo"
@@ -220,14 +226,13 @@ def inject_prompt_into_ltx_video_workflow(workflow_api_data: Dict, prompt: str, 
         api_graph['4']['inputs']['length'] = frame_count
         api_graph['4']['inputs']['batch_size'] = 1
         
-        # Remove incompatible 'batch_size' if it was set for EmptyLatentImage logic formerly (we just overwrote it above to 1, which is fine)
-        
-        logging.info(f"LTX T2V Configured: {width}x{height}, {frame_count} frames, Preset: {quality_preset}, Node: EmptyLTXVLatentVideo")
+        logging.info(f"LTX T2V Configured: {width}x{height}, {frame_count} frames, {steps} steps, Preset: {quality_preset}, Node: EmptyLTXVLatentVideo")
 
-    # Randomize seed for node 5 (KSampler)
+    # Inject steps and randomized seed for node 5 (KSampler)
     if '5' in api_graph and 'inputs' in api_graph['5']:
         new_seed = random.randint(0, 2**63 - 1)
         api_graph['5']['inputs']['seed'] = new_seed
+        api_graph['5']['inputs']['steps'] = steps
     
     if '1' in api_graph and 'inputs' in api_graph['1']:
          api_graph['1']['inputs']['ckpt_name'] = ckpt_name
@@ -255,10 +260,18 @@ def inject_prompt_and_image_into_ltx_video_workflow(workflow_api_data: Dict, pro
         api_graph['10']['inputs']['height'] = height
         logging.info(f"LTX I2V Configured: {width}x{height}, Preset: {quality_preset}")
 
-    # Randomize seed (6)
+    # Determine steps based on quality preset
+    steps = 35 # Default
+    if quality_preset == "low_vram":
+        steps = 30
+    elif quality_preset == "high_quality":
+        steps = 50
+
+    # Randomize seed (6) and inject steps
     if '6' in api_graph and 'inputs' in api_graph['6']:
         new_seed = random.randint(0, 2**63 - 1)
         api_graph['6']['inputs']['seed'] = new_seed
+        api_graph['6']['inputs']['steps'] = steps
 
     # Checkpoint configuration
     ckpt_name = "ltx-video-2b-v0.9.1.safetensors"
