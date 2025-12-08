@@ -150,8 +150,7 @@ def main():
     parser.add_argument('--allowed-targets', type=str, help='For specific_* policies, a comma-separated list of targets (e.g., user/project-slug or user/project-slug:branch-name).')
     args = parser.parse_args()
 
-    if args.service != 'auto':
-        docker_manager.run_container(service_type=args.service)
+
     
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()
@@ -168,6 +167,8 @@ def main():
         # If we are running a dedicated service, set it as active on the client.
         if args.service != 'auto':
             client.active_service_type = args.service
+            # Start the container now that config is loaded and image map is set
+            docker_manager.run_container(service_type=args.service)
 
         run_client(client, provider_id, args.service)
     except Exception as e:
