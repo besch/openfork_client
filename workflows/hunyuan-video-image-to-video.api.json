@@ -43,15 +43,19 @@
   },
   "6": {
     "inputs": {
-      "text": "A cinematic shot of a futuristic city...",
-      "clip": [
+      "prompt": "A cinematic shot...",
+      "text_encoders": [
         "40",
         1
+      ],
+      "image": [
+        "50",
+        0
       ]
     },
-    "class_type": "CLIPTextEncode",
+    "class_type": "HyVideoI2V",
     "_meta": {
-      "title": "CLIP Text Encode (Positive)"
+      "title": "HyVideo I2V Encode"
     }
   },
   "7": {

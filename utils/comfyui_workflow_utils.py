@@ -848,6 +848,10 @@ def inject_prompt_and_image_into_hunyuan_workflow(workflow_api_data: Dict, promp
              elif node_id == "6": 
                  inputs["text"] = prompt
 
+        # HyVideoI2V (Positive with Image)
+        if class_type == "HyVideoI2V":
+            inputs["prompt"] = prompt
+
         # LoadImage
         if class_type == "LoadImage":
             inputs["image"] = start_image_filename
