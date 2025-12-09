@@ -19,7 +19,9 @@ from utils.comfyui_workflow_utils import (
     materialize_start_image,
     inject_video_into_upscaler_workflow,
     inject_prompt_into_ltx_video_workflow,
-    inject_prompt_and_image_into_ltx_video_workflow
+    inject_prompt_and_image_into_ltx_video_workflow,
+    inject_prompt_into_hunyuan_workflow,
+    inject_prompt_and_image_into_hunyuan_workflow
 )
 import random
 
@@ -316,26 +318,6 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
         inputs = self.job.get('inputs', {})
         cfg_scale = inputs.get('cfg_scale', 3.5)
         diffusion_steps = inputs.get('diffusion_steps', 10)
-        temperature = inputs.get('temperature', 0.8)
-        top_p = inputs.get('top_p', 0.95)
-        seed = inputs.get('seed')
-        voice_id = inputs.get('voice_id', "Alice")
-
-        wf_ready = inject_prompt_into_vibevoice_workflow(
-            workflow_data, 
-            self.positive_prompt,
-            cfg_scale=cfg_scale,
-            diffusion_steps=diffusion_steps,
-            temperature=temperature,
-            top_p=top_p,
-            seed=seed,
-            voice_id=voice_id
-        )
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
         audio_info = find_audio_in_output(outputs)
         if not audio_info:
             logging.error(f"VibeVoice workflow for job {self.job_id} completed, but no audio file found.")
@@ -1237,3 +1219,134 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Text generation failed: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
+
+
+class HunyuanVideoJobProcessor(BaseJobProcessor):
+    def process(self):
+        if DEV_MODE:
+             return
+
+        if not self.job:
+            logging.error(f"Job object is None for HunyuanVideoJobProcessor. Cannot proceed.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        inputs = self.job.get('inputs', {})
+        steps = inputs.get('steps', 30)
+        guidance = inputs.get('guidance', 6.0)
+        strength = inputs.get('strength', 1.0)
+        # Hunyuan 1.5 standard res (could be configurable)
+        width = 854 
+        height = 480
+        frame_count = 49
+
+        wf_ready = None
+
+        if self.workflow_type == 'hunyuan-video-image-to-video':
+            start_image_filename = materialize_start_image(self.job, self.input_dir)
+            if not start_image_filename:
+                logging.error(f"Failed to materialize start image for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
+
+            start_image_full_path = os.path.join(self.input_dir, start_image_filename)
+
+            try:
+                container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
+                docker_manager.copy_file_to_container(
+                    service_type=self.client.active_service_type,
+                    source_on_host=start_image_full_path,
+                    dest_in_container=container_input_path,
+                    shutdown_event=self.shutdown_event
+                )
+            except Exception as e:
+                logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+                return
+
+            wf_ready = inject_prompt_and_image_into_hunyuan_workflow(
+                workflow_data, 
+                self.positive_prompt, 
+                start_image_filename,
+                steps=steps, 
+                guidance=guidance, 
+                strength=strength,
+                width=width,
+                height=height,
+                frame_count=frame_count
+            )
+        else:
+            wf_ready = inject_prompt_into_hunyuan_workflow(
+                workflow_data, 
+                self.positive_prompt, 
+                steps=steps, 
+                guidance=guidance, 
+                strength=strength,
+                width=width,
+                height=height,
+                frame_count=frame_count
+            )
+
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        video_info = find_video_in_output(outputs)
+        if not video_info:
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        video_filename, subfolder = video_info
+        temp_host_path = self._copy_file_from_container(video_filename, subfolder)
+        if not temp_host_path:
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
+
+        try:
+            video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
+            if video_storage_path:
+                thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
+                thumbnail_storage_path = None
+                
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
+                    thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
+                    os.remove(thumbnail_local_path)
+                
+                duration = get_video_duration(temp_host_path)
+                self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=video_storage_path, thumbnail_storage_path=thumbnail_storage_path, duration_seconds=duration)
+
+                # Upscale chaining
+                workflow_config = self.job.get('inputs', {})
+                if workflow_config.get('upscale_enabled'):
+                    logging.info(f"Upscale enabled for job {self.job_id}. Submitting upscale job.")
+                    upscale_params = workflow_config.get('upscale_params', {})
+                    
+                    submit_body = {
+                        "sceneId": self.job.get('scene_id'),
+                        "branchId": self.job.get('branch_id'),
+                        "model": "esrgan-upscaler",
+                        "prompt": "Upscaling video",
+                        "input_storage_path": video_storage_path,
+                        "upscale_params": upscale_params,
+                        "originalJobId": self.job.get('id')
+                    }
+                    
+                    new_job_id = self.orchestrator_service.submit_job(submit_body)
+                    if new_job_id:
+                        logging.info(f"Successfully submitted upscale job: {new_job_id}")
+                    else:
+                        logging.error("Failed to submit upscale job.")
+
+            else:
+                logging.error(f"Video upload failed for job {self.job_id}.")
+                self.orchestrator_service.update_job_status(self.job_id, 'failed')
+        finally:
+            logging.info(f"Cleaning up temporary file: {temp_host_path}")
+            os.remove(temp_host_path)

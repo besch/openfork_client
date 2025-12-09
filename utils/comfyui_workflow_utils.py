@@ -768,3 +768,84 @@ def inject_prompt_into_stable_audio_workflow(workflow_data, prompt, duration_sec
     
     # Return just the node graph (consistent with other inject functions)
     return api_graph
+
+def inject_prompt_into_hunyuan_workflow(workflow_api_data: Dict, prompt: str, steps: int = 30, guidance: float = 6.0, strength: float = 1.0, width: int = 854, height: int = 480, frame_count: int = 49):
+    """
+    Injects parameters into the HunyuanVideo workflow.
+    """
+    api_graph = copy.deepcopy(workflow_api_data.get("prompt", workflow_api_data))
+    
+    # Generate random seed
+    seed = random.randint(0, 2**63 - 1)
+
+    for node_id, node in api_graph.items():
+        class_type = node.get("class_type")
+        inputs = node.get("inputs", {})
+
+        # KSampler for steps and guidance (cfg)
+        if class_type == "KSampler":
+            inputs["steps"] = int(steps)
+            inputs["cfg"] = float(guidance)
+            inputs["seed"] = seed
+            if "denoise" in inputs:
+                inputs["denoise"] = float(strength)
+
+        # EmptyHunyuanLatentVideo for resolution and frames
+        if class_type == "EmptyHunyuanLatentVideo":
+            inputs["width"] = int(width)
+            inputs["height"] = int(height)
+            inputs["length"] = int(frame_count)
+            inputs["batch_size"] = 1
+
+        # CLIPTextEncode (Positive)
+        if class_type == "CLIPTextEncode":
+             title = node.get("_meta", {}).get("title", "")
+             if "Positive" in title:
+                 inputs["text"] = prompt
+             # Also check if it's the positive prompt node 6
+             elif node_id == "6": 
+                 inputs["text"] = prompt
+
+    return api_graph
+
+def inject_prompt_and_image_into_hunyuan_workflow(workflow_api_data: Dict, prompt: str, start_image_filename: str, steps: int = 30, guidance: float = 6.0, strength: float = 1.0, width: int = 854, height: int = 480, frame_count: int = 49):
+    """
+    Injects parameters and image into the HunyuanVideo I2V workflow.
+    """
+    api_graph = copy.deepcopy(workflow_api_data.get("prompt", workflow_api_data))
+    
+    # Generate random seed
+    seed = random.randint(0, 2**63 - 1)
+
+    for node_id, node in api_graph.items():
+        class_type = node.get("class_type")
+        inputs = node.get("inputs", {})
+
+        # KSampler
+        if class_type == "KSampler":
+            inputs["steps"] = int(steps)
+            inputs["cfg"] = float(guidance)
+            inputs["seed"] = seed
+            if "denoise" in inputs:
+                inputs["denoise"] = float(strength)
+
+        # EmptyHunyuanLatentVideo
+        if class_type == "EmptyHunyuanLatentVideo":
+            inputs["width"] = int(width)
+            inputs["height"] = int(height)
+            inputs["length"] = int(frame_count)
+            inputs["batch_size"] = 1
+
+        # CLIPTextEncode (Positive)
+        if class_type == "CLIPTextEncode":
+             title = node.get("_meta", {}).get("title", "")
+             if "Positive" in title:
+                 inputs["text"] = prompt
+             elif node_id == "6": 
+                 inputs["text"] = prompt
+
+        # LoadImage
+        if class_type == "LoadImage":
+            inputs["image"] = start_image_filename
+
+    return api_graph
