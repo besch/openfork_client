@@ -3,6 +3,7 @@ import os
 import json
 from services.docker_manager import docker_manager
 from services.orchestrator_service import TokenExpiredError
+from services.job_processors import CriticalWorkflowError
 
 class JobListener:
     def __init__(self, client, provider_id, shutdown_event):
@@ -40,6 +41,8 @@ class JobListener:
                                 f"Auth expired during processing of job {job.get('id')}. Signaled main process."
                             )
                             raise  # Re-raise to be caught by outer exception handler
+                        except CriticalWorkflowError:
+                            raise
                         except Exception as e:
                             logging.error(
                                 f"An error occurred while processing job {job.get('id')}: {e}",
@@ -58,6 +61,8 @@ class JobListener:
             except TokenExpiredError:
                 print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
                 logging.warning("Could not fetch job due to expired token. Notified main process.")
+            except CriticalWorkflowError:
+                raise
             except Exception as e:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
@@ -108,6 +113,8 @@ class JobListener:
                                             f"Auth expired during processing of job {job.get('id')}. Signaled main process."
                                         )
                                         raise  # Re-raise to be caught by outer exception handler
+                                    except CriticalWorkflowError:
+                                        raise
                                     except Exception as e:
                                         logging.error(
                                             f"An error occurred while processing job {job.get('id')}: {e}",
@@ -133,6 +140,8 @@ class JobListener:
                                         f"Auth expired during processing of job {job.get('id')}. Signaled main process."
                                     )
                                     raise  # Re-raise to be caught by outer exception handler
+                                except CriticalWorkflowError:
+                                    raise
                                 except Exception as e:
                                     logging.error(
                                         f"An error occurred while processing job {job.get('id')}: {e}",
@@ -154,11 +163,15 @@ class JobListener:
                 except TokenExpiredError:
                     print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
                     logging.warning("Could not fetch job due to expired token. Notified main process.")
+                except CriticalWorkflowError:
+                    raise
                 except Exception as e:
                     logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 
                 if not (job and job.get('id')):
                     self.shutdown_event.wait(10)
+        except CriticalWorkflowError:
+            raise
         finally:
             logging.info("Shutdown event received or loop exited. Exiting auto job listening loop.")
             if self.client.active_service_type:

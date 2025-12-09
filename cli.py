@@ -173,6 +173,7 @@ def main():
         run_client(client, provider_id, args.service)
     except Exception as e:
         logging.error(f"A critical error occurred during client operation: {e}", exc_info=True)
+        sys.exit(1)
     finally:
         cleanup(client, provider_id, args.service)
 
