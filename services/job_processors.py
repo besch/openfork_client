@@ -510,7 +510,6 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
             
-        logging.info(f"DEBUG: self.job type: {type(self.job)}, value: {self.job}")
         inputs = self.job.get('inputs', {})
         aspect_ratio = inputs.get('aspect_ratio', '16:9')
         wf_ready = inject_prompt_into_text_to_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio)

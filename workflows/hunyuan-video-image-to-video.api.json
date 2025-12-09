@@ -85,7 +85,7 @@
   },
   "40": {
     "inputs": {
-      "unet_name": "hunyuan-video-t2v-720p-Q4_K_M.gguf",
+      "unet_name": "hunyuan-video-i2v-720p-Q4_K_M.gguf",
       "vae_name": "hunyuan_video_vae_bf16.safetensors",
       "clip_name": "llava-llama-3-8b-v1_1-transformers",
       "lora_name": "None",

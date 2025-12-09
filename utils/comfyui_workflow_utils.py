@@ -598,6 +598,10 @@ def verify_workflow_nodes(workflow: dict) -> bool:
         
         # Misc / meta
         'Note',
+        # Hunyuan Nodes
+        'HunyuanVideoModelLoaderGGUF',
+        'EmptyHunyuanLatentVideo',
+        'HyVideoI2V',
     ]
 
     # Iterate nodes from multiple possible shapes: API dict, wrapped {"prompt": {...}}, or litegraph arrays.
