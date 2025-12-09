@@ -6,11 +6,6 @@ from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.docker_manager import docker_manager
-
-
-class CriticalWorkflowError(Exception):
-    """Exception raised when a workflow fails critically and the client should terminate."""
-    pass
 from utils.media_utils import get_audio_duration, find_audio_in_output, find_audio_file_in_directory, find_image_in_output, find_video_in_output, generate_thumbnail, get_video_duration, get_video_dimensions, get_video_framerate, extract_last_frame
 from utils.comfyui_workflow_utils import (
     inject_prompt_and_image_into_workflow,
@@ -60,7 +55,7 @@ class BaseJobProcessor(ABC):
         except ValueError as e:
             logging.error(f"Cannot get workflow payload for job {self.job_id}: {e}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Cannot get workflow payload for job {self.job_id}: {e}")
+            return None
 
         # Construct the full path to the workflow file.
         workflow_path = os.path.join(self.root_dir, 'workflows', local_filename)
@@ -74,15 +69,15 @@ class BaseJobProcessor(ABC):
         except FileNotFoundError:
             logging.error(f"Local workflow file not found: {workflow_path}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Local workflow file not found: {workflow_path}")
+            return None
         except json.JSONDecodeError:
             logging.error(f"Failed to decode JSON from workflow file: {workflow_path}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to decode JSON from workflow file: {workflow_path}")
+            return None
         except Exception as e:
             logging.error(f"An unexpected error occurred while loading local workflow {local_filename}: {e}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"An unexpected error occurred while loading local workflow {local_filename}: {e}")
+            return None
 
     def _check_interruption(self, outputs):
         if outputs == "interrupted":
@@ -120,14 +115,14 @@ class BaseJobProcessor(ABC):
                 raise RuntimeError("docker cp command finished but destination file does not exist.")
         except Exception as e:
             logging.error(f"Failed to copy file from container: {e}", exc_info=True)
-            raise CriticalWorkflowError(f"Failed to copy file from container: {e}")
+            return None
 
     def _trigger_and_get_output(self, payload):
         prompt_id = self.comfyui_client.trigger_workflow(payload)
         if not prompt_id:
             logging.error(f"Failed to trigger workflow for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to trigger workflow for job {self.job_id}.")
+            return None
 
         outputs = self.comfyui_client.get_workflow_output(
             prompt_id,
@@ -142,7 +137,7 @@ class BaseJobProcessor(ABC):
         if not outputs:
             logging.error(f"Workflow for job {self.job_id} failed to produce outputs.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Workflow for job {self.job_id} failed to produce outputs.")
+            return None
             
         return outputs
 
@@ -155,7 +150,7 @@ class StableAudioJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for StableAudioJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for StableAudioJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -184,14 +179,14 @@ class StableAudioJobProcessor(BaseJobProcessor):
                 audio_info = find_audio_file_in_directory(output_dir, self.job_id)
             
         if not audio_info:
-            logging.error(f"StableAudio workflow for job {self.job_id} completed, but no audio file found. (Block 1)")
+            logging.error(f"StableAudio workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"StableAudio workflow for job {self.job_id} completed, but no audio file found. (Block 1)")
+            return
 
         audio_filename, subfolder = audio_info
         temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 2)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -202,9 +197,8 @@ class StableAudioJobProcessor(BaseJobProcessor):
                 completion_metadata = self.job.get('completion_metadata') or {}
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
-                logging.error(f"StableAudio job {self.job_id} completed, but audio upload failed. (Block 3)")
+                logging.error(f"StableAudio job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"StableAudio job {self.job_id} completed, but audio upload failed. (Block 3)")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -215,7 +209,7 @@ class FoleyJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for FoleyJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for FoleyJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -223,15 +217,15 @@ class FoleyJobProcessor(BaseJobProcessor):
 
         input_video_url = self.job.get('input_video_url')
         if not input_video_url:
-            logging.error(f"Foley job {self.job_id} missing 'input_video_url'. (Block 4)")
+            logging.error(f"Foley job {self.job_id} missing 'input_video_url'.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Foley job {self.job_id} missing 'input_video_url'. (Block 4)")
+            return
 
         video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
         if not video_path:
-            logging.error(f"Failed to download input video for foley job {self.job_id}. (Block 5)")
+            logging.error(f"Failed to download input video for foley job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to download input video for foley job {self.job_id}. (Block 5)")
+            return
         
         video_filename = os.path.basename(video_path)
         wf_ready = inject_video_and_prompt_into_foley_workflow(workflow_data, video_filename, self.positive_prompt, self.negative_prompt)
@@ -243,14 +237,14 @@ class FoleyJobProcessor(BaseJobProcessor):
 
         audio_info = find_audio_in_output(outputs)
         if not audio_info:
-            logging.error(f"Foley workflow for job {self.job_id} completed, but no audio file found. (Block 6)")
+            logging.error(f"Foley workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Foley workflow for job {self.job_id} completed, but no audio file found. (Block 6)")
+            return
 
         audio_filename, subfolder = audio_info
         temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 7)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -261,9 +255,8 @@ class FoleyJobProcessor(BaseJobProcessor):
                 completion_metadata = self.job.get('completion_metadata') or {}
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
-                logging.error(f"Foley job {self.job_id} completed, but audio upload failed. (Block 8)")
+                logging.error(f"Foley job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Foley job {self.job_id} completed, but audio upload failed. (Block 8)")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -273,7 +266,7 @@ class TextToImageJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for TextToImageJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for TextToImageJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -289,14 +282,14 @@ class TextToImageJobProcessor(BaseJobProcessor):
 
         image_info = find_image_in_output(outputs)
         if not image_info:
-            logging.error(f"Workflow for job {self.job_id} completed, but no image file found. (Block 9)")
+            logging.error(f"Workflow for job {self.job_id} completed, but no image file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Workflow for job {self.job_id} completed, but no image file found. (Block 9)")
+            return
 
         image_filename, subfolder = image_info
         temp_host_path = self._copy_file_from_container(image_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 10)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -305,9 +298,8 @@ class TextToImageJobProcessor(BaseJobProcessor):
             if image_storage_path:
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=image_storage_path, thumbnail_storage_path=image_storage_path, prompt=self.positive_prompt)
             else:
-                logging.error(f"Image upload failed for job {self.job_id}. (Block 11)")
+                logging.error(f"Image upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Image upload failed for job {self.job_id}. (Block 11)")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -317,7 +309,7 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for VibeVoiceJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for VibeVoiceJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -328,14 +320,14 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
         diffusion_steps = inputs.get('diffusion_steps', 10)
         audio_info = find_audio_in_output(outputs)
         if not audio_info:
-            logging.error(f"VibeVoice workflow for job {self.job_id} completed, but no audio file found. (Block 12)")
+            logging.error(f"VibeVoice workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"VibeVoice workflow for job {self.job_id} completed, but no audio file found. (Block 12)")
+            return
 
         audio_filename, subfolder = audio_info
         temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 13)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -346,9 +338,8 @@ class VibeVoiceJobProcessor(BaseJobProcessor):
                 completion_metadata = self.job.get('completion_metadata') or {}
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
-                logging.error(f"VibeVoice job {self.job_id} completed, but audio upload failed. (Block 14)")
+                logging.error(f"VibeVoice job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"VibeVoice job {self.job_id} completed, but audio upload failed. (Block 14)")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -358,7 +349,7 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for VibeVoiceMultiCloneJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for VibeVoiceMultiCloneJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -367,17 +358,17 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
         inputs = self.job.get('inputs', {})
         voice_clone_urls = inputs.get('voice_clone_urls', [])
         if not voice_clone_urls:
-            logging.error(f"VibeVoice multi-clone job {self.job_id} missing 'voice_clone_urls'. (Block 15)")
+            logging.error(f"VibeVoice multi-clone job {self.job_id} missing 'voice_clone_urls'.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"VibeVoice multi-clone job {self.job_id} missing 'voice_clone_urls'. (Block 15)")
+            return
 
         clone_paths = []
         for url in voice_clone_urls:
             clone_path = self.orchestrator_service.download_asset_by_url(url, self.input_dir)
             if not clone_path:
-                logging.error(f"Failed to download voice clone from {url} for job {self.job_id}. (Block 16)")
+                logging.error(f"Failed to download voice clone from {url} for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Failed to download voice clone from {url} for job {self.job_id}. (Block 16)")
+                return
             clone_paths.append(os.path.basename(clone_path))
 
         inputs = self.job.get('inputs', {})
@@ -404,14 +395,14 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
 
         audio_info = find_audio_in_output(outputs)
         if not audio_info:
-            logging.error(f"VibeVoice multi-clone workflow for job {self.job_id} completed, but no audio file found. (Block 17)")
+            logging.error(f"VibeVoice multi-clone workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"VibeVoice multi-clone workflow for job {self.job_id} completed, but no audio file found. (Block 17)")
+            return
 
         audio_filename, subfolder = audio_info
         temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 18)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -422,9 +413,8 @@ class VibeVoiceMultiCloneJobProcessor(BaseJobProcessor):
                 completion_metadata = self.job.get('completion_metadata') or {}
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
-                logging.error(f"VibeVoice multi-clone job {self.job_id} completed, but audio upload failed. (Block 19)")
+                logging.error(f"VibeVoice multi-clone job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"VibeVoice multi-clone job {self.job_id} completed, but audio upload failed. (Block 19)")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -434,7 +424,7 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for DiffRhythmJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for DiffRhythmJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -464,14 +454,14 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
 
         audio_info = find_audio_in_output(outputs)
         if not audio_info:
-            logging.error(f"DiffRhythm workflow for job {self.job_id} completed, but no audio file found. (Block 20)")
+            logging.error(f"DiffRhythm workflow for job {self.job_id} completed, but no audio file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"DiffRhythm workflow for job {self.job_id} completed, but no audio file found. (Block 20)")
+            return
 
         audio_filename, subfolder = audio_info
         temp_host_path = self._copy_file_from_container(audio_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 21)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -487,15 +477,13 @@ class DiffRhythmJobProcessor(BaseJobProcessor):
                 })
                 self.orchestrator_service.update_job_status(self.job_id, 'completed', storage_path=audio_storage_path, duration_seconds=duration, completion_metadata=completion_metadata)
             else:
-                logging.error(f"DiffRhythm job {self.job_id} completed, but audio upload failed. (Block 22)")
+                logging.error(f"DiffRhythm job {self.job_id} completed, but audio upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"DiffRhythm job {self.job_id} completed, but audio upload failed. (Block 22)")
         except TokenExpiredError:
             raise  # Re-raise to be handled by the main loop
         except Exception as e:
             logging.error(f"Error processing DiffRhythm job {self.job_id}: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Error processing DiffRhythm job {self.job_id}: {e}")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -510,6 +498,7 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
         if not workflow_data:
             return
             
+        logging.info(f"DEBUG: self.job type: {type(self.job)}, value: {self.job}")
         inputs = self.job.get('inputs', {})
         aspect_ratio = inputs.get('aspect_ratio', '16:9')
         wf_ready = inject_prompt_into_text_to_video_workflow(workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio)
@@ -520,14 +509,14 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
 
         video_info = find_video_in_output(outputs)
         if not video_info:
-            logging.error(f"Workflow for job {self.job_id} completed, but no video file found. (Block 23)")
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
         video_filename, subfolder = video_info
         temp_host_path = self._copy_file_from_container(video_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 24)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -568,7 +557,7 @@ class WAN22TextToVideoJobProcessor(BaseJobProcessor):
                         logging.error("Failed to submit upscale job.")
 
             else:
-                logging.error(f"Video upload failed for job {self.job_id}. (Block 25)")
+                logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
@@ -583,7 +572,7 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for WAN22ImageToVideoJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for WAN22ImageToVideoJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -591,7 +580,7 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
 
         start_image_filename = materialize_start_image(self.job, self.input_dir)
         if not start_image_filename:
-            logging.error(f"Failed to materialize start image for job {self.job_id}. (Block 26)")
+            logging.error(f"Failed to materialize start image for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -620,14 +609,14 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
 
         video_info = find_video_in_output(outputs)
         if not video_info:
-            logging.error(f"Workflow for job {self.job_id} completed, but no video file found. (Block 27)")
+            logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
         video_filename, subfolder = video_info
         temp_host_path = self._copy_file_from_container(video_filename, subfolder)
         if not temp_host_path:
-            logging.error(f"Failed to copy output file from container for job {self.job_id}. (Block 28)")
+            logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
 
@@ -667,9 +656,8 @@ class WAN22ImageToVideoJobProcessor(BaseJobProcessor):
                         logging.error("Failed to submit upscale job.")
 
             else:
-                logging.error(f"Video upload failed for job {self.job_id}. (Block 29)")
+                logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Video upload failed for job {self.job_id}. (Block 29)")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -683,7 +671,7 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for ImageToVideoFromLastFrameJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for ImageToVideoFromLastFrameJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -694,7 +682,13 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
         if not input_video_url:
             logging.error(f"Job {self.job_id} missing 'input_video_url' in inputs.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Job {self.job_id} missing 'input_video_url' in inputs.")
+            return
+
+        video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
+        if not video_path:
+            logging.error(f"Failed to download input video for job {self.job_id}.")
+            self.orchestrator_service.update_job_status(self.job_id, 'failed')
+            return
 
         # Extract last frame
         start_image_filename = f"{self.job_id}_last_frame.jpg"
@@ -703,7 +697,7 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
         if not extract_last_frame(video_path, start_image_full_path):
              logging.error(f"Failed to extract last frame for job {self.job_id}.")
              self.orchestrator_service.update_job_status(self.job_id, 'failed')
-             raise CriticalWorkflowError(f"Failed to extract last frame for job {self.job_id}.")
+             return
 
         try:
             container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
@@ -716,7 +710,7 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy start image to container for job {self.job_id}: {e}")
+            return
 
         inputs = self.job.get('inputs', {})
         aspect_ratio = inputs.get('aspect_ratio', '16:9')
@@ -730,14 +724,14 @@ class ImageToVideoFromLastFrameJobProcessor(BaseJobProcessor):
         if not video_info:
             logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Workflow for job {self.job_id} completed, but no video file found.")
+            return
 
         video_filename, subfolder = video_info
         temp_host_path = self._copy_file_from_container(video_filename, subfolder)
         if not temp_host_path:
             logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy output file from container for job {self.job_id}.")
+            return
 
         try:
             video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
@@ -808,14 +802,14 @@ class LTXVideoTextToVideoJobProcessor(BaseJobProcessor):
         if not video_info:
             logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Workflow for job {self.job_id} completed, but no video file found.")
+            return
 
         video_filename, subfolder = video_info
         temp_host_path = self._copy_file_from_container(video_filename, subfolder)
         if not temp_host_path:
             logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy output file from container for job {self.job_id}.")
+            return
 
         try:
             video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
@@ -832,7 +826,6 @@ class LTXVideoTextToVideoJobProcessor(BaseJobProcessor):
             else:
                 logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Video upload failed for job {self.job_id}.")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -845,7 +838,7 @@ class LTXVideoImageToVideoJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for LTXVideoImageToVideoJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for LTXVideoImageToVideoJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -855,7 +848,7 @@ class LTXVideoImageToVideoJobProcessor(BaseJobProcessor):
         if not start_image_filename:
             logging.error(f"Failed to materialize start image for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to materialize start image for job {self.job_id}.")
+            return
 
         start_image_full_path = os.path.join(self.input_dir, start_image_filename)
 
@@ -870,7 +863,7 @@ class LTXVideoImageToVideoJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy start image to container for job {self.job_id}: {e}")
+            return
 
         inputs = self.job.get('inputs', {})
         aspect_ratio = inputs.get('aspect_ratio', '16:9')
@@ -885,14 +878,14 @@ class LTXVideoImageToVideoJobProcessor(BaseJobProcessor):
         if not video_info:
             logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Workflow for job {self.job_id} completed, but no video file found.")
+            return
 
         video_filename, subfolder = video_info
         temp_host_path = self._copy_file_from_container(video_filename, subfolder)
         if not temp_host_path:
             logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy output file from container for job {self.job_id}.")
+            return
 
         try:
             video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
@@ -909,7 +902,6 @@ class LTXVideoImageToVideoJobProcessor(BaseJobProcessor):
             else:
                 logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Video upload failed for job {self.job_id}.")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -919,7 +911,7 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for VideoUpscalerJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for VideoUpscalerJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -929,13 +921,13 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
         if not input_video_url:
             logging.error(f"Video upscaler job {self.job_id} missing 'input_video_url'.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Video upscaler job {self.job_id} missing 'input_video_url'.")
+            return
 
         video_path = self.orchestrator_service.download_asset_by_url(input_video_url, self.input_dir)
         if not video_path:
             logging.error(f"Failed to download input video for upscaler job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to download input video for upscaler job {self.job_id}.")
+            return
         
         video_filename = os.path.basename(video_path)
 
@@ -952,7 +944,7 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Failed to copy video to container for job {self.job_id}: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy video to container for job {self.job_id}: {e}")
+            return
         
         # --- New Upscale Logic ---
         original_width = None
@@ -963,7 +955,7 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Could not get video dimensions for {video_path}: {e}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Could not get video dimensions for {video_path}: {e}")
+            return
 
         job_inputs = self.job.get('inputs', {})
         upscale_model = job_inputs.get('upscale_model', 'RealESRGAN_x4plus.pth')
@@ -1041,14 +1033,14 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
         if not video_info:
             logging.error(f"Upscaler workflow for job {self.job_id} completed, but no video file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Upscaler workflow for job {self.job_id} completed, but no video file found.")
+            return
 
         video_filename, subfolder = video_info
         temp_host_path = self._copy_file_from_container(video_filename, subfolder)
         if not temp_host_path:
             logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy output file from container for job {self.job_id}.")
+            return
 
         try:
             video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
@@ -1075,7 +1067,6 @@ class VideoUpscalerJobProcessor(BaseJobProcessor):
             else:
                 logging.error(f"Video upscaler job {self.job_id} completed, but video upload failed.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Video upscaler job {self.job_id} completed, but video upload failed.")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
@@ -1093,7 +1084,7 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for TextGenerationJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for TextGenerationJobProcessor.")
+            return
 
         # Container is already running (started by job listener)
         # Wait for Ollama to be ready
@@ -1129,7 +1120,7 @@ class TextGenerationJobProcessor(BaseJobProcessor):
             logging.error(f"Ollama service failed to become ready within 60 seconds at {api_base}")
             logging.error("Please check: 1) Container is running, 2) Port 11434 is mapped correctly, 3) No firewall blocking")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Ollama service failed to become ready within 60 seconds at {api_base}")
+            return
 
         # Get generation parameters
         inputs = self.job.get('inputs', {})
@@ -1167,7 +1158,7 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Failed to verify/pull model {model_name}: {e}")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to verify/pull model {model_name}: {e}")
+            return
 
         try:
             # Use Ollama's /api/generate endpoint (available in all versions including 0.13.0)
@@ -1197,7 +1188,7 @@ class TextGenerationJobProcessor(BaseJobProcessor):
             if not generated_text:
                 logging.error(f"Ollama returned empty response. Full result: {result}")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Ollama returned empty response. Full result: {result}")
+                return
             
             logging.info(f"Generation complete. Length: {len(generated_text)} chars.")
 
@@ -1220,7 +1211,6 @@ class TextGenerationJobProcessor(BaseJobProcessor):
             else:
                 logging.error("Failed to upload generated script.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError("Failed to upload generated script.")
 
             # Cleanup
             if os.path.exists(output_path):
@@ -1229,7 +1219,6 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Text generation failed: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Text generation failed: {e}")
 
 
 class HunyuanVideoJobProcessor(BaseJobProcessor):
@@ -1240,7 +1229,7 @@ class HunyuanVideoJobProcessor(BaseJobProcessor):
         if not self.job:
             logging.error(f"Job object is None for HunyuanVideoJobProcessor. Cannot proceed.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError("Job object is None for HunyuanVideoJobProcessor.")
+            return
 
         workflow_data = self._get_workflow_payload()
         if not workflow_data:
@@ -1262,7 +1251,7 @@ class HunyuanVideoJobProcessor(BaseJobProcessor):
             if not start_image_filename:
                 logging.error(f"Failed to materialize start image for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Failed to materialize start image for job {self.job_id}.")
+                return
 
             start_image_full_path = os.path.join(self.input_dir, start_image_filename)
 
@@ -1277,7 +1266,7 @@ class HunyuanVideoJobProcessor(BaseJobProcessor):
             except Exception as e:
                 logging.error(f"Failed to copy start image to container for job {self.job_id}: {e}", exc_info=True)
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Failed to copy start image to container for job {self.job_id}: {e}")
+                return
 
             wf_ready = inject_prompt_and_image_into_hunyuan_workflow(
                 workflow_data, 
@@ -1311,14 +1300,14 @@ class HunyuanVideoJobProcessor(BaseJobProcessor):
         if not video_info:
             logging.error(f"Workflow for job {self.job_id} completed, but no video file found.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Workflow for job {self.job_id} completed, but no video file found.")
+            return
 
         video_filename, subfolder = video_info
         temp_host_path = self._copy_file_from_container(video_filename, subfolder)
         if not temp_host_path:
             logging.error(f"Failed to copy output file from container for job {self.job_id}.")
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
-            raise CriticalWorkflowError(f"Failed to copy output file from container for job {self.job_id}.")
+            return
 
         try:
             video_storage_path = self.orchestrator_service.upload_output(temp_host_path, self.job_id, 'video/mp4')
@@ -1358,7 +1347,6 @@ class HunyuanVideoJobProcessor(BaseJobProcessor):
             else:
                 logging.error(f"Video upload failed for job {self.job_id}.")
                 self.orchestrator_service.update_job_status(self.job_id, 'failed')
-                raise CriticalWorkflowError(f"Video upload failed for job {self.job_id}.")
         finally:
             logging.info(f"Cleaning up temporary file: {temp_host_path}")
             os.remove(temp_host_path)
