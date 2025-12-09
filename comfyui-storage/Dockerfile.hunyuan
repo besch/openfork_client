@@ -61,11 +61,10 @@ RUN apt-get update && apt-get install -y \
 # Install uv
 RUN python -m pip install uv
 
-# Copy user configurations
-COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
-
-# Setup model directories if you want to bake them in, otherwise we rely on volume mounts
-# We assume the user maps the 'storage/ComfyUI/models' directory to '/opt/ComfyUI/models'
+# Use models baked into the image
+COPY --chown=user:user ./storage/ComfyUI/models/vae/hunyuan_video_vae_bf16.safetensors /opt/ComfyUI/models/vae/
+COPY --chown=user:user ./storage/ComfyUI/models/unet/hunyuan-video-i2v-720p-Q4_K_M.gguf /opt/ComfyUI/models/unet/
+COPY --chown=user:user ./storage/ComfyUI/models/unet/hunyuan-video-t2v-720p-Q4_K_M.gguf /opt/ComfyUI/models/unet/
 
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
