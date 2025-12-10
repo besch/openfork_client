@@ -22,9 +22,17 @@ RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-inde
 # Install other dependencies as before, including gitpython to fix 'git' module error
 RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
 
-# Clone SageAttention for installation at runtime (when GPU is available)
+# Clone SageAttention for installation
 RUN python -m pip install ninja
 RUN git clone https://github.com/thu-ml/SageAttention.git /opt/sageattention
+
+# Install SageAttention (Baked in)
+ENV TORCH_CUDA_ARCH_LIST="8.9"
+WORKDIR /opt/sageattention
+ENV MAX_JOBS=1
+RUN python -m pip install --no-build-isolation -v . \
+    && cd / \
+    && python -c "import sageattention.core; print(f'SM89_ENABLED: {sageattention.core.SM89_ENABLED}'); assert sageattention.core.SM89_ENABLED, 'SageAttention SM89 kernel was not built!'"
 
 # Set working directory back to /opt/ComfyUI
 WORKDIR /opt/ComfyUI
@@ -77,7 +85,6 @@ COPY --chown=user:user ./storage/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3f
 
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
-# On start, check if SageAttention is installed in the persistent user volume.
-# If not, install it there. Then, start ComfyUI.
-CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]
+# On start, start ComfyUI
+CMD ["python", "main.py", "--listen", "--gpu-only", "--use-sage-attention"]
 
