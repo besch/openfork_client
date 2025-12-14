@@ -89,17 +89,21 @@ class DGNClient:
             response = requests.get(config_url)
             response.raise_for_status()
 
-            self.config = response.json()
+            full_config = response.json()
+            
+            # Extract workflows and services from the config
+            self.config = full_config.get("workflows", {})
+            services_config = full_config.get("services", {})
 
             # Create a map from service_name to prod_image for docker_manager
-            unique_services = {
-                (config["service_name"], config["prod_image"])
-                for config in self.config.values()
-                if "service_name" in config and "prod_image" in config
-            }
-            self.docker_image_map = {
-                service_name: image for service_name, image in unique_services
-            }
+            # Now we need to get prod_image from services and map it via workflows
+            self.docker_image_map = {}
+            for workflow_type, workflow_config in self.config.items():
+                service_name = workflow_config.get("service_name")
+                if service_name and service_name in services_config:
+                    prod_image = services_config[service_name].get("prod_image")
+                    if prod_image:
+                        self.docker_image_map[service_name] = prod_image
 
             docker_manager.set_docker_image_map(self.docker_image_map)
 
