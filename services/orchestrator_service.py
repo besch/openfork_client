@@ -4,7 +4,7 @@ import base64
 import json
 import time
 import threading
-from typing import Union, Dict
+from typing import Union, Dict, List
 from services.hardware_profiler import get_hardware_profile
 import os
 
@@ -233,7 +233,7 @@ class OrchestratorService:
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
 
-    def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None):
+    def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None, media_type: str = None):
         """Update the status of a job."""
         try:
             payload = {"status": status}
@@ -247,6 +247,8 @@ class OrchestratorService:
                 payload["completion_metadata"] = completion_metadata
             if prompt:
                 payload["prompt"] = prompt
+            if media_type:
+                payload["media_type"] = media_type
 
             response = self._make_request(
                 'put',
@@ -283,7 +285,7 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self, service_type: str) -> Union[str, None]:
+    def register_with_orchestrator(self, service_type: str, workflows: List[Dict] = None) -> Union[str, None]:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
         
@@ -292,7 +294,12 @@ class OrchestratorService:
             logging.error("Could not extract user_id from token. Cannot register.")
             return None
         
-        payload = {**hardware_profile, "user_id": user_id, "service_type": service_type}
+        payload = {
+            **hardware_profile, 
+            "user_id": user_id, 
+            "service_type": service_type,
+            "available_workflows": workflows or []
+        }
 
         logging.info(f"Registering with profile: {payload}")
         try:

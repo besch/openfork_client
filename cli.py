@@ -10,7 +10,6 @@ import os
 
 from config import DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from dgn_client import DGNClient
-from services.docker_manager import docker_manager
 from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
 from services.heartbeat_manager import HeartbeatManager
 from services.job_listener import JobListener
@@ -72,19 +71,20 @@ def setup_client(args):
         access_token=args.access_token,
         refresh_token=args.refresh_token,
         accept_policy=args.accept_policy,
-        allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None
+        allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None,
+        comfyui_install_dir=args.comfyui_install_dir,
+        comfyui_url=args.comfyui_url
     )
 
     client.load_config() # Fetch config from orchestrator
 
-    # Validate service argument after loading config
-    if args.service != 'auto':
-        available_services = list(client.docker_image_map.keys())
-        if args.service not in available_services:
-            logging.error(f"Invalid service '{args.service}'. Available services from config: {', '.join(available_services)}")
-            sys.exit(1)
-
-    provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
+    # In local mode, we don't strictly validate against docker images. 
+    # Whatever workflows we scanned are what we support.
+    
+    provider_id = client.orchestrator_service.register_with_orchestrator(
+        service_type=args.service,
+        workflows=client.available_workflows
+    )
     if not provider_id:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
     
@@ -124,16 +124,12 @@ def cleanup(client, provider_id, service_mode):
         except Exception as e:
             logging.error(f"DGN Client: Failed to deregister from orchestrator: {e}", exc_info=True)
     
-    logging.info("DGN Client: Stopping Docker container(s).")
+    logging.info("DGN Client: Stopping ComfyUI if managed.")
     try:
-        if service_mode != 'auto':
-            docker_manager.stop_container(service_type=service_mode)
-        elif client and client.active_service_type:
-            docker_manager.stop_container(service_type=client.active_service_type)
-        else:
-            logging.info("DGN Client: No active container to stop.")
+        if client and client.comfyui_manager:
+            client.comfyui_manager.stop()
     except Exception as e:
-        logging.error(f"DGN Client: Failed to stop Docker container: {e}", exc_info=True)
+         logging.error(f"DGN Client: Failed to stop ComfyUI: {e}", exc_info=True)
 
 def main():
     multiprocessing.freeze_support()
@@ -148,6 +144,8 @@ def main():
     parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')
     parser.add_argument('--accept-policy', type=str, default='mine', help='The job acceptance policy (all, mine, project).')
     parser.add_argument('--allowed-targets', type=str, help='For specific_* policies, a comma-separated list of targets (e.g., user/project-slug or user/project-slug:branch-name).')
+    parser.add_argument('--comfyui-install-dir', type=str, help='Path to local ComfyUI installation directory.')
+    parser.add_argument('--comfyui-url', type=str, default='http://127.0.0.1:8188', help='URL of the ComfyUI instance.')
     args = parser.parse_args()
 
 
@@ -167,8 +165,8 @@ def main():
         # If we are running a dedicated service, set it as active on the client.
         if args.service != 'auto':
             client.active_service_type = args.service
-            # Start the container now that config is loaded and image map is set
-            docker_manager.run_container(service_type=args.service)
+            # No container to run
+            pass
 
         run_client(client, provider_id, args.service)
     except Exception as e:
