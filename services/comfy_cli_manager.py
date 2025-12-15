@@ -108,16 +108,37 @@ class ComfyCliManager:
             self._comfy_cli_available = False
             logging.warning("comfy-cli is not installed. Run: pip install comfy-cli")
             return False
+        
+        logging.info(f"Checking comfy-cli availability at: {cmd}")
             
         try:
-            result = subprocess.run(
-                [cmd, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+            # On Windows, .BAT files require shell=True
+            use_shell = os.name == 'nt' and cmd.lower().endswith(('.bat', '.cmd'))
+            
+            if use_shell:
+                result = subprocess.run(
+                    f'"{cmd}" --version',
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            else:
+                result = subprocess.run(
+                    [cmd, "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            
             self._comfy_cli_available = result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+            if self._comfy_cli_available:
+                logging.info(f"comfy-cli is available: {result.stdout.strip()}")
+            else:
+                logging.warning(f"comfy-cli returned non-zero: {result.stderr}")
+                
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logging.warning(f"comfy-cli check failed: {e}")
             self._comfy_cli_available = False
             
         if not self._comfy_cli_available:
@@ -211,35 +232,100 @@ class ComfyCliManager:
             cmd = self._get_comfy_cmd() + self._get_workspace_args() + ["node", "install", git_url]
             logging.info(f"Installing node from URL: {' '.join(cmd)}")
             
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600  # 10 minute timeout for installation (may need to clone + install deps)
-            )
+            # On Windows, if the command is a .BAT file, we need shell=True
+            use_shell = os.name == 'nt' and cmd[0].lower().endswith(('.bat', '.cmd'))
+            if use_shell:
+                # Join command for shell execution
+                cmd_str = ' '.join(f'"{c}"' if ' ' in c else c for c in cmd)
+                logging.info(f"Using shell mode for Windows BAT file: {cmd_str}")
             
-            if result.returncode == 0:
+            logging.info(f"Starting installation of {package_name}...")
+            
+            # Use Popen for streaming output
+            import threading
+            import time
+            
+            if use_shell:
+                process = subprocess.Popen(
+                    cmd_str,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1
+                )
+            else:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1
+                )
+            
+            stdout_lines = []
+            stderr_lines = []
+            
+            def read_output(pipe, lines, name):
+                for line in iter(pipe.readline, ''):
+                    if line:
+                        lines.append(line.rstrip())
+                        logging.info(f"[comfy-cli {name}] {line.rstrip()}")
+                pipe.close()
+            
+            stdout_thread = threading.Thread(target=read_output, args=(process.stdout, stdout_lines, "stdout"))
+            stderr_thread = threading.Thread(target=read_output, args=(process.stderr, stderr_lines, "stderr"))
+            
+            stdout_thread.start()
+            stderr_thread.start()
+            
+            # Wait for completion with timeout
+            start_time = time.time()
+            timeout = 600  # 10 minutes
+            
+            while process.poll() is None:
+                elapsed = time.time() - start_time
+                if elapsed > timeout:
+                    process.kill()
+                    logging.error(f"Installation timed out after {timeout}s")
+                    return NodeInstallResult(
+                        success=False,
+                        node_name=package_name,
+                        message="Installation timed out after 10 minutes"
+                    )
+                
+                # Log progress every 30 seconds
+                if int(elapsed) % 30 == 0 and elapsed > 1:
+                    logging.info(f"Installation in progress... ({int(elapsed)}s elapsed)")
+                
+                time.sleep(1)
+            
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
+            
+            returncode = process.returncode
+            stdout = '\n'.join(stdout_lines)
+            stderr = '\n'.join(stderr_lines)
+            
+            logging.info(f"Installation completed with return code: {returncode}")
+            
+            if returncode == 0:
                 logging.info(f"Successfully installed node: {package_name}")
                 return NodeInstallResult(
                     success=True,
                     node_name=package_name,
-                    message=result.stdout
+                    message=stdout
                 )
             else:
-                logging.error(f"Failed to install node {package_name}: {result.stderr}")
+                logging.error(f"Failed to install node {package_name}: {stderr}")
                 return NodeInstallResult(
                     success=False,
                     node_name=package_name,
-                    message=result.stderr
+                    message=stderr or stdout or f"Return code: {returncode}"
                 )
                 
-        except subprocess.TimeoutExpired:
-            return NodeInstallResult(
-                success=False,
-                node_name=package_name,
-                message="Installation timed out after 10 minutes"
-            )
         except Exception as e:
+            logging.error(f"Exception during node installation: {e}", exc_info=True)
             return NodeInstallResult(
                 success=False,
                 node_name=package_name,
