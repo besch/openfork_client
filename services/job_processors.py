@@ -442,14 +442,49 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         packages_to_install = {}  # git_url -> list of class_types it provides
         unresolved = []
         
+        # Fallback mappings for common nodes not in the registry
+        fallback_mappings = {
+            # pythongosssss ComfyUI-Custom-Scripts nodes
+            "MarkdownNote": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+            "Note": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+            "ShowText": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+            "StringFunction": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+            # Prefix-based fallbacks
+        }
+        
+        # Prefix-based fallback mappings
+        prefix_fallbacks = {
+            "VHS_": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+            "KJ": "https://github.com/kijai/ComfyUI-KJNodes",
+            "WAS ": "https://github.com/WASasquatch/was-node-suite-comfyui",
+            "Impact": "https://github.com/ltdrdata/ComfyUI-Impact-Pack",
+        }
+        
         for class_type in missing_class_types:
             if class_type in node_to_package:
                 git_url = node_to_package[class_type]
                 if git_url not in packages_to_install:
                     packages_to_install[git_url] = []
                 packages_to_install[git_url].append(class_type)
+            elif class_type in fallback_mappings:
+                git_url = fallback_mappings[class_type]
+                if git_url not in packages_to_install:
+                    packages_to_install[git_url] = []
+                packages_to_install[git_url].append(class_type)
+                logging.info(f"Using fallback mapping for {class_type} -> {git_url}")
             else:
-                unresolved.append(class_type)
+                # Try prefix-based matching
+                matched = False
+                for prefix, git_url in prefix_fallbacks.items():
+                    if class_type.startswith(prefix):
+                        if git_url not in packages_to_install:
+                            packages_to_install[git_url] = []
+                        packages_to_install[git_url].append(class_type)
+                        logging.info(f"Using prefix fallback for {class_type} -> {git_url}")
+                        matched = True
+                        break
+                if not matched:
+                    unresolved.append(class_type)
         
         if unresolved:
             logging.warning(f"Could not find packages for these nodes (not in ComfyUI-Manager registry): {unresolved}")

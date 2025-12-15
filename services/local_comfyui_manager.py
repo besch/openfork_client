@@ -312,8 +312,85 @@ class LocalComfyUIManager:
         
         return templates
 
-    def fetch_github_templates(self) -> List[Dict[str, Any]]:
-        """Fetch built-in workflow templates from Comfy-Org's GitHub repository."""
+    def _get_cache_dir(self) -> str:
+        """Get the cache directory path, creating it if needed."""
+        if self.comfyui_install_dir:
+            cache_dir = os.path.join(self.comfyui_install_dir, ".openfork_cache")
+        else:
+            # Fallback to user home directory
+            cache_dir = os.path.join(os.path.expanduser("~"), ".openfork_cache")
+        
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+    
+    def _load_github_templates_cache(self) -> tuple[List[Dict[str, Any]], bool]:
+        """
+        Load GitHub templates from local cache.
+        
+        Returns:
+            Tuple of (templates list, is_cache_valid). 
+            is_cache_valid is True if cache exists and is less than 24 hours old.
+        """
+        cache_file = os.path.join(self._get_cache_dir(), "github_templates.json")
+        
+        if not os.path.exists(cache_file):
+            return [], False
+        
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            cached_at = cache_data.get("cached_at", 0)
+            templates = cache_data.get("templates", [])
+            
+            # Check if cache is less than 24 hours old
+            cache_age_hours = (time.time() - cached_at) / 3600
+            is_valid = cache_age_hours < 24
+            
+            if is_valid:
+                logging.info(f"Using cached GitHub templates ({len(templates)} templates, {cache_age_hours:.1f}h old)")
+            else:
+                logging.info(f"GitHub templates cache expired ({cache_age_hours:.1f}h old)")
+            
+            return templates, is_valid
+            
+        except Exception as e:
+            logging.debug(f"Could not load GitHub templates cache: {e}")
+            return [], False
+    
+    def _save_github_templates_cache(self, templates: List[Dict[str, Any]]):
+        """Save GitHub templates to local cache."""
+        cache_file = os.path.join(self._get_cache_dir(), "github_templates.json")
+        
+        try:
+            cache_data = {
+                "cached_at": time.time(),
+                "templates": templates
+            }
+            
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2)
+            
+            logging.info(f"Saved {len(templates)} GitHub templates to cache")
+            
+        except Exception as e:
+            logging.warning(f"Could not save GitHub templates cache: {e}")
+    
+    def fetch_github_templates(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """
+        Fetch built-in workflow templates from Comfy-Org's GitHub repository.
+        
+        Uses local cache by default, refreshing only if cache is >24 hours old.
+        
+        Args:
+            force_refresh: If True, always fetch from GitHub regardless of cache age.
+        """
+        # Try to use cache first (unless force refresh)
+        if not force_refresh:
+            cached_templates, is_valid = self._load_github_templates_cache()
+            if is_valid and cached_templates:
+                return cached_templates
+        
         templates = []
         GITHUB_API_URL = "https://api.github.com/repos/Comfy-Org/workflow_templates/contents"
         
@@ -323,9 +400,17 @@ class LocalComfyUIManager:
                 "Accept": "application/vnd.github.v3+json"
             })
             
+            if response.status_code == 403:
+                # Rate limited - use cache as fallback
+                logging.warning("GitHub API rate limited, using cached templates")
+                cached_templates, _ = self._load_github_templates_cache()
+                return cached_templates
+            
             if response.status_code != 200:
                 logging.debug(f"GitHub API returned {response.status_code}")
-                return templates
+                # Use cache as fallback
+                cached_templates, _ = self._load_github_templates_cache()
+                return cached_templates if cached_templates else []
             
             items = response.json()
             
@@ -384,13 +469,22 @@ class LocalComfyUIManager:
                                     })
                     except Exception as e:
                         logging.debug(f"Error fetching category {category_name}: {e}")
-                        
-            logging.info(f"Fetched {len(templates)} templates from ComfyUI GitHub repository")
+            
+            if templates:
+                logging.info(f"Fetched {len(templates)} templates from ComfyUI GitHub repository")
+                # Save to cache for next time
+                self._save_github_templates_cache(templates)
             
         except requests.exceptions.RequestException as e:
             logging.warning(f"Could not fetch templates from GitHub: {e}")
+            # Fallback to cache even if expired
+            cached_templates, _ = self._load_github_templates_cache()
+            return cached_templates if cached_templates else []
         except Exception as e:
             logging.warning(f"Error processing GitHub templates: {e}")
+            # Fallback to cache even if expired
+            cached_templates, _ = self._load_github_templates_cache()
+            return cached_templates if cached_templates else []
         
         return templates
 

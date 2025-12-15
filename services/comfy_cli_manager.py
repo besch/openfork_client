@@ -37,15 +37,81 @@ class ComfyCliManager:
     def __init__(self, comfyui_install_dir: str = None):
         self.comfyui_install_dir = comfyui_install_dir
         self._comfy_cli_available = None
+        self._comfy_cmd = None  # Will store the path to comfy command
+    
+    def _find_comfy_command(self) -> Union[str, None]:
+        """Find the comfy command, checking multiple locations."""
+        # First check if we've already found it
+        if self._comfy_cmd:
+            return self._comfy_cmd
+        
+        # Locations to check
+        candidates = ["comfy"]  # Try system PATH first
+        
+        # Try common Python Scripts directories
+        import sys
+        home = os.path.expanduser("~")
+        
+        # Add Python Scripts directory from the current interpreter
+        python_scripts = os.path.join(os.path.dirname(sys.executable), "Scripts")
+        if os.name == 'nt':  # Windows
+            candidates.extend([
+                os.path.join(python_scripts, "comfy.exe"),
+                os.path.join(home, ".pyenv", "pyenv-win", "shims", "comfy"),
+                os.path.join(home, ".local", "bin", "comfy"),
+                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python39", "Scripts", "comfy.exe"),
+                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python310", "Scripts", "comfy.exe"),
+                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python311", "Scripts", "comfy.exe"),
+            ])
+            # Also check pyenv versions
+            pyenv_base = os.path.join(home, ".pyenv", "pyenv-win", "versions")
+            if os.path.exists(pyenv_base):
+                for version_dir in os.listdir(pyenv_base):
+                    candidates.append(os.path.join(pyenv_base, version_dir, "Scripts", "comfy.exe"))
+        else:  # Unix-like
+            candidates.extend([
+                os.path.join(python_scripts, "comfy"),
+                os.path.join(home, ".local", "bin", "comfy"),
+                "/usr/local/bin/comfy",
+            ])
+        
+        # Try shutil.which first for system PATH
+        cmd = shutil.which("comfy")
+        if cmd:
+            self._comfy_cmd = cmd
+            logging.info(f"Found comfy-cli at: {cmd}")
+            return cmd
+        
+        # Check all candidates
+        for cmd in candidates:
+            if os.path.isfile(cmd):
+                self._comfy_cmd = cmd
+                logging.info(f"Found comfy-cli at: {cmd}")
+                return cmd
+        
+        return None
+    
+    def _get_comfy_cmd(self) -> list[str]:
+        """Get the comfy command as a list for subprocess."""
+        cmd = self._find_comfy_command()
+        if cmd:
+            return [cmd]
+        return ["comfy"]  # Fallback to system PATH
         
     def is_available(self) -> bool:
         """Check if comfy-cli is installed and available."""
         if self._comfy_cli_available is not None:
             return self._comfy_cli_available
+        
+        cmd = self._find_comfy_command()
+        if not cmd:
+            self._comfy_cli_available = False
+            logging.warning("comfy-cli is not installed. Run: pip install comfy-cli")
+            return False
             
         try:
             result = subprocess.run(
-                ["comfy", "--version"],
+                [cmd, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10
@@ -83,7 +149,7 @@ class ComfyCliManager:
             )
         
         try:
-            cmd = ["comfy"] + self._get_workspace_args() + ["node", "install", node_name]
+            cmd = self._get_comfy_cmd() + self._get_workspace_args() + ["node", "install", node_name]
             logging.info(f"Installing node: {' '.join(cmd)}")
             
             result = subprocess.run(
@@ -142,7 +208,7 @@ class ComfyCliManager:
         package_name = git_url.rstrip('/').split('/')[-1].replace('.git', '')
         
         try:
-            cmd = ["comfy"] + self._get_workspace_args() + ["node", "install", git_url]
+            cmd = self._get_comfy_cmd() + self._get_workspace_args() + ["node", "install", git_url]
             logging.info(f"Installing node from URL: {' '.join(cmd)}")
             
             result = subprocess.run(
