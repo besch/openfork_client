@@ -41,7 +41,8 @@ class DockerProdManager:
         except docker.errors.ImageNotFound:
             logging.info(f"Image '{image_name}' not found locally. Pulling from Docker Hub...")
             try:
-                self.client.images.pull(image_name)
+                from .docker_progress_logger import stream_pull_with_progress
+                stream_pull_with_progress(self.client, image_name, throttle_interval=0.5)
                 logging.info(f"Successfully pulled image: {image_name}")
             except docker.errors.APIError as e:
                 logging.error(f"Failed to pull image '{image_name}': {e}")
