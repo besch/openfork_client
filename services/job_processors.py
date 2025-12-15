@@ -241,24 +241,103 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         except ImportError:
             self._analyzer = None
 
+    def _is_ui_format(self, workflow_data: dict) -> bool:
+        """Check if workflow is in UI format (with nodes/links arrays) vs API format."""
+        return "nodes" in workflow_data and "links" in workflow_data and "prompt" not in workflow_data
+
+    def _convert_ui_to_api_format(self, ui_workflow: dict) -> dict:
+        """Convert ComfyUI UI format workflow to API format.
+        
+        UI format has 'nodes' array with 'id', 'type', 'widgets_values' etc.
+        API format has numbered dict keys with 'class_type' and 'inputs'.
+        """
+        nodes = ui_workflow.get("nodes", [])
+        links = ui_workflow.get("links", [])
+        
+        # Build link map: link_id -> (from_node_id, from_slot, to_node_id, to_slot, type)
+        link_map = {}
+        for link in links:
+            if len(link) >= 6:
+                link_id, from_node, from_slot, to_node, to_slot, link_type = link[:6]
+                link_map[link_id] = {
+                    "from_node": from_node,
+                    "from_slot": from_slot,
+                    "to_node": to_node,
+                    "to_slot": to_slot,
+                    "type": link_type
+                }
+        
+        api_prompt = {}
+        
+        for node in nodes:
+            node_id = str(node.get("id"))
+            class_type = node.get("type")
+            
+            if not class_type:
+                continue
+            
+            inputs = {}
+            
+            # Process widget values - these come from the UI
+            widgets_values = node.get("widgets_values", [])
+            widget_names = node.get("widgets_names", [])
+            
+            # If no explicit names, try to assign based on common patterns
+            if widgets_values and not widget_names:
+                # Use generic naming
+                for i, val in enumerate(widgets_values):
+                    if val is not None:
+                        inputs[f"widget_{i}"] = val
+            else:
+                for i, val in enumerate(widgets_values):
+                    if i < len(widget_names):
+                        inputs[widget_names[i]] = val
+            
+            # Process inputs from links
+            node_inputs = node.get("inputs", [])
+            for inp in node_inputs:
+                if isinstance(inp, dict):
+                    inp_name = inp.get("name")
+                    link_id = inp.get("link")
+                    if link_id and link_id in link_map:
+                        link_info = link_map[link_id]
+                        # Reference format: [from_node_id, from_slot]
+                        inputs[inp_name] = [str(link_info["from_node"]), link_info["from_slot"]]
+            
+            api_prompt[node_id] = {
+                "class_type": class_type,
+                "inputs": inputs
+            }
+        
+        logging.info(f"Converted UI workflow with {len(nodes)} nodes to API format")
+        return {"prompt": api_prompt}
+
     def _get_workflow(self):
         """Load workflow from local ComfyUI or by absolute path."""
+        workflow = None
+        
         if self.workflow_name and self.local_comfyui_manager:
             workflow = self.local_comfyui_manager.get_workflow_content(self.workflow_name)
             if workflow:
                 logging.info(f"Loaded workflow '{self.workflow_name}' from local ComfyUI")
-                return workflow
         
-        if self.workflow_path and os.path.exists(self.workflow_path):
+        if not workflow and self.workflow_path and os.path.exists(self.workflow_path):
             try:
                 with open(self.workflow_path, 'r', encoding='utf-8') as f:
                     workflow = json.load(f)
                 logging.info(f"Loaded workflow from path: {self.workflow_path}")
-                return workflow
             except Exception as e:
                 logging.error(f"Failed to load workflow from {self.workflow_path}: {e}")
         
-        return None
+        if not workflow:
+            return None
+        
+        # Check if it's UI format and convert if needed
+        if self._is_ui_format(workflow):
+            logging.info("Detected UI format workflow, converting to API format...")
+            workflow = self._convert_ui_to_api_format(workflow)
+        
+        return workflow
 
     def _inject_inputs(self, workflow_data: dict, user_inputs: dict) -> dict:
         """Inject user inputs into workflow using automatically detected schema."""

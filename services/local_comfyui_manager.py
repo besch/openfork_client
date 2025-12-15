@@ -387,18 +387,50 @@ class LocalComfyUIManager:
             if not any(w["name"] == template["name"] for w in workflows):
                 workflows.append(template)
         
+        # Cache the workflows for get_workflow_content to access
+        self._cached_workflows = workflows
+        
         logging.info(f"Found {len(workflows)} total workflows/templates")
         return workflows
 
     def get_workflow_content(self, workflow_name: str) -> Union[Dict[str, Any], None]:
-        """Retrieves user saved workflow content by name."""
+        """Retrieves workflow content by name - from local files or by downloading from GitHub."""
+        
+        # First, check if we have this workflow in our cached scan results
+        # This handles GitHub templates that have download_url
+        if hasattr(self, '_cached_workflows') and self._cached_workflows:
+            for wf in self._cached_workflows:
+                if wf.get('name') == workflow_name:
+                    # If it has a local path, try to load from there
+                    if wf.get('path') and os.path.exists(wf['path']):
+                        try:
+                            with open(wf['path'], 'r', encoding='utf-8') as f:
+                                logging.info(f"Loaded workflow '{workflow_name}' from cached path: {wf['path']}")
+                                return json.load(f)
+                        except Exception as e:
+                            logging.error(f"Error reading workflow from cached path: {e}")
+                    
+                    # If it has a download_url (GitHub template), download it
+                    if wf.get('download_url'):
+                        try:
+                            logging.info(f"Downloading workflow '{workflow_name}' from GitHub: {wf['download_url']}")
+                            response = requests.get(wf['download_url'], timeout=30)
+                            response.raise_for_status()
+                            workflow_data = response.json()
+                            logging.info(f"Successfully downloaded workflow '{workflow_name}' from GitHub")
+                            return workflow_data
+                        except Exception as e:
+                            logging.error(f"Failed to download workflow from GitHub: {e}")
+        
+        # Fall back to searching local files if not found in cache
         if not self.comfyui_install_dir:
             return None
         
-        # Search for exact match first
         search_patterns = [
              os.path.join(self.comfyui_install_dir, "user", "default", "workflows", "**", f"{workflow_name}.json"),
              os.path.join(self.comfyui_install_dir, "user", "default", "workflows", "**", f"{workflow_name}.api.json"),
+             os.path.join(self.comfyui_install_dir, "custom_nodes", "**", "workflows", f"{workflow_name}.json"),
+             os.path.join(self.comfyui_install_dir, "custom_nodes", "**", "examples", f"{workflow_name}.json"),
         ]
 
         for pattern in search_patterns:
@@ -407,11 +439,13 @@ class LocalComfyUIManager:
                  filepath = matches[0]
                  try:
                      with open(filepath, 'r', encoding='utf-8') as f:
+                         logging.info(f"Loaded workflow '{workflow_name}' from local path: {filepath}")
                          return json.load(f)
                  except Exception as e:
                      logging.error(f"Error reading workflow {filepath}: {e}")
                      return None
         
+        logging.warning(f"Workflow '{workflow_name}' not found in cache or local files")
         return None
 
     def _infer_inputs_from_workflow(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
