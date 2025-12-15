@@ -35,15 +35,6 @@ class WorkflowOutput:
     filename_prefix: str = None
 
 
-@dataclass
-class ModelRequirement:
-    """Represents a model file required by the workflow."""
-    filename: str
-    model_type: str  # 'checkpoint', 'lora', 'vae', 'clip', 'controlnet', etc.
-    node_id: str
-    widget_name: str
-
-
 @dataclass 
 class WorkflowMetadata:
     """Complete metadata extracted from a workflow."""
@@ -51,7 +42,6 @@ class WorkflowMetadata:
     inputs: list[WorkflowInput]
     outputs: list[WorkflowOutput]
     required_nodes: list[str]
-    required_models: list[ModelRequirement] = field(default_factory=list)
     estimated_vram_mb: int = 0
     description: str = ""
     category: str = "general"
@@ -114,23 +104,6 @@ class WorkflowAnalyzer:
         "LTXVSampler": 8000,
     }
     
-    # Widget names that contain model filenames, mapped to model type
-    # This is extensible - just add new entries as ComfyUI evolves
-    MODEL_LOADER_WIDGETS = {
-        "ckpt_name": "checkpoint",
-        "unet_name": "unet",
-        "vae_name": "vae",
-        "clip_name": "clip",
-        "lora_name": "lora",
-        "control_net_name": "controlnet",
-        "model_name": "checkpoint",  # Generic
-        "style_model_name": "style_models",
-        "gligen_name": "gligen",
-        "ipadapter_file": "ipadapter",
-        "upscale_model": "upscale_models",
-        "model_path": "checkpoint",  # Used by some loaders
-    }
-    
     def analyze(self, workflow_data: dict, workflow_name: str = "Untitled") -> WorkflowMetadata:
         """
         Extract complete metadata from a workflow.
@@ -148,7 +121,6 @@ class WorkflowAnalyzer:
         inputs = self._extract_inputs(graph)
         outputs = self._extract_outputs(graph)
         required_nodes = self._extract_required_nodes(graph)
-        required_models = self._extract_model_requirements(graph)
         vram = self._estimate_vram(graph)
         category = self._infer_category(graph, outputs)
         
@@ -157,7 +129,6 @@ class WorkflowAnalyzer:
             inputs=inputs,
             outputs=outputs,
             required_nodes=required_nodes,
-            required_models=required_models,
             estimated_vram_mb=vram,
             category=category
         )
@@ -418,52 +389,6 @@ class WorkflowAnalyzer:
         
         return list(class_types)
     
-    def _extract_model_requirements(self, graph: dict) -> list[ModelRequirement]:
-        """Extract model file requirements from workflow nodes.
-        
-        Uses MODEL_LOADER_WIDGETS mapping to detect model filenames
-        in any node that has a matching input widget.
-        """
-        models = []
-        seen = set()  # Prevent duplicates
-        
-        for node_id, node in graph.items():
-            if not isinstance(node, dict):
-                continue
-            
-            node_inputs = node.get("inputs", {})
-            
-            for widget_name, model_type in self.MODEL_LOADER_WIDGETS.items():
-                if widget_name in node_inputs:
-                    value = node_inputs[widget_name]
-                    
-                    # Only process string values (actual filenames)
-                    # Skip link references like ["5", 0]
-                    if isinstance(value, str) and value:
-                        # Skip placeholder/empty values
-                        if value.lower() in ["none", "", "default"]:
-                            continue
-                        
-                        # Skip if we've already seen this model
-                        if value.lower() in seen:
-                            continue
-                        seen.add(value.lower())
-                        
-                        models.append(ModelRequirement(
-                            filename=value,
-                            model_type=model_type,
-                            node_id=node_id,
-                            widget_name=widget_name
-                        ))
-        
-        return models
-    
-    def extract_model_filenames(self, workflow_data: dict) -> list[str]:
-        """Convenience method to get just the list of model filenames."""
-        graph = self._normalize_graph(workflow_data)
-        models = self._extract_model_requirements(graph)
-        return [m.filename for m in models]
-
     def _estimate_vram(self, graph: dict) -> int:
         """Estimate required VRAM based on model nodes."""
         total_vram = 0

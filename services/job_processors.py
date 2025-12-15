@@ -10,8 +10,7 @@ from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.local_comfyui_manager import LocalComfyUIManager
-from services.model_downloader import ModelDownloader
-from services.manager_api_client import ComfyUIManagerClient, install_via_git_clone
+import subprocess
 from utils.media_utils import (
     get_audio_duration, find_audio_in_output, find_audio_file_in_directory,
     find_image_in_output, find_video_in_output, generate_thumbnail,
@@ -396,24 +395,11 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
         
-        # Check and install missing models first
-        if self.local_comfyui_manager:
-            models_valid, missing_models = self.local_comfyui_manager.validate_workflow_models(workflow_data)
-            if not models_valid:
-                logging.warning(f"Workflow has missing models: {missing_models}")
-                if not self._auto_install_missing_models(missing_models):
-                    logging.error(f"Failed to auto-install missing models for job {self.job_id}")
-                    self.orchestrator_service.update_job_status(
-                        self.job_id, 'failed',
-                        completion_metadata={"error": "missing_models", "missing": missing_models}
-                    )
-                    return
-        
-        # Check and install missing nodes
         if self.local_comfyui_manager:
             is_valid, missing_nodes = self.local_comfyui_manager.validate_workflow(workflow_data)
             if not is_valid:
                 logging.warning(f"Workflow has missing nodes: {missing_nodes}")
+                # Attempt automatic installation
                 if not self._auto_install_missing_nodes(missing_nodes):
                     logging.error(f"Failed to auto-install missing nodes for job {self.job_id}")
                     self.orchestrator_service.update_job_status(
@@ -431,46 +417,9 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         
         self._handle_outputs(outputs)
 
-    def _auto_install_missing_models(self, missing_filenames: list[str]) -> bool:
-        """
-        Attempt to automatically download missing models.
-        
-        Args:
-            missing_filenames: List of missing model filenames
-            
-        Returns:
-            True if all models were successfully downloaded.
-        """
-        if not missing_filenames:
-            return True
-        
-        if not self.local_comfyui_manager or not self.local_comfyui_manager.comfyui_install_dir:
-            logging.error("No ComfyUI installation directory configured")
-            return False
-        
-        logging.info(f"Attempting to download {len(missing_filenames)} missing model(s): {missing_filenames}")
-        
-        downloader = ModelDownloader(
-            comfyui_install_dir=self.local_comfyui_manager.comfyui_install_dir,
-            cache_dir=self.cache_dir
-        )
-        
-        all_success = True
-        for filename in missing_filenames:
-            result = downloader.download_model(filename)
-            if result.success:
-                logging.info(f"Successfully downloaded model: {filename}")
-            else:
-                logging.warning(f"Could not download model '{filename}': {result.message}")
-                all_success = False
-        
-        return all_success
-
     def _auto_install_missing_nodes(self, missing_class_types: list[str]) -> bool:
         """
         Attempt to automatically install missing custom nodes.
-        
-        Uses ComfyUI-Manager API (fast) with git clone fallback.
         
         Args:
             missing_class_types: List of missing node class_type names
@@ -495,10 +444,12 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         
         # Fallback mappings for common nodes not in the registry
         fallback_mappings = {
+            # pythongosssss ComfyUI-Custom-Scripts nodes
             "MarkdownNote": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "Note": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "ShowText": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "StringFunction": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+            # Prefix-based fallbacks
         }
         
         # Prefix-based fallback mappings
@@ -536,59 +487,78 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
                     unresolved.append(class_type)
         
         if unresolved:
-            logging.warning(f"Could not find packages for these nodes: {unresolved}")
+            logging.warning(f"Could not find packages for these nodes (not in ComfyUI-Manager registry): {unresolved}")
         
         if not packages_to_install:
             logging.error("No packages to install - all missing nodes are unresolved")
             return False
         
-        git_urls = list(packages_to_install.keys())
-        
-        # Try ComfyUI-Manager API first (fast - runs inside ComfyUI)
-        manager = ComfyUIManagerClient(self.client.comfyui_client.http_base)
-        
-        if manager.is_manager_available():
-            logging.info("Using ComfyUI-Manager API for node installation...")
-            all_success, results = manager.install_packages(git_urls)
-            
-            if all_success:
-                # Invalidate node cache after restart
-                self.local_comfyui_manager.invalidate_cache()
-                logging.info("All packages installed via ComfyUI-Manager!")
-                return self._verify_nodes_installed()
-            else:
-                failed = [r.package_name for r in results if not r.success]
-                logging.warning(f"Some packages failed via Manager: {failed}")
-        else:
-            logging.warning("ComfyUI-Manager not available, falling back to git clone...")
-        
-        # Fallback: git clone directly
-        custom_nodes_dir = os.path.join(self.local_comfyui_manager.comfyui_install_dir, "custom_nodes")
-        if not os.path.exists(custom_nodes_dir):
-            logging.error(f"Custom nodes directory not found: {custom_nodes_dir}")
+        # Find custom_nodes directory (handles split installations)
+        custom_nodes_dir = self.local_comfyui_manager.get_custom_nodes_dir()
+        if not custom_nodes_dir:
+            logging.error("Could not find custom_nodes directory. Cannot auto-install nodes.")
             return False
         
-        all_success = True
-        for git_url in git_urls:
-            result = install_via_git_clone(git_url, custom_nodes_dir)
-            if result.success:
-                logging.info(f"Successfully cloned {result.package_name}")
-            else:
-                logging.error(f"Failed to clone {git_url}: {result.message}")
-                all_success = False
+        logging.info(f"Installing nodes to: {custom_nodes_dir}")
         
-        if not all_success:
-            logging.warning("Some packages failed to install")
+        # Install each package via git clone
+        all_success = True
+        for git_url, class_types in packages_to_install.items():
+            package_name = git_url.rstrip('/').split('/')[-1].replace('.git', '')
+            target_dir = os.path.join(custom_nodes_dir, package_name)
+            
+            if os.path.exists(target_dir):
+                logging.info(f"Package {package_name} already exists at {target_dir}")
+                continue
+            
+            logging.info(f"Cloning {package_name} (provides: {class_types})...")
+            
+            try:
+                # Prevent git from waiting for credentials
+                env = os.environ.copy()
+                env["GIT_TERMINAL_PROMPT"] = "0"
+                
+                result = subprocess.run(
+                    ["git", "clone", "--depth", "1", "--progress", git_url, target_dir],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,  # 2 minute timeout
+                    env=env
+                )
+                
+                if result.returncode == 0:
+                    logging.info(f"Successfully cloned {package_name}")
+                    
+                    # Install requirements if present
+                    requirements_file = os.path.join(target_dir, "requirements.txt")
+                    if os.path.exists(requirements_file):
+                        logging.info(f"Installing requirements for {package_name}...")
+                        subprocess.run(
+                            ["pip", "install", "-r", requirements_file],
+                            capture_output=True,
+                            timeout=300
+                        )
+                else:
+                    logging.error(f"Failed to clone {package_name}: {result.stderr}")
+                    all_success = False
+                    
+            except subprocess.TimeoutExpired:
+                logging.error(f"Git clone timed out for {package_name}")
+                all_success = False
+            except FileNotFoundError:
+                logging.error("Git is not installed. Cannot auto-install nodes.")
+                return False
+            except Exception as e:
+                logging.error(f"Error cloning {package_name}: {e}")
+                all_success = False
         
         # Restart ComfyUI to load the new nodes
         if not self.local_comfyui_manager.restart(timeout_seconds=90):
             logging.error("Failed to restart ComfyUI after node installation")
             return False
         
-        return self._verify_nodes_installed()
-    
-    def _verify_nodes_installed(self) -> bool:
-        """Re-validate that installed nodes are now available."""
+        # Re-validate the workflow
+        # Need to re-get workflow since we need fresh validation
         workflow_data = self._get_workflow()
         if not workflow_data:
             return False

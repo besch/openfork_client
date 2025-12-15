@@ -36,11 +36,6 @@ class LocalComfyUIManager:
         self._installed_nodes_cache = None
         self._workflow_analyzer = WorkflowAnalyzer() if WorkflowAnalyzer else None
 
-    def invalidate_cache(self):
-        """Clear cached node information. Call after installing new nodes."""
-        self._installed_nodes_cache = None
-        logging.debug("Invalidated installed nodes cache")
-
     def _detect_install_dir(self) -> Union[str, None]:
         """Attempts to detect ComfyUI installation in common locations."""
         home = os.path.expanduser("~")
@@ -48,6 +43,8 @@ class LocalComfyUIManager:
 
         if os.name == 'nt': # Windows
             common_paths = [
+                "D:\\Comfyui",
+                "D:\\Comfy",
                 "C:\\ComfyUI_windows_portable",
                 "D:\\ComfyUI_windows_portable",
                 os.path.join(home, "ComfyUI_windows_portable"),
@@ -70,6 +67,39 @@ class LocalComfyUIManager:
             if os.path.exists(os.path.join(nested_path, "main.py")):
                 return nested_path
         
+        return None
+
+    def get_custom_nodes_dir(self) -> Union[str, None]:
+        """Find the custom_nodes directory, which may be in a different location.
+        
+        Handles split installations where custom_nodes are stored separately
+        from the main ComfyUI installation.
+        """
+        # List of possible locations to check
+        possible_locations = []
+        
+        # First, check relative to the install directory
+        if self.comfyui_install_dir:
+            possible_locations.extend([
+                os.path.join(self.comfyui_install_dir, "custom_nodes"),
+                os.path.join(self.comfyui_install_dir, "ComfyUI", "custom_nodes"),
+            ])
+        
+        # Check common Windows split-installation locations
+        if os.name == 'nt':
+            possible_locations.extend([
+                "D:\\Comfy\\custom_nodes",
+                "D:\\Comfyui\\custom_nodes",
+                "D:\\ComfyUI\\custom_nodes",
+                "C:\\ComfyUI\\custom_nodes",
+            ])
+        
+        for path in possible_locations:
+            if os.path.isdir(path):
+                logging.info(f"Found custom_nodes directory at: {path}")
+                return path
+        
+        logging.warning(f"Could not find custom_nodes directory")
         return None
 
     def is_running(self) -> bool:
@@ -262,10 +292,14 @@ class LocalComfyUIManager:
         
         logging.info("Restarting ComfyUI to load newly installed nodes...")
         
-        # Stop if we have a managed process
+        # Stop ComfyUI - either managed process or by killing port
         if self.process:
             self.stop()
-            time.sleep(2)  # Brief pause after stopping
+            time.sleep(2)
+        else:
+            # Kill any process using the ComfyUI port
+            self._kill_process_on_port()
+            time.sleep(3)
         
         # Start ComfyUI
         self.start()
@@ -282,6 +316,47 @@ class LocalComfyUIManager:
         
         logging.error(f"ComfyUI failed to become ready within {timeout_seconds}s after restart")
         return False
+
+    def _kill_process_on_port(self):
+        """Kill any process using the ComfyUI port (default 8188)."""
+        import re
+        
+        # Extract port from URL
+        port_match = re.search(r':(\d+)', self.comfyui_url)
+        port = port_match.group(1) if port_match else "8188"
+        
+        logging.info(f"Killing any process on port {port}...")
+        
+        try:
+            if os.name == 'nt':  # Windows
+                # Find PID using netstat
+                result = subprocess.run(
+                    ["netstat", "-ano", "-p", "TCP"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                
+                for line in result.stdout.split('\n'):
+                    if f":{port}" in line and "LISTENING" in line:
+                        parts = line.split()
+                        if parts:
+                            pid = parts[-1]
+                            logging.info(f"Found process {pid} on port {port}, killing...")
+                            subprocess.run(["taskkill", "/F", "/PID", pid], timeout=10)
+                            return
+            else:  # Linux/Mac
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if result.stdout.strip():
+                    for pid in result.stdout.strip().split('\n'):
+                        subprocess.run(["kill", "-9", pid], timeout=10)
+        except Exception as e:
+            logging.warning(f"Could not kill process on port {port}: {e}")
 
     def fetch_comfyui_templates(self) -> List[Dict[str, Any]]:
         """Fetch templates list from ComfyUI's /templates API endpoint if available."""
@@ -858,39 +933,3 @@ class LocalComfyUIManager:
                 logging.error(f"Error stopping ComfyUI: {e}")
             finally:
                 self.process = None
-
-    def get_models_directory(self) -> Union[str, None]:
-        """Get the ComfyUI models directory path."""
-        if not self.comfyui_install_dir:
-            return None
-        return os.path.join(self.comfyui_install_dir, "models")
-
-    def is_model_installed(self, filename: str) -> bool:
-        """Check if a model file exists in any models subdirectory."""
-        models_dir = self.get_models_directory()
-        if not models_dir or not os.path.exists(models_dir):
-            return False
-        
-        for root, _, files in os.walk(models_dir):
-            if filename in files:
-                return True
-        return False
-
-    def validate_workflow_models(self, workflow_data: dict) -> tuple[bool, list[str]]:
-        """Check if all models required by a workflow are installed.
-        
-        Returns:
-            Tuple of (all_installed, list_of_missing_model_filenames)
-        """
-        if self._workflow_analyzer is None:
-            return True, []
-        
-        model_filenames = self._workflow_analyzer.extract_model_filenames(workflow_data)
-        missing = []
-        
-        for filename in model_filenames:
-            if not self.is_model_installed(filename):
-                missing.append(filename)
-        
-        return len(missing) == 0, missing
-
