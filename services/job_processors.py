@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.local_comfyui_manager import LocalComfyUIManager
+from services.comfy_cli_manager import ComfyCliManager
 from utils.media_utils import (
     get_audio_duration, find_audio_in_output, find_audio_file_in_directory,
     find_image_in_output, find_video_in_output, generate_thumbnail,
@@ -398,6 +399,14 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             is_valid, missing_nodes = self.local_comfyui_manager.validate_workflow(workflow_data)
             if not is_valid:
                 logging.warning(f"Workflow has missing nodes: {missing_nodes}")
+                # Attempt automatic installation
+                if not self._auto_install_missing_nodes(missing_nodes):
+                    logging.error(f"Failed to auto-install missing nodes for job {self.job_id}")
+                    self.orchestrator_service.update_job_status(
+                        self.job_id, 'failed',
+                        completion_metadata={"error": "missing_nodes", "missing": missing_nodes}
+                    )
+                    return
         
         user_inputs = self.job.get('inputs', {})
         payload = self._inject_inputs(workflow_data, user_inputs)
@@ -407,6 +416,88 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             return
         
         self._handle_outputs(outputs)
+
+    def _auto_install_missing_nodes(self, missing_class_types: list[str]) -> bool:
+        """
+        Attempt to automatically install missing custom nodes.
+        
+        Args:
+            missing_class_types: List of missing node class_type names
+            
+        Returns:
+            True if all nodes were successfully installed and ComfyUI restarted.
+        """
+        if not missing_class_types:
+            return True
+        
+        logging.info(f"Attempting to auto-install {len(missing_class_types)} missing node(s): {missing_class_types}")
+        
+        # Get the node-to-package mapping
+        node_to_package = self.local_comfyui_manager.get_node_to_package_map()
+        if not node_to_package:
+            logging.error("Could not load node-to-package mapping. Cannot auto-install nodes.")
+            return False
+        
+        # Resolve class_types to git URLs
+        packages_to_install = {}  # git_url -> list of class_types it provides
+        unresolved = []
+        
+        for class_type in missing_class_types:
+            if class_type in node_to_package:
+                git_url = node_to_package[class_type]
+                if git_url not in packages_to_install:
+                    packages_to_install[git_url] = []
+                packages_to_install[git_url].append(class_type)
+            else:
+                unresolved.append(class_type)
+        
+        if unresolved:
+            logging.warning(f"Could not find packages for these nodes (not in ComfyUI-Manager registry): {unresolved}")
+        
+        if not packages_to_install:
+            logging.error("No packages to install - all missing nodes are unresolved")
+            return False
+        
+        # Initialize ComfyCliManager
+        comfy_cli = ComfyCliManager(self.local_comfyui_manager.comfyui_install_dir)
+        
+        if not comfy_cli.is_available():
+            logging.error("comfy-cli is not available. Cannot auto-install nodes. Install with: pip install comfy-cli")
+            return False
+        
+        # Install each package
+        all_success = True
+        for git_url, class_types in packages_to_install.items():
+            logging.info(f"Installing package {git_url} (provides: {class_types})")
+            result = comfy_cli.install_node_by_url(git_url)
+            if not result.success:
+                logging.error(f"Failed to install {git_url}: {result.message}")
+                all_success = False
+            else:
+                logging.info(f"Successfully installed {result.node_name}")
+        
+        if not all_success:
+            logging.warning("Some packages failed to install")
+        
+        # Restart ComfyUI to load the new nodes
+        if not self.local_comfyui_manager.restart(timeout_seconds=90):
+            logging.error("Failed to restart ComfyUI after node installation")
+            return False
+        
+        # Re-validate the workflow
+        # Need to re-get workflow since we need fresh validation
+        workflow_data = self._get_workflow()
+        if not workflow_data:
+            return False
+        
+        is_valid, still_missing = self.local_comfyui_manager.validate_workflow(workflow_data)
+        
+        if not is_valid:
+            logging.error(f"Still missing nodes after installation: {still_missing}")
+            return False
+        
+        logging.info("All missing nodes installed and verified successfully!")
+        return True
 
     def _handle_outputs(self, outputs: dict):
         """Detect output type and upload appropriately."""

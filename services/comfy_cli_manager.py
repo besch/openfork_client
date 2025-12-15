@@ -121,6 +121,65 @@ class ComfyCliManager:
                 message=str(e)
             )
     
+    def install_node_by_url(self, git_url: str) -> NodeInstallResult:
+        """
+        Install a custom node from a git URL using comfy-cli.
+        
+        Args:
+            git_url: The git repository URL (e.g., 'https://github.com/pythongosssss/ComfyUI-Custom-Scripts')
+            
+        Returns:
+            NodeInstallResult with success status and message
+        """
+        if not self.is_available():
+            return NodeInstallResult(
+                success=False,
+                node_name=git_url,
+                message="comfy-cli is not available"
+            )
+        
+        # Extract package name from URL for logging
+        package_name = git_url.rstrip('/').split('/')[-1].replace('.git', '')
+        
+        try:
+            cmd = ["comfy"] + self._get_workspace_args() + ["node", "install", git_url]
+            logging.info(f"Installing node from URL: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600  # 10 minute timeout for installation (may need to clone + install deps)
+            )
+            
+            if result.returncode == 0:
+                logging.info(f"Successfully installed node: {package_name}")
+                return NodeInstallResult(
+                    success=True,
+                    node_name=package_name,
+                    message=result.stdout
+                )
+            else:
+                logging.error(f"Failed to install node {package_name}: {result.stderr}")
+                return NodeInstallResult(
+                    success=False,
+                    node_name=package_name,
+                    message=result.stderr
+                )
+                
+        except subprocess.TimeoutExpired:
+            return NodeInstallResult(
+                success=False,
+                node_name=package_name,
+                message="Installation timed out after 10 minutes"
+            )
+        except Exception as e:
+            return NodeInstallResult(
+                success=False,
+                node_name=package_name,
+                message=str(e)
+            )
+    
     def install_nodes(self, node_names: list[str]) -> list[NodeInstallResult]:
         """Install multiple custom nodes."""
         results = []

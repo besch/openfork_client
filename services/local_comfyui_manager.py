@@ -176,6 +176,100 @@ class LocalComfyUIManager:
         
         return len(missing) == 0, missing
 
+    def invalidate_cache(self):
+        """Clear the installed nodes cache to force re-fetching from /object_info."""
+        self._installed_nodes_cache = None
+        logging.info("Invalidated installed nodes cache")
+
+    def get_node_to_package_map(self) -> Dict[str, str]:
+        """
+        Load ComfyUI-Manager's extension-node-map.json to map class_type -> package git URL.
+        
+        Returns:
+            Dict mapping class_type names to git repository URLs.
+            Example: {"MarkdownNote": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts"}
+        """
+        node_map = {}
+        
+        # Try local ComfyUI-Manager first
+        if self.comfyui_install_dir:
+            manager_path = os.path.join(
+                self.comfyui_install_dir, "custom_nodes", "ComfyUI-Manager"
+            )
+            map_file = os.path.join(manager_path, "extension-node-map.json")
+            
+            if os.path.exists(map_file):
+                try:
+                    with open(map_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    # Format: {"git_url": ["node_class_type1", "node_class_type2", ...], ...}
+                    for git_url, node_types in data.items():
+                        if isinstance(node_types, list):
+                            for node_type in node_types:
+                                node_map[node_type] = git_url
+                    
+                    logging.info(f"Loaded {len(node_map)} node-to-package mappings from local ComfyUI-Manager")
+                    return node_map
+                except Exception as e:
+                    logging.warning(f"Error reading extension-node-map.json: {e}")
+        
+        # Fall back to fetching from GitHub
+        GITHUB_URL = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/extension-node-map.json"
+        try:
+            logging.info("Fetching extension-node-map.json from GitHub...")
+            response = requests.get(GITHUB_URL, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            for git_url, node_types in data.items():
+                if isinstance(node_types, list):
+                    for node_type in node_types:
+                        node_map[node_type] = git_url
+            
+            logging.info(f"Loaded {len(node_map)} node-to-package mappings from GitHub")
+        except Exception as e:
+            logging.warning(f"Failed to fetch extension-node-map.json from GitHub: {e}")
+        
+        return node_map
+
+    def restart(self, timeout_seconds: int = 60) -> bool:
+        """
+        Stop ComfyUI, wait briefly, then start it again.
+        
+        Args:
+            timeout_seconds: Maximum time to wait for ComfyUI to become ready after restart.
+            
+        Returns:
+            True if successfully restarted and ready, False otherwise.
+        """
+        if not self.comfyui_install_dir:
+            logging.warning("Cannot restart ComfyUI: no installation directory configured")
+            return False
+        
+        logging.info("Restarting ComfyUI to load newly installed nodes...")
+        
+        # Stop if we have a managed process
+        if self.process:
+            self.stop()
+            time.sleep(2)  # Brief pause after stopping
+        
+        # Start ComfyUI
+        self.start()
+        
+        # Wait for it to become ready
+        start_time = time.time()
+        while time.time() - start_time < timeout_seconds:
+            if self.is_running():
+                # Also invalidate the node cache since we restarted
+                self.invalidate_cache()
+                logging.info(f"ComfyUI restarted and ready after {int(time.time() - start_time)}s")
+                return True
+            time.sleep(2)
+        
+        logging.error(f"ComfyUI failed to become ready within {timeout_seconds}s after restart")
+        return False
+
     def fetch_comfyui_templates(self) -> List[Dict[str, Any]]:
         """Fetch templates list from ComfyUI's /templates API endpoint if available."""
         templates = []
@@ -246,6 +340,24 @@ class LocalComfyUIManager:
                                     workflow_name = file_item["name"].replace(".json", "")
                                     download_url = file_item.get("download_url", "")
                                     
+                                    # Download and analyze workflow for input_schema
+                                    input_schema = []
+                                    estimated_vram = 0
+                                    if download_url and self._workflow_analyzer:
+                                        try:
+                                            wf_response = requests.get(download_url, timeout=15)
+                                            if wf_response.status_code == 200:
+                                                workflow_data = wf_response.json()
+                                                input_schema = self._workflow_analyzer.to_input_schema(
+                                                    workflow_data, workflow_name
+                                                )
+                                                metadata = self._workflow_analyzer.analyze(
+                                                    workflow_data, workflow_name
+                                                )
+                                                estimated_vram = metadata.estimated_vram_mb
+                                        except Exception as e:
+                                            logging.debug(f"Could not analyze {workflow_name}: {e}")
+                                    
                                     templates.append({
                                         "name": workflow_name,
                                         "filename": file_item["name"],
@@ -254,11 +366,12 @@ class LocalComfyUIManager:
                                         "source": "github_builtin",
                                         "source_name": "ComfyUI Official",
                                         "download_url": download_url,
-                                        "input_schema": [],
+                                        "input_schema": input_schema,
                                         "metadata": {
                                             "description": f"Official ComfyUI template from {category_name}",
                                             "github_url": file_item.get("html_url", ""),
-                                            "from_github": True
+                                            "from_github": True,
+                                            "vram": estimated_vram
                                         }
                                     })
                     except Exception as e:
