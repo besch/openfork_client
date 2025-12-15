@@ -11,6 +11,7 @@ from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.local_comfyui_manager import LocalComfyUIManager
 from services.comfy_cli_manager import ComfyCliManager
+from services.model_downloader import ModelDownloader
 from utils.media_utils import (
     get_audio_duration, find_audio_in_output, find_audio_file_in_directory,
     find_image_in_output, find_video_in_output, generate_thumbnail,
@@ -395,11 +396,24 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
         
+        # Check and install missing models first
+        if self.local_comfyui_manager:
+            models_valid, missing_models = self.local_comfyui_manager.validate_workflow_models(workflow_data)
+            if not models_valid:
+                logging.warning(f"Workflow has missing models: {missing_models}")
+                if not self._auto_install_missing_models(missing_models):
+                    logging.error(f"Failed to auto-install missing models for job {self.job_id}")
+                    self.orchestrator_service.update_job_status(
+                        self.job_id, 'failed',
+                        completion_metadata={"error": "missing_models", "missing": missing_models}
+                    )
+                    return
+        
+        # Check and install missing nodes
         if self.local_comfyui_manager:
             is_valid, missing_nodes = self.local_comfyui_manager.validate_workflow(workflow_data)
             if not is_valid:
                 logging.warning(f"Workflow has missing nodes: {missing_nodes}")
-                # Attempt automatic installation
                 if not self._auto_install_missing_nodes(missing_nodes):
                     logging.error(f"Failed to auto-install missing nodes for job {self.job_id}")
                     self.orchestrator_service.update_job_status(
@@ -416,6 +430,41 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             return
         
         self._handle_outputs(outputs)
+
+    def _auto_install_missing_models(self, missing_filenames: list[str]) -> bool:
+        """
+        Attempt to automatically download missing models.
+        
+        Args:
+            missing_filenames: List of missing model filenames
+            
+        Returns:
+            True if all models were successfully downloaded.
+        """
+        if not missing_filenames:
+            return True
+        
+        if not self.local_comfyui_manager or not self.local_comfyui_manager.comfyui_install_dir:
+            logging.error("No ComfyUI installation directory configured")
+            return False
+        
+        logging.info(f"Attempting to download {len(missing_filenames)} missing model(s): {missing_filenames}")
+        
+        downloader = ModelDownloader(
+            comfyui_install_dir=self.local_comfyui_manager.comfyui_install_dir,
+            cache_dir=self.cache_dir
+        )
+        
+        all_success = True
+        for filename in missing_filenames:
+            result = downloader.download_model(filename)
+            if result.success:
+                logging.info(f"Successfully downloaded model: {filename}")
+            else:
+                logging.warning(f"Could not download model '{filename}': {result.message}")
+                all_success = False
+        
+        return all_success
 
     def _auto_install_missing_nodes(self, missing_class_types: list[str]) -> bool:
         """

@@ -853,3 +853,39 @@ class LocalComfyUIManager:
                 logging.error(f"Error stopping ComfyUI: {e}")
             finally:
                 self.process = None
+
+    def get_models_directory(self) -> Union[str, None]:
+        """Get the ComfyUI models directory path."""
+        if not self.comfyui_install_dir:
+            return None
+        return os.path.join(self.comfyui_install_dir, "models")
+
+    def is_model_installed(self, filename: str) -> bool:
+        """Check if a model file exists in any models subdirectory."""
+        models_dir = self.get_models_directory()
+        if not models_dir or not os.path.exists(models_dir):
+            return False
+        
+        for root, _, files in os.walk(models_dir):
+            if filename in files:
+                return True
+        return False
+
+    def validate_workflow_models(self, workflow_data: dict) -> tuple[bool, list[str]]:
+        """Check if all models required by a workflow are installed.
+        
+        Returns:
+            Tuple of (all_installed, list_of_missing_model_filenames)
+        """
+        if self._workflow_analyzer is None:
+            return True, []
+        
+        model_filenames = self._workflow_analyzer.extract_model_filenames(workflow_data)
+        missing = []
+        
+        for filename in model_filenames:
+            if not self.is_model_installed(filename):
+                missing.append(filename)
+        
+        return len(missing) == 0, missing
+
