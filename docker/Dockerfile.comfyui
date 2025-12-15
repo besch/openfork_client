@@ -1,0 +1,62 @@
+# OpenFork ComfyUI Docker Image
+# Based on ai-dock/comfyui with pre-installed custom nodes for video/image generation
+
+FROM ghcr.io/ai-dock/comfyui:latest-cuda
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Pre-install essential custom nodes
+WORKDIR /opt/ComfyUI/custom_nodes
+
+# Clone core nodes (shallow clone for faster builds)
+RUN git clone --depth 1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git && \
+    git clone --depth 1 https://github.com/kijai/ComfyUI-KJNodes.git && \
+    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Pack.git && \
+    git clone --depth 1 https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git && \
+    git clone --depth 1 https://github.com/WASasquatch/was-node-suite-comfyui.git && \
+    git clone --depth 1 https://github.com/cubiq/ComfyUI_essentials.git
+
+# Clone WAN / Video generation nodes
+RUN git clone --depth 1 https://github.com/kijai/ComfyUI-WanVideoWrapper.git || true
+
+# Install requirements for each custom node
+RUN for dir in /opt/ComfyUI/custom_nodes/*/; do \
+      if [ -f "${dir}requirements.txt" ]; then \
+        echo "Installing requirements for $(basename ${dir})..."; \
+        pip install --no-cache-dir -r "${dir}requirements.txt" || true; \
+      fi; \
+      if [ -f "${dir}install.py" ]; then \
+        echo "Running install.py for $(basename ${dir})..."; \
+        cd "${dir}" && python install.py || true; \
+        cd /opt/ComfyUI/custom_nodes; \
+      fi \
+    done
+
+# Create workflow directories
+RUN mkdir -p /opt/ComfyUI/user/default/workflows
+
+# Copy bundled workflows (will be provided at runtime via volume mount or build context)
+COPY workflows/*.json /opt/ComfyUI/user/default/workflows/
+
+# Create model directory structure
+RUN mkdir -p /opt/ComfyUI/models/checkpoints \
+             /opt/ComfyUI/models/loras \
+             /opt/ComfyUI/models/vae \
+             /opt/ComfyUI/models/clip \
+             /opt/ComfyUI/models/clip_vision \
+             /opt/ComfyUI/models/text_encoders \
+             /opt/ComfyUI/models/diffusion_models \
+             /opt/ComfyUI/models/controlnet \
+             /opt/ComfyUI/models/upscale_models
+
+# Return to ComfyUI root
+WORKDIR /opt/ComfyUI
+
+# Expose the ComfyUI port
+EXPOSE 8188
+
+# Default command (ai-dock image handles this, but explicit for clarity)
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]

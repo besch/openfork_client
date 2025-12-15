@@ -1,0 +1,99 @@
+{
+  "text-to-image-sdxl": {
+    "name": "Text to Image (SDXL)",
+    "description": "Generate images from text prompts using SDXL",
+    "category": "image",
+    "vram_required_mb": 8000,
+    "models": [
+      {
+        "type": "checkpoints", 
+        "filename": "sd_xl_base_1.0.safetensors",
+        "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+        "size_gb": 6.9
+      }
+    ],
+    "custom_nodes": []
+  },
+  "image-to-image-sdxl": {
+    "name": "Image to Image (SDXL)",
+    "description": "Transform images using SDXL",
+    "category": "image",
+    "vram_required_mb": 8000,
+    "models": [
+      {
+        "type": "checkpoints",
+        "filename": "sd_xl_base_1.0.safetensors",
+        "url": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+        "size_gb": 6.9
+      }
+    ],
+    "custom_nodes": []
+  },
+  "text-to-video-wan21": {
+    "name": "Text to Video (WAN 2.1)",
+    "description": "Generate videos from text prompts using WAN 2.1",
+    "category": "video",
+    "vram_required_mb": 24000,
+    "models": [
+      {
+        "type": "diffusion_models",
+        "filename": "wan2.1_t2v_14B_bf16.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_t2v_14B_bf16.safetensors",
+        "size_gb": 28.3
+      },
+      {
+        "type": "vae",
+        "filename": "wan_2.1_vae.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+        "size_gb": 0.2
+      },
+      {
+        "type": "text_encoders",
+        "filename": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "size_gb": 4.9
+      },
+      {
+        "type": "clip_vision",
+        "filename": "clip_vision_h.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
+        "size_gb": 1.9
+      }
+    ],
+    "custom_nodes": ["ComfyUI-VideoHelperSuite"]
+  },
+  "image-to-video-wan21": {
+    "name": "Image to Video (WAN 2.1)",
+    "description": "Generate videos from images using WAN 2.1",
+    "category": "video",
+    "vram_required_mb": 24000,
+    "models": [
+      {
+        "type": "diffusion_models",
+        "filename": "wan2.1_i2v_720p_14B_bf16.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/diffusion_models/wan2.1_i2v_720p_14B_bf16.safetensors",
+        "size_gb": 28.3
+      },
+      {
+        "type": "vae",
+        "filename": "wan_2.1_vae.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors",
+        "size_gb": 0.2
+      },
+      {
+        "type": "text_encoders",
+        "filename": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "size_gb": 4.9
+      },
+      {
+        "type": "clip_vision",
+        "filename": "clip_vision_h.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors",
+        "size_gb": 1.9
+      }
+    ],
+    "custom_nodes": ["ComfyUI-VideoHelperSuite"]
+  }
+}
+

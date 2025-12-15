@@ -5,7 +5,6 @@ import sys
 import threading
 import requests
 import json
-
 import os
 
 from config import DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
@@ -16,10 +15,9 @@ from services.job_listener import JobListener
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
 
+
 def listen_for_ipc_commands(client: DGNClient):
-    """
-    Listens for JSON commands from stdin (sent by the parent Electron process).
-    """
+    """Listens for JSON commands from stdin (sent by the parent Electron process)."""
     logging.info("IPC listener thread started.")
     for line in sys.stdin:
         if SHUTDOWN_EVENT.is_set():
@@ -64,6 +62,9 @@ def setup_client(args):
     root_dir = args.root_dir if args.root_dir else os.getcwd()
     logging.info(f"Using root directory: {root_dir}")
 
+    # Extract port from URL if provided, otherwise use default
+    host_port = 8188
+    
     client = DGNClient(
         orchestrator_url=determined_orchestrator_url,
         root_dir=root_dir,
@@ -72,14 +73,11 @@ def setup_client(args):
         refresh_token=args.refresh_token,
         accept_policy=args.accept_policy,
         allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None,
-        comfyui_install_dir=args.comfyui_install_dir,
-        comfyui_url=args.comfyui_url
+        docker_image=args.docker_image,
+        host_port=host_port,
     )
 
-    client.load_config() # Fetch config from orchestrator
-
-    # In local mode, we don't strictly validate against docker images. 
-    # Whatever workflows we scanned are what we support.
+    client.load_config()
     
     provider_id = client.orchestrator_service.register_with_orchestrator(
         service_type=args.service,
@@ -89,6 +87,7 @@ def setup_client(args):
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
     
     return client, provider_id
+
 
 def run_client(client, provider_id, service_mode):
     heartbeat_manager = HeartbeatManager(client.orchestrator_service, provider_id, SHUTDOWN_EVENT)
@@ -103,6 +102,7 @@ def run_client(client, provider_id, service_mode):
         job_listener.listen_for_jobs_auto()
     else:
         job_listener.listen_for_jobs()
+
 
 def cleanup(client, provider_id, service_mode):
     logging.info("DGN Client: Initiating shutdown sequence.")
@@ -124,31 +124,27 @@ def cleanup(client, provider_id, service_mode):
         except Exception as e:
             logging.error(f"DGN Client: Failed to deregister from orchestrator: {e}", exc_info=True)
     
-    logging.info("DGN Client: Stopping ComfyUI if managed.")
+    logging.info("DGN Client: Stopping ComfyUI container.")
     try:
         if client and client.comfyui_manager:
             client.comfyui_manager.stop()
     except Exception as e:
-         logging.error(f"DGN Client: Failed to stop ComfyUI: {e}", exc_info=True)
+        logging.error(f"DGN Client: Failed to stop ComfyUI: {e}", exc_info=True)
+
 
 def main():
     multiprocessing.freeze_support()
     
-    parser = argparse.ArgumentParser(description='DGN Client')
+    parser = argparse.ArgumentParser(description='DGN Client - Docker-based ComfyUI Job Processor')
     parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
     parser.add_argument('--refresh-token', type=str, required=True, help='Supabase Auth Refresh Token')
-    
     parser.add_argument('--service', type=str, default='auto', help='Service to run (e.g., wan22, foley). Default is "auto".')
-
     parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
     parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')
     parser.add_argument('--accept-policy', type=str, default='mine', help='The job acceptance policy (all, mine, project).')
-    parser.add_argument('--allowed-targets', type=str, help='For specific_* policies, a comma-separated list of targets (e.g., user/project-slug or user/project-slug:branch-name).')
-    parser.add_argument('--comfyui-install-dir', type=str, help='Path to local ComfyUI installation directory.')
-    parser.add_argument('--comfyui-url', type=str, default='http://127.0.0.1:8188', help='URL of the ComfyUI instance.')
+    parser.add_argument('--allowed-targets', type=str, help='Comma-separated list of targets for specific policies.')
+    parser.add_argument('--docker-image', type=str, help='Docker image to use (default: ghcr.io/ai-dock/comfyui:latest-cuda).')
     args = parser.parse_args()
-
-
     
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()
@@ -162,11 +158,9 @@ def main():
         ipc_thread = threading.Thread(target=listen_for_ipc_commands, args=(client,), daemon=True)
         ipc_thread.start()
 
-        # If we are running a dedicated service, set it as active on the client.
+        # If we are running a dedicated service, set it as active on the client
         if args.service != 'auto':
             client.active_service_type = args.service
-            # No container to run
-            pass
 
         run_client(client, provider_id, args.service)
     except Exception as e:

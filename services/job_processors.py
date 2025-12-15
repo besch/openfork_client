@@ -5,12 +5,11 @@ import random
 import shutil
 import time
 import requests
-from typing import Union, Dict
+from typing import Union, Dict, Any, List
 from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
-from services.local_comfyui_manager import LocalComfyUIManager
-import subprocess
+from services.docker_comfyui_manager import DockerComfyUIManager
 from utils.media_utils import (
     get_audio_duration, find_audio_in_output, find_audio_file_in_directory,
     find_image_in_output, find_video_in_output, generate_thumbnail,
@@ -19,6 +18,8 @@ from utils.media_utils import (
 
 
 class BaseJobProcessor(ABC):
+    """Base class for all job processors."""
+    
     def __init__(self, client, job, shutdown_event):
         self.client = client
         self.orchestrator_service = client.orchestrator_service
@@ -40,19 +41,23 @@ class BaseJobProcessor(ABC):
         return False
 
     def _retrieve_output_file(self, filename: str, subfolder: str) -> Union[str, None]:
-        """Copies a file from ComfyUI output directory to a temporary location on the client."""
+        """Copies a file from ComfyUI output directory to a temporary location."""
         safe_filename = os.path.basename(filename)
         
+        # Get output directory (from volume mount on host)
         comfy_output_dir = self.client.comfyui_manager.get_output_directory()
         if not comfy_output_dir or not os.path.exists(comfy_output_dir):
-             logging.error("ComfyUI output directory not found.")
-             return None
+            logging.error(f"ComfyUI output directory not found: {comfy_output_dir}")
+            return None
 
-        source_path = os.path.join(comfy_output_dir, subfolder, safe_filename)
+        if subfolder:
+            source_path = os.path.join(comfy_output_dir, subfolder, safe_filename)
+        else:
+            source_path = os.path.join(comfy_output_dir, safe_filename)
         
         if not os.path.exists(source_path):
-             logging.error(f"Output file not found at {source_path}")
-             return None
+            logging.error(f"Output file not found at {source_path}")
+            return None
 
         os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -215,19 +220,20 @@ class TextGenerationJobProcessor(BaseJobProcessor):
 
 class GenericComfyWorkflowProcessor(BaseJobProcessor):
     """
-    Generic processor that can execute ANY ComfyUI workflow without custom code.
+    Generic processor that can execute ANY ComfyUI workflow using Docker.
     
     This processor:
-    1. Loads workflow by name from local ComfyUI or by path
+    1. Loads workflow by name from Docker volume or by path
     2. Automatically detects inputs using WorkflowAnalyzer
     3. Injects user-provided input values
-    4. Executes the workflow
-    5. Automatically detects and uploads outputs (video, audio, image)
+    4. Validates and auto-installs missing nodes
+    5. Executes the workflow
+    6. Automatically detects and uploads outputs (video, audio, image)
     """
     
-    def __init__(self, dgn_client, job_data, shutdown_event, local_comfyui_manager=None):
+    def __init__(self, dgn_client, job_data, shutdown_event, docker_comfyui_manager=None):
         super().__init__(dgn_client, job_data, shutdown_event)
-        self.local_comfyui_manager = local_comfyui_manager or dgn_client.comfyui_manager
+        self.docker_manager = docker_comfyui_manager or dgn_client.comfyui_manager
         
         inputs = job_data.get("inputs", {})
         self.workflow_name = inputs.get("workflowName") or inputs.get("workflow_name")
@@ -241,21 +247,43 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             self._analyzer = WorkflowAnalyzer()
         except ImportError:
             self._analyzer = None
+    
+    def _get_workflow_key(self) -> Union[str, None]:
+        """Get the manifest key for the current workflow.
+        
+        Converts workflow filename to manifest key format:
+        - 'text-to-image-sdxl.api.json' -> 'text-to-image-sdxl'
+        - 'text-to-image-sdxl' -> 'text-to-image-sdxl'
+        
+        Returns None if no workflow name is set.
+        """
+        name = self.workflow_name
+        if not name:
+            if self.workflow_path:
+                # Extract name from path
+                name = os.path.basename(self.workflow_path)
+            else:
+                return None
+        
+        # Remove common suffixes
+        if name.endswith('.api.json'):
+            name = name[:-9]
+        elif name.endswith('.json'):
+            name = name[:-5]
+        elif name.endswith('.api'):
+            name = name[:-4]
+        
+        return name
 
     def _is_ui_format(self, workflow_data: dict) -> bool:
         """Check if workflow is in UI format (with nodes/links arrays) vs API format."""
         return "nodes" in workflow_data and "links" in workflow_data and "prompt" not in workflow_data
 
     def _convert_ui_to_api_format(self, ui_workflow: dict) -> dict:
-        """Convert ComfyUI UI format workflow to API format.
-        
-        UI format has 'nodes' array with 'id', 'type', 'widgets_values' etc.
-        API format has numbered dict keys with 'class_type' and 'inputs'.
-        """
+        """Convert ComfyUI UI format workflow to API format."""
         nodes = ui_workflow.get("nodes", [])
         links = ui_workflow.get("links", [])
         
-        # Build link map: link_id -> (from_node_id, from_slot, to_node_id, to_slot, type)
         link_map = {}
         for link in links:
             if len(link) >= 6:
@@ -279,13 +307,10 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             
             inputs = {}
             
-            # Process widget values - these come from the UI
             widgets_values = node.get("widgets_values", [])
             widget_names = node.get("widgets_names", [])
             
-            # If no explicit names, try to assign based on common patterns
             if widgets_values and not widget_names:
-                # Use generic naming
                 for i, val in enumerate(widgets_values):
                     if val is not None:
                         inputs[f"widget_{i}"] = val
@@ -294,7 +319,6 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
                     if i < len(widget_names):
                         inputs[widget_names[i]] = val
             
-            # Process inputs from links
             node_inputs = node.get("inputs", [])
             for inp in node_inputs:
                 if isinstance(inp, dict):
@@ -302,7 +326,6 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
                     link_id = inp.get("link")
                     if link_id and link_id in link_map:
                         link_info = link_map[link_id]
-                        # Reference format: [from_node_id, from_slot]
                         inputs[inp_name] = [str(link_info["from_node"]), link_info["from_slot"]]
             
             api_prompt[node_id] = {
@@ -313,14 +336,27 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         logging.info(f"Converted UI workflow with {len(nodes)} nodes to API format")
         return {"prompt": api_prompt}
 
-    def _get_workflow(self):
-        """Load workflow from local ComfyUI or by absolute path."""
-        workflow = None
+    def _get_workflow(self) -> Union[Dict[str, Any], None]:
+        """Load workflow from job inputs, Docker volume, or by absolute path.
         
-        if self.workflow_name and self.local_comfyui_manager:
-            workflow = self.local_comfyui_manager.get_workflow_content(self.workflow_name)
+        Supports:
+        1. Embedded workflow_data in job inputs (from dynamic templates)
+        2. Loading by workflow_name from Docker volume
+        3. Loading by absolute workflow_path
+        """
+        workflow = None
+        inputs = self.job.get("inputs", {})
+        
+        # First check if workflow_data is directly provided (dynamic templates)
+        if "workflow_data" in inputs and isinstance(inputs["workflow_data"], dict):
+            workflow = inputs["workflow_data"]
+            logging.info("Using embedded workflow_data from job inputs")
+        
+        # Try loading by name from Docker volume
+        if not workflow and self.workflow_name:
+            workflow = self.docker_manager.get_workflow_content(self.workflow_name)
             if workflow:
-                logging.info(f"Loaded workflow '{self.workflow_name}' from local ComfyUI")
+                logging.info(f"Loaded workflow '{self.workflow_name}' from Docker volume")
         
         if not workflow and self.workflow_path and os.path.exists(self.workflow_path):
             try:
@@ -333,7 +369,6 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         if not workflow:
             return None
         
-        # Check if it's UI format and convert if needed
         if self._is_ui_format(workflow):
             logging.info("Detected UI format workflow, converting to API format...")
             workflow = self._convert_ui_to_api_format(workflow)
@@ -348,10 +383,8 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         
         if self._analyzer:
             schema = self._analyzer.to_input_schema(workflow_data, self.workflow_name or "")
-        elif self.local_comfyui_manager:
-            schema = self.local_comfyui_manager._infer_inputs_from_workflow(workflow_data)
         else:
-            schema = []
+            schema = self._infer_inputs_from_workflow(workflow_data)
         
         schema_by_name = {s['name']: s for s in schema}
         
@@ -368,9 +401,10 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             widget_name = schema_entry['widget_name']
             input_type = schema_entry.get('type', 'text')
             
+            # Download assets if they're URLs
             if input_type in ['image', 'video', 'input_video', 'input_audio', 'audio']:
                 if isinstance(value, str) and (value.startswith("http") or "supabase" in value.lower()):
-                    input_dir = self.local_comfyui_manager.get_input_directory() if self.local_comfyui_manager else self.input_dir
+                    input_dir = self.docker_manager.get_input_directory()
                     local_path = self.orchestrator_service.download_asset_by_url(value, input_dir)
                     if local_path:
                         value = os.path.basename(local_path)
@@ -381,6 +415,46 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
                 logging.info(f"Injected input '{field_name}' -> Node {node_id}.{widget_name}")
         
         return {"prompt": graph}
+    
+    def _infer_inputs_from_workflow(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Heuristically determine input fields from workflow structure."""
+        inputs = []
+        graph = data.get("prompt", data)
+        
+        if not isinstance(graph, dict):
+            return inputs
+        
+        for node_id, node in graph.items():
+            if not isinstance(node, dict):
+                continue
+            
+            class_type = node.get("class_type")
+            node_inputs = node.get("inputs", {})
+            
+            if class_type == "CLIPTextEncode":
+                text_val = node_inputs.get("text")
+                if isinstance(text_val, str):
+                    label = "negative_prompt" if any(x in text_val.lower() for x in ["negative", "bad", "nsfw"]) else "prompt"
+                    inputs.append({
+                        "name": label,
+                        "type": "text",
+                        "default": text_val,
+                        "node_id": node_id,
+                        "widget_name": "text"
+                    })
+            
+            elif class_type in ["KSampler", "KSamplerAdvanced"]:
+                seed = node_inputs.get("seed") or node_inputs.get("noise_seed")
+                if isinstance(seed, (int, float)):
+                    inputs.append({
+                        "name": "seed",
+                        "type": "number",
+                        "default": seed,
+                        "node_id": node_id,
+                        "widget_name": "seed"
+                    })
+        
+        return inputs
 
     def process(self):
         """Execute the workflow and handle outputs."""
@@ -395,18 +469,30 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
             return
         
-        if self.local_comfyui_manager:
-            is_valid, missing_nodes = self.local_comfyui_manager.validate_workflow(workflow_data)
-            if not is_valid:
-                logging.warning(f"Workflow has missing nodes: {missing_nodes}")
-                # Attempt automatic installation
-                if not self._auto_install_missing_nodes(missing_nodes):
-                    logging.error(f"Failed to auto-install missing nodes for job {self.job_id}")
-                    self.orchestrator_service.update_job_status(
-                        self.job_id, 'failed',
-                        completion_metadata={"error": "missing_nodes", "missing": missing_nodes}
-                    )
-                    return
+        # Check GPU capability and download models if workflow is in manifest
+        workflow_key = self._get_workflow_key()
+        if workflow_key:
+            is_ready, message = self.docker_manager.ensure_workflow_ready(workflow_key)
+            if not is_ready:
+                logging.error(f"Workflow not ready: {message}")
+                self.orchestrator_service.update_job_status(
+                    self.job_id, 'failed',
+                    completion_metadata={"error": "workflow_not_ready", "reason": message}
+                )
+                return
+            logging.info(f"Workflow '{workflow_key}' is ready: {message}")
+        
+        # Validate workflow and auto-install missing nodes
+        is_valid, missing_nodes = self.docker_manager.validate_workflow(workflow_data)
+        if not is_valid:
+            logging.warning(f"Workflow has missing nodes: {missing_nodes}")
+            if not self._auto_install_missing_nodes(missing_nodes):
+                logging.error(f"Failed to auto-install missing nodes for job {self.job_id}")
+                self.orchestrator_service.update_job_status(
+                    self.job_id, 'failed',
+                    completion_metadata={"error": "missing_nodes", "missing": missing_nodes}
+                )
+                return
         
         user_inputs = self.job.get('inputs', {})
         payload = self._inject_inputs(workflow_data, user_inputs)
@@ -417,39 +503,29 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         
         self._handle_outputs(outputs)
 
-    def _auto_install_missing_nodes(self, missing_class_types: list[str]) -> bool:
-        """
-        Attempt to automatically install missing custom nodes.
-        
-        Args:
-            missing_class_types: List of missing node class_type names
-            
-        Returns:
-            True if all nodes were successfully installed and ComfyUI restarted.
-        """
+    def _auto_install_missing_nodes(self, missing_class_types: List[str]) -> bool:
+        """Attempt to automatically install missing custom nodes via Docker."""
         if not missing_class_types:
             return True
         
         logging.info(f"Attempting to auto-install {len(missing_class_types)} missing node(s): {missing_class_types}")
         
-        # Get the node-to-package mapping
-        node_to_package = self.local_comfyui_manager.get_node_to_package_map()
+        # Get the node-to-package mapping from GitHub
+        node_to_package = self.docker_manager.get_node_to_package_map()
         if not node_to_package:
             logging.error("Could not load node-to-package mapping. Cannot auto-install nodes.")
             return False
         
         # Resolve class_types to git URLs
-        packages_to_install = {}  # git_url -> list of class_types it provides
+        packages_to_install = {}
         unresolved = []
         
         # Fallback mappings for common nodes not in the registry
         fallback_mappings = {
-            # pythongosssss ComfyUI-Custom-Scripts nodes
             "MarkdownNote": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "Note": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "ShowText": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "StringFunction": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
-            # Prefix-based fallbacks
         }
         
         # Prefix-based fallback mappings
@@ -473,7 +549,6 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
                 packages_to_install[git_url].append(class_type)
                 logging.info(f"Using fallback mapping for {class_type} -> {git_url}")
             else:
-                # Try prefix-based matching
                 matched = False
                 for prefix, git_url in prefix_fallbacks.items():
                     if class_type.startswith(prefix):
@@ -487,83 +562,34 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
                     unresolved.append(class_type)
         
         if unresolved:
-            logging.warning(f"Could not find packages for these nodes (not in ComfyUI-Manager registry): {unresolved}")
+            logging.warning(f"Could not find packages for these nodes: {unresolved}")
         
         if not packages_to_install:
             logging.error("No packages to install - all missing nodes are unresolved")
             return False
         
-        # Find custom_nodes directory (handles split installations)
-        custom_nodes_dir = self.local_comfyui_manager.get_custom_nodes_dir()
-        if not custom_nodes_dir:
-            logging.error("Could not find custom_nodes directory. Cannot auto-install nodes.")
-            return False
+        # Install nodes via Docker
+        logging.info("Installing nodes via Docker container...")
         
-        logging.info(f"Installing nodes to: {custom_nodes_dir}")
-        
-        # Install each package via git clone
-        all_success = True
         for git_url, class_types in packages_to_install.items():
-            package_name = git_url.rstrip('/').split('/')[-1].replace('.git', '')
-            target_dir = os.path.join(custom_nodes_dir, package_name)
-            
-            if os.path.exists(target_dir):
-                logging.info(f"Package {package_name} already exists at {target_dir}")
-                continue
-            
-            logging.info(f"Cloning {package_name} (provides: {class_types})...")
-            
-            try:
-                # Prevent git from waiting for credentials
-                env = os.environ.copy()
-                env["GIT_TERMINAL_PROMPT"] = "0"
-                
-                result = subprocess.run(
-                    ["git", "clone", "--depth", "1", "--progress", git_url, target_dir],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,  # 2 minute timeout
-                    env=env
-                )
-                
-                if result.returncode == 0:
-                    logging.info(f"Successfully cloned {package_name}")
-                    
-                    # Install requirements if present
-                    requirements_file = os.path.join(target_dir, "requirements.txt")
-                    if os.path.exists(requirements_file):
-                        logging.info(f"Installing requirements for {package_name}...")
-                        subprocess.run(
-                            ["pip", "install", "-r", requirements_file],
-                            capture_output=True,
-                            timeout=300
-                        )
-                else:
-                    logging.error(f"Failed to clone {package_name}: {result.stderr}")
-                    all_success = False
-                    
-            except subprocess.TimeoutExpired:
-                logging.error(f"Git clone timed out for {package_name}")
-                all_success = False
-            except FileNotFoundError:
-                logging.error("Git is not installed. Cannot auto-install nodes.")
-                return False
-            except Exception as e:
-                logging.error(f"Error cloning {package_name}: {e}")
-                all_success = False
+            logging.info(f"Installing {git_url} (provides: {class_types})")
+            result = self.docker_manager.install_node(git_url)
+            if not result.success:
+                logging.error(f"Failed to install {git_url}: {result.message}")
+            else:
+                logging.info(f"Successfully installed {result.package_name}")
         
-        # Restart ComfyUI to load the new nodes
-        if not self.local_comfyui_manager.restart(timeout_seconds=90):
-            logging.error("Failed to restart ComfyUI after node installation")
+        # Restart container to load new nodes
+        if not self.docker_manager.restart_container():
+            logging.error("Failed to restart Docker container after node installation")
             return False
         
         # Re-validate the workflow
-        # Need to re-get workflow since we need fresh validation
         workflow_data = self._get_workflow()
         if not workflow_data:
             return False
         
-        is_valid, still_missing = self.local_comfyui_manager.validate_workflow(workflow_data)
+        is_valid, still_missing = self.docker_manager.validate_workflow(workflow_data)
         
         if not is_valid:
             logging.error(f"Still missing nodes after installation: {still_missing}")

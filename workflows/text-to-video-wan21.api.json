@@ -1,0 +1,88 @@
+{
+  "1": {
+    "class_type": "WanVideoTextEncode",
+    "inputs": {
+      "prompt": "A majestic eagle soaring through clouds over a mountain range, golden sunlight, cinematic, dramatic lighting",
+      "t5": ["3", 0],
+      "clip_vision": ["4", 0]
+    }
+  },
+  "2": {
+    "class_type": "WanVideoTextEncode", 
+    "inputs": {
+      "prompt": "ugly, blurry, low quality, distorted, watermark, text",
+      "t5": ["3", 0],
+      "clip_vision": ["4", 0]
+    }
+  },
+  "3": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.1_t2v_14B_bf16.safetensors",
+      "weight_dtype": "bf16"
+    }
+  },
+  "4": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "clip_vision_h.safetensors"
+    }
+  },
+  "5": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "clip_name2": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan"
+    }
+  },
+  "6": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    }
+  },
+  "7": {
+    "class_type": "EmptyWanLatentVideo",
+    "inputs": {
+      "width": 832,
+      "height": 480,
+      "length": 81,
+      "batch_size": 1
+    }
+  },
+  "8": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 30,
+      "cfg": 6.0,
+      "sampler_name": "euler",
+      "scheduler": "beta",
+      "denoise": 1.0,
+      "model": ["3", 0],
+      "positive": ["1", 0],
+      "negative": ["2", 0],
+      "latent_image": ["7", 0]
+    }
+  },
+  "9": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["8", 0],
+      "vae": ["6", 0]
+    }
+  },
+  "10": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "wan_t2v",
+      "format": "video/h264-mp4",
+      "pingpong": false,
+      "save_output": true,
+      "images": ["9", 0]
+    }
+  }
+}
