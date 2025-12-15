@@ -10,8 +10,8 @@ from abc import ABC, abstractmethod
 from services.orchestrator_service import TokenExpiredError
 from config import DEV_MODE
 from services.local_comfyui_manager import LocalComfyUIManager
-from services.comfy_cli_manager import ComfyCliManager
 from services.model_downloader import ModelDownloader
+from services.manager_api_client import ComfyUIManagerClient, install_via_git_clone
 from utils.media_utils import (
     get_audio_duration, find_audio_in_output, find_audio_file_in_directory,
     find_image_in_output, find_video_in_output, generate_thumbnail,
@@ -470,6 +470,8 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         """
         Attempt to automatically install missing custom nodes.
         
+        Uses ComfyUI-Manager API (fast) with git clone fallback.
+        
         Args:
             missing_class_types: List of missing node class_type names
             
@@ -493,12 +495,10 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
         
         # Fallback mappings for common nodes not in the registry
         fallback_mappings = {
-            # pythongosssss ComfyUI-Custom-Scripts nodes
             "MarkdownNote": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "Note": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "ShowText": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
             "StringFunction": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
-            # Prefix-based fallbacks
         }
         
         # Prefix-based fallback mappings
@@ -536,29 +536,46 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
                     unresolved.append(class_type)
         
         if unresolved:
-            logging.warning(f"Could not find packages for these nodes (not in ComfyUI-Manager registry): {unresolved}")
+            logging.warning(f"Could not find packages for these nodes: {unresolved}")
         
         if not packages_to_install:
             logging.error("No packages to install - all missing nodes are unresolved")
             return False
         
-        # Initialize ComfyCliManager
-        comfy_cli = ComfyCliManager(self.local_comfyui_manager.comfyui_install_dir)
+        git_urls = list(packages_to_install.keys())
         
-        if not comfy_cli.is_available():
-            logging.error("comfy-cli is not available. Cannot auto-install nodes. Install with: pip install comfy-cli")
+        # Try ComfyUI-Manager API first (fast - runs inside ComfyUI)
+        manager = ComfyUIManagerClient(self.client.comfyui_client.http_base)
+        
+        if manager.is_manager_available():
+            logging.info("Using ComfyUI-Manager API for node installation...")
+            all_success, results = manager.install_packages(git_urls)
+            
+            if all_success:
+                # Invalidate node cache after restart
+                self.local_comfyui_manager.invalidate_cache()
+                logging.info("All packages installed via ComfyUI-Manager!")
+                return self._verify_nodes_installed()
+            else:
+                failed = [r.package_name for r in results if not r.success]
+                logging.warning(f"Some packages failed via Manager: {failed}")
+        else:
+            logging.warning("ComfyUI-Manager not available, falling back to git clone...")
+        
+        # Fallback: git clone directly
+        custom_nodes_dir = os.path.join(self.local_comfyui_manager.comfyui_install_dir, "custom_nodes")
+        if not os.path.exists(custom_nodes_dir):
+            logging.error(f"Custom nodes directory not found: {custom_nodes_dir}")
             return False
         
-        # Install each package
         all_success = True
-        for git_url, class_types in packages_to_install.items():
-            logging.info(f"Installing package {git_url} (provides: {class_types})")
-            result = comfy_cli.install_node_by_url(git_url)
-            if not result.success:
-                logging.error(f"Failed to install {git_url}: {result.message}")
-                all_success = False
+        for git_url in git_urls:
+            result = install_via_git_clone(git_url, custom_nodes_dir)
+            if result.success:
+                logging.info(f"Successfully cloned {result.package_name}")
             else:
-                logging.info(f"Successfully installed {result.node_name}")
+                logging.error(f"Failed to clone {git_url}: {result.message}")
+                all_success = False
         
         if not all_success:
             logging.warning("Some packages failed to install")
@@ -568,8 +585,10 @@ class GenericComfyWorkflowProcessor(BaseJobProcessor):
             logging.error("Failed to restart ComfyUI after node installation")
             return False
         
-        # Re-validate the workflow
-        # Need to re-get workflow since we need fresh validation
+        return self._verify_nodes_installed()
+    
+    def _verify_nodes_installed(self) -> bool:
+        """Re-validate that installed nodes are now available."""
         workflow_data = self._get_workflow()
         if not workflow_data:
             return False

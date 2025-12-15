@@ -40,34 +40,43 @@ class ComfyCliManager:
         self._comfy_cmd = None  # Will store the path to comfy command
     
     def _find_comfy_command(self) -> Union[str, None]:
-        """Find the comfy command, checking multiple locations."""
+        """Find the comfy command, checking multiple locations.
+        
+        Prioritizes actual .exe files over pyenv shims which can be slow on Windows.
+        """
         # First check if we've already found it
         if self._comfy_cmd:
             return self._comfy_cmd
         
-        # Locations to check
-        candidates = ["comfy"]  # Try system PATH first
-        
-        # Try common Python Scripts directories
         import sys
         home = os.path.expanduser("~")
         
-        # Add Python Scripts directory from the current interpreter
+        # Build list of candidates - actual executables first, shims last
+        candidates = []
+        
+        # Add Python Scripts directory from the current interpreter (highest priority)
         python_scripts = os.path.join(os.path.dirname(sys.executable), "Scripts")
+        
         if os.name == 'nt':  # Windows
-            candidates.extend([
-                os.path.join(python_scripts, "comfy.exe"),
-                os.path.join(home, ".pyenv", "pyenv-win", "shims", "comfy"),
-                os.path.join(home, ".local", "bin", "comfy"),
-                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python39", "Scripts", "comfy.exe"),
-                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python310", "Scripts", "comfy.exe"),
-                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python311", "Scripts", "comfy.exe"),
-            ])
-            # Also check pyenv versions
+            # Check actual .exe files first (fast)
+            candidates.append(os.path.join(python_scripts, "comfy.exe"))
+            
+            # Check pyenv versions (actual executables, not shims)
             pyenv_base = os.path.join(home, ".pyenv", "pyenv-win", "versions")
             if os.path.exists(pyenv_base):
                 for version_dir in os.listdir(pyenv_base):
                     candidates.append(os.path.join(pyenv_base, version_dir, "Scripts", "comfy.exe"))
+            
+            # Check common Python installations
+            candidates.extend([
+                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python39", "Scripts", "comfy.exe"),
+                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python310", "Scripts", "comfy.exe"),
+                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python311", "Scripts", "comfy.exe"),
+                os.path.join(home, "AppData", "Local", "Programs", "Python", "Python312", "Scripts", "comfy.exe"),
+                os.path.join(home, ".local", "bin", "comfy.exe"),
+            ])
+            
+            # NOTE: pyenv shims (*.BAT) are intentionally NOT added - they are slow
         else:  # Unix-like
             candidates.extend([
                 os.path.join(python_scripts, "comfy"),
@@ -75,49 +84,61 @@ class ComfyCliManager:
                 "/usr/local/bin/comfy",
             ])
         
-        # Try shutil.which first for system PATH
-        cmd = shutil.which("comfy")
-        if cmd:
-            self._comfy_cmd = cmd
-            logging.info(f"Found comfy-cli at: {cmd}")
-            return cmd
-        
-        # Check all candidates
+        # Check all candidate locations first
         for cmd in candidates:
             if os.path.isfile(cmd):
+                # Verify it's not a BAT/CMD shim on Windows
+                if os.name == 'nt' and cmd.lower().endswith(('.bat', '.cmd')):
+                    logging.debug(f"Skipping slow BAT shim: {cmd}")
+                    continue
                 self._comfy_cmd = cmd
                 logging.info(f"Found comfy-cli at: {cmd}")
                 return cmd
         
+        # Fallback to shutil.which (may find shims, but we try to avoid them)
+        cmd = shutil.which("comfy")
+        if cmd:
+            # Check if it's a BAT shim - if so, try one more approach
+            if os.name == 'nt' and cmd.lower().endswith(('.bat', '.cmd')):
+                logging.warning(f"Found pyenv shim at {cmd} - these can be slow. Looking for alternative...")
+                # Try using python -m comfy_cli instead
+                self._comfy_cmd = None  # Will use module fallback
+                return None
+            
+            self._comfy_cmd = cmd
+            logging.info(f"Found comfy-cli at: {cmd}")
+            return cmd
+        
         return None
     
     def _get_comfy_cmd(self) -> list[str]:
-        """Get the comfy command as a list for subprocess."""
+        """Get the comfy command as a list for subprocess.
+        
+        Falls back to 'python -m comfy_cli' if no direct executable found.
+        """
         cmd = self._find_comfy_command()
         if cmd:
             return [cmd]
-        return ["comfy"]  # Fallback to system PATH
+        
+        # Fallback: use python -m comfy_cli (works if comfy-cli is installed)
+        import sys
+        logging.info("Using 'python -m comfy_cli' as fallback")
+        return [sys.executable, "-m", "comfy_cli"]
         
     def is_available(self) -> bool:
         """Check if comfy-cli is installed and available."""
         if self._comfy_cli_available is not None:
             return self._comfy_cli_available
         
-        cmd = self._find_comfy_command()
-        if not cmd:
-            self._comfy_cli_available = False
-            logging.warning("comfy-cli is not installed. Run: pip install comfy-cli")
-            return False
+        # Get command (may be direct exe or python -m fallback)
+        cmd_list = self._get_comfy_cmd()
         
-        logging.info(f"Checking comfy-cli availability at: {cmd}")
+        logging.info(f"Checking comfy-cli availability: {' '.join(cmd_list)}")
             
         try:
             import time
             
-            # On Windows, .BAT files require shell=True  
-            use_shell = os.name == 'nt' and cmd.lower().endswith(('.bat', '.cmd'))
-            
-            # Use Popen for better timeout control on Windows
+            # Windows-specific settings
             startupinfo = None
             creationflags = 0
             if os.name == 'nt':
@@ -125,34 +146,24 @@ class ComfyCliManager:
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 creationflags = subprocess.CREATE_NO_WINDOW
             
-            if use_shell:
-                process = subprocess.Popen(
-                    f'"{cmd}" --version',
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    startupinfo=startupinfo,
-                    creationflags=creationflags
-                )
-            else:
-                process = subprocess.Popen(
-                    [cmd, "--version"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    startupinfo=startupinfo,
-                    creationflags=creationflags
-                )
+            # Run version check
+            process = subprocess.Popen(
+                cmd_list + ["--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
             
             # Wait with timeout
-            timeout = 30  # Increase timeout for slow pyenv shims
+            timeout = 15
             start = time.time()
             while process.poll() is None:
                 if time.time() - start > timeout:
                     process.kill()
                     process.wait()
-                    raise subprocess.TimeoutExpired(cmd, timeout)
+                    raise subprocess.TimeoutExpired(' '.join(cmd_list), timeout)
                 time.sleep(0.1)
             
             stdout, stderr = process.communicate(timeout=5)

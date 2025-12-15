@@ -36,6 +36,11 @@ class LocalComfyUIManager:
         self._installed_nodes_cache = None
         self._workflow_analyzer = WorkflowAnalyzer() if WorkflowAnalyzer else None
 
+    def invalidate_cache(self):
+        """Clear cached node information. Call after installing new nodes."""
+        self._installed_nodes_cache = None
+        logging.debug("Invalidated installed nodes cache")
+
     def _detect_install_dir(self) -> Union[str, None]:
         """Attempts to detect ComfyUI installation in common locations."""
         home = os.path.expanduser("~")
