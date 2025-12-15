@@ -112,37 +112,66 @@ class ComfyCliManager:
         logging.info(f"Checking comfy-cli availability at: {cmd}")
             
         try:
-            # On Windows, .BAT files require shell=True
+            import time
+            
+            # On Windows, .BAT files require shell=True  
             use_shell = os.name == 'nt' and cmd.lower().endswith(('.bat', '.cmd'))
             
+            # Use Popen for better timeout control on Windows
+            startupinfo = None
+            creationflags = 0
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
             if use_shell:
-                result = subprocess.run(
+                process = subprocess.Popen(
                     f'"{cmd}" --version',
                     shell=True,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=10
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
                 )
             else:
-                result = subprocess.run(
+                process = subprocess.Popen(
                     [cmd, "--version"],
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=10
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
                 )
             
-            self._comfy_cli_available = result.returncode == 0
+            # Wait with timeout
+            timeout = 30  # Increase timeout for slow pyenv shims
+            start = time.time()
+            while process.poll() is None:
+                if time.time() - start > timeout:
+                    process.kill()
+                    process.wait()
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                time.sleep(0.1)
+            
+            stdout, stderr = process.communicate(timeout=5)
+            
+            self._comfy_cli_available = process.returncode == 0
             if self._comfy_cli_available:
-                logging.info(f"comfy-cli is available: {result.stdout.strip()}")
+                logging.info(f"comfy-cli is available: {stdout.strip()}")
             else:
-                logging.warning(f"comfy-cli returned non-zero: {result.stderr}")
+                logging.warning(f"comfy-cli returned non-zero: {stderr}")
                 
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logging.warning(f"comfy-cli check failed: {e}")
             self._comfy_cli_available = False
+        except Exception as e:
+            logging.warning(f"comfy-cli check error: {e}")
+            self._comfy_cli_available = False
             
         if not self._comfy_cli_available:
-            logging.warning("comfy-cli is not installed. Run: pip install comfy-cli")
+            logging.warning("comfy-cli is not installed or not responding. Run: pip install comfy-cli")
             
         return self._comfy_cli_available
     
@@ -245,6 +274,14 @@ class ComfyCliManager:
             import threading
             import time
             
+            # Windows-specific settings
+            startupinfo = None
+            creationflags = 0
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                creationflags = subprocess.CREATE_NO_WINDOW
+            
             if use_shell:
                 process = subprocess.Popen(
                     cmd_str,
@@ -252,7 +289,9 @@ class ComfyCliManager:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    bufsize=1
+                    bufsize=1,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
                 )
             else:
                 process = subprocess.Popen(
@@ -260,7 +299,9 @@ class ComfyCliManager:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    bufsize=1
+                    bufsize=1,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
                 )
             
             stdout_lines = []
