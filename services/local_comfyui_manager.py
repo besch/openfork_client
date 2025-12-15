@@ -203,11 +203,15 @@ class LocalComfyUIManager:
                     with open(map_file, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                     
-                    # Format: {"git_url": ["node_class_type1", "node_class_type2", ...], ...}
-                    for git_url, node_types in data.items():
-                        if isinstance(node_types, list):
-                            for node_type in node_types:
-                                node_map[node_type] = git_url
+                    # Format: {"git_url": [["node_class_type1", "node_class_type2", ...], {metadata}], ...}
+                    # The first element is the list of node types, second is metadata
+                    for git_url, value in data.items():
+                        if isinstance(value, list) and len(value) > 0:
+                            node_types = value[0]  # First element is the list of node types
+                            if isinstance(node_types, list):
+                                for node_type in node_types:
+                                    if isinstance(node_type, str):
+                                        node_map[node_type] = git_url
                     
                     logging.info(f"Loaded {len(node_map)} node-to-package mappings from local ComfyUI-Manager")
                     return node_map
@@ -222,10 +226,14 @@ class LocalComfyUIManager:
             response.raise_for_status()
             data = response.json()
             
-            for git_url, node_types in data.items():
-                if isinstance(node_types, list):
-                    for node_type in node_types:
-                        node_map[node_type] = git_url
+            # Format: {"git_url": [["node_class_type1", ...], {metadata}], ...}
+            for git_url, value in data.items():
+                if isinstance(value, list) and len(value) > 0:
+                    node_types = value[0]  # First element is the list of node types
+                    if isinstance(node_types, list):
+                        for node_type in node_types:
+                            if isinstance(node_type, str):
+                                node_map[node_type] = git_url
             
             logging.info(f"Loaded {len(node_map)} node-to-package mappings from GitHub")
         except Exception as e:

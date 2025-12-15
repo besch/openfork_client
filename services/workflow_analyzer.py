@@ -134,14 +134,113 @@ class WorkflowAnalyzer:
         )
     
     def _normalize_graph(self, workflow_data: dict) -> dict:
-        """Normalize workflow to get the node graph."""
+        """Normalize workflow to get the node graph, converting UI format if needed."""
+        # Check if already in API format with prompt wrapper
         if "prompt" in workflow_data and isinstance(workflow_data["prompt"], dict):
             return workflow_data["prompt"]
-        # Check if it's already the graph
-        if all(isinstance(v, dict) and "class_type" in v for k, v in workflow_data.items() if k.isdigit()):
+        
+        # Check if it's UI format (has 'nodes' and 'links' arrays)
+        if self._is_ui_format(workflow_data):
+            return self._convert_ui_to_api(workflow_data)
+        
+        # Check if it's already the graph (dict of nodes with class_type)
+        if all(isinstance(v, dict) and "class_type" in v for k, v in workflow_data.items() if isinstance(k, str) and k.isdigit()):
             return workflow_data
-        # Might be UI format, but we only support API format
+        
         return workflow_data
+    
+    def _is_ui_format(self, workflow_data: dict) -> bool:
+        """Check if workflow is in UI format (with nodes/links arrays)."""
+        return ("nodes" in workflow_data and 
+                "links" in workflow_data and 
+                isinstance(workflow_data.get("nodes"), list))
+    
+    def _convert_ui_to_api(self, ui_workflow: dict) -> dict:
+        """
+        Convert ComfyUI UI format workflow to API format.
+        
+        UI format has 'nodes' array with 'id', 'type', 'widgets_values' etc.
+        API format has numbered dict keys with 'class_type' and 'inputs'.
+        """
+        nodes = ui_workflow.get("nodes", [])
+        links = ui_workflow.get("links", [])
+        
+        # Build link map: link_id -> (from_node_id, from_slot)
+        link_map = {}
+        for link in links:
+            if len(link) >= 6:
+                link_id, from_node, from_slot = link[0], link[1], link[2]
+                link_map[link_id] = {"from_node": from_node, "from_slot": from_slot}
+        
+        # Get widget names from node configuration if available
+        # ComfyUI stores extra info sometimes in 'extra' -> 'groupNodes' or similar
+        
+        api_prompt = {}
+        
+        for node in nodes:
+            node_id = str(node.get("id"))
+            class_type = node.get("type")
+            
+            if not class_type:
+                continue
+            
+            inputs = {}
+            
+            # UI nodes have 'widgets_values' array containing the values in order
+            widgets_values = node.get("widgets_values", [])
+            
+            # Get widget order from the node's known input structure
+            # We'll use common patterns to map widget_values to named inputs
+            widget_names = self._get_widget_names_for_class(class_type, len(widgets_values))
+            
+            for i, val in enumerate(widgets_values):
+                if val is not None and i < len(widget_names):
+                    inputs[widget_names[i]] = val
+            
+            # Process inputs from links (these are connections to other nodes)
+            node_inputs_config = node.get("inputs", [])
+            for inp_config in node_inputs_config:
+                if isinstance(inp_config, dict):
+                    inp_name = inp_config.get("name")
+                    link_id = inp_config.get("link")
+                    if link_id and link_id in link_map:
+                        link_info = link_map[link_id]
+                        # In API format, connected inputs are [node_id, slot_index]
+                        inputs[inp_name] = [str(link_info["from_node"]), link_info["from_slot"]]
+            
+            api_prompt[node_id] = {
+                "class_type": class_type,
+                "inputs": inputs
+            }
+        
+        return api_prompt
+    
+    def _get_widget_names_for_class(self, class_type: str, num_widgets: int) -> list[str]:
+        """Get ordered widget names for a class type based on known patterns."""
+        # Common widget name mappings for known node types
+        widget_mappings = {
+            "CLIPTextEncode": ["text"],
+            "KSampler": ["seed", "control_after_generate", "steps", "cfg", "sampler_name", "scheduler", "denoise"],
+            "KSamplerAdvanced": ["add_noise", "noise_seed", "control_after_generate", "steps", "cfg", "sampler_name", "scheduler", "start_at_step", "end_at_step", "return_with_leftover_noise"],
+            "EmptyLatentImage": ["width", "height", "batch_size"],
+            "LoadImage": ["image", "upload"],
+            "VHS_LoadVideo": ["video", "force_rate", "force_size", "custom_width", "custom_height", "frame_load_cap", "skip_first_frames", "select_every_nth"],
+            "CheckpointLoaderSimple": ["ckpt_name"],
+            "LoraLoader": ["lora_name", "strength_model", "strength_clip"],
+            "SaveImage": ["filename_prefix"],
+            "VHS_VideoCombine": ["frame_rate", "loop_count", "filename_prefix", "format", "pingpong", "save_output"],
+            # Add more as needed - this is heuristic based
+        }
+        
+        if class_type in widget_mappings:
+            names = widget_mappings[class_type]
+            # Pad with generic names if needed
+            while len(names) < num_widgets:
+                names.append(f"widget_{len(names)}")
+            return names[:num_widgets]
+        
+        # Fallback: generate generic names
+        return [f"widget_{i}" for i in range(num_widgets)]
     
     def _extract_inputs(self, graph: dict) -> list[WorkflowInput]:
         """Extract customizable inputs from the workflow."""
