@@ -13,7 +13,6 @@ from .comfyui_processor import ComfyUIProcessor
 from .video.wan22_text import WAN22TextToVideoJobProcessor
 from .video.wan22_image import WAN22ImageToVideoJobProcessor, ImageToVideoFromLastFrameJobProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
-from .video.lightning import TextToVideoLightningJobProcessor, ImageToVideoLightningJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -38,8 +37,6 @@ __all__ = [
     "WAN22ImageToVideoJobProcessor",
     "ImageToVideoFromLastFrameJobProcessor",
     "VideoUpscalerJobProcessor",
-    "TextToVideoLightningJobProcessor",
-    "ImageToVideoLightningJobProcessor",
     "StableAudioJobProcessor",
     "FoleyJobProcessor",
     "VibeVoiceJobProcessor",
@@ -49,3 +46,4 @@ __all__ = [
     "TextToImageJobProcessor",
     "TextGenerationJobProcessor",
 ]
+

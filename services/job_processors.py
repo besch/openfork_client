@@ -19,8 +19,6 @@ from services.processors import (
     WAN22ImageToVideoJobProcessor,
     ImageToVideoFromLastFrameJobProcessor,
     VideoUpscalerJobProcessor,
-    TextToVideoLightningJobProcessor,
-    ImageToVideoLightningJobProcessor,
     StableAudioJobProcessor,
     FoleyJobProcessor,
     VibeVoiceJobProcessor,
@@ -41,8 +39,6 @@ __all__ = [
     "WAN22ImageToVideoJobProcessor",
     "ImageToVideoFromLastFrameJobProcessor",
     "VideoUpscalerJobProcessor",
-    "TextToVideoLightningJobProcessor",
-    "ImageToVideoLightningJobProcessor",
     "StableAudioJobProcessor",
     "FoleyJobProcessor",
     "VibeVoiceJobProcessor",
@@ -52,3 +48,4 @@ __all__ = [
     "TextToImageJobProcessor",
     "TextGenerationJobProcessor",
 ]
+
