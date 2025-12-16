@@ -113,31 +113,17 @@
       },
       "class_type": "VHS_VideoCombine"
     },
-    "65": {
-      "inputs": {
-        "sage_attention": "sageattn_qk_int8_pv_fp8_cuda++",
-        "model": ["61", 0]
-      },
-      "class_type": "PathchSageAttentionKJ"
-    },
     "66": {
       "inputs": {
         "enable_fp16_accumulation": true,
-        "model": ["65", 0]
+        "model": ["61", 0]
       },
       "class_type": "ModelPatchTorchSettings"
-    },
-    "67": {
-      "inputs": {
-        "sage_attention": "sageattn_qk_int8_pv_fp8_cuda++",
-        "model": ["62", 0]
-      },
-      "class_type": "PathchSageAttentionKJ"
     },
     "68": {
       "inputs": {
         "enable_fp16_accumulation": true,
-        "model": ["67", 0]
+        "model": ["62", 0]
       },
       "class_type": "ModelPatchTorchSettings"
     },
