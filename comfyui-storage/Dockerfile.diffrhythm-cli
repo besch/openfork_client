@@ -38,14 +38,33 @@ RUN python -m pip install fastapi uvicorn[standard] python-multipart requests
 ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
 ENV PHONEMIZER_ESPEAK_PATH=/usr/bin
 
-# Create directories for input/output
-RUN mkdir -p /app/input /app/output
+# Create directories for input/output and model cache
+RUN mkdir -p /app/input /app/output /app/pretrained
 
-# Download models at build time (optional - can also be done via volume mount)
-# Models are downloaded automatically on first run, but pre-downloading saves time
+# ============================================
+# PRE-DOWNLOAD ALL MODELS AT BUILD TIME
+# This prevents runtime downloads and makes container startup fast
+# ============================================
+
+# Download DiffRhythm CFM model (main inference model)
 RUN python -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download('ASLP-lab/DiffRhythm-1_2', 'cfm_model.pt', local_dir='./checkpoints'); \
-    hf_hub_download('ASLP-lab/DiffRhythm-vae', 'vae_model.pt', local_dir='./checkpoints')" || true
+    hf_hub_download('ASLP-lab/DiffRhythm-1_2', 'cfm_model.pt', cache_dir='./pretrained')"
+
+# Download DiffRhythm VAE model (audio decoder)
+RUN python -c "from huggingface_hub import hf_hub_download; \
+    hf_hub_download('ASLP-lab/DiffRhythm-vae', 'vae_model.pt', cache_dir='./pretrained')"
+
+# Download MuQ-MuLan model (music understanding - this is the big one!)
+RUN python -c "from muq import MuQMuLan; \
+    MuQMuLan.from_pretrained('OpenMuQ/MuQ-MuLan-large', cache_dir='./pretrained')"
+
+# Also download the full model variant for longer songs (optional but prevents future downloads)
+RUN python -c "from huggingface_hub import hf_hub_download; \
+    hf_hub_download('ASLP-lab/DiffRhythm-1_2-full', 'cfm_model.pt', cache_dir='./pretrained')" || true
+
+# Set HuggingFace cache to use our pretrained folder
+ENV HF_HOME=/app/pretrained
+ENV TRANSFORMERS_CACHE=/app/pretrained
 
 # Copy the API wrapper script
 COPY diffrhythm_api.py /app/diffrhythm_api.py
