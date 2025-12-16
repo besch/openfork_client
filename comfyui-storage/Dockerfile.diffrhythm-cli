@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1.4
+# DiffRhythm CLI-based Docker image for OpenFork
+# Uses official DiffRhythm with GPU support for 8GB VRAM (RTX 4060)
+
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.10 python3.10-venv python3.10-distutils python3.10-dev \
+    curl git wget ffmpeg espeak-ng \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Clone DiffRhythm repository
+RUN git clone https://github.com/ASLP-lab/DiffRhythm.git /app
+
+# Install Python dependencies
+RUN python -m pip install --upgrade pip
+RUN python -m pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+RUN python -m pip install -r requirements.txt
+
+# Install API server dependencies
+RUN python -m pip install fastapi uvicorn[standard] python-multipart requests
+
+# Set environment variables for espeak
+ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
+ENV PHONEMIZER_ESPEAK_PATH=/usr/bin
+
+# Create directories for input/output
+RUN mkdir -p /app/input /app/output
+
+# Download models at build time (optional - can also be done via volume mount)
+# Models are downloaded automatically on first run, but pre-downloading saves time
+RUN python -c "from huggingface_hub import hf_hub_download; \
+    hf_hub_download('ASLP-lab/DiffRhythm-1_2', 'cfm_model.pt', local_dir='./checkpoints'); \
+    hf_hub_download('ASLP-lab/DiffRhythm-vae', 'vae_model.pt', local_dir='./checkpoints')" || true
+
+# Copy the API wrapper script
+COPY diffrhythm_api.py /app/diffrhythm_api.py
+
+# Expose port for API
+EXPOSE 8000
+
+# Default command - run the API server
+CMD ["python", "diffrhythm_api.py"]

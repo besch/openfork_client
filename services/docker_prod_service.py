@@ -56,6 +56,8 @@ class DockerProdManager:
         if ports is None:
             if service_type == 'text_generation':
                 ports = {'11434/tcp': 11434}  # Ollama port
+            elif service_type == 'diffrhythm':
+                ports = {'8000/tcp': 8000}  # DiffRhythm REST API port
             else:
                 ports = {'8188/tcp': 8188}  # ComfyUI port (default)
 

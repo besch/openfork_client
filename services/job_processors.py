@@ -1109,3 +1109,7 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Text generation failed: {e}", exc_info=True)
             self.orchestrator_service.update_job_status(self.job_id, 'failed')
+
+# Import the CLI-based processors
+from services.diffrhythm_cli_processor import DiffRhythmCLIJobProcessor
+

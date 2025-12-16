@@ -95,8 +95,10 @@ class JobListener:
                             logging.info(f"Job requires service '{service_type}'. Starting container...")
                             docker_manager.run_container(service_type=service_type)
                             
-                            # Text generation doesn't use ComfyUI, so skip the readiness check
-                            if service_type != 'text_generation':
+                            # Services that don't use ComfyUI and have their own readiness handling
+                            non_comfyui_services = ['text_generation', 'diffrhythm']
+                            
+                            if service_type not in non_comfyui_services:
                                 if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
                                     # Process the job while holding the lock
                                     try:

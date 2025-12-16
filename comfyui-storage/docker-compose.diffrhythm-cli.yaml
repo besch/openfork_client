@@ -1,0 +1,29 @@
+services:
+  diffrhythm-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile.diffrhythm-cli
+    container_name: diffrhythm-cli
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/diffrhythm/output:/app/output
+      - ./storage/diffrhythm/input:/app/input
+      - ./storage/diffrhythm/checkpoints:/app/checkpoints
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    tty: true
+    stdin_open: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
