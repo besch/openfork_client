@@ -7,6 +7,7 @@ import json
 from services.orchestrator_service import OrchestratorService, TokenExpiredError
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
+from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display
 import services.job_processors as job_processors_module
 
 
@@ -45,6 +46,9 @@ class DGNClient:
         self.processing_lock = threading.Lock()
 
         self.processor_map = {}
+        self.services_config = {}
+        self.available_vram = get_available_vram()
+        self.compatible_services = set()
 
         if self.accept_policy == "mine":
             user_id = self.orchestrator_service._get_user_id_from_token()
@@ -89,7 +93,11 @@ class DGNClient:
             response = requests.get(config_url)
             response.raise_for_status()
 
-            self.config = response.json()
+            full_config = response.json()
+            
+            # Extract workflows and services from the config
+            self.config = full_config.get("workflows", full_config)
+            self.services_config = full_config.get("services", {})
 
             # Create a map from service_name to prod_image for docker_manager
             unique_services = {
@@ -104,12 +112,50 @@ class DGNClient:
             docker_manager.set_docker_image_map(self.docker_image_map)
 
             self.processor_map = self._build_processor_map()
+            
+            # Check VRAM compatibility for each service
+            self.compatible_services = set()
+            for service_name, service_config in self.services_config.items():
+                if can_run_service(service_config, self.available_vram):
+                    self.compatible_services.add(service_name)
+                else:
+                    required = service_config.get("vram_required_mb", 0)
+                    logging.warning(
+                        f"Service '{service_name}' requires {get_vram_requirement_display(required)} VRAM, "
+                        f"but only {get_vram_requirement_display(self.available_vram)} available. "
+                        f"Jobs for this service will be skipped."
+                    )
+            
+            if self.compatible_services:
+                logging.info(f"GPU VRAM: {get_vram_requirement_display(self.available_vram)}")
+                logging.info(f"Compatible services: {', '.join(sorted(self.compatible_services))}")
+            else:
+                logging.warning("No compatible services found for current GPU!")
 
             logging.info("DGN configuration loaded successfully from orchestrator.")
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to fetch configuration from orchestrator: {e}")
             raise
+
+    def can_accept_workflow(self, workflow_type: str) -> bool:
+        """
+        Check if this client can accept a job based on GPU VRAM compatibility.
+        
+        Args:
+            workflow_type: The workflow type to check
+            
+        Returns:
+            True if the service required for this workflow is compatible with the GPU
+        """
+        if workflow_type not in self.config:
+            return False
+        
+        service_name = self.config[workflow_type].get("service_name")
+        if not service_name:
+            return False
+            
+        return service_name in self.compatible_services
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
         """Maps a workflow type to a service type using the loaded config."""

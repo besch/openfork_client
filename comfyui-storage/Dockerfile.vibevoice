@@ -64,13 +64,12 @@ RUN python -m pip install uv
 # Copy user configurations and custom nodes
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
-# Install git-lfs for model downloads
-RUN apt-get update && apt-get install -y git-lfs && rm -rf /var/lib/apt/lists/* && git lfs install
+# Install huggingface-cli for model downloads
+RUN python -m pip install huggingface_hub
 
-# Download VibeVoice-1.5B model from Hugging Face
+# Download VibeVoice-1.5B model from Hugging Face (Microsoft repo)
 RUN mkdir -p /opt/ComfyUI/models/vibevoice && \
-    cd /opt/ComfyUI/models/vibevoice && \
-    git clone https://huggingface.co/ShoukanLabs/VibeVoice-1.5B VibeVoice-1.5B
+    huggingface-cli download microsoft/VibeVoice-1.5B --local-dir /opt/ComfyUI/models/vibevoice/VibeVoice-1.5B
 
 # Download Qwen2.5-1.5B tokenizer required by VibeVoice
 RUN mkdir -p /opt/ComfyUI/models/vibevoice/tokenizer && \
