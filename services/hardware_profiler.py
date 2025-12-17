@@ -1,6 +1,7 @@
 import cpuinfo
 import GPUtil
 import psutil
+from typing import Optional, Tuple, List
 
 def get_hardware_profile():
     """Get hardware profile of the system."""
@@ -40,7 +41,7 @@ def get_available_vram() -> int:
     return 0
 
 
-def can_run_service(service_config: dict, available_vram_mb: int | None = None) -> bool:
+def can_run_service(service_config: dict, available_vram_mb: Optional[int] = None) -> bool:
     """
     Check if the current GPU can run a service based on VRAM requirements.
     
@@ -58,7 +59,7 @@ def can_run_service(service_config: dict, available_vram_mb: int | None = None) 
     return available_vram_mb >= required_vram
 
 
-def get_compatible_services(services_config: dict) -> tuple[list[str], list[str]]:
+def get_compatible_services(services_config: dict) -> Tuple[List[str], List[str]]:
     """
     Get lists of compatible and incompatible services based on available VRAM.
     
