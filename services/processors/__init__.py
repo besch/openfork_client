@@ -18,7 +18,6 @@ from .video.upscaler import VideoUpscalerJobProcessor
 from .audio.stable_audio import StableAudioJobProcessor
 from .audio.foley import FoleyJobProcessor
 from .audio.vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
-from .audio.diffrhythm import DiffRhythmJobProcessor
 from .audio.diffrhythm_cli import DiffRhythmCLIJobProcessor
 
 # Image processors
@@ -41,7 +40,6 @@ __all__ = [
     "FoleyJobProcessor",
     "VibeVoiceJobProcessor",
     "VibeVoiceMultiCloneJobProcessor",
-    "DiffRhythmJobProcessor",
     "DiffRhythmCLIJobProcessor",
     "TextToImageJobProcessor",
     "TextGenerationJobProcessor",
