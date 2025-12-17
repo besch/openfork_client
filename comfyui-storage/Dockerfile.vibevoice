@@ -71,13 +71,11 @@ RUN python -m pip install huggingface_hub
 RUN mkdir -p /opt/ComfyUI/models/vibevoice && \
     huggingface-cli download microsoft/VibeVoice-1.5B --local-dir /opt/ComfyUI/models/vibevoice/VibeVoice-1.5B
 
-# Download Qwen2.5-1.5B tokenizer required by VibeVoice
-RUN mkdir -p /opt/ComfyUI/models/vibevoice/tokenizer && \
-    cd /opt/ComfyUI/models/vibevoice/tokenizer && \
-    wget -q https://huggingface.co/Qwen/Qwen2.5-1.5B/resolve/main/tokenizer_config.json && \
-    wget -q https://huggingface.co/Qwen/Qwen2.5-1.5B/resolve/main/vocab.json && \
-    wget -q https://huggingface.co/Qwen/Qwen2.5-1.5B/resolve/main/merges.txt && \
-    wget -q https://huggingface.co/Qwen/Qwen2.5-1.5B/resolve/main/tokenizer.json
+# Download Qwen2.5-1.5B tokenizer required by VibeVoice (only tokenizer files, not the full model)
+RUN huggingface-cli download Qwen/Qwen2.5-1.5B \
+    tokenizer_config.json vocab.json merges.txt tokenizer.json \
+    --local-dir /opt/ComfyUI/models/vibevoice/tokenizer \
+    --local-dir-use-symlinks=False
 
 # Set final working directory and command
 WORKDIR /opt/ComfyUI
