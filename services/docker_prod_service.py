@@ -11,7 +11,8 @@ class DockerProdManager:
     def __init__(self):
         try:
             self.client = docker.from_env()
-            self.docker_image_map = {} # Fallback to static config
+            self.docker_image_map = {}
+            self.services_config = {}
         except docker.errors.DockerException:
             logging.error("Docker is not running. Please start Docker Desktop.")
             raise
@@ -22,6 +23,16 @@ class DockerProdManager:
             self.docker_image_map = image_map
         else:
             logging.warning("Dynamic Docker image map is empty. Using fallback static map.")
+
+    def set_services_config(self, services_config: dict):
+        if services_config:
+            logging.info("Setting services configuration.")
+            self.services_config = services_config
+
+    def get_default_ports(self, service_type: str) -> dict:
+        config = self.services_config.get(service_type, {})
+        port = config.get("port", 8188)  # Default to ComfyUI port
+        return {f'{port}/tcp': port}
 
     def get_image_name(self, service_type: str) -> str:
         image = self.docker_image_map.get(service_type)
@@ -52,14 +63,9 @@ class DockerProdManager:
         image_name = self.get_image_name(service_type)
         container_name = self.get_container_name(service_type)
 
-        # Set service-specific default ports if not provided
+        # Get ports from configuration if not provided
         if ports is None:
-            if service_type == 'llm':
-                ports = {'11434/tcp': 11434}  # Ollama port
-            elif service_type == 'diffrhythm':
-                ports = {'8000/tcp': 8000}  # DiffRhythm REST API port
-            else:
-                ports = {'8188/tcp': 8188}  # ComfyUI port (default)
+            ports = self.get_default_ports(service_type)
 
         try:
             container = self.client.containers.get(container_name)

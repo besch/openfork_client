@@ -110,6 +110,7 @@ class DGNClient:
             }
 
             docker_manager.set_docker_image_map(self.docker_image_map)
+            docker_manager.set_services_config(self.services_config)
 
             self.processor_map = self._build_processor_map()
             
