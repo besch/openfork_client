@@ -54,7 +54,7 @@ class DockerProdManager:
 
         # Set service-specific default ports if not provided
         if ports is None:
-            if service_type == 'text_generation':
+            if service_type == 'llm':
                 ports = {'11434/tcp': 11434}  # Ollama port
             elif service_type == 'diffrhythm':
                 ports = {'8000/tcp': 8000}  # DiffRhythm REST API port
