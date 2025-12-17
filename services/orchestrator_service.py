@@ -14,23 +14,62 @@ class TokenExpiredError(Exception):
     pass
 
 class OrchestratorService:
+    # Debounce interval for AUTH_EXPIRED signals (seconds)
+    AUTH_EXPIRED_DEBOUNCE_SECONDS = 5
+
     def __init__(self, orchestrator_url: str, access_token: str, refresh_token: str):
         self.orchestrator_url = orchestrator_url
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.token_update_lock = threading.Lock()
+        self._last_auth_expired_signal = 0
+        self._auth_failed_permanently = False
 
     def update_tokens(self, access_token: str, refresh_token: str):
         """Thread-safe method to update auth tokens."""
         with self.token_update_lock:
             self.access_token = access_token
             self.refresh_token = refresh_token
+            self._auth_failed_permanently = False  # Reset permanent failure on new tokens
             logging.info("OrchestratorService tokens have been updated by the main process.")
+
+    def mark_auth_failed_permanently(self):
+        """Mark authentication as permanently failed (refresh token expired)."""
+        with self.token_update_lock:
+            self._auth_failed_permanently = True
+            logging.error("Authentication marked as permanently failed. Client will stop.")
+
+    def is_auth_failed_permanently(self) -> bool:
+        """Thread-safe check if auth has permanently failed."""
+        with self.token_update_lock:
+            return self._auth_failed_permanently
+
+    def signal_auth_expired(self):
+        """
+        Send AUTH_EXPIRED signal to main process with debouncing.
+        Only sends one signal per AUTH_EXPIRED_DEBOUNCE_SECONDS to prevent spam.
+        """
+        current_time = time.time()
+        with self.token_update_lock:
+            if self._auth_failed_permanently:
+                # Don't signal if already marked as permanently failed
+                return
+            if current_time - self._last_auth_expired_signal < self.AUTH_EXPIRED_DEBOUNCE_SECONDS:
+                logging.debug("AUTH_EXPIRED signal debounced (within cooldown period).")
+                return
+            self._last_auth_expired_signal = current_time
+        
+        print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+        logging.warning("AUTH_EXPIRED signal sent to main process.")
 
     def _make_request(self, method, url, auth_required=True, **kwargs) -> requests.Response:
         """
         Makes an HTTP request, raising a custom error on 401 Unauthorized.
         """
+        # Check for permanent auth failure before making any authenticated request
+        if auth_required and self.is_auth_failed_permanently():
+            raise TokenExpiredError("Authentication has permanently failed. Please log in again.")
+
         # Add a default timeout to all requests to prevent indefinite hangs
         kwargs.setdefault('timeout', 30)
 

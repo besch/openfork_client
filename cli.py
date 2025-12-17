@@ -39,6 +39,10 @@ def listen_for_ipc_commands(client: DGNClient):
                     )
                 else:
                     logging.warning("UPDATE_TOKENS command received with invalid payload.")
+            elif cmd_type == "AUTH_FAILED_PERMANENTLY":
+                logging.error("Received AUTH_FAILED_PERMANENTLY command from main process.")
+                client.orchestrator_service.mark_auth_failed_permanently()
+                SHUTDOWN_EVENT.set()
             else:
                 logging.warning(f"Received unknown IPC command type: {cmd_type}")
 

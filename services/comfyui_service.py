@@ -11,6 +11,7 @@ from queue import Queue, Empty
 import logging
 from typing import Union
 import requests
+from services.orchestrator_service import TokenExpiredError
 
 class ComfyUIClient:
     def __init__(self, comfyui_ws_url: str, access_token: str = None):
@@ -195,6 +196,14 @@ class ComfyUIClient:
                             logging.warning(f"Cancellation requested for job {job_id} (polled). Interrupting workflow.")
                             self.interrupt_workflow()
                             return "interrupted"
+                    except TokenExpiredError:
+                        orchestrator_service.signal_auth_expired()
+                        logging.warning(f"Auth expired during cancellation polling for job {job_id}.")
+                        # If auth is permanently failed, stop polling
+                        if orchestrator_service.is_auth_failed_permanently():
+                            logging.error("Auth permanently failed. Stopping workflow.")
+                            self.interrupt_workflow()
+                            return "auth_failed"
                     except Exception as e:
                         logging.error(f"Error checking for job cancellation (polling fallback): {e}")
 

@@ -187,9 +187,9 @@ class DGNClient:
             processor = self._get_job_processor(job, shutdown_event)
             processor.process()
         except TokenExpiredError:
-            print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+            self.orchestrator_service.signal_auth_expired()
             logging.warning(
-                f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+                f"Auth expired during processing of job {job.get('id')}."
             )
         except Exception as e:
             logging.error(

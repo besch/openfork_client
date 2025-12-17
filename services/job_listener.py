@@ -1,6 +1,4 @@
 import logging
-import os
-import json
 from services.docker_manager import docker_manager
 from services.orchestrator_service import TokenExpiredError
 
@@ -35,9 +33,9 @@ class JobListener:
                             processor = self.client._get_job_processor(job, self.shutdown_event)
                             processor.process()
                         except TokenExpiredError:
-                            print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                            self.orchestrator_service.signal_auth_expired()
                             logging.warning(
-                                f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+                                f"Auth expired during processing of job {job.get('id')}."
                             )
                             raise  # Re-raise to be caught by outer exception handler
                         except Exception as e:
@@ -56,8 +54,11 @@ class JobListener:
                     else:
                         logging.info("No new jobs.")
             except TokenExpiredError:
-                print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
-                logging.warning("Could not fetch job due to expired token. Notified main process.")
+                self.orchestrator_service.signal_auth_expired()
+                logging.warning("Could not fetch job due to expired token.")
+                if self.orchestrator_service.is_auth_failed_permanently():
+                    logging.error("Auth permanently failed. Stopping job listener.")
+                    break
             except Exception as e:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
@@ -106,9 +107,9 @@ class JobListener:
                                         processor = self.client._get_job_processor(job, self.shutdown_event)
                                         processor.process()
                                     except TokenExpiredError:
-                                        print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                                        self.orchestrator_service.signal_auth_expired()
                                         logging.warning(
-                                            f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+                                            f"Auth expired during processing of job {job.get('id')}."
                                         )
                                         raise  # Re-raise to be caught by outer exception handler
                                     except Exception as e:
@@ -131,9 +132,9 @@ class JobListener:
                                     processor = self.client._get_job_processor(job, self.shutdown_event)
                                     processor.process()
                                 except TokenExpiredError:
-                                    print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
+                                    self.orchestrator_service.signal_auth_expired()
                                     logging.warning(
-                                        f"Auth expired during processing of job {job.get('id')}. Signaled main process."
+                                        f"Auth expired during processing of job {job.get('id')}."
                                     )
                                     raise  # Re-raise to be caught by outer exception handler
                                 except Exception as e:
@@ -155,8 +156,11 @@ class JobListener:
                         else:
                             logging.info("No new jobs found in this check.")
                 except TokenExpiredError:
-                    print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
-                    logging.warning("Could not fetch job due to expired token. Notified main process.")
+                    self.orchestrator_service.signal_auth_expired()
+                    logging.warning("Could not fetch job due to expired token.")
+                    if self.orchestrator_service.is_auth_failed_permanently():
+                        logging.error("Auth permanently failed. Stopping job listener.")
+                        break
                 except Exception as e:
                     logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 
