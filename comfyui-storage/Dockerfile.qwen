@@ -48,10 +48,11 @@ RUN python -m pip install -r /opt/ComfyUI/custom_nodes/was-node-suite-comfyui/re
 # Copy user configurations and custom nodes
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
-# --- Copy Models for Qwen Workflow ---
-COPY --chown=user:user ./storage/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors /opt/ComfyUI/models/text_encoders/
-COPY --chown=user:user ./storage/ComfyUI/models/unet/Qwen_Image_Distill-Q4_K_S.gguf /opt/ComfyUI/models/unet/
-COPY --chown=user:user ./storage/ComfyUI/models/vae/qwen_image_vae.safetensors /opt/ComfyUI/models/vae/
+# --- Download Models for Qwen Workflow ---
+RUN mkdir -p /opt/ComfyUI/models/text_encoders /opt/ComfyUI/models/unet /opt/ComfyUI/models/vae
+RUN wget -O /opt/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors
+RUN wget -O /opt/ComfyUI/models/unet/Qwen_Image_Distill-Q4_K_S.gguf https://huggingface.co/QuantStack/Qwen-Image-Distill-GGUF/resolve/main/Qwen_Image_Distill-Q4_K_S.gguf
+RUN wget -O /opt/ComfyUI/models/vae/qwen_image_vae.safetensors https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors
 
 # Install additional system dependencies for OpenCV
 RUN apt-get update && apt-get install -y \
