@@ -1,0 +1,18 @@
+services:
+  comfyui-zimage:
+    build:
+      context: .
+      dockerfile: Dockerfile.zimage
+    ports:
+      - "8188:8188"
+    volumes:
+      - ../data/input:/opt/ComfyUI/input
+      - ../data/output:/opt/ComfyUI/output
+      - ./storage/ComfyUI/user:/opt/ComfyUI/user
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -22,6 +22,7 @@ from .audio.diffrhythm_cli import DiffRhythmCLIJobProcessor
 
 # Image processors
 from .image.text_to_image import TextToImageJobProcessor
+from .image.zimage import ZImageTextToImageProcessor, ZImageControlNetProcessor, ZImageInpaintProcessor
 
 # Text processors
 from .text.text_generation import TextGenerationJobProcessor
@@ -42,6 +43,10 @@ __all__ = [
     "VibeVoiceMultiCloneJobProcessor",
     "DiffRhythmCLIJobProcessor",
     "TextToImageJobProcessor",
+    "ZImageTextToImageProcessor",
+    "ZImageControlNetProcessor",
+    "ZImageInpaintProcessor",
     "TextGenerationJobProcessor",
 ]
+
 

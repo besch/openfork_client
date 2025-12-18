@@ -638,3 +638,224 @@ def inject_prompt_into_stable_audio_workflow(workflow_data, prompt, duration_sec
     
     # Return just the node graph (consistent with other inject functions)
     return api_graph
+
+
+def get_zimage_dimensions(aspect_ratio: str) -> tuple[int, int]:
+    """
+    Returns (width, height) for Z-Image based on aspect ratio.
+    Z-Image works best at 1024px base resolution.
+    All dimensions are divisible by 16.
+    """
+    if aspect_ratio == "16:9":
+        return 1024, 576
+    elif aspect_ratio == "9:16":
+        return 576, 1024
+    elif aspect_ratio == "1:1":
+        return 1024, 1024
+    elif aspect_ratio == "4:3":
+        return 1024, 768
+    elif aspect_ratio == "3:4":
+        return 768, 1024
+    elif aspect_ratio == "21:9":
+        return 1024, 448
+    else:
+        return 1024, 1024
+
+
+def inject_prompt_into_zimage_workflow(workflow_api_data: Dict, prompt: str, aspect_ratio: str = "1:1"):
+    """
+    Loads a Z-Image ComfyUI API-formatted workflow, injects prompt and dimensions.
+    Also randomizes seed for varied outputs.
+    
+    Args:
+        workflow_api_data: The workflow JSON structure with 'prompt' key
+        prompt: Text prompt for image generation
+        aspect_ratio: Aspect ratio string (e.g., "1:1", "16:9", "9:16")
+    
+    Returns:
+        Modified workflow graph (dict)
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    
+    # Node 45 is CLIPTextEncode (positive prompt)
+    if '45' in api_graph and 'inputs' in api_graph['45'] and 'text' in api_graph['45']['inputs']:
+        api_graph['45']['inputs']['text'] = prompt
+    else:
+        # Fallback: search for CLIPTextEncode by class type
+        for node in api_graph.values():
+            if node.get("class_type") == "CLIPTextEncode":
+                node["inputs"]["text"] = prompt
+                break
+        else:
+            logging.warning("Could not find CLIPTextEncode node in Z-Image workflow")
+    
+    # Inject dimensions into EmptySD3LatentImage (Node 41)
+    width, height = get_zimage_dimensions(aspect_ratio)
+    if '41' in api_graph and 'inputs' in api_graph['41']:
+        api_graph['41']['inputs']['width'] = width
+        api_graph['41']['inputs']['height'] = height
+    else:
+        # Fallback: search by class type
+        for node in api_graph.values():
+            if node.get("class_type") == "EmptySD3LatentImage":
+                node["inputs"]["width"] = width
+                node["inputs"]["height"] = height
+                break
+    
+    # Randomize seed for KSampler (Node 44)
+    new_seed = random.randint(0, 2**63 - 1)
+    if '44' in api_graph and 'inputs' in api_graph['44']:
+        api_graph['44']['inputs']['seed'] = new_seed
+    else:
+        for node in api_graph.values():
+            if node.get("class_type") == "KSampler":
+                node["inputs"]["seed"] = new_seed
+                break
+    
+    logging.info(f"Z-Image configured - Prompt: '{prompt[:50]}...', Size: {width}x{height}, Seed: {new_seed}")
+    
+    return api_graph
+
+
+def inject_image_into_zimage_controlnet_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    image_filename: str,
+    control_mode: str = "pose",
+    strength: float = 1.0,
+    aspect_ratio: str = "1:1"
+):
+    """
+    Loads a Z-Image ControlNet ComfyUI API-formatted workflow, injects prompt, image, and control settings.
+    
+    Args:
+        workflow_api_data: The workflow JSON structure with 'prompt' key
+        prompt: Text prompt for image generation
+        image_filename: Filename of the reference image in input directory
+        control_mode: ControlNet mode - 'pose', 'depth', or 'canny'
+        strength: ControlNet strength (0.0 to 1.0)
+        aspect_ratio: Aspect ratio string for output dimensions
+    
+    Returns:
+        Modified workflow graph (dict)
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    
+    # Node 45 is CLIPTextEncode (positive prompt)
+    if '45' in api_graph and 'inputs' in api_graph['45'] and 'text' in api_graph['45']['inputs']:
+        api_graph['45']['inputs']['text'] = prompt
+    else:
+        for node in api_graph.values():
+            if node.get("class_type") == "CLIPTextEncode":
+                node["inputs"]["text"] = prompt
+                break
+        else:
+            logging.warning("Could not find CLIPTextEncode node in Z-Image ControlNet workflow")
+    
+    # Node 58 is LoadImage - inject reference image filename
+    if '58' in api_graph and 'inputs' in api_graph['58']:
+        api_graph['58']['inputs']['image'] = image_filename
+    else:
+        for node in api_graph.values():
+            if node.get("class_type") == "LoadImage":
+                node["inputs"]["image"] = image_filename
+                break
+        else:
+            logging.warning("Could not find LoadImage node in Z-Image ControlNet workflow")
+    
+    # Node 60 is ZImageFunControlnet - inject control mode and strength
+    if '60' in api_graph and 'inputs' in api_graph['60']:
+        api_graph['60']['inputs']['control_mode'] = control_mode
+        api_graph['60']['inputs']['strength'] = strength
+    else:
+        for node in api_graph.values():
+            if node.get("class_type") == "ZImageFunControlnet":
+                node["inputs"]["control_mode"] = control_mode
+                node["inputs"]["strength"] = strength
+                break
+        else:
+            logging.warning("Could not find ZImageFunControlnet node in Z-Image ControlNet workflow")
+    
+    # Randomize seed for KSampler (Node 44)
+    new_seed = random.randint(0, 2**63 - 1)
+    if '44' in api_graph and 'inputs' in api_graph['44']:
+        api_graph['44']['inputs']['seed'] = new_seed
+    else:
+        for node in api_graph.values():
+            if node.get("class_type") == "KSampler":
+                node["inputs"]["seed"] = new_seed
+                break
+    
+    logging.info(f"Z-Image ControlNet configured - Mode: {control_mode}, Strength: {strength}, Image: {image_filename}, Seed: {new_seed}")
+    
+    return api_graph
+
+
+def inject_image_into_zimage_inpaint_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    image_filename: str,
+    mask_filename: str,
+    denoise_strength: float = 0.8
+):
+    """
+    Loads a Z-Image Inpaint ComfyUI API-formatted workflow, injects prompt, image, and mask.
+    
+    Args:
+        workflow_api_data: The workflow JSON structure with 'prompt' key
+        prompt: Text prompt describing what to generate in masked area
+        image_filename: Filename of the source image in input directory
+        mask_filename: Filename of the mask image (white = edit, black = keep)
+        denoise_strength: How much to change the masked area (0.0 to 1.0)
+    
+    Returns:
+        Modified workflow graph (dict)
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    
+    # Node 45 is CLIPTextEncode (positive prompt)
+    if '45' in api_graph and 'inputs' in api_graph['45'] and 'text' in api_graph['45']['inputs']:
+        api_graph['45']['inputs']['text'] = prompt
+    else:
+        for node in api_graph.values():
+            if node.get("class_type") == "CLIPTextEncode":
+                node["inputs"]["text"] = prompt
+                break
+        else:
+            logging.warning("Could not find CLIPTextEncode node in Z-Image inpaint workflow")
+    
+    # Node 58 is LoadImage for source image
+    if '58' in api_graph and 'inputs' in api_graph['58']:
+        api_graph['58']['inputs']['image'] = image_filename
+    else:
+        load_image_nodes = [n for n in api_graph.values() if n.get("class_type") == "LoadImage"]
+        if load_image_nodes:
+            load_image_nodes[0]["inputs"]["image"] = image_filename
+        else:
+            logging.warning("Could not find LoadImage node for source image in Z-Image inpaint workflow")
+    
+    # Node 59 is LoadImage for mask
+    if '59' in api_graph and 'inputs' in api_graph['59']:
+        api_graph['59']['inputs']['image'] = mask_filename
+    else:
+        load_image_nodes = [n for n in api_graph.values() if n.get("class_type") == "LoadImage"]
+        if len(load_image_nodes) > 1:
+            load_image_nodes[1]["inputs"]["image"] = mask_filename
+        else:
+            logging.warning("Could not find LoadImage node for mask in Z-Image inpaint workflow")
+    
+    # Randomize seed for KSampler (Node 44) and set denoise strength
+    new_seed = random.randint(0, 2**63 - 1)
+    if '44' in api_graph and 'inputs' in api_graph['44']:
+        api_graph['44']['inputs']['seed'] = new_seed
+        api_graph['44']['inputs']['denoise'] = denoise_strength
+    else:
+        for node in api_graph.values():
+            if node.get("class_type") == "KSampler":
+                node["inputs"]["seed"] = new_seed
+                node["inputs"]["denoise"] = denoise_strength
+                break
+    
+    logging.info(f"Z-Image Inpaint configured - Image: {image_filename}, Mask: {mask_filename}, Denoise: {denoise_strength}, Seed: {new_seed}")
+    
+    return api_graph
