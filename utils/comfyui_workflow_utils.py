@@ -39,15 +39,18 @@ def get_dimensions(aspect_ratio: str, default_width: int = 768, default_height: 
 def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
     """
     Accepts:
-      - job['start_image_base64']: 'data:image/png;base64,...' or plain base64 (preferred from Supabase)
-      - job['start_image_filename']: stored file already present in mounted input dir
+      - job['start_image_base64'] or job['inputs']['start_image_base64']: 'data:image/png;base64,...' or plain base64
+      - job['start_image_filename'] or job['inputs']['start_image_filename']: stored file already present in mounted input dir
 
     Writes file into INPUT_DIR (host path mounted to /opt/ComfyUI/input) and returns the filename to use in workflow.
     Always prefers start_image_base64 when present.
     """
     try:
-        # 1) Preferred path: Supabase provides base64 under 'start_image_base64'
-        data_url = job.get('start_image_base64')
+        # Get inputs dict for fallback lookup
+        inputs = job.get('inputs', {})
+        
+        # 1) Preferred path: base64 image (check both root and inputs)
+        data_url = job.get('start_image_base64') or inputs.get('start_image_base64')
         if isinstance(data_url, str) and len(data_url) > 0:
             # Extract base64 regardless of data URL or raw base64
             b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
@@ -57,7 +60,7 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
                 # Fallback to non-strict decode if upstream added whitespace/newlines
                 binary = base64.b64decode(b64)
             # Filename deterministic by job id unless explicit name provided
-            fname = job.get('start_image_name') or f"start_{job.get('id', 'job')}.png"
+            fname = job.get('start_image_name') or inputs.get('start_image_name') or f"start_{job.get('id', 'job')}.png"
             out_path = os.path.join(input_dir, fname)
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "wb") as f:
@@ -66,7 +69,7 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
             return fname
 
         # 2) Fallback: use provided filename that should already exist in mounted input
-        fname = job.get('start_image_filename')
+        fname = job.get('start_image_filename') or inputs.get('start_image_filename')
         if isinstance(fname, str) and len(fname) > 0:
             host_path = os.path.join(input_dir, fname)
             if not os.path.exists(host_path):

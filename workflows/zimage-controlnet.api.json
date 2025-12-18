@@ -67,8 +67,7 @@
     "58": {
       "class_type": "LoadImage",
       "inputs": {
-        "image": "input_image.png",
-        "upload": "image"
+        "image": "input_image.png"
       }
     },
     "60": {
@@ -76,6 +75,7 @@
       "inputs": {
         "model": ["47", 0],
         "model_patch": ["64", 0],
+        "vae": ["40", 0],
         "image": ["62", 0],
         "control_mode": "pose",
         "strength": 1.0
@@ -93,13 +93,13 @@
       "inputs": {
         "image": ["58", 0],
         "upscale_method": "lanczos",
-        "max_dimension": 1024
+        "largest_size": 1024
       }
     },
     "64": {
       "class_type": "ModelPatchLoader",
       "inputs": {
-        "model_patch_name": "Z-Image-Turbo-Fun-Controlnet-Union.safetensors"
+        "name": "Z-Image-Turbo-Fun-Controlnet-Union.safetensors"
       }
     },
     "9": {

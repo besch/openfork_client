@@ -88,10 +88,25 @@ class ZImageControlNetProcessor(ComfyUIProcessor, ImageOutputHandler):
         control_mode = inputs.get("control_mode", "pose")
         strength = inputs.get("control_strength", 1.0)
 
-        # Materialize the reference image
+        # Materialize the reference image to host
         reference_image_filename = materialize_start_image(self.job, self.client.input_dir)
         if not reference_image_filename:
             self._fail_job("No reference image provided for ControlNet workflow.")
+            return
+
+        # Copy the image to the Docker container
+        reference_image_full_path = os.path.join(self.client.input_dir, reference_image_filename)
+        try:
+            from services.docker_manager import docker_manager
+            container_input_path = f"/opt/ComfyUI/input/{reference_image_filename}"
+            docker_manager.copy_file_to_container(
+                service_type=self.client.active_service_type,
+                source_on_host=reference_image_full_path,
+                dest_in_container=container_input_path,
+                shutdown_event=self.shutdown_event,
+            )
+        except Exception as e:
+            self._fail_job(f"Failed to copy reference image to container: {e}")
             return
 
         wf_ready = inject_image_into_zimage_controlnet_workflow(
