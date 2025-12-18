@@ -67,21 +67,19 @@
     "58": {
       "class_type": "LoadImage",
       "inputs": {
-        "image": "input_image.png",
-        "upload": "image"
+        "image": "input_image.png"
       }
     },
     "59": {
       "class_type": "LoadImage",
       "inputs": {
-        "image": "input_mask.png",
-        "upload": "image"
+        "image": "input_mask.png"
       }
     },
     "60": {
       "class_type": "ImageToMask",
       "inputs": {
-        "image": ["59", 0],
+        "image": ["63", 0],
         "channel": "red"
       }
     },
@@ -90,7 +88,7 @@
       "inputs": {
         "pixels": ["62", 0],
         "vae": ["40", 0],
-        "mask": ["63", 0],
+        "mask": ["60", 0],
         "grow_mask_by": 6
       }
     },
@@ -99,15 +97,15 @@
       "inputs": {
         "image": ["58", 0],
         "upscale_method": "lanczos",
-        "max_dimension": 1024
+        "largest_size": 1024
       }
     },
     "63": {
       "class_type": "ImageScaleToMaxDimension",
       "inputs": {
-        "image": ["60", 0],
-        "upscale_method": "nearest",
-        "max_dimension": 1024
+        "image": ["59", 0],
+        "upscale_method": "nearest-exact",
+        "largest_size": 1024
       }
     },
     "9": {

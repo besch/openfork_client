@@ -88,8 +88,25 @@ class ZImageControlNetProcessor(ComfyUIProcessor, ImageOutputHandler):
         control_mode = inputs.get("control_mode", "pose")
         strength = inputs.get("control_strength", 1.0)
 
-        # Materialize the reference image to host
+        # Get reference image - either from base64 or storage path
+        reference_image_filename = None
+        
+        # Try base64 first (from job or inputs)
         reference_image_filename = materialize_start_image(self.job, self.client.input_dir)
+        
+        # If no base64, try downloading from storage path
+        if not reference_image_filename:
+            input_storage_path = self.job.get("input_storage_path")
+            if input_storage_path:
+                bucket = self.job.get("bucket", "projects_public")
+                source_url = f"{os.environ.get('SUPABASE_URL', '')}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                
+                logging.info(f"Downloading reference image from: {source_url}")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+                if downloaded_path:
+                    reference_image_filename = os.path.basename(downloaded_path)
+                    logging.info(f"Downloaded reference image: {reference_image_filename}")
+        
         if not reference_image_filename:
             self._fail_job("No reference image provided for ControlNet workflow.")
             return
@@ -150,8 +167,26 @@ class ZImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         inputs = self.job.get("inputs", {})
         denoise_strength = inputs.get("denoise_strength", 0.8)
 
-        # Materialize the source image
+        # Get source image - either from base64 or storage path
+        source_image_filename = None
+        
+        # Try base64 first (from job or inputs)
         source_image_filename = materialize_start_image(self.job, self.client.input_dir)
+        
+        # If no base64, try downloading from storage path
+        if not source_image_filename:
+            input_storage_path = self.job.get("input_storage_path")
+            if input_storage_path:
+                # Build the download URL
+                bucket = self.job.get("bucket", "projects_public")
+                source_url = f"{os.environ.get('SUPABASE_URL', '')}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                
+                logging.info(f"Downloading source image from: {source_url}")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+                if downloaded_path:
+                    source_image_filename = os.path.basename(downloaded_path)
+                    logging.info(f"Downloaded source image: {source_image_filename}")
+        
         if not source_image_filename:
             self._fail_job("No source image provided for inpaint workflow.")
             return
@@ -177,6 +212,28 @@ class ZImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             logging.info(f"Saved mask to: {mask_path}")
         except Exception as e:
             self._fail_job(f"Failed to process mask image: {str(e)}")
+            return
+
+        # Copy both source image and mask to Docker container
+        source_image_full_path = os.path.join(self.client.input_dir, source_image_filename)
+        try:
+            from services.docker_manager import docker_manager
+            # Copy source image
+            docker_manager.copy_file_to_container(
+                service_type=self.client.active_service_type,
+                source_on_host=source_image_full_path,
+                dest_in_container=f"/opt/ComfyUI/input/{source_image_filename}",
+                shutdown_event=self.shutdown_event,
+            )
+            # Copy mask
+            docker_manager.copy_file_to_container(
+                service_type=self.client.active_service_type,
+                source_on_host=mask_path,
+                dest_in_container=f"/opt/ComfyUI/input/{mask_filename}",
+                shutdown_event=self.shutdown_event,
+            )
+        except Exception as e:
+            self._fail_job(f"Failed to copy images to container: {e}")
             return
 
         wf_ready = inject_image_into_zimage_inpaint_workflow(
