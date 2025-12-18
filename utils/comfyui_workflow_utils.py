@@ -662,15 +662,21 @@ def get_zimage_dimensions(aspect_ratio: str) -> tuple[int, int]:
         return 1024, 1024
 
 
-def inject_prompt_into_zimage_workflow(workflow_api_data: Dict, prompt: str, aspect_ratio: str = "1:1"):
+def inject_prompt_into_zimage_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    aspect_ratio: str = "1:1",
+    advanced_settings: Optional[Dict] = None
+):
     """
     Loads a Z-Image ComfyUI API-formatted workflow, injects prompt and dimensions.
-    Also randomizes seed for varied outputs.
+    Also randomizes seed for varied outputs and applies advanced settings.
     
     Args:
         workflow_api_data: The workflow JSON structure with 'prompt' key
         prompt: Text prompt for image generation
         aspect_ratio: Aspect ratio string (e.g., "1:1", "16:9", "9:16")
+        advanced_settings: Optional dict with keys: steps, cfg, sampler_name, scheduler, shift
     
     Returns:
         Modified workflow graph (dict)
@@ -711,6 +717,38 @@ def inject_prompt_into_zimage_workflow(workflow_api_data: Dict, prompt: str, asp
             if node.get("class_type") == "KSampler":
                 node["inputs"]["seed"] = new_seed
                 break
+    
+    # Apply advanced settings to KSampler (Node 44)
+    if advanced_settings:
+        ksampler_node = api_graph.get('44', {}).get('inputs')
+        if not ksampler_node:
+            # Fallback search
+            for node in api_graph.values():
+                if node.get("class_type") == "KSampler":
+                    ksampler_node = node.get("inputs", {})
+                    break
+        
+        if ksampler_node:
+            if 'steps' in advanced_settings:
+                ksampler_node['steps'] = advanced_settings['steps']
+            if 'cfg' in advanced_settings:
+                ksampler_node['cfg'] = advanced_settings['cfg']
+            if 'sampler_name' in advanced_settings:
+                ksampler_node['sampler_name'] = advanced_settings['sampler_name']
+            if 'scheduler' in advanced_settings:
+                ksampler_node['scheduler'] = advanced_settings['scheduler']
+        
+        # Apply shift to ModelSamplingAuraFlow (Node 47)
+        if 'shift' in advanced_settings:
+            if '47' in api_graph and 'inputs' in api_graph['47']:
+                api_graph['47']['inputs']['shift'] = advanced_settings['shift']
+            else:
+                for node in api_graph.values():
+                    if node.get("class_type") == "ModelSamplingAuraFlow":
+                        node["inputs"]["shift"] = advanced_settings['shift']
+                        break
+        
+        logging.info(f"Advanced settings applied: {advanced_settings}")
     
     logging.info(f"Z-Image configured - Prompt: '{prompt[:50]}...', Size: {width}x{height}, Seed: {new_seed}")
     

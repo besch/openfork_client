@@ -33,9 +33,25 @@ class ZImageTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
 
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
+        
+        # Build advanced settings dict from inputs
+        advanced_settings = {}
+        if "steps" in inputs:
+            advanced_settings["steps"] = inputs["steps"]
+        if "cfg" in inputs:
+            advanced_settings["cfg"] = inputs["cfg"]
+        if "sampler_name" in inputs:
+            advanced_settings["sampler_name"] = inputs["sampler_name"]
+        if "scheduler" in inputs:
+            advanced_settings["scheduler"] = inputs["scheduler"]
+        if "shift" in inputs:
+            advanced_settings["shift"] = inputs["shift"]
 
         wf_ready = inject_prompt_into_zimage_workflow(
-            workflow_data, self.positive_prompt, aspect_ratio
+            workflow_data, 
+            self.positive_prompt, 
+            aspect_ratio,
+            advanced_settings=advanced_settings if advanced_settings else None
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
