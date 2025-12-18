@@ -13,6 +13,12 @@ class TokenExpiredError(Exception):
     """Raised when the API returns a 401 Unauthorized error."""
     pass
 
+# Custom exception for handling expired provider registration
+class ProviderNotFoundError(Exception):
+    """Raised when the provider registration has expired (cleaned up by stale provider cron)."""
+    pass
+
+
 class OrchestratorService:
     # Debounce interval for AUTH_EXPIRED signals (seconds)
     AUTH_EXPIRED_DEBOUNCE_SECONDS = 5
@@ -141,16 +147,29 @@ class OrchestratorService:
                 params["allowedIds"] = ",".join(allowed_ids)
 
             response = self._make_request('get', base_url, params=params)
+            
+            # Check for provider expiration (404 with provider_not_found error)
+            if response.status_code == 404:
+                try:
+                    error_data = response.json()
+                    if error_data.get("error") == "provider_not_found":
+                        raise ProviderNotFoundError("Provider registration has expired")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            
             response.raise_for_status()
             if not response.content:
                 return None
             return response.json()
+        except ProviderNotFoundError:
+            raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching next job: {e}")
             return None
         except json.JSONDecodeError:
             logging.error(f"Failed to decode JSON from get_next_job response: {response.text}")
             return None
+
 
     def get_job(self, job_id: str) -> Union[Dict, None]:
         """Get a job by its ID. Returns a fabricated 'cancelled' status if the job is not found (404)."""
@@ -267,10 +286,23 @@ class OrchestratorService:
                 f"{self.orchestrator_url}/api/dgn/heartbeat",
                 json={"providerId": provider_id}
             )
+            
+            # Check for provider expiration (404 with provider_not_found error)
+            if response.status_code == 404:
+                try:
+                    error_data = response.json()
+                    if error_data.get("error") == "provider_not_found":
+                        raise ProviderNotFoundError("Provider registration has expired")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            
             response.raise_for_status()
             logging.info("Heartbeat sent successfully.")
+        except ProviderNotFoundError:
+            raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
+
 
     def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None):
         """Update the status of a job."""

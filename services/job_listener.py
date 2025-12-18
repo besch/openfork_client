@@ -1,6 +1,7 @@
 import logging
+import json
 from services.docker_manager import docker_manager
-from services.orchestrator_service import TokenExpiredError
+from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
 
 class JobListener:
     def __init__(self, client, provider_id, shutdown_event):
@@ -59,6 +60,10 @@ class JobListener:
                 if self.orchestrator_service.is_auth_failed_permanently():
                     logging.error("Auth permanently failed. Stopping job listener.")
                     break
+            except ProviderNotFoundError:
+                logging.warning("Provider registration expired. Signaling main process for restart.")
+                print(json.dumps({"status": "PROVIDER_EXPIRED"}), flush=True)
+                break  # Exit the loop, Electron will restart the client
             except Exception as e:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
@@ -161,6 +166,10 @@ class JobListener:
                     if self.orchestrator_service.is_auth_failed_permanently():
                         logging.error("Auth permanently failed. Stopping job listener.")
                         break
+                except ProviderNotFoundError:
+                    logging.warning("Provider registration expired. Signaling main process for restart.")
+                    print(json.dumps({"status": "PROVIDER_EXPIRED"}), flush=True)
+                    break  # Exit the loop, Electron will restart the client
                 except Exception as e:
                     logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 

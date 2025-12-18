@@ -1,6 +1,7 @@
 import threading
 import logging
-from services.orchestrator_service import TokenExpiredError
+import json
+from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
 
 class HeartbeatManager:
     def __init__(self, orchestrator_service, provider_id, shutdown_event):
@@ -26,7 +27,13 @@ class HeartbeatManager:
                 if self.orchestrator_service.is_auth_failed_permanently():
                     logging.error("Auth permanently failed. Stopping heartbeat loop.")
                     break
+            except ProviderNotFoundError:
+                logging.warning("Provider registration expired (detected in heartbeat). Signaling main process for restart.")
+                print(json.dumps({"status": "PROVIDER_EXPIRED"}), flush=True)
+                self.shutdown_event.set()  # Trigger shutdown
+                break
             except Exception as e:
                 logging.error(f"An error occurred in the heartbeat loop: {e}")
             # Wait for 60 seconds or until shutdown event is set
             self.shutdown_event.wait(60)
+
