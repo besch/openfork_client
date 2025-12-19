@@ -32,6 +32,33 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             return
 
         start_image_filename = materialize_start_image(self.job, self.input_dir)
+        
+        # If not materialized from base64, try downloading from storage path
+        if not start_image_filename:
+            input_storage_path = self.job.get("input_storage_path")
+            
+            # Fallback: sometimes the path is passed in start_image_base64 (legacy/action behavior)
+            if not input_storage_path:
+                possible_path = self.job.get('start_image_base64')
+                # If it's short and doesn't look like a data URL, treat it as a path
+                if possible_path and isinstance(possible_path, str) and not possible_path.startswith('data:') and len(possible_path) < 2048:
+                    input_storage_path = possible_path
+
+            if input_storage_path:
+                bucket = self.job.get("bucket", "projects_public")
+                # Construct URL assuming Supabase storage structure
+                # Note: This relies on SUPABASE_URL being set in the environment or client config
+                supabase_url = os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', ''))
+                if supabase_url:
+                    source_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                    
+                    logging.info(f"Downloading start image from: {source_url}")
+                    downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.input_dir)
+                    if downloaded_path:
+                        start_image_filename = os.path.basename(downloaded_path)
+                else:
+                    logging.warning("SUPABASE_URL not found in environment or config. Cannot download input image.")
+
         if not start_image_filename:
             self._fail_job(f"Failed to materialize start image for job {self.job_id}.")
             return
