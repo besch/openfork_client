@@ -34,6 +34,6 @@ class HeartbeatManager:
                 break
             except Exception as e:
                 logging.error(f"An error occurred in the heartbeat loop: {e}")
-            # Wait for 60 seconds or until shutdown event is set
-            self.shutdown_event.wait(60)
+            # Wait for 30 seconds or until shutdown event is set
+            self.shutdown_event.wait(30)
 
