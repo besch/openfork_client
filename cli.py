@@ -51,6 +51,9 @@ def listen_for_ipc_commands(client: DGNClient):
         except Exception as e:
             logging.error(f"Error processing IPC command: {e}")
     logging.info("IPC listener thread stopped.")
+    if not SHUTDOWN_EVENT.is_set():
+        logging.warning("Stdin closed (EOF). Parent process probably exited. Initiating shutdown.")
+        SHUTDOWN_EVENT.set()
 
 
 def setup_client(args):
@@ -152,6 +155,8 @@ def main():
     parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')
     parser.add_argument('--accept-policy', type=str, default='mine', help='The job acceptance policy (all, mine, project).')
     parser.add_argument('--allowed-targets', type=str, help='For specific_* policies, a comma-separated list of targets (e.g., user/project-slug or user/project-slug:branch-name).')
+    # This argument is used solely for process identification by the cleanup logic
+    parser.add_argument('--process-marker', type=str, help='Unique marker for process identification')
     args = parser.parse_args()
 
     if args.service != 'auto':
