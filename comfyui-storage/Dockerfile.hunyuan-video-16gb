@@ -1,0 +1,96 @@
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+# Dockerfile for Hunyuan Video 1.5 (16GB VRAM version - FP8/Distilled)
+# Uses quantized FP8 and distilled models for lower VRAM usage
+# Supports both text-to-video and image-to-video workflows
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev curl git wget \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --upgrade pip
+
+# Install PyTorch with CUDA 12.8
+RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Install dependencies
+RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
+
+WORKDIR /opt/ComfyUI
+
+# Clone ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+RUN python -m pip install -r requirements.txt
+
+# Clone ComfyUI Manager
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
+RUN python -m pip install GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub>0.20
+
+# Clone required custom nodes
+RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
+RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
+
+# Install requirements for custom nodes
+RUN python -m pip install color-matcher matplotlib huggingface_hub mss toml rich
+
+# Install additional system dependencies for OpenCV
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for ComfyUI-Manager
+RUN python -m pip install uv
+
+# Create model directories
+RUN mkdir -p /opt/ComfyUI/models/text_encoders \
+    && mkdir -p /opt/ComfyUI/models/diffusion_models \
+    && mkdir -p /opt/ComfyUI/models/vae \
+    && mkdir -p /opt/ComfyUI/models/clip_vision
+
+# --- Download Hunyuan Video 1.5 FP8/Distilled Models ---
+# These are quantized versions that fit in 16GB VRAM
+
+# Text Encoders - FP8 Qwen and FP16 BYT5 (smaller model)
+RUN wget -O /opt/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
+    "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+
+RUN wget -O /opt/ComfyUI/models/text_encoders/byt5_small_glyphxl_fp16.safetensors \
+    "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/byt5_small_glyphxl_fp16.safetensors"
+
+# VAE - FP16 (required, same for all)
+RUN wget -O /opt/ComfyUI/models/vae/hunyuanvideo15_vae_fp16.safetensors \
+    "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/vae/hunyuanvideo15_vae_fp16.safetensors"
+
+# Diffusion Models - CFG Distilled FP8 versions (~8GB each, faster inference)
+# 720p I2V CFG Distilled FP8 (8.33 GB) - Image-to-Video
+RUN wget -O /opt/ComfyUI/models/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors \
+    "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors"
+
+# 480p I2V CFG Distilled FP8 (8.33 GB) - For lower VRAM fallback
+RUN wget -O /opt/ComfyUI/models/diffusion_models/hunyuanvideo1.5_480p_i2v_cfg_distilled_fp8_scaled.safetensors \
+    "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/diffusion_models/hunyuanvideo1.5_480p_i2v_cfg_distilled_fp8_scaled.safetensors"
+
+# Note: For T2V in 16GB, we use the same FP16 model with weight_dtype set to fp8_e4m3fn in ComfyUI
+# The workflow JSON should specify fp8_e4m3fn weight type for this image
+RUN wget -O /opt/ComfyUI/models/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors \
+    "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.safetensors"
+
+# CLIP Vision for Image-to-Video
+RUN wget -O /opt/ComfyUI/models/clip_vision/sigclip_vision_patch14_384.safetensors \
+    "https://huggingface.co/Comfy-Org/sigclip_vision_384/resolve/main/sigclip_vision_patch14_384.safetensors"
+
+# Copy user configurations
+COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
+
+WORKDIR /opt/ComfyUI
+CMD ["python", "main.py", "--listen"]

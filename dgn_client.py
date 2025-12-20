@@ -17,14 +17,15 @@ class DGNClient:
         orchestrator_url: str,
         root_dir: str,
         data_dir: str,
-        access_token: str,
-        refresh_token: str,
+        access_token: str = None,
+        refresh_token: str = None,
+        dgn_api_key: str = None,
         accept_policy: str = "all",
         allowed_targets: list[str] = None,
     ):
         self.orchestrator_url = orchestrator_url
         self.orchestrator_service = OrchestratorService(
-            orchestrator_url, access_token, refresh_token
+            orchestrator_url, access_token, refresh_token, dgn_api_key=dgn_api_key
         )
         self.comfyui_client = ComfyUIClient(
             os.environ.get("COMFYUI_WS_URL", "ws://127.0.0.1:8188/ws?clientId={}"),

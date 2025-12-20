@@ -23,10 +23,12 @@ class OrchestratorService:
     # Debounce interval for AUTH_EXPIRED signals (seconds)
     AUTH_EXPIRED_DEBOUNCE_SECONDS = 5
 
-    def __init__(self, orchestrator_url: str, access_token: str, refresh_token: str):
+    def __init__(self, orchestrator_url: str, access_token: str = None, refresh_token: str = None, dgn_api_key: str = None):
         self.orchestrator_url = orchestrator_url
         self.access_token = access_token
         self.refresh_token = refresh_token
+        self.dgn_api_key = dgn_api_key
+        self.use_api_key = dgn_api_key is not None
         self.token_update_lock = threading.Lock()
         self._last_auth_expired_signal = 0
         self._auth_failed_permanently = False
@@ -71,10 +73,13 @@ class OrchestratorService:
     def _make_request(self, method, url, auth_required=True, **kwargs) -> requests.Response:
         """
         Makes an HTTP request, raising a custom error on 401 Unauthorized.
+        Supports both API key auth (headless) and Bearer token auth (Electron).
         """
-        # Check for permanent auth failure before making any authenticated request
-        if auth_required and self.is_auth_failed_permanently():
-            raise TokenExpiredError("Authentication has permanently failed. Please log in again.")
+        # In API key mode, we don't need to check for token expiry
+        if not self.use_api_key:
+            # Check for permanent auth failure before making any authenticated request
+            if auth_required and self.is_auth_failed_permanently():
+                raise TokenExpiredError("Authentication has permanently failed. Please log in again.")
 
         # Add a default timeout to all requests to prevent indefinite hangs
         kwargs.setdefault('timeout', 30)
@@ -82,18 +87,27 @@ class OrchestratorService:
         request_headers = kwargs.pop("headers", {}).copy()
         
         if auth_required:
-            # Use the lock to ensure the token isn't being updated by another thread while we read it
-            with self.token_update_lock:
-                request_headers['Authorization'] = f'Bearer {self.access_token}'
+            if self.use_api_key:
+                # Headless mode: use API key
+                request_headers['x-dgn-api-key'] = self.dgn_api_key
+            else:
+                # Electron/web mode: use Bearer token
+                with self.token_update_lock:
+                    request_headers['Authorization'] = f'Bearer {self.access_token}'
 
         if 'Content-Type' not in request_headers and 'files' not in kwargs and 'data' not in kwargs and 'json' not in kwargs:
              request_headers['Content-Type'] = 'application/json'
         
         response = requests.request(method, url, headers=request_headers, **kwargs)
 
+        # In API key mode, 401 means invalid key (permanent failure)
         if response.status_code == 401 and auth_required:
-            logging.warning("Received 401 Unauthorized. Notifying main process to refresh token.")
-            raise TokenExpiredError("Access token has expired.")
+            if self.use_api_key:
+                logging.error("Received 401 Unauthorized with API key. Key may be invalid or revoked.")
+                raise TokenExpiredError("DGN API key is invalid or revoked.")
+            else:
+                logging.warning("Received 401 Unauthorized. Notifying main process to refresh token.")
+                raise TokenExpiredError("Access token has expired.")
         
         return response
 
@@ -354,7 +368,7 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self, service_type: str) -> Union[str, None]:
+    def register_with_orchestrator(self, service_type: str, supported_services: list = None) -> Union[str, None]:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
         
@@ -363,7 +377,12 @@ class OrchestratorService:
             logging.error("Could not extract user_id from token. Cannot register.")
             return None
         
-        payload = {**hardware_profile, "user_id": user_id, "service_type": service_type}
+        payload = {
+            **hardware_profile,
+            "user_id": user_id,
+            "service_type": service_type,
+            "supported_services": supported_services or []
+        }
 
         logging.info(f"Registering with profile: {payload}")
         try:

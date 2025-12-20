@@ -1,0 +1,122 @@
+{
+  "prompt": {
+    "1": {
+      "inputs": {
+        "ckpt_name": "ltx-video-2b-v0.9.1.safetensors"
+      },
+      "class_type": "CheckpointLoaderSimple"
+    },
+    "2": {
+      "inputs": {
+        "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
+        "type": "ltxv",
+        "device": "default"
+      },
+      "class_type": "CLIPLoader"
+    },
+    "3": {
+      "inputs": {
+        "text": "A cinematic video prompt placeholder",
+        "clip": ["2", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "4": {
+      "inputs": {
+        "text": "low quality, worst quality, deformed, distorted, disfigured, motion smear, motion artifacts, fused fingers, bad anatomy, weird hand, ugly",
+        "clip": ["2", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "5": {
+      "inputs": {
+        "positive": ["3", 0],
+        "negative": ["4", 0],
+        "frame_rate": 24
+      },
+      "class_type": "LTXVConditioning"
+    },
+    "6": {
+      "inputs": {
+        "image": "start_image.png"
+      },
+      "class_type": "LoadImage"
+    },
+    "7": {
+      "inputs": {
+        "noise_seed": 0
+      },
+      "class_type": "RandomNoise"
+    },
+    "8": {
+      "inputs": {
+        "sampler_name": "euler"
+      },
+      "class_type": "KSamplerSelect"
+    },
+    "9": {
+      "inputs": {
+        "scheduler": "simple",
+        "steps": 30,
+        "denoise": 0.9,
+        "model": ["1", 0]
+      },
+      "class_type": "BasicScheduler"
+    },
+    "10": {
+      "inputs": {
+        "pixels": ["6", 0],
+        "vae": ["1", 2]
+      },
+      "class_type": "VAEEncode"
+    },
+    "11": {
+      "inputs": {
+        "length": 97,
+        "latent": ["10", 0]
+      },
+      "class_type": "LTXVAddLatent"
+    },
+    "12": {
+      "inputs": {
+        "cfg": 3.5,
+        "model": ["1", 0],
+        "positive": ["5", 0],
+        "negative": ["5", 1]
+      },
+      "class_type": "CFGGuider"
+    },
+    "13": {
+      "inputs": {
+        "noise": ["7", 0],
+        "guider": ["12", 0],
+        "sampler": ["8", 0],
+        "sigmas": ["9", 0],
+        "latent_image": ["11", 0]
+      },
+      "class_type": "SamplerCustomAdvanced"
+    },
+    "14": {
+      "inputs": {
+        "samples": ["13", 0],
+        "vae": ["1", 2]
+      },
+      "class_type": "VAEDecode"
+    },
+    "15": {
+      "inputs": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "ltx_i2v",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 19,
+        "save_metadata": true,
+        "pingpong": false,
+        "save_output": true,
+        "images": ["14", 0]
+      },
+      "class_type": "VHS_VideoCombine"
+    }
+  }
+}

@@ -78,6 +78,7 @@ def setup_client(args):
         data_dir=args.data_dir,
         access_token=args.access_token,
         refresh_token=args.refresh_token,
+        dgn_api_key=args.dgn_api_key,
         accept_policy=args.accept_policy,
         allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None
     )
@@ -91,7 +92,10 @@ def setup_client(args):
             logging.error(f"Invalid service '{args.service}'. Available services from config: {', '.join(available_services)}")
             sys.exit(1)
 
-    provider_id = client.orchestrator_service.register_with_orchestrator(service_type=args.service)
+    provider_id = client.orchestrator_service.register_with_orchestrator(
+        service_type=args.service,
+        supported_services=list(client.compatible_services)
+    )
     if not provider_id:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
     
@@ -146,8 +150,11 @@ def main():
     multiprocessing.freeze_support()
     
     parser = argparse.ArgumentParser(description='DGN Client')
-    parser.add_argument('--access-token', type=str, required=True, help='Supabase Auth Access Token')
-    parser.add_argument('--refresh-token', type=str, required=True, help='Supabase Auth Refresh Token')
+    
+    # Authentication options (API key OR OAuth tokens)
+    parser.add_argument('--dgn-api-key', type=str, help='DGN API Key for headless mode (alternative to OAuth tokens)')
+    parser.add_argument('--access-token', type=str, help='Supabase Auth Access Token')
+    parser.add_argument('--refresh-token', type=str, help='Supabase Auth Refresh Token')
     
     parser.add_argument('--service', type=str, default='auto', help='Service to run (e.g., wan22, foley). Default is "auto".')
 
@@ -158,6 +165,10 @@ def main():
     # This argument is used solely for process identification by the cleanup logic
     parser.add_argument('--process-marker', type=str, help='Unique marker for process identification')
     args = parser.parse_args()
+    
+    # Validate authentication - need either API key OR OAuth tokens
+    if not args.dgn_api_key and not (args.access_token and args.refresh_token):
+        parser.error('Either --dgn-api-key OR both --access-token and --refresh-token are required')
 
     if args.service != 'auto':
         docker_manager.run_container(service_type=args.service)
@@ -170,9 +181,11 @@ def main():
     try:
         client, provider_id = setup_client(args)
 
-        # Start the IPC listener thread
-        ipc_thread = threading.Thread(target=listen_for_ipc_commands, args=(client,), daemon=True)
-        ipc_thread.start()
+        # Start the IPC listener thread only when using OAuth tokens (Electron mode)
+        # In headless API key mode, there's no parent process to listen to
+        if not args.dgn_api_key:
+            ipc_thread = threading.Thread(target=listen_for_ipc_commands, args=(client,), daemon=True)
+            ipc_thread.start()
 
         # If we are running a dedicated service, set it as active on the client.
         if args.service != 'auto':

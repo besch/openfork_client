@@ -1,0 +1,40 @@
+# LTX-Video 2B Docker Image (12GB VRAM)
+# Uses ltx-video-2b-v0.9.1 model with T5 FP8 text encoder
+
+FROM beschiak/comfyui-base:latest
+
+# Install ComfyUI-LTXVideo custom nodes
+RUN cd /opt/ComfyUI/custom_nodes && \
+    git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git && \
+    cd ComfyUI-LTXVideo && \
+    pip install -r requirements.txt
+
+# Install VideoHelperSuite for video output
+RUN cd /opt/ComfyUI/custom_nodes && \
+    git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git && \
+    cd ComfyUI-VideoHelperSuite && \
+    pip install -r requirements.txt || true
+
+# Download LTX-Video 2B model (main checkpoint)
+RUN mkdir -p /opt/ComfyUI/models/checkpoints && \
+    wget -q --show-progress -O /opt/ComfyUI/models/checkpoints/ltx-video-2b-v0.9.1.safetensors \
+    "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.1.safetensors"
+
+# Download T5 XXL FP8 text encoder (smaller, fits in 12GB)
+RUN mkdir -p /opt/ComfyUI/models/text_encoders && \
+    wget -q --show-progress -O /opt/ComfyUI/models/text_encoders/t5xxl_fp8_e4m3fn.safetensors \
+    "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors"
+
+# Also place in clip folder for compatibility
+RUN mkdir -p /opt/ComfyUI/models/clip && \
+    ln -s /opt/ComfyUI/models/text_encoders/t5xxl_fp8_e4m3fn.safetensors \
+    /opt/ComfyUI/models/clip/t5xxl_fp8_e4m3fn.safetensors
+
+# Copy workflow files
+COPY workflows/ltx-text-to-video.api.json /opt/ComfyUI/workflows/
+COPY workflows/ltx-image-to-video.api.json /opt/ComfyUI/workflows/
+
+WORKDIR /opt/ComfyUI
+
+# Start ComfyUI
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--preview-method", "auto"]

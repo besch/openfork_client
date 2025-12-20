@@ -12,6 +12,10 @@ from .comfyui_processor import ComfyUIProcessor
 # Video processors
 from .video.wan22_text import WAN22TextToVideoJobProcessor
 from .video.wan22_image import WAN22ImageToVideoJobProcessor, ImageToVideoFromLastFrameJobProcessor
+from .video.hunyuan_text import HunyuanTextToVideoJobProcessor
+from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
+from .video.ltx_text import LTXTextToVideoJobProcessor
+from .video.ltx_image import LTXImageToVideoJobProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
 
 # Audio processors
@@ -36,6 +40,10 @@ __all__ = [
     "WAN22TextToVideoJobProcessor",
     "WAN22ImageToVideoJobProcessor",
     "ImageToVideoFromLastFrameJobProcessor",
+    "HunyuanTextToVideoJobProcessor",
+    "HunyuanImageToVideoJobProcessor",
+    "LTXTextToVideoJobProcessor",
+    "LTXImageToVideoJobProcessor",
     "VideoUpscalerJobProcessor",
     "StableAudioJobProcessor",
     "FoleyJobProcessor",
