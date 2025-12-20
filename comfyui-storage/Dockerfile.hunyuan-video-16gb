@@ -89,8 +89,5 @@ RUN wget -O /opt/ComfyUI/models/diffusion_models/hunyuanvideo1.5_720p_t2v_fp16.s
 RUN wget -O /opt/ComfyUI/models/clip_vision/sigclip_vision_patch14_384.safetensors \
     "https://huggingface.co/Comfy-Org/sigclip_vision_384/resolve/main/sigclip_vision_patch14_384.safetensors"
 
-# Copy user configurations
-COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
-
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
