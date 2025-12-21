@@ -1,0 +1,73 @@
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget ffmpeg libgl1-mesa-glx libgl1-mesa-dri \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --upgrade pip
+
+# Install PyTorch with CUDA 12.8 - TurboDiffusion recommends torch>=2.7.0
+RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Install build prerequisites
+RUN python -m pip install psutil ninja packaging wheel setuptools
+
+# Install flash-attn (skip building, use pip cache or prebuilt)
+RUN MAX_JOBS=2 python -m pip install flash-attn --no-build-isolation || echo "flash-attn skipped"
+
+# Install TurboDiffusion dependencies manually (avoid editable install issues)
+RUN python -m pip install einops transformers accelerate diffusers sentencepiece imageio imageio-ffmpeg opencv-python
+
+# Clone TurboDiffusion source
+WORKDIR /opt
+RUN git clone --depth 1 https://github.com/thu-ml/TurboDiffusion.git
+WORKDIR /opt/TurboDiffusion
+RUN git submodule update --init --recursive
+
+# Add TurboDiffusion to Python path instead of editable install
+ENV PYTHONPATH=/opt/TurboDiffusion:/opt/TurboDiffusion/turbodiffusion
+
+# Install SpargeAttn for SageSLA (faster attention) - skip on failure
+RUN python -m pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation || echo "SpargeAttn skipped"
+
+# Install FastAPI for REST API server
+RUN python -m pip install fastapi uvicorn python-multipart aiofiles
+
+# Create directories for models and outputs
+RUN mkdir -p /opt/TurboDiffusion/checkpoints /opt/TurboDiffusion/outputs /opt/TurboDiffusion/inputs
+
+# Download VAE and text encoder
+WORKDIR /opt/TurboDiffusion/checkpoints
+RUN wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/Wan2.1_VAE.pth" && \
+    wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth"
+
+# Download T2V model (1.3B quantized - works on 8GB GPUs)
+RUN wget -q -O TurboWan2.1-T2V-1.3B-480P-quant.pth \
+    "https://huggingface.co/TurboDiffusion/TurboWan2.1-T2V-1.3B-480P/resolve/main/TurboWan2.1-T2V-1.3B-480P-quant.pth"
+
+# Download I2V models (14B quantized dual-expert)
+RUN wget -q -O TurboWan2.2-I2V-A14B-high-720P-quant.pth \
+    "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-high-720P-quant.pth" && \
+    wget -q -O TurboWan2.2-I2V-A14B-low-720P-quant.pth \
+    "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-low-720P-quant.pth"
+
+# Copy the API server script
+COPY comfyui-storage/turbodiffusion_api_server.py /opt/TurboDiffusion/api_server.py
+
+WORKDIR /opt/TurboDiffusion
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]

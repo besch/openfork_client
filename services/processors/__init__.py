@@ -17,6 +17,7 @@ from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
 from .video.ltx_text import LTXTextToVideoJobProcessor
 from .video.ltx_image import LTXImageToVideoJobProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
+from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -45,6 +46,8 @@ __all__ = [
     "LTXTextToVideoJobProcessor",
     "LTXImageToVideoJobProcessor",
     "VideoUpscalerJobProcessor",
+    "TurboDiffusionT2VJobProcessor",
+    "TurboDiffusionI2VJobProcessor",
     "StableAudioJobProcessor",
     "FoleyJobProcessor",
     "VibeVoiceJobProcessor",

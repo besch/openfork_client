@@ -1,0 +1,4 @@
+{
+  "description": "TurboDiffusion T2V - Standalone processor, no ComfyUI workflow needed",
+  "note": "This workflow uses TurboDiffusionT2VJobProcessor which communicates directly with the TurboDiffusion REST API"
+}
