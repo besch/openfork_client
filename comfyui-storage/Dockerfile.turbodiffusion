@@ -57,8 +57,8 @@ RUN git clone --depth 1 https://github.com/thu-ml/TurboDiffusion.git
 WORKDIR /opt/TurboDiffusion
 RUN git submodule update --init --recursive
 
-# Add TurboDiffusion to Python path instead of editable install
-ENV PYTHONPATH=/opt/TurboDiffusion:/opt/TurboDiffusion/turbodiffusion
+# Install TurboDiffusion (compiles custom CUDA ops)
+RUN python -m pip install . --no-build-isolation
 
 # Install SpargeAttn for SageSLA (faster attention) - skip on failure
 RUN python -m pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation || echo "SpargeAttn skipped"

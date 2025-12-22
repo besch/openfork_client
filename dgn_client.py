@@ -135,29 +135,15 @@ class DGNClient:
                 logging.warning("No compatible services found for current GPU!")
 
             logging.info("DGN configuration loaded successfully from orchestrator.")
+            
+            # Note: VRAM-based job filtering is handled server-side in the SQL function
+            # get_and_assign_next_dgn_job(). Jobs are only assigned to providers whose
+            # supported_services array (calculated at registration) contains the job's service_type.
+            # The client-side compatible_services is kept for informational logging only.
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to fetch configuration from orchestrator: {e}")
             raise
-
-    def can_accept_workflow(self, workflow_type: str) -> bool:
-        """
-        Check if this client can accept a job based on GPU VRAM compatibility.
-        
-        Args:
-            workflow_type: The workflow type to check
-            
-        Returns:
-            True if the service required for this workflow is compatible with the GPU
-        """
-        if workflow_type not in self.config:
-            return False
-        
-        service_name = self.config[workflow_type].get("service_name")
-        if not service_name:
-            return False
-            
-        return service_name in self.compatible_services
 
     def get_service_type_for_workflow(self, workflow_type: str) -> str:
         """Maps a workflow type to a service type using the loaded config."""
