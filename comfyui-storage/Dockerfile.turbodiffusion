@@ -46,7 +46,7 @@ RUN python -m pip install \
     nvidia-ml-py
 
 # Install additional dependencies for AI workflows
-RUN python -m pip install accelerate diffusers sentencepiece opencv-python
+RUN python -m pip install accelerate diffusers sentencepiece opencv-python av
 
 # Install imaginaire minimal dependencies (submodule requirements)
 RUN python -m pip install scipy scikit-image lmdb tensorboard lpips matplotlib tqdm requests
