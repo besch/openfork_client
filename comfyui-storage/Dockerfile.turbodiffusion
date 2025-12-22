@@ -28,7 +28,7 @@ RUN python -m pip install psutil ninja packaging wheel setuptools
 RUN MAX_JOBS=2 python -m pip install flash-attn --no-build-isolation || echo "flash-attn skipped"
 
 # Install TurboDiffusion dependencies manually (avoid editable install issues)
-RUN python -m pip install einops transformers accelerate diffusers sentencepiece imageio imageio-ffmpeg opencv-python
+RUN python -m pip install einops transformers accelerate diffusers sentencepiece imageio imageio-ffmpeg opencv-python loguru
 
 # Clone TurboDiffusion source
 WORKDIR /opt
