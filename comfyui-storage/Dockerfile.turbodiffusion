@@ -57,7 +57,11 @@ RUN git clone --depth 1 https://github.com/thu-ml/TurboDiffusion.git
 WORKDIR /opt/TurboDiffusion
 RUN git submodule update --init --recursive
 
-# Add TurboDiffusion to Python path instead of editable install
+# Build turbo_diffusion_ops CUDA extension (required for quantized inference)
+# This builds the custom CUDA kernels for int8 quantization and fast norms
+RUN MAX_JOBS=2 python -m pip install -e . --no-build-isolation || echo "turbo_diffusion_ops build skipped"
+
+# Add TurboDiffusion to Python path
 ENV PYTHONPATH=/opt/TurboDiffusion:/opt/TurboDiffusion/turbodiffusion
 
 # Install SpargeAttn for SageSLA (faster attention) - skip on failure
