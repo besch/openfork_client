@@ -64,12 +64,14 @@ def run_t2v_inference(job_id: str, prompt: str, resolution: str, num_steps: int,
         output_dir = OUTPUTS_DIR / job_id
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        output_file = output_dir / "generated_video.mp4"
+        
         cmd = [
             "python", "turbodiffusion/inference/wan2.1_t2v_infer.py",
             "--model", "Wan2.1-1.3B",
             "--dit_path", str(CHECKPOINTS_DIR / "TurboWan2.1-T2V-1.3B-480P-quant.pth"),
             "--vae_path", str(CHECKPOINTS_DIR / "Wan2.1_VAE.pth"),
-            "--t5_path", str(CHECKPOINTS_DIR / "models_t5_umt5-xxl-enc-bf16.pth"),
+            "--text_encoder_path", str(CHECKPOINTS_DIR / "models_t5_umt5-xxl-enc-bf16.pth"),
             "--resolution", resolution,
             "--prompt", prompt,
             "--num_samples", "1",
@@ -78,7 +80,7 @@ def run_t2v_inference(job_id: str, prompt: str, resolution: str, num_steps: int,
             "--quant_linear",
             "--attention_type", "sla",
             "--sla_topk", "0.1",
-            "--output_dir", str(output_dir),
+            "--save_path", str(output_file),
         ]
         
         logger.info(f"Running T2V command: {' '.join(cmd)}")
@@ -128,13 +130,15 @@ def run_i2v_inference(job_id: str, image_path: str, prompt: str, resolution: str
         output_dir = OUTPUTS_DIR / job_id
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        output_file = output_dir / "generated_video.mp4"
+        
         cmd = [
             "python", "turbodiffusion/inference/wan2.2_i2v_infer.py",
             "--model", "Wan2.2-A14B",
             "--low_noise_model_path", str(CHECKPOINTS_DIR / "TurboWan2.2-I2V-A14B-low-720P-quant.pth"),
             "--high_noise_model_path", str(CHECKPOINTS_DIR / "TurboWan2.2-I2V-A14B-high-720P-quant.pth"),
             "--vae_path", str(CHECKPOINTS_DIR / "Wan2.1_VAE.pth"),
-            "--t5_path", str(CHECKPOINTS_DIR / "models_t5_umt5-xxl-enc-bf16.pth"),
+            "--text_encoder_path", str(CHECKPOINTS_DIR / "models_t5_umt5-xxl-enc-bf16.pth"),
             "--resolution", resolution,
             "--adaptive_resolution",
             "--image_path", image_path,
@@ -147,7 +151,7 @@ def run_i2v_inference(job_id: str, image_path: str, prompt: str, resolution: str
             "--attention_type", "sla",
             "--sla_topk", "0.1",
             "--ode",
-            "--output_dir", str(output_dir),
+            "--save_path", str(output_file),
         ]
         
         logger.info(f"Running I2V command: {' '.join(cmd)}")
