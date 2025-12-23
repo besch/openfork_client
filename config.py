@@ -21,6 +21,15 @@ os.chdir(ROOT_DIR)
 CACHE_DIR = os.path.join(ROOT_DIR, '.cache')
 DEV_MODE = False
 
+# Headless mode detection - when running inside a cloud container (RunPod/Vast.ai),
+# Docker operations should be skipped as ComfyUI is already running in the same container.
+# Detection based on standard env vars set by cloud providers or explicitly by deploy scripts.
+HEADLESS_MODE = any([
+    os.environ.get("RUNPOD_POD_ID"),      # RunPod sets this automatically
+    os.environ.get("VAST_CONTAINERLABEL"), # Vast.ai container environment
+    os.environ.get("HEADLESS_MODE", "").lower() in ("1", "true", "yes"),  # Explicit flag
+])
+
 # --- Supabase Configuration ---
 SUPABASE_URL = "https://vmuylzvwqravkmdmcpgv.supabase.co"
 SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZtdXlsenZ3cXJhdmttZG1jcGd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIxNDM3MjAsImV4cCI6MjA2NzcxOTcyMH0.f2USQOkuKhPksSLSXhTlyl5zTstyCyYvzdiHV9HQUKw"
@@ -28,3 +37,4 @@ SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 # --- Orchestrator Configuration ---
 ORCHESTRATOR_URL_PROD = os.getenv("ORCHESTRATOR_URL_PROD", "https://www.openfork.video")
 ORCHESTRATOR_URL_DEV = os.getenv("ORCHESTRATOR_URL_DEV", "http://localhost:3000")
+

@@ -85,6 +85,31 @@ def setup_client(args):
 
     client.load_config() # Fetch config from orchestrator
 
+    # Filter compatible_services based on SELECTED_WORKFLOWS env var
+    # This allows cloud deployments to specify which workflows this client should handle
+    selected_workflows_env = os.environ.get("SELECTED_WORKFLOWS", "").strip()
+    if selected_workflows_env:
+        selected_workflows = [w.strip() for w in selected_workflows_env.split(",") if w.strip()]
+        if selected_workflows:
+            # Get the services required by the selected workflows
+            allowed_services = set()
+            for wf_id in selected_workflows:
+                if wf_id in client.config:
+                    service_name = client.config[wf_id].get("service_name")
+                    if service_name:
+                        allowed_services.add(service_name)
+                else:
+                    logging.warning(f"Unknown workflow in SELECTED_WORKFLOWS: {wf_id}")
+            
+            if allowed_services:
+                # Intersect with VRAM-compatible services
+                original_count = len(client.compatible_services)
+                client.compatible_services = client.compatible_services & allowed_services
+                logging.info(f"SELECTED_WORKFLOWS filter: {selected_workflows_env}")
+                logging.info(f"Filtered services: {original_count} -> {len(client.compatible_services)} ({', '.join(sorted(client.compatible_services))})")
+            else:
+                logging.warning("No valid services found for SELECTED_WORKFLOWS. Using all compatible services.")
+
     # Validate service argument after loading config
     if args.service != 'auto':
         available_services = list(client.docker_image_map.keys())
@@ -135,16 +160,21 @@ def cleanup(client, provider_id, service_mode):
         except Exception as e:
             logging.error(f"DGN Client: Failed to deregister from orchestrator: {e}", exc_info=True)
     
-    logging.info("DGN Client: Stopping Docker container(s).")
-    try:
-        if service_mode != 'auto':
-            docker_manager.stop_container(service_type=service_mode)
-        elif client and client.active_service_type:
-            docker_manager.stop_container(service_type=client.active_service_type)
-        else:
-            logging.info("DGN Client: No active container to stop.")
-    except Exception as e:
-        logging.error(f"DGN Client: Failed to stop Docker container: {e}", exc_info=True)
+    # Skip Docker cleanup in headless mode (container isn't managed by us)
+    from config import HEADLESS_MODE
+    if HEADLESS_MODE:
+        logging.info("DGN Client: Headless mode - skipping Docker cleanup.")
+    else:
+        logging.info("DGN Client: Stopping Docker container(s).")
+        try:
+            if service_mode != 'auto':
+                docker_manager.stop_container(service_type=service_mode)
+            elif client and client.active_service_type:
+                docker_manager.stop_container(service_type=client.active_service_type)
+            else:
+                logging.info("DGN Client: No active container to stop.")
+        except Exception as e:
+            logging.error(f"DGN Client: Failed to stop Docker container: {e}", exc_info=True)
 
 def main():
     multiprocessing.freeze_support()
@@ -171,7 +201,13 @@ def main():
         parser.error('Either --dgn-api-key OR both --access-token and --refresh-token are required')
 
     if args.service != 'auto':
-        docker_manager.run_container(service_type=args.service)
+        # In headless mode (running inside cloud container), don't manage Docker
+        # - container is already running with ComfyUI
+        from config import HEADLESS_MODE
+        if not HEADLESS_MODE:
+            docker_manager.run_container(service_type=args.service)
+        else:
+            logging.info(f"Headless mode detected - skipping Docker management. ComfyUI should be running at 127.0.0.1:8188")
     
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()

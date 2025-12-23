@@ -1,5 +1,6 @@
 import logging
 import json
+from config import HEADLESS_MODE
 from services.docker_manager import docker_manager
 from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
 
@@ -97,9 +98,12 @@ class JobListener:
                             workflow_type = job.get('workflow_type', 'image_to_video')
                             service_type = self.client.get_service_type_for_workflow(workflow_type)
                             self.client.active_service_type = service_type
-                            
-                            logging.info(f"Job requires service '{service_type}'. Starting container...")
-                            docker_manager.run_container(service_type=service_type)
+                            logging.info(f"Job requires service '{service_type}'.")
+                            if not HEADLESS_MODE:
+                                logging.info("Starting container...")
+                                docker_manager.run_container(service_type=service_type)
+                            else:
+                                logging.info("Headless mode - container already running, skipping Docker management.")
                             
                             # Check if service uses ComfyUI backend from configuration
                             service_config = self.client.services_config.get(service_type, {})
@@ -153,8 +157,10 @@ class JobListener:
                                     self.client.current_job = None
 
                             if not self.shutdown_event.is_set():
-                                logging.info(f"Job processing finished. Stopping container for service '{service_type}'...")
-                                docker_manager.stop_container(service_type=service_type)
+                                logging.info(f"Job processing finished.")
+                                if not HEADLESS_MODE:
+                                    logging.info(f"Stopping container for service '{service_type}'...")
+                                    docker_manager.stop_container(service_type=service_type)
                                 self.client.active_service_type = None
                                 self.orchestrator_service.update_provider_status(self.provider_id, 'available')
                                 logging.info("Provider status set to available. Waiting for next job...")
