@@ -121,9 +121,9 @@ class TurboDiffusionBaseProcessor(BaseJobProcessor, VideoOutputHandler):
             
             # Generate thumbnail
             thumbnail_storage_path = None
-            from utils.media_utils import extract_first_frame
+            from utils.media_utils import generate_thumbnail
             thumbnail_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
-            if extract_first_frame(local_path, thumbnail_path):
+            if generate_thumbnail(local_path, thumbnail_path, width=100):
                 thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_path, self.job_id)
                 if os.path.exists(thumbnail_path):
                     os.remove(thumbnail_path)
