@@ -117,7 +117,7 @@ class TurboDiffusionBaseProcessor(BaseJobProcessor, VideoOutputHandler):
     def _finalize_job(self, local_path: str, remote_job_id: str):
         """Upload output and update job status."""
         try:
-            video_storage_path = self.orchestrator_service.upload_video_output(local_path, self.job_id)
+            video_storage_path = self.orchestrator_service.upload_output(local_path, self.job_id, "video/mp4")
             
             # Generate thumbnail
             thumbnail_storage_path = None
