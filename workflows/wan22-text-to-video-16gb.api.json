@@ -87,13 +87,13 @@
     },
     "61": {
       "inputs": {
-        "unet_name": "wan2.2-t2v-a14b-high_noise-Q6_K.gguf"
+        "unet_name": "Wan2.2-T2V-A14B-HighNoise-Q6_K.gguf"
       },
       "class_type": "UnetLoaderGGUF"
     },
     "62": {
       "inputs": {
-        "unet_name": "wan2.2-t2v-a14b-low_noise-Q6_K.gguf"
+        "unet_name": "Wan2.2-T2V-A14B-LowNoise-Q6_K.gguf"
       },
       "class_type": "UnetLoaderGGUF"
     },
