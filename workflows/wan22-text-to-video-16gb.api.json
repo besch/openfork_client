@@ -1,0 +1,159 @@
+{
+  "prompt": {
+    "6": {
+      "inputs": {
+        "text": "A cinematic, handheld shot of two samurai in an intense sword fight on the roof of a moving train. Their swords clash, creating flying sparks. The background countryside is a blur as the train travels fast along the tracks.",
+        "clip": ["38", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "7": {
+      "inputs": {
+        "text": "blurry, low quality, jpeg artifacts, static, still image, text, watermark, title, ugly, disfigured, deformed, fused fingers, poorly drawn hands, poorly drawn face",
+        "clip": ["38", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "8": {
+      "inputs": {
+        "samples": ["58", 0],
+        "vae": ["39", 0]
+      },
+      "class_type": "VAEDecode"
+    },
+    "38": {
+      "inputs": {
+        "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        "type": "wan",
+        "device": "cpu"
+      },
+      "class_type": "CLIPLoader"
+    },
+    "39": {
+      "inputs": {
+        "vae_name": "wan_2.1_vae.safetensors"
+      },
+      "class_type": "VAELoader"
+    },
+    "54": {
+      "inputs": {
+        "shift": 8,
+        "model": ["69", 0]
+      },
+      "class_type": "ModelSamplingSD3"
+    },
+    "55": {
+      "inputs": {
+        "shift": 8,
+        "model": ["70", 0]
+      },
+      "class_type": "ModelSamplingSD3"
+    },
+    "57": {
+      "inputs": {
+        "add_noise": "enable",
+        "noise_seed": 191156116025741,
+        "steps": 6,
+        "cfg": 1,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "start_at_step": 0,
+        "end_at_step": 3,
+        "return_with_leftover_noise": "enable",
+        "model": ["54", 0],
+        "positive": ["50", 0],
+        "negative": ["50", 1],
+        "latent_image": ["50", 2]
+      },
+      "class_type": "KSamplerAdvanced"
+    },
+    "58": {
+      "inputs": {
+        "add_noise": "disable",
+        "noise_seed": 0,
+        "steps": 6,
+        "cfg": 1,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "start_at_step": 3,
+        "end_at_step": 10000,
+        "return_with_leftover_noise": "disable",
+        "model": ["55", 0],
+        "positive": ["50", 0],
+        "negative": ["50", 1],
+        "latent_image": ["57", 0]
+      },
+      "class_type": "KSamplerAdvanced"
+    },
+    "61": {
+      "inputs": {
+        "unet_name": "wan2.2-t2v-a14b-high_noise-Q6_K.gguf"
+      },
+      "class_type": "UnetLoaderGGUF"
+    },
+    "62": {
+      "inputs": {
+        "unet_name": "wan2.2-t2v-a14b-low_noise-Q6_K.gguf"
+      },
+      "class_type": "UnetLoaderGGUF"
+    },
+    "63": {
+      "inputs": {
+        "frame_rate": 16,
+        "loop_count": 0,
+        "filename_prefix": "%date:yyyy-MM-dd%/wan22_t2v_16gb_",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 19,
+        "save_metadata": true,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true,
+        "images": ["8", 0]
+      },
+      "class_type": "VHS_VideoCombine"
+    },
+    "66": {
+      "inputs": {
+        "enable_fp16_accumulation": true,
+        "model": ["61", 0]
+      },
+      "class_type": "ModelPatchTorchSettings"
+    },
+    "68": {
+      "inputs": {
+        "enable_fp16_accumulation": true,
+        "model": ["62", 0]
+      },
+      "class_type": "ModelPatchTorchSettings"
+    },
+    "69": {
+      "inputs": {
+        "strength_model": 3,
+        "lora_name": "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        "model": ["66", 0]
+      },
+      "class_type": "LoraLoaderModelOnly"
+    },
+    "70": {
+      "inputs": {
+        "strength_model": 1.5,
+        "lora_name": "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        "model": ["68", 0]
+      },
+      "class_type": "LoraLoaderModelOnly"
+    },
+    "50": {
+      "inputs": {
+        "width": 832,
+        "height": 480,
+        "length": 81,
+        "batch_size": 1,
+        "positive": ["6", 0],
+        "negative": ["7", 0],
+        "vae": ["39", 0]
+      },
+      "class_type": "WanImageToVideo"
+    }
+  }
+}

@@ -1,0 +1,97 @@
+FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+
+# Dockerfile for WAN 2.2 (16GB VRAM version)
+# Uses Q6_K GGUF quantization for higher quality generation
+# Supports both text-to-video and image-to-video workflows
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev curl git wget \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --upgrade pip
+
+# Install PyTorch with CUDA 12.1 (widely compatible with cloud GPUs)
+RUN python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Install dependencies
+RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
+
+WORKDIR /opt/ComfyUI
+
+# Clone ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+RUN python -m pip install -r requirements.txt
+
+# Clone ComfyUI Manager
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
+RUN python -m pip install GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub>0.20
+
+# Clone required custom nodes
+RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
+RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
+RUN git clone https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF
+RUN python -m pip install --upgrade gguf
+
+# Install requirements for custom nodes
+RUN python -m pip install color-matcher matplotlib huggingface_hub mss toml rich
+
+# Install additional system dependencies for OpenCV
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for ComfyUI-Manager
+RUN python -m pip install uv
+
+# Create model directories
+RUN mkdir -p /opt/ComfyUI/models/unet \
+    && mkdir -p /opt/ComfyUI/models/vae \
+    && mkdir -p /opt/ComfyUI/models/text_encoders \
+    && mkdir -p /opt/ComfyUI/models/loras
+
+# --- Download WAN 2.2 Q6_K Models for 16GB VRAM ---
+
+# Text Encoder (FP8 scaled)
+RUN wget -O /opt/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+
+# VAE
+RUN wget -O /opt/ComfyUI/models/vae/wan_2.1_vae.safetensors \
+    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+
+# UNETs - Q6_K quantization (~12GB each, higher quality than Q4_K_S)
+# T2V High Noise
+RUN wget -O /opt/ComfyUI/models/unet/wan2.2-t2v-a14b-high_noise-Q6_K.gguf \
+    "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/wan2.2-t2v-a14b-high_noise-Q6_K.gguf"
+
+# T2V Low Noise
+RUN wget -O /opt/ComfyUI/models/unet/wan2.2-t2v-a14b-low_noise-Q6_K.gguf \
+    "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/wan2.2-t2v-a14b-low_noise-Q6_K.gguf"
+
+# I2V High Noise
+RUN wget -O /opt/ComfyUI/models/unet/wan2.2-i2v-a14b-high_noise-Q6_K.gguf \
+    "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2-i2v-a14b-high_noise-Q6_K.gguf"
+
+# I2V Low Noise
+RUN wget -O /opt/ComfyUI/models/unet/wan2.2-i2v-a14b-low_noise-Q6_K.gguf \
+    "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/wan2.2-i2v-a14b-low_noise-Q6_K.gguf"
+
+# LoRAs for step distillation (same as base wan22)
+RUN wget -O /opt/ComfyUI/models/loras/Wan21_lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors \
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors"
+
+RUN wget -O /opt/ComfyUI/models/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors \
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
+
+WORKDIR /opt/ComfyUI
+CMD ["python", "main.py", "--listen"]
