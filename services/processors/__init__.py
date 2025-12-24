@@ -24,6 +24,7 @@ from .audio.stable_audio import StableAudioJobProcessor
 from .audio.foley import FoleyJobProcessor
 from .audio.vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
 from .audio.diffrhythm_cli import DiffRhythmCLIJobProcessor
+from .audio.chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProcessor
 
 # Image processors
 from .image.text_to_image import TextToImageJobProcessor
@@ -58,6 +59,8 @@ __all__ = [
     "ZImageControlNetProcessor",
     "ZImageInpaintProcessor",
     "TextGenerationJobProcessor",
+    "ChatterboxTTSJobProcessor",
+    "ChatterboxVoiceCloneJobProcessor",
 ]
 
 

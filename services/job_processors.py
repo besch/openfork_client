@@ -30,6 +30,8 @@ from services.processors import (
     VibeVoiceJobProcessor,
     VibeVoiceMultiCloneJobProcessor,
     DiffRhythmCLIJobProcessor,
+    ChatterboxTTSJobProcessor,
+    ChatterboxVoiceCloneJobProcessor,
     TextToImageJobProcessor,
     ZImageTextToImageProcessor,
     ZImageControlNetProcessor,
@@ -63,6 +65,8 @@ __all__ = [
     "ZImageControlNetProcessor",
     "ZImageInpaintProcessor",
     "TextGenerationJobProcessor",
+    "ChatterboxTTSJobProcessor",
+    "ChatterboxVoiceCloneJobProcessor",
 ]
 
 

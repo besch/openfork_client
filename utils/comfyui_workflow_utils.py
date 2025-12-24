@@ -357,6 +357,81 @@ def inject_script_and_clones_into_vibevoice_workflow(
 
     return api_graph
 
+def inject_prompt_into_chatterbox_workflow(
+    workflow_api_data: Dict, 
+    prompt: str,
+    exaggeration: float = 0.5,
+    cfg_weight: float = 0.5,
+    temperature: float = 0.8,
+    max_new_tokens: int = 2048,
+    seed: Union[int, None] = None,
+):
+    """
+    Loads the Chatterbox ComfyUI API-formatted workflow, injects the prompt
+    and generation parameters.
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Generate random seed if not provided
+    if seed is None:
+        seed = random.randint(0, 2**31 - 1)
+
+    # Find the ChatterboxTTS node and set its inputs
+    for node in api_graph.values():
+        if node["class_type"] == "ChatterboxTTS":
+            node["inputs"]["text"] = prompt
+            node["inputs"]["exaggeration"] = exaggeration
+            node["inputs"]["cfg_weight"] = cfg_weight
+            node["inputs"]["temperature"] = temperature
+            node["inputs"]["max_new_tokens"] = max_new_tokens
+            node["inputs"]["seed"] = seed
+            break
+
+    logging.info(f"Chatterbox TTS configured - Prompt: '{prompt[:50]}...', Exaggeration: {exaggeration}, CFG Weight: {cfg_weight}")
+    
+    return api_graph
+
+def inject_prompt_and_clone_into_chatterbox_workflow(
+    workflow_api_data: Dict, 
+    prompt: str,
+    audio_prompt_filename: str,
+    exaggeration: float = 0.5,
+    cfg_weight: float = 0.5,
+    temperature: float = 0.8,
+    max_new_tokens: int = 2048,
+    seed: Union[int, None] = None,
+):
+    """
+    Loads the Chatterbox voice clone ComfyUI API-formatted workflow, 
+    injects the prompt and audio prompt for voice cloning.
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Generate random seed if not provided
+    if seed is None:
+        seed = random.randint(0, 2**31 - 1)
+
+    # Find the LoadAudio node and set the audio filename
+    for node in api_graph.values():
+        if node["class_type"] == "LoadAudio":
+            node["inputs"]["audio"] = audio_prompt_filename
+            break
+
+    # Find the ChatterboxTTS node and set its inputs
+    for node in api_graph.values():
+        if node["class_type"] == "ChatterboxTTS":
+            node["inputs"]["text"] = prompt
+            node["inputs"]["exaggeration"] = exaggeration
+            node["inputs"]["cfg_weight"] = cfg_weight
+            node["inputs"]["temperature"] = temperature
+            node["inputs"]["max_new_tokens"] = max_new_tokens
+            node["inputs"]["seed"] = seed
+            break
+
+    logging.info(f"Chatterbox Voice Clone configured - Prompt: '{prompt[:50]}...', Audio: {audio_prompt_filename}")
+    
+    return api_graph
+
 def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_output_func) -> Union[str, None]:
     """Process the workflow output, upload the generated files, and return the first successful upload path."""
     logging.info(f"Processing workflow outputs for job {job_id}. Outputs received: {json.dumps(outputs, indent=2)}")
