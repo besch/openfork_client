@@ -1,0 +1,23 @@
+name: Generate Manifest
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'manifest.txt'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Generate Manifest
+        run: python generate_manifest.py
+      - name: Commit manifest
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update manifest.txt [skip ci]"
+          file_pattern: 'manifest.txt'
