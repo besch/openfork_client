@@ -1,11 +1,11 @@
 #!/bin/bash
 # OpenFork DGN Client Bootstrap Script
 # Downloads all client files from GitHub repository
-# Usage: curl -sL https://raw.githubusercontent.com/beschiak/openfork/main/client/bootstrap.sh | bash
+# Usage: curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh | bash
 
 set -e
 
-BASE_URL="https://raw.githubusercontent.com/beschiak/openfork/main/client"
+BASE_URL="https://raw.githubusercontent.com/besch/openfork_client/main"
 
 echo "=== OpenFork DGN Client Bootstrap ==="
 echo "Downloading client files from GitHub..."

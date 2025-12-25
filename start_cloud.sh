@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenFork DGN Client Cloud Startup Script
+# OpenFork DGN Client Cloud Startup Script (start_cloud.sh)
 # This script is fetched and run by cloud containers (RunPod, Vast.ai)
 # It downloads the DGN client and starts it after ComfyUI is ready
 
@@ -21,7 +21,7 @@ mkdir -p /opt/dgn-client /data/.cache /data/input
 cd /opt/dgn-client
 echo "Downloading DGN client files..."
 export INSTALL_DEPS=true
-curl -sL https://github.com/besch/openfork_client/blob/main/bootstrap.sh | bash
+curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh | bash
 
 echo "DGN client downloaded successfully"
 
