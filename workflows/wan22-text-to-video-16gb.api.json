@@ -130,7 +130,7 @@
     "69": {
       "inputs": {
         "strength_model": 3,
-        "lora_name": "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        "lora_name": "lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors",
         "model": ["66", 0]
       },
       "class_type": "LoraLoaderModelOnly"
@@ -138,7 +138,7 @@
     "70": {
       "inputs": {
         "strength_model": 1.5,
-        "lora_name": "Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors",
+        "lora_name": "lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors",
         "model": ["68", 0]
       },
       "class_type": "LoraLoaderModelOnly"

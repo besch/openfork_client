@@ -86,12 +86,12 @@ RUN wget -O /opt/ComfyUI/models/unet/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf \
 RUN wget -O /opt/ComfyUI/models/unet/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf \
     "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf"
 
-# LoRAs for step distillation (same as base wan22)
-RUN wget -O /opt/ComfyUI/models/loras/Wan21_lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors \
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors"
+# LoRAs for step distillation
+RUN wget -O /opt/ComfyUI/models/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors \
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors"
 
-RUN wget -O /opt/ComfyUI/models/loras/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors \
-    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors"
+RUN wget -O /opt/ComfyUI/models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors \
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors"
 
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
