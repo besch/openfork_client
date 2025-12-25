@@ -5,10 +5,18 @@
 
 set -e
 
+echo "========================================"
 echo "=== OpenFork DGN Worker Initialization ==="
+echo "========================================"
+echo "Script: start_cloud.sh"
+echo "Timestamp: $(date)"
+echo "Hostname: $(hostname)"
+echo "----------------------------------------"
 echo "Service: ${SERVICE_TYPE:-auto}"
 echo "Selected Workflows: ${SELECTED_WORKFLOWS:-auto}"
 echo "Orchestrator: ${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
+echo "HEADLESS_MODE: ${HEADLESS_MODE:-not set}"
+echo "========================================"
 
 # Start ComfyUI in the background
 # We assume ComfyUI is in /opt/ComfyUI as per our Dockerfiles
