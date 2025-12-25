@@ -55,6 +55,15 @@ if [ $WAITED -ge $MAX_WAIT ]; then
   echo "Warning: ComfyUI did not become ready within $MAX_WAIT seconds. Proceeding anyway..."
 fi
 
+# Save restart configuration for Remote Restart feature
+echo "Saving restart configuration..."
+cat > /opt/dgn-client/.restart-config << RESTART_CONFIG_EOF
+export DGN_CLIENT_ARGS="--dgn-api-key \"$DGN_API_KEY\" --service \"${SERVICE_TYPE:-auto}\" --accept-policy all --root-dir /opt/dgn-client --data-dir /data"
+export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
+RESTART_CONFIG_EOF
+
+chmod +x /opt/dgn-client/.restart-config
+
 # Start DGN client
 echo "Starting DGN client..."
 cd /opt/dgn-client
