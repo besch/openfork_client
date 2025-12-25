@@ -10,6 +10,16 @@ echo "Service: ${SERVICE_TYPE:-auto}"
 echo "Selected Workflows: ${SELECTED_WORKFLOWS:-auto}"
 echo "Orchestrator: ${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 
+# Start ComfyUI in the background
+# We assume ComfyUI is in /opt/ComfyUI as per our Dockerfiles
+if [ -d "/opt/ComfyUI" ]; then
+  echo "Starting ComfyUI in background..."
+  (cd /opt/ComfyUI && python main.py --listen > /var/log/comfyui.log 2>&1) &
+  echo "ComfyUI startup initiated (logging to /var/log/comfyui.log)"
+else
+  echo "Warning: /opt/ComfyUI not found. Skipping ComfyUI startup."
+fi
+
 # Install dependencies
 echo "Installing Python dependencies..."
 pip install --quiet requests python-dotenv websocket-client 2>/dev/null || true
