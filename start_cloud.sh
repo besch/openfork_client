@@ -120,6 +120,29 @@ chmod +x /opt/dgn-client/.restart-config
 echo "Starting DGN client..."
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 
+# Test that imports work before running
+echo "Testing Python imports..."
+$PYTHON_EXE -c "
+import sys
+sys.path.insert(0, '/opt/dgn-client')
+try:
+    from config import HEADLESS_MODE
+    print(f'HEADLESS_MODE = {HEADLESS_MODE}')
+    from dgn_client import DGNClient
+    print('DGNClient import successful')
+except Exception as e:
+    print(f'Import error: {e}')
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"
+
+if [ $? -ne 0 ]; then
+  echo "ERROR: Python imports failed. Check the error above."
+  exit 1
+fi
+
+echo "Imports OK. Starting client..."
 $PYTHON_EXE cli.py \
   --dgn-api-key "$DGN_API_KEY" \
   --service "${SERVICE_TYPE:-auto}" \
