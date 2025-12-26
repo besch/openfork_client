@@ -39,6 +39,36 @@ if [ "$PYTHON_EXE" = "NOT_FOUND" ]; then
   exit 1
 fi
 
+# Ensure pip is installed
+echo "Checking for pip..."
+if ! $PYTHON_EXE -m pip --version &> /dev/null; then
+  echo "pip not found, attempting to install..."
+  
+  # Try ensurepip first (built into Python 3.4+)
+  if $PYTHON_EXE -m ensurepip --upgrade 2>/dev/null; then
+    echo "pip installed via ensurepip"
+  else
+    # Fall back to get-pip.py
+    echo "ensurepip failed, downloading get-pip.py..."
+    curl -sL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+    $PYTHON_EXE /tmp/get-pip.py --quiet
+    echo "pip installed via get-pip.py"
+  fi
+fi
+
+# Verify pip works
+if $PYTHON_EXE -m pip --version; then
+  echo "pip is ready"
+else
+  echo "ERROR: Failed to install pip! Exiting."
+  exit 1
+fi
+
+# Install critical dependencies
+echo "Installing base dependencies..."
+$PYTHON_EXE -m pip install --quiet --break-system-packages requests python-dotenv websocket-client 2>/dev/null || \
+$PYTHON_EXE -m pip install --quiet requests python-dotenv websocket-client || true
+
 # Start ComfyUI in the background
 if [ -d "/opt/ComfyUI" ]; then
   echo "Starting ComfyUI in background..."
@@ -47,10 +77,6 @@ if [ -d "/opt/ComfyUI" ]; then
 else
   echo "Warning: /opt/ComfyUI not found. Pod might be LLM-only."
 fi
-
-# Install critical dependencies first
-echo "Installing base dependencies..."
-$PYTHON_EXE -m pip install --quiet requests python-dotenv websocket-client 2>/dev/null || true
 
 # Create directories
 mkdir -p /opt/dgn-client /data/.cache /data/input
