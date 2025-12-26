@@ -1,12 +1,21 @@
 #!/bin/bash
 # OpenFork DGN Client Cloud Startup Script (start_cloud.sh)
 # This script is fetched and run by cloud containers (RunPod, Vast.ai)
-# It downloads the DGN client and starts it after ComfyUI is ready
 
 set -e
 
-# Ensure python3 is available as 'python' if not already
-# This fixes "python: command not found" on some containers
+# Redirect all output to a log file AND stdout so we can see it in cloud logs
+LOG_FILE="/tmp/dgn_init.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "========================================"
+echo "=== OpenFork DGN Worker Initialization ==="
+echo "========================================"
+echo "Timestamp: $(date)"
+echo "User: $(whoami)"
+echo "Path: $PATH"
+
+# Ensure python3 is available as 'python'
 if ! command -v python &> /dev/null; then
   if command -v python3 &> /dev/null; then
     echo "Creating python symlink to python3..."
@@ -22,33 +31,26 @@ if ! command -v pip &> /dev/null; then
   fi
 fi
 
-echo "========================================"
-echo "=== OpenFork DGN Worker Initialization ==="
-echo "========================================"
-echo "Script: start_cloud.sh"
-echo "Timestamp: $(date)"
-echo "Hostname: $(hostname)"
-echo "Python: $(which python3 2>/dev/null || which python 2>/dev/null || echo 'NOT FOUND')"
-echo "----------------------------------------"
-echo "Service: ${SERVICE_TYPE:-auto}"
-echo "Selected Workflows: ${SELECTED_WORKFLOWS:-auto}"
-echo "Orchestrator: ${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
-echo "HEADLESS_MODE: ${HEADLESS_MODE:-not set}"
-echo "========================================"
+PYTHON_EXE=$(command -v python3 || command -v python || echo "NOT_FOUND")
+echo "Python Executable: $PYTHON_EXE"
 
-# Start ComfyUI in the background
-# We assume ComfyUI is in /opt/ComfyUI as per our Dockerfiles
-if [ -d "/opt/ComfyUI" ]; then
-  echo "Starting ComfyUI in background..."
-  (cd /opt/ComfyUI && python3 main.py --listen > /var/log/comfyui.log 2>&1) &
-  echo "ComfyUI startup initiated (logging to /var/log/comfyui.log)"
-else
-  echo "Warning: /opt/ComfyUI not found. Skipping ComfyUI startup."
+if [ "$PYTHON_EXE" = "NOT_FOUND" ]; then
+  echo "ERROR: Python not found! Exiting."
+  exit 1
 fi
 
-# Install dependencies
-echo "Installing Python dependencies..."
-pip3 install --quiet requests python-dotenv websocket-client 2>/dev/null || pip install --quiet requests python-dotenv websocket-client 2>/dev/null || true
+# Start ComfyUI in the background
+if [ -d "/opt/ComfyUI" ]; then
+  echo "Starting ComfyUI in background..."
+  (cd /opt/ComfyUI && $PYTHON_EXE main.py --listen > /tmp/comfyui.log 2>&1) &
+  echo "ComfyUI startup initiated (logging to /tmp/comfyui.log)"
+else
+  echo "Warning: /opt/ComfyUI not found. Pod might be LLM-only."
+fi
+
+# Install critical dependencies first
+echo "Installing base dependencies..."
+$PYTHON_EXE -m pip install --quiet requests python-dotenv websocket-client 2>/dev/null || true
 
 # Create directories
 mkdir -p /opt/dgn-client /data/.cache /data/input
@@ -57,31 +59,28 @@ mkdir -p /opt/dgn-client /data/.cache /data/input
 cd /opt/dgn-client
 echo "Downloading DGN client files..."
 export INSTALL_DEPS=true
-curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh | bash
+curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
+bash bootstrap.sh
 
 echo "DGN client downloaded successfully"
 
-# Wait for ComfyUI to be ready
-echo "Waiting for ComfyUI to be ready..."
-MAX_WAIT=120
-WAIT_INTERVAL=2
-WAITED=0
-
-while [ $WAITED -lt $MAX_WAIT ]; do
-  if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
-    echo "ComfyUI is ready!"
-    break
-  fi
-  echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
-  sleep $WAIT_INTERVAL
-  WAITED=$((WAITED + WAIT_INTERVAL))
-done
-
-if [ $WAITED -ge $MAX_WAIT ]; then
-  echo "Warning: ComfyUI did not become ready within $MAX_WAIT seconds. Proceeding anyway..."
+# Wait for ComfyUI to be ready (if it exists)
+if [ -d "/opt/ComfyUI" ]; then
+  echo "Waiting for ComfyUI to be ready..."
+  MAX_WAIT=120
+  WAITED=0
+  while [ $WAITED -lt $MAX_WAIT ]; do
+    if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
+      echo "ComfyUI is ready!"
+      break
+    fi
+    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
+    sleep 2
+    WAITED=$((WAITED + 2))
+  done
 fi
 
-# Save restart configuration for Remote Restart feature
+# Save restart configuration
 echo "Saving restart configuration..."
 cat > /opt/dgn-client/.restart-config << RESTART_CONFIG_EOF
 export DGN_CLIENT_ARGS="--dgn-api-key \"$DGN_API_KEY\" --service \"${SERVICE_TYPE:-auto}\" --accept-policy all --root-dir /opt/dgn-client --data-dir /data"
@@ -90,17 +89,13 @@ RESTART_CONFIG_EOF
 
 chmod +x /opt/dgn-client/.restart-config
 
-# Start DGN client
+# Run the client
 echo "Starting DGN client..."
-cd /opt/dgn-client
-
-# Export orchestrator URL from env var
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 
-# Run the client (use python3 for better compatibility)
-python3 cli.py \
+$PYTHON_EXE cli.py \
   --dgn-api-key "$DGN_API_KEY" \
   --service "${SERVICE_TYPE:-auto}" \
   --accept-policy all \
   --root-dir /opt/dgn-client \
-  --data-dir /data
+  --data-dir /data 2>&1 | tee -a /tmp/dgn_client.log
