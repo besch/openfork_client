@@ -65,10 +65,10 @@ else
   exit 1
 fi
 
-# Install critical dependencies (setuptools needed for distutils in Python 3.12+)
+# Install critical dependencies (setuptools for distutils, pyyaml for ComfyUI)
 echo "Installing base dependencies..."
-$PYTHON_EXE -m pip install --quiet --break-system-packages setuptools requests python-dotenv websocket-client py-cpuinfo GPUtil psutil 2>/dev/null || \
-$PYTHON_EXE -m pip install --quiet setuptools requests python-dotenv websocket-client py-cpuinfo GPUtil psutil || true
+$PYTHON_EXE -m pip install --quiet --break-system-packages setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo GPUtil psutil 2>/dev/null || \
+$PYTHON_EXE -m pip install --quiet setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo GPUtil psutil || true
 
 # Start ComfyUI in the background
 if [ -d "/opt/ComfyUI" ]; then
