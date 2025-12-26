@@ -1,7 +1,21 @@
 FROM ollama/ollama:latest
 
-# Pre-pull llama3.1:8b model during build
-# The model will be persisted via volume mount at /root/.ollama
-RUN /bin/sh -c "ollama serve & pid=\$! && sleep 5 && ollama pull llama3.1:8b && kill \$pid"
+# Install Python and other dependencies
+RUN apt-get update && apt-get install -y \
+    python3 python3-pip python3-venv curl bash \
+    && rm -rf /var/lib/apt/lists/*
 
-# Use Ollama's default entrypoint (ollama serve)
+# Install DGN client dependencies (with --break-system-packages for PEP 668)
+RUN pip3 install --break-system-packages \
+    requests python-dotenv websocket-client py-cpuinfo GPUtil psutil \
+    httpx supabase websockets ffmpeg-python
+
+# Pre-pull llama3.1:8b model during build
+RUN /bin/sh -c "ollama serve & pid=\$! && sleep 10 && ollama pull llama3.1:8b && kill \$pid"
+
+# Copy startup script
+COPY llm-start.sh /start.sh
+RUN chmod +x /start.sh
+
+# Override entrypoint to use our custom script
+ENTRYPOINT ["/start.sh"]

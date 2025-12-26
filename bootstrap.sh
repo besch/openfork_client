@@ -32,7 +32,21 @@ done < manifest.txt
 # Install Python dependencies if we're in a fresh environment
 if [ "$INSTALL_DEPS" = "true" ]; then
   echo "Installing Python dependencies..."
-  pip install --quiet -r requirements.txt 2>/dev/null || true
+  
+  # Detect Python executable
+  PYTHON_EXE=$(command -v python3 || command -v python || echo "")
+  
+  if [ -n "$PYTHON_EXE" ]; then
+    echo "Using $PYTHON_EXE to install dependencies..."
+    # Try with --break-system-packages first (for PEP 668 / Ubuntu 24+)
+    $PYTHON_EXE -m pip install --quiet --break-system-packages -r requirements.txt 2>/dev/null || \
+    $PYTHON_EXE -m pip install --quiet -r requirements.txt 2>/dev/null || \
+    echo "Warning: pip install failed with $PYTHON_EXE. Retrying with --user..."
+    $PYTHON_EXE -m pip install --quiet --user -r requirements.txt 2>/dev/null || \
+    echo "Failed to install dependencies automatically."
+  else
+    echo "Warning: Python not found, skipping dependency installation."
+  fi
 fi
 
 echo "✓ DGN client files downloaded successfully"
