@@ -5,12 +5,30 @@
 
 set -e
 
+# Ensure python3 is available as 'python' if not already
+# This fixes "python: command not found" on some containers
+if ! command -v python &> /dev/null; then
+  if command -v python3 &> /dev/null; then
+    echo "Creating python symlink to python3..."
+    ln -sf $(which python3) /usr/local/bin/python 2>/dev/null || true
+  fi
+fi
+
+# Ensure pip is available
+if ! command -v pip &> /dev/null; then
+  if command -v pip3 &> /dev/null; then
+    echo "Creating pip symlink to pip3..."
+    ln -sf $(which pip3) /usr/local/bin/pip 2>/dev/null || true
+  fi
+fi
+
 echo "========================================"
 echo "=== OpenFork DGN Worker Initialization ==="
 echo "========================================"
 echo "Script: start_cloud.sh"
 echo "Timestamp: $(date)"
 echo "Hostname: $(hostname)"
+echo "Python: $(which python3 2>/dev/null || which python 2>/dev/null || echo 'NOT FOUND')"
 echo "----------------------------------------"
 echo "Service: ${SERVICE_TYPE:-auto}"
 echo "Selected Workflows: ${SELECTED_WORKFLOWS:-auto}"
@@ -22,7 +40,7 @@ echo "========================================"
 # We assume ComfyUI is in /opt/ComfyUI as per our Dockerfiles
 if [ -d "/opt/ComfyUI" ]; then
   echo "Starting ComfyUI in background..."
-  (cd /opt/ComfyUI && python main.py --listen > /var/log/comfyui.log 2>&1) &
+  (cd /opt/ComfyUI && python3 main.py --listen > /var/log/comfyui.log 2>&1) &
   echo "ComfyUI startup initiated (logging to /var/log/comfyui.log)"
 else
   echo "Warning: /opt/ComfyUI not found. Skipping ComfyUI startup."
@@ -30,7 +48,7 @@ fi
 
 # Install dependencies
 echo "Installing Python dependencies..."
-pip install --quiet requests python-dotenv websocket-client 2>/dev/null || true
+pip3 install --quiet requests python-dotenv websocket-client 2>/dev/null || pip install --quiet requests python-dotenv websocket-client 2>/dev/null || true
 
 # Create directories
 mkdir -p /opt/dgn-client /data/.cache /data/input
@@ -79,8 +97,8 @@ cd /opt/dgn-client
 # Export orchestrator URL from env var
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 
-# Run the client
-python cli.py \
+# Run the client (use python3 for better compatibility)
+python3 cli.py \
   --dgn-api-key "$DGN_API_KEY" \
   --service "${SERVICE_TYPE:-auto}" \
   --accept-policy all \
