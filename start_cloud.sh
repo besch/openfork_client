@@ -48,9 +48,10 @@ if ! $PYTHON_EXE -m pip --version &> /dev/null; then
   if $PYTHON_EXE -m ensurepip --upgrade 2>/dev/null; then
     echo "pip installed via ensurepip"
   else
-    # Fall back to get-pip.py
+    # Fall back to get-pip.py (use --break-system-packages for PEP 668 / Ubuntu 24+)
     echo "ensurepip failed, downloading get-pip.py..."
     curl -sL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+    $PYTHON_EXE /tmp/get-pip.py --quiet --break-system-packages 2>/dev/null || \
     $PYTHON_EXE /tmp/get-pip.py --quiet
     echo "pip installed via get-pip.py"
   fi
