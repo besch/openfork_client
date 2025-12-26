@@ -110,8 +110,10 @@ class DGNClient:
                 service_name: image for service_name, image in unique_services
             }
 
-            docker_manager.set_docker_image_map(self.docker_image_map)
-            docker_manager.set_services_config(self.services_config)
+            # Only configure docker_manager if not in headless mode
+            if docker_manager:
+                docker_manager.set_docker_image_map(self.docker_image_map)
+                docker_manager.set_services_config(self.services_config)
 
             self.processor_map = self._build_processor_map()
             

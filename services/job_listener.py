@@ -183,7 +183,7 @@ class JobListener:
                     self.shutdown_event.wait(10)
         finally:
             logging.info("Shutdown event received or loop exited. Exiting auto job listening loop.")
-            if self.client.active_service_type:
+            if self.client.active_service_type and not HEADLESS_MODE:
                 logging.info(f"Ensuring container for service '{self.client.active_service_type}' is stopped.")
                 docker_manager.stop_container(service_type=self.client.active_service_type)
                 self.client.active_service_type = None
