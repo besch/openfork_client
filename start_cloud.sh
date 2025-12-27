@@ -69,6 +69,20 @@ else
   exit 1
 fi
 
+# Install ffmpeg for thumbnail generation and video duration detection
+echo "Installing ffmpeg..."
+apt-get update -qq 2>/dev/null || true
+apt-get install -y -qq ffmpeg 2>/dev/null || \
+  (echo "apt-get failed, trying alternative..." && \
+   apt-get install -y ffmpeg 2>&1 || echo "Warning: ffmpeg installation failed")
+
+# Verify ffmpeg installed
+if command -v ffmpeg &> /dev/null; then
+  echo "ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
+else
+  echo "WARNING: ffmpeg not available. Thumbnails and duration detection will fail."
+fi
+
 # Install critical dependencies
 # - setuptools: for distutils compatibility
 # - pyyaml: for ComfyUI config files
