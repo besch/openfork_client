@@ -25,33 +25,57 @@ class OutputHandlerMixin:
     """Base mixin providing common output handling utilities."""
 
     def _copy_file_from_container(self, filename: str, subfolder: str) -> Union[str, None]:
-        """Copies a file from the active container to a temporary location on the host."""
-        if not self.client.active_service_type:
-            logging.error("Cannot copy from container: no active service type is set.")
-            return None
-
+        """
+        Copies a file from the ComfyUI output directory to a temporary location.
+        
+        In headless mode (cloud deployment), files are on the local filesystem.
+        In Docker mode, files need to be copied from the container.
+        """
+        from config import HEADLESS_MODE
+        import shutil
+        
         safe_filename = os.path.basename(filename)
-        source_in_container = os.path.join("/opt/ComfyUI/output", subfolder, safe_filename).replace("\\", "/")
-
         os.makedirs(self.cache_dir, exist_ok=True)
         temp_filename = f"{self.job_id}_{safe_filename}"
         dest_on_host = os.path.join(self.cache_dir, temp_filename)
+        
+        # Build source path - same structure whether local or in container
+        source_path = os.path.join("/opt/ComfyUI/output", subfolder, safe_filename).replace("\\", "/")
 
-        try:
-            docker_manager.copy_file_from_container(
-                service_type=self.client.active_service_type,
-                source_in_container=source_in_container,
-                dest_on_host=dest_on_host,
-                shutdown_event=self.shutdown_event,
-            )
-            if os.path.exists(dest_on_host):
-                logging.info(f"Successfully copied file to temporary host path: {dest_on_host}")
-                return dest_on_host
-            else:
-                raise RuntimeError("docker cp command finished but destination file does not exist.")
-        except Exception as e:
-            logging.error(f"Failed to copy file from container: {e}", exc_info=True)
-            return None
+        if HEADLESS_MODE:
+            # Headless mode: files are directly on the local filesystem
+            try:
+                if os.path.exists(source_path):
+                    shutil.copy2(source_path, dest_on_host)
+                    logging.info(f"Headless mode: copied file from {source_path} to {dest_on_host}")
+                    return dest_on_host
+                else:
+                    logging.error(f"Headless mode: source file not found at {source_path}")
+                    return None
+            except Exception as e:
+                logging.error(f"Headless mode: failed to copy file: {e}", exc_info=True)
+                return None
+        else:
+            # Docker mode: copy file from container
+            if not self.client.active_service_type:
+                logging.error("Cannot copy from container: no active service type is set.")
+                return None
+
+            try:
+                docker_manager.copy_file_from_container(
+                    service_type=self.client.active_service_type,
+                    source_in_container=source_path,
+                    dest_on_host=dest_on_host,
+                    shutdown_event=self.shutdown_event,
+                )
+                if os.path.exists(dest_on_host):
+                    logging.info(f"Successfully copied file to temporary host path: {dest_on_host}")
+                    return dest_on_host
+                else:
+                    raise RuntimeError("docker cp command finished but destination file does not exist.")
+            except Exception as e:
+                logging.error(f"Failed to copy file from container: {e}", exc_info=True)
+                return None
 
 
 class VideoOutputHandler(OutputHandlerMixin):
@@ -116,7 +140,11 @@ class AudioOutputHandler(OutputHandlerMixin):
 
         if not audio_info and scan_directory:
             logging.info(f"Audio not found in workflow outputs for job {self.job_id}, scanning output directory...")
-            if self.client.active_service_type:
+            from config import HEADLESS_MODE
+            if HEADLESS_MODE:
+                output_dir = "/opt/ComfyUI/output"
+                audio_info = find_audio_file_in_directory(output_dir, self.job_id)
+            elif self.client.active_service_type:
                 output_dir = docker_manager.get_output_dir_path(self.client.active_service_type)
                 audio_info = find_audio_file_in_directory(output_dir, self.job_id)
 
