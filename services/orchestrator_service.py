@@ -372,17 +372,24 @@ class OrchestratorService:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
         
-        user_id = self._get_user_id_from_token()
-        if not user_id:
-            logging.error("Could not extract user_id from token. Cannot register.")
-            return None
+        # In API key mode, the server will get user_id from the API key
+        # In OAuth mode, we extract it from the JWT token
+        user_id = None
+        if not self.use_api_key:
+            user_id = self._get_user_id_from_token()
+            if not user_id:
+                logging.error("Could not extract user_id from token. Cannot register.")
+                return None
         
         payload = {
             **hardware_profile,
-            "user_id": user_id,
             "service_type": service_type,
             "supported_services": supported_services or []
         }
+        
+        # Only include user_id if we have it (OAuth mode)
+        if user_id:
+            payload["user_id"] = user_id
 
         logging.info(f"Registering with profile: {payload}")
         try:
