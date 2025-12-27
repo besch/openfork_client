@@ -15,28 +15,32 @@ echo "Timestamp: $(date)"
 echo "User: $(whoami)"
 echo "Path: $PATH"
 
-# Ensure python3 is available as 'python'
-if ! command -v python &> /dev/null; then
-  if command -v python3 &> /dev/null; then
-    echo "Creating python symlink to python3..."
-    ln -sf $(which python3) /usr/local/bin/python 2>/dev/null || true
-  fi
+# Python detection priority:
+# 1. /usr/bin/python (Docker images symlink this to Python 3.11 with PyTorch)
+# 2. python (general fallback)
+# 3. python3 (system Python, may not have PyTorch)
+if [ -x "/usr/bin/python" ]; then
+  PYTHON_EXE="/usr/bin/python"
+elif command -v python &> /dev/null; then
+  PYTHON_EXE=$(command -v python)
+elif command -v python3 &> /dev/null; then
+  PYTHON_EXE=$(command -v python3)
+else
+  PYTHON_EXE="NOT_FOUND"
 fi
 
-# Ensure pip is available
-if ! command -v pip &> /dev/null; then
-  if command -v pip3 &> /dev/null; then
-    echo "Creating pip symlink to pip3..."
-    ln -sf $(which pip3) /usr/local/bin/pip 2>/dev/null || true
-  fi
-fi
-
-PYTHON_EXE=$(command -v python3 || command -v python || echo "NOT_FOUND")
 echo "Python Executable: $PYTHON_EXE"
+$PYTHON_EXE --version 2>&1 || true
 
 if [ "$PYTHON_EXE" = "NOT_FOUND" ]; then
   echo "ERROR: Python not found! Exiting."
   exit 1
+fi
+
+# Verify PyTorch is available (critical for ComfyUI)
+if ! $PYTHON_EXE -c "import torch" 2>/dev/null; then
+  echo "WARNING: PyTorch not found in $PYTHON_EXE"
+  echo "ComfyUI will likely fail to start. Check Docker image installation."
 fi
 
 # Ensure pip is installed
