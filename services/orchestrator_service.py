@@ -390,6 +390,29 @@ class OrchestratorService:
         # Only include user_id if we have it (OAuth mode)
         if user_id:
             payload["user_id"] = user_id
+        
+        # Detect cloud environment and include cloud instance info
+        # This allows the orchestrator to correlate providers with cloud deployments
+        cloud_instance_id = None
+        cloud_provider = None
+        
+        # Vast.ai detection
+        vast_container_id = os.environ.get("CONTAINER_ID") or os.environ.get("VAST_CONTAINERLABEL")
+        if vast_container_id:
+            # CONTAINER_ID is the numeric ID, VAST_CONTAINERLABEL is like "C.12345"
+            cloud_instance_id = vast_container_id.replace("C.", "") if vast_container_id.startswith("C.") else vast_container_id
+            cloud_provider = "vast.ai"
+        
+        # RunPod detection
+        runpod_pod_id = os.environ.get("RUNPOD_POD_ID")
+        if runpod_pod_id:
+            cloud_instance_id = runpod_pod_id
+            cloud_provider = "runpod"
+        
+        if cloud_instance_id:
+            payload["cloud_instance_id"] = cloud_instance_id
+            payload["cloud_provider"] = cloud_provider
+            logging.info(f"Cloud environment detected: {cloud_provider} instance {cloud_instance_id}")
 
         logging.info(f"Registering with profile: {payload}")
         try:

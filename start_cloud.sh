@@ -65,10 +65,20 @@ else
   exit 1
 fi
 
-# Install critical dependencies (setuptools for distutils, pyyaml for ComfyUI)
+# Install critical dependencies
+# - setuptools: for distutils compatibility
+# - pyyaml: for ComfyUI config files
+# - transformers, Pillow, typing_extensions: ComfyUI requires these
+# - Other deps: for DGN client operation
 echo "Installing base dependencies..."
-$PYTHON_EXE -m pip install --quiet --break-system-packages setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo GPUtil psutil 2>/dev/null || \
-$PYTHON_EXE -m pip install --quiet setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo GPUtil psutil || true
+$PYTHON_EXE -m pip install --quiet --break-system-packages \
+  setuptools pyyaml requests python-dotenv websocket-client \
+  py-cpuinfo GPUtil psutil transformers Pillow typing_extensions \
+  aiohttp einops safetensors scipy tqdm 2>/dev/null || \
+$PYTHON_EXE -m pip install --quiet \
+  setuptools pyyaml requests python-dotenv websocket-client \
+  py-cpuinfo GPUtil psutil transformers Pillow typing_extensions \
+  aiohttp einops safetensors scipy tqdm || true
 
 # Start ComfyUI in the background
 if [ -d "/opt/ComfyUI" ]; then
