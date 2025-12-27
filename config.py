@@ -23,10 +23,20 @@ DEV_MODE = False
 
 # Headless mode detection - when running inside a cloud container (RunPod/Vast.ai),
 # Docker operations should be skipped as ComfyUI is already running in the same container.
-# Detection based on standard env vars set by cloud providers or explicitly by deploy scripts.
+# Detection based on:
+# 1. Environment vars set by cloud providers or deploy scripts
+# 2. File markers created by cloud providers (Vast.ai creates ~/.vast_containerlabel)
+def _is_vast_container():
+    """Check if running inside a Vast.ai container by looking for marker files."""
+    return (
+        os.path.exists(os.path.expanduser("~/.vast_containerlabel")) or
+        os.path.exists(os.path.expanduser("~/.vast_api_key"))
+    )
+
 HEADLESS_MODE = any([
     os.environ.get("RUNPOD_POD_ID"),      # RunPod sets this automatically
-    os.environ.get("VAST_CONTAINERLABEL"), # Vast.ai container environment
+    os.environ.get("VAST_CONTAINERLABEL"), # Vast.ai container environment (via env var)
+    _is_vast_container(),                  # Vast.ai container (via file detection)
     os.environ.get("HEADLESS_MODE", "").lower() in ("1", "true", "yes"),  # Explicit flag
 ])
 
