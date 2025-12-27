@@ -234,3 +234,7 @@ def main():
         cleanup(client, provider_id, args.service)
 
     logging.info("Main function completed.")
+
+
+if __name__ == "__main__":
+    main()
