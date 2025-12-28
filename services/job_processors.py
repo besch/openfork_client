@@ -36,6 +36,8 @@ from services.processors import (
     ZImageTextToImageProcessor,
     ZImageControlNetProcessor,
     ZImageInpaintProcessor,
+    QwenImageEditProcessor,
+    QwenImageInpaintProcessor,
     TextGenerationJobProcessor,
 )
 
@@ -64,6 +66,8 @@ __all__ = [
     "ZImageTextToImageProcessor",
     "ZImageControlNetProcessor",
     "ZImageInpaintProcessor",
+    "QwenImageEditProcessor",
+    "QwenImageInpaintProcessor",
     "TextGenerationJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",

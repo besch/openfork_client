@@ -38,7 +38,7 @@ RUN python -m pip install -r requirements.txt
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
 RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
 
-# Install custom nodes
+# Install custom nodes - GGUF support is essential for 8GB version
 RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
 RUN git clone https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF
 RUN python -m pip install --upgrade gguf
@@ -48,12 +48,12 @@ RUN python -m pip install -r /opt/ComfyUI/custom_nodes/was-node-suite-comfyui/re
 # Copy user configurations and custom nodes
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
-# --- Download Models for Qwen-Image-Edit-2511 Workflow (FP8 12GB version) ---
-RUN mkdir -p /opt/ComfyUI/models/text_encoders /opt/ComfyUI/models/diffusion_models /opt/ComfyUI/models/vae /opt/ComfyUI/models/loras
+# --- Download Models for Qwen-Image-Edit-2511 8GB GGUF version ---
+RUN mkdir -p /opt/ComfyUI/models/text_encoders /opt/ComfyUI/models/unet /opt/ComfyUI/models/vae /opt/ComfyUI/models/loras
 
-# FP8 diffusion model for Qwen-Image-Edit-2511 (12GB VRAM)
-RUN wget -O /opt/ComfyUI/models/diffusion_models/qwen_image_edit_fp8_e4m3fn.safetensors \
-    https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_fp8_e4m3fn.safetensors
+# GGUF quantized model for Qwen-Image-Edit-2511 (Q4_K_S fits in 8GB VRAM)
+RUN wget -O /opt/ComfyUI/models/unet/Qwen-Image-Edit-2511-Q4_K_S.gguf \
+    https://huggingface.co/QuantStack/Qwen-Image-Edit-2511-GGUF/resolve/main/Qwen-Image-Edit-2511-Q4_K_S.gguf
 
 # Text encoder (Qwen 2.5 VL 7B FP8)
 RUN wget -O /opt/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
