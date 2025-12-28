@@ -45,9 +45,6 @@ RUN python -m pip install --upgrade gguf
 RUN git clone https://github.com/WASasquatch/was-node-suite-comfyui.git /opt/ComfyUI/custom_nodes/was-node-suite-comfyui
 RUN python -m pip install -r /opt/ComfyUI/custom_nodes/was-node-suite-comfyui/requirements.txt
 
-# Copy user configurations and custom nodes
-COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
-
 # --- Download Models for Qwen-Image-Edit-2511 Workflow (FP8 12GB version) ---
 RUN mkdir -p /opt/ComfyUI/models/text_encoders /opt/ComfyUI/models/diffusion_models /opt/ComfyUI/models/vae /opt/ComfyUI/models/loras
 
