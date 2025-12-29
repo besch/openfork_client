@@ -8,6 +8,7 @@ import logging
 import os
 import base64
 import uuid
+import copy
 
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import ImageOutputHandler
@@ -106,7 +107,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
 
     def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength):
         """Inject prompt and image into the editing workflow."""
-        wf = workflow_data.copy()
+        wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
         # Update prompt in CLIPTextEncode node
         for node_id, node in wf.items():
@@ -248,7 +249,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
 
     def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength):
         """Inject prompt and images into the inpainting workflow."""
-        wf = workflow_data.copy()
+        wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
         image_node_count = 0
         for node_id, node in wf.items():
@@ -324,7 +325,7 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
 
     def _inject_t2i_workflow(self, workflow_data, prompt, width, height):
         """Inject prompt and dimensions into the text-to-image workflow."""
-        wf = workflow_data.copy()
+        wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
         for node_id, node in wf.items():
             if node.get("class_type") == "CLIPTextEncode":
