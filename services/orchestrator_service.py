@@ -184,6 +184,70 @@ class OrchestratorService:
             logging.error(f"Failed to decode JSON from get_next_job response: {response.text}")
             return None
 
+    def peek_available_jobs(self, provider_id: str, accept_policy: str, allowed_ids: list[str], limit: int = 10) -> list[Dict]:
+        """
+        Peek at available jobs without reserving any.
+        
+        Used for Docker image pre-fetching - allows the client to see what jobs
+        are available and start downloading required images in the background.
+        
+        Args:
+            provider_id: The provider's ID
+            accept_policy: Job acceptance policy ('all', 'mine', 'project', 'users')
+            allowed_ids: List of allowed IDs for project/users policies
+            limit: Maximum number of jobs to return
+            
+        Returns:
+            List of job dictionaries (without reserving them)
+        """
+        try:
+            base_url = f"{self.orchestrator_url}/api/dgn/jobs/peek"
+            params = {
+                "ts": int(time.time()),
+                "providerId": provider_id,
+                "acceptPolicy": accept_policy,
+                "limit": limit,
+            }
+
+            if accept_policy == 'mine':
+                user_id = self._get_user_id_from_token()
+                if not user_id:
+                    logging.error("Could not get user ID for 'own' policy. Aborting job peek.")
+                    return []
+                params["userId"] = user_id
+            
+            if (accept_policy == 'project' or accept_policy == 'users') and allowed_ids:
+                params["allowedIds"] = ",".join(allowed_ids)
+
+            response = self._make_request('get', base_url, params=params)
+            
+            # Check for provider expiration (404 with provider_not_found error)
+            if response.status_code == 404:
+                try:
+                    error_data = response.json()
+                    if error_data.get("error") == "provider_not_found":
+                        raise ProviderNotFoundError("Provider registration has expired")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            
+            response.raise_for_status()
+            if not response.content:
+                return []
+            
+            result = response.json()
+            # Handle both array and object with 'jobs' key responses
+            if isinstance(result, list):
+                return result
+            return result.get('jobs', [])
+        except ProviderNotFoundError:
+            raise  # Re-raise to be handled by caller
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error peeking at available jobs: {e}")
+            return []
+        except json.JSONDecodeError:
+            logging.error(f"Failed to decode JSON from peek_available_jobs response: {response.text}")
+            return []
+
 
     def get_job(self, job_id: str) -> Union[Dict, None]:
         """Get a job by its ID. Returns a fabricated 'cancelled' status if the job is not found (404)."""

@@ -7,6 +7,7 @@ import json
 from services.orchestrator_service import OrchestratorService, TokenExpiredError
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
+from services.docker_download_manager import DockerDownloadManager
 from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display
 import services.job_processors as job_processors_module
 
@@ -50,6 +51,9 @@ class DGNClient:
         self.services_config = {}
         self.available_vram = get_available_vram()
         self.compatible_services = set()
+        
+        # Initialize download manager for Docker image pre-fetching (only when not headless)
+        self.download_manager = DockerDownloadManager(docker_manager) if docker_manager else None
 
         if self.accept_policy == "mine":
             user_id = self.orchestrator_service._get_user_id_from_token()
