@@ -131,7 +131,8 @@ def setup_client(args):
     provider_id = client.orchestrator_service.register_with_orchestrator(
         service_type=args.service,
         supported_services=list(client.compatible_services),
-        cached_images=cached_images
+        cached_images=cached_images,
+        accept_policy=client.accept_policy
     )
     if not provider_id:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")

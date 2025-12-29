@@ -435,7 +435,7 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self, service_type: str, supported_services: list = None, cached_images: list = None) -> Union[str, None]:
+    def register_with_orchestrator(self, service_type: str, supported_services: list = None, cached_images: list = None, accept_policy: str = "all") -> Union[str, None]:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
         
@@ -452,7 +452,8 @@ class OrchestratorService:
             **hardware_profile,
             "service_type": service_type,
             "supported_services": supported_services or [],
-            "cached_images": cached_images or []  # For smart job assignment
+            "cached_images": cached_images or [],  # For smart job assignment
+            "accept_policy": accept_policy,  # Job acceptance policy
         }
         
         # Only include user_id if we have it (OAuth mode)
