@@ -29,18 +29,23 @@ class DockerDownloadManager:
     - Non-blocking: downloads run in daemon threads
     - Deduplication: won't start duplicate downloads for same image
     - Graceful shutdown: daemon threads don't block process exit
+    - Reports completed downloads to server for smart job assignment
     """
     
     MAX_CONCURRENT_DOWNLOADS = 1
     
-    def __init__(self, docker_manager):
+    def __init__(self, docker_manager, orchestrator_service=None, provider_id=None):
         """
         Initialize the download manager.
         
         Args:
             docker_manager: The DockerProdManager instance for Docker operations
+            orchestrator_service: Optional OrchestratorService for reporting cached images
+            provider_id: Optional provider ID for server-side tracking
         """
         self.docker_manager = docker_manager
+        self.orchestrator_service = orchestrator_service
+        self.provider_id = provider_id
         self._lock = threading.Lock()
         self._active_downloads: Set[str] = set()  # service_types currently downloading
         self._download_queue: list[str] = []  # service_types waiting to download
@@ -152,6 +157,10 @@ class DockerDownloadManager:
             with self._lock:
                 self._download_status[service_type] = DownloadStatus.COMPLETED
                 logging.info(f"Background download completed for {service_type}")
+            
+            # Report newly cached image to server for smart job assignment
+            # This doesn't affect credits - credits are based on processing time, not caching
+            self._report_cached_image(service_type)
                 
         except Exception as e:
             logging.error(f"Background download failed for {service_type}: {e}")
@@ -160,6 +169,22 @@ class DockerDownloadManager:
         finally:
             # Clean up and start next queued download
             self._finish_download(service_type)
+    
+    def _report_cached_image(self, service_type: str):
+        """Report a newly cached image to the server for smart job assignment."""
+        if not self.orchestrator_service or not self.provider_id:
+            return
+        
+        try:
+            self.orchestrator_service.report_cached_images(
+                provider_id=self.provider_id,
+                cached_images=[service_type],
+                mode="add"
+            )
+            logging.info(f"Reported cached image '{service_type}' to server")
+        except Exception as e:
+            # Non-critical - don't fail if reporting fails
+            logging.warning(f"Failed to report cached image to server: {e}")
     
     def _finish_download(self, service_type: str):
         """Clean up after a download finishes and start the next queued download."""
@@ -188,6 +213,26 @@ class DockerDownloadManager:
                 service: status.value 
                 for service, status in self._download_status.items()
             }
+    
+    def get_cached_service_types(self, all_service_types: list[str]) -> list[str]:
+        """
+        Get list of service types that have their Docker images cached locally.
+        
+        Args:
+            all_service_types: List of all known service types to check
+            
+        Returns:
+            List of service types with locally cached images
+        """
+        if not self.docker_manager:
+            return []
+        
+        cached = []
+        for service_type in all_service_types:
+            if self.has_image(service_type):
+                cached.append(service_type)
+        
+        return cached
     
     def shutdown(self):
         """

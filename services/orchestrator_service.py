@@ -432,7 +432,7 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self, service_type: str, supported_services: list = None) -> Union[str, None]:
+    def register_with_orchestrator(self, service_type: str, supported_services: list = None, cached_images: list = None) -> Union[str, None]:
         """Register the client with the orchestrator."""
         hardware_profile = get_hardware_profile()
         
@@ -448,7 +448,8 @@ class OrchestratorService:
         payload = {
             **hardware_profile,
             "service_type": service_type,
-            "supported_services": supported_services or []
+            "supported_services": supported_services or [],
+            "cached_images": cached_images or []  # For smart job assignment
         }
         
         # Only include user_id if we have it (OAuth mode)
@@ -581,5 +582,37 @@ class OrchestratorService:
             if e.response is not None:
                 logging.error(f"Response content: {e.response.text}")
             return None
+
+    def report_cached_images(self, provider_id: str, cached_images: list[str], mode: str = "replace") -> bool:
+        """
+        Report cached Docker images to the server for smart job assignment.
+        
+        This doesn't affect credits - credits are calculated based on processing time
+        and VRAM, not image caching. This optimization just helps route jobs to
+        providers that can process them immediately.
+        
+        Args:
+            provider_id: The provider's ID
+            cached_images: List of service types with cached images
+            mode: 'replace' to overwrite, 'add' to append new images
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            response = self._make_request(
+                'post',
+                f"{self.orchestrator_url}/api/dgn/provider-cached-images",
+                json={
+                    "providerId": provider_id,
+                    "cached_images": cached_images,
+                    "mode": mode
+                }
+            )
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"Failed to report cached images: {e}")
+            return False
 
 

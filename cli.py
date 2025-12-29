@@ -117,12 +117,29 @@ def setup_client(args):
             logging.error(f"Invalid service '{args.service}'. Available services from config: {', '.join(available_services)}")
             sys.exit(1)
 
+    # Scan for cached Docker images before registration (for smart job assignment)
+    # This doesn't affect credits - just helps route jobs to providers with cached images
+    cached_images = []
+    if client.download_manager and client.services_config:
+        all_service_types = list(client.services_config.keys())
+        cached_images = client.download_manager.get_cached_service_types(all_service_types)
+        if cached_images:
+            logging.info(f"Found {len(cached_images)} cached Docker images: {', '.join(cached_images)}")
+        else:
+            logging.info("No cached Docker images found")
+
     provider_id = client.orchestrator_service.register_with_orchestrator(
         service_type=args.service,
-        supported_services=list(client.compatible_services)
+        supported_services=list(client.compatible_services),
+        cached_images=cached_images
     )
     if not provider_id:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
+    
+    # Update download manager with provider_id for reporting newly cached images
+    if client.download_manager:
+        client.download_manager.orchestrator_service = client.orchestrator_service
+        client.download_manager.provider_id = provider_id
     
     return client, provider_id
 
