@@ -48,9 +48,10 @@ RUN python -m pip install -r /opt/ComfyUI/custom_nodes/was-node-suite-comfyui/re
 # --- Download Models for Qwen-Image-Edit-2511 8GB GGUF version ---
 RUN mkdir -p /opt/ComfyUI/models/text_encoders /opt/ComfyUI/models/unet /opt/ComfyUI/models/vae /opt/ComfyUI/models/loras
 
-# GGUF quantized model for Qwen-Image-Edit-2511 (Q4_K_S fits in 8GB VRAM)
-RUN wget -O /opt/ComfyUI/models/unet/Qwen-Image-Edit-2511-Q4_K_S.gguf \
-    https://huggingface.co/QuantStack/Qwen-Image-Edit-2511-GGUF/resolve/main/Qwen-Image-Edit-2511-Q4_K_S.gguf
+# GGUF quantized model for Qwen-Image-Edit-2511 (Q4_K_M fits in 8GB VRAM)
+# Using unsloth public repository (QuantStack requires authentication)
+RUN wget -O /opt/ComfyUI/models/unet/qwen-image-edit-2511-Q4_K_M.gguf \
+    https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF/resolve/main/qwen-image-edit-2511-Q4_K_M.gguf
 
 # Text encoder (Qwen 2.5 VL 7B FP8)
 RUN wget -O /opt/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
