@@ -96,28 +96,5 @@ class HunyuanImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             storage_path=video_storage_path,
             thumbnail_storage_path=thumbnail_storage_path,
             duration_seconds=duration,
+            prompt=self.positive_prompt,
         )
-
-        workflow_config = self.job.get("workflow", {})
-        self._maybe_submit_upscale_job(video_storage_path, workflow_config)
-
-    def _maybe_submit_upscale_job(self, video_storage_path: str, workflow_config: dict):
-        """Submit upscale job if enabled in config."""
-        if workflow_config.get("upscale_enabled"):
-            logging.info(f"Upscale enabled for job {self.job_id}. Submitting upscale job.")
-            upscale_params = workflow_config.get("upscale_params", {})
-
-            submit_body = {
-                "sceneId": self.job.get("scene_id"),
-                "branchId": self.job.get("branch_id"),
-                "model": "esrgan-upscaler",
-                "prompt": "Upscaling video",
-                "input_storage_path": video_storage_path,
-                "upscale_params": upscale_params,
-            }
-
-            new_job_id = self.orchestrator_service.submit_job(submit_body)
-            if new_job_id:
-                logging.info(f"Successfully submitted upscale job: {new_job_id}")
-            else:
-                logging.error("Failed to submit upscale job.")
