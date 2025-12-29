@@ -29,7 +29,7 @@ from .audio.chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJob
 # Image processors
 from .image.text_to_image import TextToImageJobProcessor
 from .image.zimage import ZImageTextToImageProcessor, ZImageControlNetProcessor, ZImageInpaintProcessor
-from .image.qwen import QwenImageEditProcessor, QwenImageInpaintProcessor
+from .image.qwen import QwenImageEditProcessor, QwenImageInpaintProcessor, QwenImageT2IProcessor
 
 # Text processors
 from .text.text_generation import TextGenerationJobProcessor
@@ -61,6 +61,7 @@ __all__ = [
     "ZImageInpaintProcessor",
     "QwenImageEditProcessor",
     "QwenImageInpaintProcessor",
+    "QwenImageT2IProcessor",
     "TextGenerationJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",
