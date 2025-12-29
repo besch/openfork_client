@@ -2,7 +2,7 @@
 
 from .text_to_image import TextToImageJobProcessor
 from .zimage import ZImageTextToImageProcessor, ZImageControlNetProcessor, ZImageInpaintProcessor
-from .qwen import QwenImageEditProcessor, QwenImageInpaintProcessor
+from .qwen import QwenImageEditProcessor, QwenImageInpaintProcessor, QwenImageT2IProcessor
 
 __all__ = [
     "TextToImageJobProcessor",
@@ -11,5 +11,6 @@ __all__ = [
     "ZImageInpaintProcessor",
     "QwenImageEditProcessor",
     "QwenImageInpaintProcessor",
+    "QwenImageT2IProcessor",
 ]
 

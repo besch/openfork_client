@@ -38,6 +38,7 @@ from services.processors import (
     ZImageInpaintProcessor,
     QwenImageEditProcessor,
     QwenImageInpaintProcessor,
+    QwenImageT2IProcessor,
     TextGenerationJobProcessor,
 )
 
@@ -68,6 +69,7 @@ __all__ = [
     "ZImageInpaintProcessor",
     "QwenImageEditProcessor",
     "QwenImageInpaintProcessor",
+    "QwenImageT2IProcessor",
     "TextGenerationJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",

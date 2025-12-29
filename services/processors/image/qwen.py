@@ -265,3 +265,75 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
                 node["inputs"]["denoise"] = denoise_strength
         
         return wf
+
+
+class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
+    """Processor for Qwen text-to-image generation."""
+
+    def process(self):
+        if not self.job:
+            self._fail_job("Job object is None for QwenImageT2IProcessor. Cannot proceed.")
+            return
+
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        inputs = self.job.get("inputs", {})
+        aspect_ratio = inputs.get("aspect_ratio", "1:1")
+        
+        # Calculate dimensions based on aspect ratio
+        width, height = self._get_dimensions(aspect_ratio)
+
+        # Inject prompt and dimensions into workflow
+        wf_ready = self._inject_t2i_workflow(
+            workflow_data,
+            self.positive_prompt,
+            width,
+            height,
+        )
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        image_storage_path = self.handle_image_output(outputs)
+        if not image_storage_path:
+            return
+
+        self.orchestrator_service.update_job_status(
+            self.job_id,
+            "completed",
+            storage_path=image_storage_path,
+            thumbnail_storage_path=image_storage_path,
+            prompt=self.positive_prompt,
+        )
+
+    def _get_dimensions(self, aspect_ratio):
+        """Calculate width and height based on aspect ratio."""
+        ratio_map = {
+            "1:1": (1024, 1024),
+            "16:9": (1360, 768),
+            "9:16": (768, 1360),
+            "4:3": (1152, 864),
+            "3:4": (864, 1152),
+            "3:2": (1216, 832),
+            "2:3": (832, 1216),
+        }
+        return ratio_map.get(aspect_ratio, (1024, 1024))
+
+    def _inject_t2i_workflow(self, workflow_data, prompt, width, height):
+        """Inject prompt and dimensions into the text-to-image workflow."""
+        wf = workflow_data.copy()
+        
+        for node_id, node in wf.items():
+            if node.get("class_type") == "CLIPTextEncode":
+                # Only update positive prompt (not negative/empty one)
+                if node["inputs"].get("text") not in ["", None]:
+                    node["inputs"]["text"] = prompt
+            elif node.get("class_type") == "EmptySD3LatentImage":
+                node["inputs"]["width"] = width
+                node["inputs"]["height"] = height
+        
+        return wf
+
