@@ -60,9 +60,9 @@ RUN wget -O /opt/ComfyUI/models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetens
 RUN wget -O /opt/ComfyUI/models/vae/qwen_image_vae.safetensors \
     https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors
 
-# Lightning LoRA for 4-step acceleration (optional, for faster generation)
-RUN wget -O /opt/ComfyUI/models/loras/Qwen-Image-Lightning-4steps-V1.0.safetensors \
-    https://huggingface.co/Qwen/Qwen-Image-Lightning-4steps/resolve/main/Qwen-Image-Lightning-4steps-V1.0.safetensors
+# Lightning LoRA for 8-step acceleration (from public lightx2v repository)
+RUN wget -O /opt/ComfyUI/models/loras/Qwen-Image-Lightning-8steps-V1.1.safetensors \
+    https://huggingface.co/lightx2v/Qwen-Image-Lightning/resolve/main/Qwen-Image-Lightning-8steps-V1.1.safetensors
 
 # Install additional system dependencies for OpenCV
 RUN apt-get update && apt-get install -y \
