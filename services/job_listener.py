@@ -11,6 +11,32 @@ class JobListener:
         self.provider_id = provider_id
         self.shutdown_event = shutdown_event
 
+    def _process_job_safely(self, job):
+        """
+        Process a job with proper error handling.
+        
+        Returns True if processing completed (success or handled failure),
+        False if a critical auth error occurred that should stop the listener.
+        """
+        try:
+            processor = self.client._get_job_processor(job, self.shutdown_event)
+            processor.process()
+            return True
+        except TokenExpiredError:
+            self.orchestrator_service.signal_auth_expired()
+            logging.warning(f"Auth expired during processing of job {job.get('id')}.")
+            raise  # Re-raise to be caught by outer exception handler
+        except Exception as e:
+            logging.error(
+                f"An error occurred while processing job {job.get('id')}: {e}",
+                exc_info=True,
+            )
+            if job and job.get('id'):
+                self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+            return True
+        finally:
+            self.client.current_job = None
+
     def listen_for_jobs(self):
         """Listen for jobs from the orchestrator (for dedicated providers)."""
         while not self.shutdown_event.is_set():
@@ -30,25 +56,8 @@ class JobListener:
                         self.client.current_job = job
                         logging.info(f"Received job: {job['id']}")
                         
-                        # Process the job while holding the lock
-                        try:
-                            processor = self.client._get_job_processor(job, self.shutdown_event)
-                            processor.process()
-                        except TokenExpiredError:
-                            self.orchestrator_service.signal_auth_expired()
-                            logging.warning(
-                                f"Auth expired during processing of job {job.get('id')}."
-                            )
-                            raise  # Re-raise to be caught by outer exception handler
-                        except Exception as e:
-                            logging.error(
-                                f"An error occurred while processing job {job.get('id')}: {e}",
-                                exc_info=True,
-                            )
-                            if job and job.get('id'):
-                                self.orchestrator_service.update_job_status(job.get('id'), 'failed')
-                        finally:
-                            self.client.current_job = None
+                        # Process the job using the shared helper
+                        self._process_job_safely(job)
                         
                         if not self.shutdown_event.is_set():
                             self.orchestrator_service.update_provider_status(self.provider_id, 'available')
@@ -156,25 +165,8 @@ class JobListener:
                                         
                                         if uses_comfyui:
                                             if self.client.comfyui_client.wait_for_ready(self.shutdown_event):
-                                                # Process the job while holding the lock
-                                                try:
-                                                    processor = self.client._get_job_processor(job, self.shutdown_event)
-                                                    processor.process()
-                                                except TokenExpiredError:
-                                                    self.orchestrator_service.signal_auth_expired()
-                                                    logging.warning(
-                                                        f"Auth expired during processing of job {job.get('id')}."
-                                                    )
-                                                    raise  # Re-raise to be caught by outer exception handler
-                                                except Exception as e:
-                                                    logging.error(
-                                                        f"An error occurred while processing job {job.get('id')}: {e}",
-                                                        exc_info=True,
-                                                    )
-                                                    if job and job.get('id'):
-                                                        self.orchestrator_service.update_job_status(job.get('id'), 'failed')
-                                                finally:
-                                                    self.client.current_job = None
+                                                # Process the job using shared helper
+                                                self._process_job_safely(job)
                                             else:
                                                 if not self.shutdown_event.is_set():
                                                     logging.error(f"ComfyUI for service '{actual_service_type}' failed to start. Failing job.")
@@ -182,24 +174,7 @@ class JobListener:
                                                     self.client.current_job = None
                                         else:
                                             # For text_generation, directly process the job (no ComfyUI needed)
-                                            try:
-                                                processor = self.client._get_job_processor(job, self.shutdown_event)
-                                                processor.process()
-                                            except TokenExpiredError:
-                                                self.orchestrator_service.signal_auth_expired()
-                                                logging.warning(
-                                                    f"Auth expired during processing of job {job.get('id')}."
-                                                )
-                                                raise  # Re-raise to be caught by outer exception handler
-                                            except Exception as e:
-                                                logging.error(
-                                                    f"An error occurred while processing job {job.get('id')}: {e}",
-                                                    exc_info=True,
-                                                )
-                                                if job and job.get('id'):
-                                                    self.orchestrator_service.update_job_status(job.get('id'), 'failed')
-                                            finally:
-                                                self.client.current_job = None
+                                            self._process_job_safely(job)
 
                                         if not self.shutdown_event.is_set():
                                             logging.info(f"Job processing finished.")
@@ -210,7 +185,7 @@ class JobListener:
                                             self.orchestrator_service.update_provider_status(self.provider_id, 'available')
                                             logging.info("Provider status set to available. Waiting for next job...")
                                     
-                                    break  # Exit the peekd jobs loop after processing one job
+                                    break  # Exit the peeked jobs loop after processing one job
                                 else:
                                     # Image not available - start background download
                                     if download_manager and not download_manager.is_downloading(service_type) and not download_manager.is_queued(service_type):
