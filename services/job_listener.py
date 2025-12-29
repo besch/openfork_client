@@ -139,7 +139,8 @@ class JobListener:
                                     job = self.orchestrator_service.get_next_job(
                                         provider_id=self.provider_id,
                                         accept_policy=self.client.accept_policy,
-                                        allowed_ids=self.client.allowed_ids
+                                        allowed_ids=self.client.allowed_ids,
+                                        job_id=peeked_job.get('id')
                                     )
                                     
                                     if job and job.get('id'):
