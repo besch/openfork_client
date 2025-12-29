@@ -11,7 +11,7 @@ httpd_server = None # Global reference to the HTTP server
 class ShutdownHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/shutdown':
-            logging.info("Received shutdown request via HTTP.")
+            logging.info("Received shutdown request via HTTP endpoint.")
             SHUTDOWN_EVENT.set()
             self.send_response(200)
             self.send_header('Content-type', 'text/html')

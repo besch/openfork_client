@@ -442,7 +442,7 @@ class OrchestratorService:
         if not self.use_api_key:
             user_id = self._get_user_id_from_token()
             if not user_id:
-                logging.error("Could not extract user_id from token. Cannot register.")
+                logging.error(f"Could not extract user_id from token. Token prefix: {self.access_token[:10]}... Length: {len(self.access_token) if self.access_token else 0}. Cannot register.")
                 return None
         
         payload = {

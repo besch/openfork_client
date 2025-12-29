@@ -52,7 +52,7 @@ def listen_for_ipc_commands(client: DGNClient):
             logging.error(f"Error processing IPC command: {e}")
     logging.info("IPC listener thread stopped.")
     if not SHUTDOWN_EVENT.is_set():
-        logging.warning("Stdin closed (EOF). Parent process probably exited. Initiating shutdown.")
+        logging.warning("Stdin closed (EOF) in IPC listener thread. Parent process probably exited. Initiating shutdown.")
         SHUTDOWN_EVENT.set()
 
 
