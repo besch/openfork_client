@@ -10,8 +10,8 @@ RUN pip3 install --break-system-packages \
     requests python-dotenv websocket-client py-cpuinfo GPUtil psutil \
     httpx supabase websockets ffmpeg-python
 
-# Pre-pull llama3.1:8b model during build
-RUN /bin/sh -c "ollama serve & pid=\$! && sleep 10 && ollama pull llama3.1:8b && kill \$pid"
+# Pre-pull popular models during build
+RUN /bin/sh -c "ollama serve & pid=\$! && sleep 10 && ollama pull phi3:mini && ollama pull gemma2:2b && kill \$pid"
 
 # Copy startup script
 COPY llm-start.sh /start.sh

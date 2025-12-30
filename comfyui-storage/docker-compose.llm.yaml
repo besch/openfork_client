@@ -2,8 +2,8 @@ services:
   ollama:
     build:
       context: .
-      dockerfile: Dockerfile.llama
-    container_name: ollama-llama3.1
+      dockerfile: Dockerfile.llm
+    container_name: ollama-llm
     ports:
       - "11434:11434"
     volumes:

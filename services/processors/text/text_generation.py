@@ -29,8 +29,9 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         if not self._wait_for_ollama(api_base):
             return
 
-        inputs = self.job.get("inputs", {})
-        model_name = inputs.get("model", "llama3.1:8b")
+        # Default to phi3:mini
+        model_name = inputs.get("model", "phi3:mini")
+            
         system_prompt = inputs.get("system_prompt", "You are a helpful assistant.")
         temperature = inputs.get("temperature", 0.7)
         max_tokens = inputs.get("max_tokens", 2000)
