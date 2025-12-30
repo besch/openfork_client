@@ -23,9 +23,12 @@ class LTXTextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
 
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "16:9")
+        cfg_scale = inputs.get("cfg_scale")
+        steps = inputs.get("steps")
 
         wf_ready = inject_prompt_into_text_to_video_workflow(
-            workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio
+            workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio,
+            cfg_scale=cfg_scale, steps=steps
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)

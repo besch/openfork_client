@@ -172,7 +172,8 @@ class TurboDiffusionT2VJobProcessor(TurboDiffusionBaseProcessor):
 
         inputs = self.job.get("inputs") or {}
         resolution = inputs.get("resolution", "480p")
-        num_steps = inputs.get("num_steps", 4)
+        # Use 'steps' if available from the new Advanced Settings, fallback to 'num_steps' or 4
+        num_steps = inputs.get("steps") or inputs.get("num_steps") or 4
         seed = inputs.get("seed", 0)
 
         remote_job_id = self._submit_t2v_generation(resolution, num_steps, seed)
@@ -262,7 +263,8 @@ class TurboDiffusionI2VJobProcessor(TurboDiffusionBaseProcessor):
 
         inputs = self.job.get("inputs") or {}
         resolution = inputs.get("resolution", "480p")
-        num_steps = inputs.get("num_steps", 4)
+        # Use 'steps' if available from the new Advanced Settings, fallback to 'num_steps' or 4
+        num_steps = inputs.get("steps") or inputs.get("num_steps") or 4
         num_frames = inputs.get("num_frames", 49)
         seed = inputs.get("seed", 0)
 

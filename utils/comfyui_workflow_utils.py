@@ -81,10 +81,19 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
         logging.error(f"Failed to materialize start image: {e}")
     return None
 
-def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, start_image_filename: str, aspect_ratio: str = "16:9"):
+def inject_prompt_and_image_into_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    start_image_filename: str, 
+    aspect_ratio: str = "16:9",
+    cfg_scale: Optional[float] = None,
+    steps: Optional[int] = None
+):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
     Also randomizes seed for image-to-video generation.
+    Optionally injects cfg_scale and steps into KSampler nodes.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -116,12 +125,30 @@ def inject_prompt_and_image_into_workflow(workflow_api_data: Dict, prompt: str, 
     if '57' in api_graph and 'inputs' in api_graph['57']:
         api_graph['57']['inputs']['noise_seed'] = random.randint(0, 2**63 - 1)
 
+    # Inject cfg and steps into KSampler nodes
+    if cfg_scale is not None or steps is not None:
+        for node in api_graph.values():
+            class_type = node.get("class_type", "")
+            if "KSampler" in class_type and "inputs" in node:
+                if cfg_scale is not None and "cfg" in node["inputs"]:
+                    node["inputs"]["cfg"] = cfg_scale
+                if steps is not None and "steps" in node["inputs"]:
+                    node["inputs"]["steps"] = steps
+
     return api_graph
 
-def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, aspect_ratio: str = "16:9"):
+def inject_prompt_into_text_to_video_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    aspect_ratio: str = "16:9",
+    cfg_scale: Optional[float] = None,
+    steps: Optional[int] = None
+):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
     Also randomizes seed for varied outputs.
+    Optionally injects cfg_scale and steps into KSamplerAdvanced nodes.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -149,6 +176,26 @@ def inject_prompt_into_text_to_video_workflow(workflow_api_data: Dict, prompt: s
         api_graph['57']['inputs']['noise_seed'] = new_seed
     else:
         logging.warning("Could not find sampler node 57 to randomize seed")
+
+    # Inject cfg and steps into KSamplerAdvanced nodes (57 and 58)
+    if cfg_scale is not None or steps is not None:
+        for node_id in ['57', '58']:
+            if node_id in api_graph and api_graph[node_id].get("class_type") == "KSamplerAdvanced":
+                if cfg_scale is not None:
+                    api_graph[node_id]['inputs']['cfg'] = cfg_scale
+                    logging.info(f"Injected cfg={cfg_scale} into KSamplerAdvanced node {node_id}")
+                if steps is not None:
+                    api_graph[node_id]['inputs']['steps'] = steps
+                    logging.info(f"Injected steps={steps} into KSamplerAdvanced node {node_id}")
+        
+        # Also search for other KSampler variants by class_type
+        for node in api_graph.values():
+            class_type = node.get("class_type", "")
+            if "KSampler" in class_type and "inputs" in node:
+                if cfg_scale is not None and "cfg" in node["inputs"]:
+                    node["inputs"]["cfg"] = cfg_scale
+                if steps is not None and "steps" in node["inputs"]:
+                    node["inputs"]["steps"] = steps
 
     # Replace date token in filename_prefix for VHS_VideoCombine node
     for node in api_graph.values():
