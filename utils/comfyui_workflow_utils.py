@@ -88,7 +88,10 @@ def inject_prompt_and_image_into_workflow(
     start_image_filename: str, 
     aspect_ratio: str = "16:9",
     cfg_scale: Optional[float] = None,
-    steps: Optional[int] = None
+    steps: Optional[int] = None,
+    flow_shift: Optional[float] = None,
+    sampler: Optional[str] = None,
+    scheduler: Optional[str] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
@@ -134,6 +137,18 @@ def inject_prompt_and_image_into_workflow(
                     node["inputs"]["cfg"] = cfg_scale
                 if steps is not None and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = steps
+    
+    # Inject flow_shift, sampler, and scheduler (V2)
+    for node in api_graph.values():
+        class_type = node.get("class_type", "")
+        if class_type == "ModelSamplingSD3" and flow_shift is not None:
+            node["inputs"]["shift"] = flow_shift
+        elif class_type == "KSamplerSelect" and sampler is not None:
+            node["inputs"]["sampler_name"] = sampler
+        elif class_type == "BasicScheduler" and scheduler is not None:
+            node["inputs"]["scheduler"] = scheduler
+        elif class_type == "CFGGuider" and cfg_scale is not None:
+            node["inputs"]["cfg"] = cfg_scale
 
     return api_graph
 
@@ -143,7 +158,10 @@ def inject_prompt_into_text_to_video_workflow(
     negative_prompt: str, 
     aspect_ratio: str = "16:9",
     cfg_scale: Optional[float] = None,
-    steps: Optional[int] = None
+    steps: Optional[int] = None,
+    flow_shift: Optional[float] = None,
+    sampler: Optional[str] = None,
+    scheduler: Optional[str] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
@@ -196,7 +214,18 @@ def inject_prompt_into_text_to_video_workflow(
                     node["inputs"]["cfg"] = cfg_scale
                 if steps is not None and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = steps
-
+        
+        # Also handle V2 parameters (flow_shift, sampler, scheduler)
+        for node in api_graph.values():
+            class_type = node.get("class_type", "")
+            if class_type == "ModelSamplingSD3" and flow_shift is not None:
+                node["inputs"]["shift"] = flow_shift
+            elif class_type == "KSamplerSelect" and sampler is not None:
+                node["inputs"]["sampler_name"] = sampler
+            elif class_type == "BasicScheduler" and scheduler is not None:
+                node["inputs"]["scheduler"] = scheduler
+            elif class_type == "CFGGuider" and cfg_scale is not None:
+                node["inputs"]["cfg"] = cfg_scale
     # Replace date token in filename_prefix for VHS_VideoCombine node
     for node in api_graph.values():
         if node.get("class_type") == "VHS_VideoCombine":

@@ -81,10 +81,14 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         aspect_ratio = inputs.get("aspect_ratio", "16:9")
         cfg_scale = inputs.get("cfg_scale")
         steps = inputs.get("steps")
+        flow_shift = inputs.get("flow_shift")
+        sampler = inputs.get("sampler")
+        scheduler = inputs.get("scheduler")
 
         wf_ready = inject_prompt_and_image_into_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
-            cfg_scale=cfg_scale, steps=steps
+            cfg_scale=cfg_scale, steps=steps,
+            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -151,8 +155,16 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
             return
 
         aspect_ratio = inputs.get("aspect_ratio", "16:9")
+        cfg_scale = inputs.get("cfg_scale")
+        steps = inputs.get("steps")
+        flow_shift = inputs.get("flow_shift")
+        sampler = inputs.get("sampler")
+        scheduler = inputs.get("scheduler")
+
         wf_ready = inject_prompt_and_image_into_workflow(
-            workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio
+            workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
+            cfg_scale=cfg_scale, steps=steps,
+            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
