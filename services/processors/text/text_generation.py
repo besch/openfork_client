@@ -29,6 +29,7 @@ class TextGenerationJobProcessor(BaseJobProcessor):
         if not self._wait_for_ollama(api_base):
             return
 
+        inputs = self.job.get("inputs", {})
         # Default to phi3:mini
         model_name = inputs.get("model", "phi3:mini")
             
