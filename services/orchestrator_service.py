@@ -182,6 +182,8 @@ class OrchestratorService:
             raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching next job: {e}")
+            if e.response is not None:
+                logging.error(f"Response content: {e.response.text}")
             return None
         except json.JSONDecodeError:
             logging.error(f"Failed to decode JSON from get_next_job response: {response.text}")
@@ -246,6 +248,8 @@ class OrchestratorService:
             raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
             logging.error(f"Error peeking at available jobs: {e}")
+            if e.response is not None:
+                logging.error(f"Response content: {e.response.text}")
             return []
         except json.JSONDecodeError:
             logging.error(f"Failed to decode JSON from peek_available_jobs response: {response.text}")
