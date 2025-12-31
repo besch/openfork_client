@@ -51,7 +51,8 @@ class ZImageTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
             workflow_data, 
             self.positive_prompt, 
             aspect_ratio,
-            advanced_settings=advanced_settings if advanced_settings else None
+            advanced_settings=advanced_settings if advanced_settings else None,
+            seed=inputs.get("seed")
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -133,6 +134,7 @@ class ZImageControlNetProcessor(ComfyUIProcessor, ImageOutputHandler):
             control_mode=control_mode,
             strength=strength,
             aspect_ratio=aspect_ratio,
+            seed=inputs.get("seed")
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -242,6 +244,7 @@ class ZImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             source_image_filename,
             mask_filename,
             denoise_strength=denoise_strength,
+            seed=inputs.get("seed")
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)

@@ -38,7 +38,7 @@
     "44": {
       "class_type": "KSampler",
       "inputs": {
-        "seed": 533303727624653,
+        "seed": 0,
         "control_after_generate": "randomize",
         "steps": 9,
         "cfg": 1,

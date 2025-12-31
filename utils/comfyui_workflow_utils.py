@@ -820,7 +820,8 @@ def inject_prompt_into_zimage_workflow(
     workflow_api_data: Dict, 
     prompt: str, 
     aspect_ratio: str = "1:1",
-    advanced_settings: Optional[Dict] = None
+    advanced_settings: Optional[Dict] = None,
+    seed: Optional[int] = None
 ):
     """
     Loads a Z-Image ComfyUI API-formatted workflow, injects prompt and dimensions.
@@ -831,6 +832,7 @@ def inject_prompt_into_zimage_workflow(
         prompt: Text prompt for image generation
         aspect_ratio: Aspect ratio string (e.g., "1:1", "16:9", "9:16")
         advanced_settings: Optional dict with keys: steps, cfg, sampler_name, scheduler, shift
+        seed: Optional seed for reproduction
     
     Returns:
         Modified workflow graph (dict)
@@ -863,7 +865,7 @@ def inject_prompt_into_zimage_workflow(
                 break
     
     # Randomize seed for KSampler (Node 44)
-    new_seed = random.randint(0, 2**63 - 1)
+    new_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '44' in api_graph and 'inputs' in api_graph['44']:
         api_graph['44']['inputs']['seed'] = new_seed
     else:
@@ -915,7 +917,8 @@ def inject_image_into_zimage_controlnet_workflow(
     image_filename: str,
     control_mode: str = "pose",
     strength: float = 1.0,
-    aspect_ratio: str = "1:1"
+    aspect_ratio: str = "1:1",
+    seed: Optional[int] = None
 ):
     """
     Loads a Z-Image ControlNet ComfyUI API-formatted workflow, injects prompt, image, and control settings.
@@ -969,7 +972,7 @@ def inject_image_into_zimage_controlnet_workflow(
             logging.warning("Could not find ZImageFunControlnet node in Z-Image ControlNet workflow")
     
     # Randomize seed for KSampler (Node 44)
-    new_seed = random.randint(0, 2**63 - 1)
+    new_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '44' in api_graph and 'inputs' in api_graph['44']:
         api_graph['44']['inputs']['seed'] = new_seed
     else:
@@ -988,7 +991,8 @@ def inject_image_into_zimage_inpaint_workflow(
     prompt: str, 
     image_filename: str,
     mask_filename: str,
-    denoise_strength: float = 0.8
+    denoise_strength: float = 0.8,
+    seed: Optional[int] = None
 ):
     """
     Loads a Z-Image Inpaint ComfyUI API-formatted workflow, injects prompt, image, and mask.
@@ -1037,7 +1041,7 @@ def inject_image_into_zimage_inpaint_workflow(
             logging.warning("Could not find LoadImage node for mask in Z-Image inpaint workflow")
     
     # Randomize seed for KSampler (Node 44) and set denoise strength
-    new_seed = random.randint(0, 2**63 - 1)
+    new_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '44' in api_graph and 'inputs' in api_graph['44']:
         api_graph['44']['inputs']['seed'] = new_seed
         api_graph['44']['inputs']['denoise'] = denoise_strength

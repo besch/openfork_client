@@ -9,6 +9,7 @@ import os
 import base64
 import uuid
 import copy
+import random
 
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import ImageOutputHandler
@@ -38,11 +39,13 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         self._copy_image_to_container(source_image_filename)
 
         # Inject prompt and image into workflow
+        seed = inputs.get("seed")
         wf_ready = self._inject_edit_workflow(
             workflow_data,
             self.positive_prompt,
             source_image_filename,
             denoise_strength,
+            seed=seed,
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -105,7 +108,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy image to container: {e}")
 
-    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength):
+    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, seed=None):
         """Inject prompt and image into the editing workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
@@ -117,6 +120,10 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
                 node["inputs"]["image"] = image_filename
             elif node.get("class_type") == "KSampler":
                 node["inputs"]["denoise"] = denoise_strength
+                if seed is not None:
+                    node["inputs"]["seed"] = seed
+                else:
+                    node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
         
         return wf
 
@@ -150,12 +157,14 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         self._copy_images_to_container(source_image_filename, mask_filename)
 
         # Inject into workflow
+        seed = inputs.get("seed")
         wf_ready = self._inject_inpaint_workflow(
             workflow_data,
             self.positive_prompt,
             source_image_filename,
             mask_filename,
             denoise_strength,
+            seed=seed,
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -247,7 +256,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy images to container: {e}")
 
-    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength):
+    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength, seed=None):
         """Inject prompt and images into the inpainting workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
@@ -264,6 +273,10 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
                 image_node_count += 1
             elif node.get("class_type") == "KSampler":
                 node["inputs"]["denoise"] = denoise_strength
+                if seed is not None:
+                    node["inputs"]["seed"] = seed
+                else:
+                    node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
         
         return wf
 
@@ -287,11 +300,13 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
         width, height = self._get_dimensions(aspect_ratio)
 
         # Inject prompt and dimensions into workflow
+        seed = inputs.get("seed")
         wf_ready = self._inject_t2i_workflow(
             workflow_data,
             self.positive_prompt,
             width,
             height,
+            seed=seed,
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -323,7 +338,7 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
         }
         return ratio_map.get(aspect_ratio, (1024, 1024))
 
-    def _inject_t2i_workflow(self, workflow_data, prompt, width, height):
+    def _inject_t2i_workflow(self, workflow_data, prompt, width, height, seed=None):
         """Inject prompt and dimensions into the text-to-image workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
@@ -335,6 +350,11 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
             elif node.get("class_type") == "EmptySD3LatentImage":
                 node["inputs"]["width"] = width
                 node["inputs"]["height"] = height
+            elif node.get("class_type") == "KSampler":
+                if seed is not None:
+                    node["inputs"]["seed"] = seed
+                else:
+                    node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
         
         return wf
 
