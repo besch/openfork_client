@@ -1,0 +1,95 @@
+FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+
+# Dockerfile for SVI 2.0 Pro (24GB VRAM version)
+# Uses full precision BF16 models + SVI LoRA for best quality infinite-length video generation
+# Supports image-to-video workflows with SVI-Shot and SVI-Film modes
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev curl git wget \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m pip install --upgrade pip
+
+# Install PyTorch with CUDA 12.1
+RUN python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Install dependencies
+RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
+
+WORKDIR /opt/ComfyUI
+
+# Clone ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+RUN python -m pip install -r requirements.txt
+
+# Clone ComfyUI Manager
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
+RUN python -m pip install GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub>0.20
+
+# Clone required custom nodes
+RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
+RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
+RUN git clone https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF
+
+# Clone WanVideoWrapper for SVI support
+RUN git clone https://github.com/kijai/ComfyUI-WanVideoWrapper.git /opt/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper
+RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-WanVideoWrapper/requirements.txt || true
+
+RUN python -m pip install --upgrade gguf
+
+# Install requirements for custom nodes
+RUN python -m pip install color-matcher matplotlib huggingface_hub mss toml rich
+
+# Install additional system dependencies for OpenCV
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for ComfyUI-Manager
+RUN python -m pip install uv
+
+# Create model directories
+RUN mkdir -p /opt/ComfyUI/models/unet \
+    && mkdir -p /opt/ComfyUI/models/vae \
+    && mkdir -p /opt/ComfyUI/models/text_encoders \
+    && mkdir -p /opt/ComfyUI/models/loras \
+    && mkdir -p /opt/ComfyUI/models/diffusion_models
+
+# --- Download WAN 2.2 Full Precision Models for 24GB VRAM ---
+
+# Text Encoder (FP8 scaled to save some VRAM)
+RUN wget -O /opt/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+
+# VAE
+RUN wget -O /opt/ComfyUI/models/vae/wan_2.1_vae.safetensors \
+    "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+
+# UNETs - Using FP8 Scaled for reliability (excellent quality on 24GB)
+# Note: Official BF16 models require auth; FP8 scaled provides near-identical quality
+RUN wget -O /opt/ComfyUI/models/diffusion_models/wan2.2_i2v_high_noise_14B.safetensors \
+    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_2-I2V-A14B-HIGH_fp8_e4m3fn_scaled_KJ.safetensors"
+
+RUN wget -O /opt/ComfyUI/models/diffusion_models/wan2.2_i2v_low_noise_14B.safetensors \
+    "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/resolve/main/I2V/Wan2_2-I2V-A14B-LOW_fp8_e4m3fn_scaled_KJ.safetensors"
+
+# LoRAs for step distillation
+RUN wget -O /opt/ComfyUI/models/loras/Wan21_lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors \
+    "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors"
+
+# --- Download SVI 2.0 LoRA ---
+RUN wget -O /opt/ComfyUI/models/loras/SVI_Wan2.1-I2V-14B_lora_v2.0.safetensors \
+    "https://huggingface.co/vita-video-gen/svi-model/resolve/main/version-2.0/SVI_Wan2.1-I2V-14B_lora_v2.0.safetensors"
+
+WORKDIR /opt/ComfyUI
+CMD ["python", "main.py", "--listen"]

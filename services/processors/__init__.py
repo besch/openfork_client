@@ -18,6 +18,8 @@ from .video.ltx_text import LTXTextToVideoJobProcessor
 from .video.ltx_image import LTXImageToVideoJobProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
+from .video.svi_shot import SVIShotImageToVideoJobProcessor
+from .video.svi_film import SVIFilmImageToVideoJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -65,6 +67,8 @@ __all__ = [
     "LLMGenerationJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",
+    "SVIShotImageToVideoJobProcessor",
+    "SVIFilmImageToVideoJobProcessor",
 ]
 
 
