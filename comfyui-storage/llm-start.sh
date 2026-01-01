@@ -12,14 +12,24 @@ ollama serve &
 OLLAMA_PID=$!
 sleep 5
 
-# Download and setup DGN client
-mkdir -p /opt/dgn-client /data/.cache /data/input
+# Setup directories
+mkdir -p /data/.cache /data/input
+
+# DGN client is pre-installed in Docker image
+# Only update if explicitly requested via environment variable
 cd /opt/dgn-client
 
-echo "Downloading DGN client..."
-curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
-export INSTALL_DEPS=true
-bash bootstrap.sh
+if [ "$DGN_UPDATE_CLIENT" = "true" ]; then
+  echo "Updating DGN client (DGN_UPDATE_CLIENT=true)..."
+  curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
+  bash bootstrap.sh
+  rm -f bootstrap.sh
+else
+  echo "Using pre-installed DGN client (set DGN_UPDATE_CLIENT=true to force update)"
+  if [ -f /opt/dgn-client/.installed ]; then
+    echo "Installed: $(cat /opt/dgn-client/.installed)"
+  fi
+fi
 
 # Start DGN client
 echo "Starting DGN client..."

@@ -6,12 +6,26 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install DGN client dependencies (with --break-system-packages for PEP 668)
+# Include tenacity for retry logic
 RUN pip3 install --break-system-packages \
     requests python-dotenv websocket-client py-cpuinfo GPUtil psutil \
-    httpx supabase websockets ffmpeg-python
+    httpx supabase websockets ffmpeg-python tenacity
 
-# Pre-pull popular models during build
+# Pre-pull popular models during build for faster startup
 RUN /bin/sh -c "ollama serve & pid=\$! && sleep 10 && ollama pull phi3:mini && ollama pull gemma2:2b && kill \$pid"
+
+# Bake DGN client into image at build time for efficiency
+# This avoids downloading files on every container start
+RUN mkdir -p /opt/dgn-client /data/.cache /data/input
+WORKDIR /opt/dgn-client
+
+# Download and install DGN client during build
+RUN curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh \
+    && bash bootstrap.sh \
+    && rm -f bootstrap.sh manifest.txt
+
+# Create marker file to indicate client is pre-installed
+RUN echo "$(date -Iseconds)" > /opt/dgn-client/.installed
 
 # Copy startup script
 COPY llm-start.sh /start.sh
