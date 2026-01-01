@@ -71,11 +71,11 @@ class DGNClient:
 
     def _build_processor_map(self):
         proc_map = {}
-        # Auto-register TextGenerationJobProcessor for 'text_generation' workflow
+        # Auto-register LLMGenerationJobProcessor for 'llm' workflow
         # This allows it to work even if not explicitly in the server config yet
-        if hasattr(job_processors_module, "TextGenerationJobProcessor"):
-            proc_map["text_generation"] = (
-                job_processors_module.TextGenerationJobProcessor
+        if hasattr(job_processors_module, "LLMGenerationJobProcessor"):
+            proc_map["llm"] = (
+                job_processors_module.LLMGenerationJobProcessor
             )
 
         for workflow_type, config in self.config.items():

@@ -1,7 +1,7 @@
 """Text processor modules."""
 
-from .text_generation import TextGenerationJobProcessor
+from .llm import LLMGenerationJobProcessor
 
 __all__ = [
-    "TextGenerationJobProcessor",
+    "LLMGenerationJobProcessor",
 ]

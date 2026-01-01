@@ -13,12 +13,12 @@ import requests
 from services.processors.base import BaseJobProcessor
 
 
-class TextGenerationJobProcessor(BaseJobProcessor):
+class LLMGenerationJobProcessor(BaseJobProcessor):
     """Processor for LLM-based text generation using Ollama."""
 
     def process(self):
         if not self.job:
-            self._fail_job(f"Job object is None for TextGenerationJobProcessor. Cannot proceed.")
+            self._fail_job(f"Job object is None for LLMGenerationJobProcessor. Cannot proceed.")
             return
 
         api_base = os.getenv("LLM_API_BASE", "http://localhost:11434")

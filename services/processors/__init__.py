@@ -32,7 +32,7 @@ from .image.zimage import ZImageTextToImageProcessor, ZImageControlNetProcessor,
 from .image.qwen import QwenImageEditProcessor, QwenImageInpaintProcessor, QwenImageT2IProcessor
 
 # Text processors
-from .text.text_generation import TextGenerationJobProcessor
+from .text.llm import LLMGenerationJobProcessor
 
 __all__ = [
     "BaseJobProcessor",
@@ -62,7 +62,7 @@ __all__ = [
     "QwenImageEditProcessor",
     "QwenImageInpaintProcessor",
     "QwenImageT2IProcessor",
-    "TextGenerationJobProcessor",
+    "LLMGenerationJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",
 ]
