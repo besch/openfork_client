@@ -1,49 +1,74 @@
 #!/bin/bash
 # OpenFork DGN Client Bootstrap Script
-# Downloads all client files from GitHub repository
+# Dynamically downloads all client files from GitHub repository using GitHub API
 # Usage: curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh | bash
 
 set -e
 
-BASE_URL="https://raw.githubusercontent.com/besch/openfork_client/main"
+REPO="besch/openfork_client"
+BRANCH="main"
+BASE_URL="https://raw.githubusercontent.com/$REPO/$BRANCH"
+API_URL="https://api.github.com/repos/$REPO/git/trees/$BRANCH?recursive=1"
 
 echo "=== OpenFork DGN Client Bootstrap ==="
-echo "Downloading manifest..."
+echo "Fetching file list from GitHub API..."
 
-# Download manifest first
-curl -sL $BASE_URL/manifest.txt -o manifest.txt
+# Fetch the repository tree from GitHub API
+# This returns all files in the repo without needing a manifest
+TREE_JSON=$(curl -sL "$API_URL")
 
-echo "Downloading client files..."
-while IFS= read -r file || [[ -n "$file" ]]; do
-  # Skip empty lines or comments
-  [[ -z "$file" || "$file" =~ ^# ]] && continue
+if [ -z "$TREE_JSON" ] || [[ "$TREE_JSON" == *"rate limit"* ]]; then
+  echo "Warning: GitHub API unavailable or rate limited. Falling back to manifest..."
+  curl -sL "$BASE_URL/manifest.txt" -o manifest.txt
+  while IFS= read -r file || [[ -n "$file" ]]; do
+    [[ -z "$file" || "$file" =~ ^# ]] && continue
+    dir=$(dirname "$file")
+    [ "$dir" != "." ] && mkdir -p "$dir"
+    curl -sL "$BASE_URL/$file" -o "$file"
+  done < manifest.txt
+else
+  echo "Downloading client files..."
   
-  # Ensure directory exists
-  dir=$(dirname "$file")
-  if [ "$dir" != "." ]; then
-    mkdir -p "$dir"
-  fi
-  
-  echo "  -> Downloading $file"
-  curl -sL "$BASE_URL/$file" -o "$file"
-done < manifest.txt
+  # Parse the JSON tree and download relevant files
+  # Filter: .py, .sh, .txt (requirements), .json (workflows), excluding tests and docs
+  echo "$TREE_JSON" | grep -E '"path":\s*"[^"]+\.(py|sh|txt|json)"' | \
+    sed 's/.*"path":\s*"\([^"]*\)".*/\1/' | \
+    grep -v "^test" | grep -v "^docs" | grep -v "__pycache__" | \
+    grep -v "generate_manifest" | grep -v "\.spec$" | \
+    while IFS= read -r file; do
+      # Ensure directory exists
+      dir=$(dirname "$file")
+      if [ "$dir" != "." ]; then
+        mkdir -p "$dir"
+      fi
+      
+      echo "  -> Downloading $file"
+      curl -sL "$BASE_URL/$file" -o "$file" 2>/dev/null || echo "    (skipped)"
+    done
+fi
 
-
-# Install Python dependencies if we're in a fresh environment
+# Install Python dependencies if requested
 if [ "$INSTALL_DEPS" = "true" ]; then
   echo "Installing Python dependencies..."
   
   # Detect Python executable
-  PYTHON_EXE=$(command -v python3 || command -v python || echo "")
+  if [ -x "/usr/bin/python" ]; then
+    PYTHON_EXE="/usr/bin/python"
+  elif command -v python &> /dev/null; then
+    PYTHON_EXE=$(command -v python)
+  elif command -v python3 &> /dev/null; then
+    PYTHON_EXE=$(command -v python3)
+  else
+    PYTHON_EXE=""
+  fi
   
   if [ -n "$PYTHON_EXE" ]; then
     echo "Using $PYTHON_EXE to install dependencies..."
     # Try with --break-system-packages first (for PEP 668 / Ubuntu 24+)
     $PYTHON_EXE -m pip install --quiet --break-system-packages -r requirements.txt 2>/dev/null || \
     $PYTHON_EXE -m pip install --quiet -r requirements.txt 2>/dev/null || \
-    echo "Warning: pip install failed with $PYTHON_EXE. Retrying with --user..."
     $PYTHON_EXE -m pip install --quiet --user -r requirements.txt 2>/dev/null || \
-    echo "Failed to install dependencies automatically."
+    echo "Warning: Failed to install dependencies automatically."
   else
     echo "Warning: Python not found, skipping dependency installation."
   fi
