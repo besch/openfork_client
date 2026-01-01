@@ -30,8 +30,8 @@ class TextGenerationJobProcessor(BaseJobProcessor):
             return
 
         inputs = self.job.get("inputs", {})
-        # Default to phi3:mini
-        model_name = inputs.get("model", "phi3:mini")
+        # Default to gemma:2b (better at following JSON output instructions than phi3)
+        model_name = inputs.get("model", "gemma:2b")
             
         system_prompt = inputs.get("system_prompt", "You are a helpful assistant.")
         temperature = inputs.get("temperature", 0.7)
