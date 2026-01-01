@@ -108,11 +108,6 @@ class DockerDownloadManager:
             
         if not self.docker_manager:
             return False  # Headless mode
-            
-        # Check if already have the image
-        if self.has_image(service_type):
-            logging.debug(f"Image for {service_type} already exists, skipping download")
-            return False
         
         with self._lock:
             # Check if already downloading or queued
@@ -121,6 +116,12 @@ class DockerDownloadManager:
                 return False
             if service_type in self._download_queue:
                 logging.debug(f"Image for {service_type} already queued")
+                return False
+            
+            # TOCTOU fix: Check inside lock to prevent race condition
+            # where multiple threads could pass the has_image check simultaneously
+            if self.has_image(service_type):
+                logging.debug(f"Image for {service_type} already exists, skipping download")
                 return False
             
             # Check if we can start a new download

@@ -4,19 +4,18 @@ import base64
 import json
 import time
 import threading
-from typing import Union, Dict
+from typing import Union, Dict, Optional, Any, List
+
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+from config import TimeoutConfig
+from exceptions import AuthError, ProviderError, TransientError
 from services.hardware_profiler import get_hardware_profile
 import os
 
-# Custom exception for handling expired tokens
-class TokenExpiredError(Exception):
-    """Raised when the API returns a 401 Unauthorized error."""
-    pass
-
-# Custom exception for handling expired provider registration
-class ProviderNotFoundError(Exception):
-    """Raised when the provider registration has expired (cleaned up by stale provider cron)."""
-    pass
+# Backward compatibility aliases
+TokenExpiredError = AuthError
+ProviderNotFoundError = ProviderError
 
 
 class OrchestratorService:
@@ -70,19 +69,44 @@ class OrchestratorService:
         print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
         logging.warning("AUTH_EXPIRED signal sent to main process.")
 
-    def _make_request(self, method, url, auth_required=True, **kwargs) -> requests.Response:
+    @retry(
+        stop=stop_after_attempt(TimeoutConfig.API_MAX_RETRIES),
+        wait=wait_exponential(
+            multiplier=1,
+            min=TimeoutConfig.API_RETRY_MIN_WAIT,
+            max=TimeoutConfig.API_RETRY_MAX_WAIT
+        ),
+        retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout, TransientError)),
+        reraise=True
+    )
+    def _make_request(self, method: str, url: str, auth_required: bool = True, **kwargs) -> requests.Response:
         """
-        Makes an HTTP request, raising a custom error on 401 Unauthorized.
+        Makes an HTTP request with automatic retry for transient failures.
+        
         Supports both API key auth (headless) and Bearer token auth (Electron).
+        Uses exponential backoff for retries on connection errors and timeouts.
+        
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            url: Target URL
+            auth_required: Whether to include auth headers
+            **kwargs: Additional arguments passed to requests.request()
+            
+        Returns:
+            requests.Response object
+            
+        Raises:
+            AuthError: When authentication fails (401)
+            TransientError: When a retryable error occurs after max retries
         """
         # In API key mode, we don't need to check for token expiry
         if not self.use_api_key:
             # Check for permanent auth failure before making any authenticated request
             if auth_required and self.is_auth_failed_permanently():
-                raise TokenExpiredError("Authentication has permanently failed. Please log in again.")
+                raise AuthError("Authentication has permanently failed. Please log in again.")
 
-        # Add a default timeout to all requests to prevent indefinite hangs
-        kwargs.setdefault('timeout', 30)
+        # Use centralized timeout configuration
+        kwargs.setdefault('timeout', TimeoutConfig.API_REQUEST_TIMEOUT)
 
         request_headers = kwargs.pop("headers", {}).copy()
         
@@ -98,16 +122,29 @@ class OrchestratorService:
         if 'Content-Type' not in request_headers and 'files' not in kwargs and 'data' not in kwargs and 'json' not in kwargs:
              request_headers['Content-Type'] = 'application/json'
         
-        response = requests.request(method, url, headers=request_headers, **kwargs)
+        try:
+            response = requests.request(method, url, headers=request_headers, **kwargs)
+        except requests.exceptions.ConnectionError as e:
+            logging.warning(f"Connection error to {url}, will retry: {e}")
+            raise  # Let tenacity handle the retry
+        except requests.exceptions.Timeout as e:
+            logging.warning(f"Request timeout to {url}, will retry: {e}")
+            raise  # Let tenacity handle the retry
 
-        # In API key mode, 401 means invalid key (permanent failure)
+        # Handle server errors that are retryable
+        if response.status_code == 503:
+            raise TransientError(f"Server unavailable (503) at {url}")
+        if response.status_code == 429:
+            raise TransientError(f"Rate limited (429) at {url}")
+
+        # Handle auth errors (not retryable)
         if response.status_code == 401 and auth_required:
             if self.use_api_key:
                 logging.error("Received 401 Unauthorized with API key. Key may be invalid or revoked.")
-                raise TokenExpiredError("DGN API key is invalid or revoked.")
+                raise AuthError("DGN API key is invalid or revoked.")
             else:
                 logging.warning("Received 401 Unauthorized. Notifying main process to refresh token.")
-                raise TokenExpiredError("Access token has expired.")
+                raise AuthError("Access token has expired.")
         
         return response
 

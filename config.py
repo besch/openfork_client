@@ -48,3 +48,38 @@ SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS
 ORCHESTRATOR_URL_PROD = os.getenv("ORCHESTRATOR_URL_PROD", "https://www.openfork.video")
 ORCHESTRATOR_URL_DEV = os.getenv("ORCHESTRATOR_URL_DEV", "http://localhost:3000")
 
+
+# --- Timeout Configuration ---
+class TimeoutConfig:
+    """
+    Centralized timeout configuration with environment variable overrides.
+    
+    All timeouts are in seconds unless otherwise specified.
+    """
+    # ComfyUI wait time for the server to become ready
+    COMFYUI_READY_TIMEOUT = int(os.getenv("COMFYUI_READY_TIMEOUT", "180"))
+    
+    # Maximum time to wait for a workflow to complete (2 hours default for long AI jobs)
+    WORKFLOW_TIMEOUT = int(os.getenv("WORKFLOW_TIMEOUT", "7200"))
+    
+    # Default timeout for HTTP API requests
+    API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", "30"))
+    
+    # Interval between job polling requests when no job is available
+    JOB_POLL_INTERVAL = int(os.getenv("JOB_POLL_INTERVAL", "10"))
+    
+    # WebSocket connection timeout
+    WEBSOCKET_TIMEOUT = int(os.getenv("WEBSOCKET_TIMEOUT", "600"))
+    
+    # Interval between heartbeat signals to orchestrator
+    HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "30"))
+    
+    # Maximum retries for transient API failures
+    API_MAX_RETRIES = int(os.getenv("API_MAX_RETRIES", "3"))
+    
+    # Minimum wait time between retries (exponential backoff)
+    API_RETRY_MIN_WAIT = int(os.getenv("API_RETRY_MIN_WAIT", "1"))
+    
+    # Maximum wait time between retries
+    API_RETRY_MAX_WAIT = int(os.getenv("API_RETRY_MAX_WAIT", "10"))
+

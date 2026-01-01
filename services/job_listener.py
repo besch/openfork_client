@@ -1,28 +1,39 @@
 import logging
 import json
-from config import HEADLESS_MODE
+import threading
+from typing import Dict, Any, Optional
+
+from config import HEADLESS_MODE, TimeoutConfig
 from services.docker_manager import docker_manager
+from exceptions import AuthError, ProviderError
 from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
 
+
 class JobListener:
-    def __init__(self, client, provider_id, shutdown_event):
+    """Listens for and processes DGN jobs from the orchestrator."""
+    
+    def __init__(self, client, provider_id: str, shutdown_event: threading.Event):
         self.client = client
         self.orchestrator_service = client.orchestrator_service
         self.provider_id = provider_id
         self.shutdown_event = shutdown_event
 
-    def _process_job_safely(self, job):
+    def _process_job_safely(self, job: Dict[str, Any]) -> bool:
         """
         Process a job with proper error handling.
         
-        Returns True if processing completed (success or handled failure),
-        False if a critical auth error occurred that should stop the listener.
+        Args:
+            job: Job dictionary from the orchestrator
+            
+        Returns:
+            True if processing completed (success or handled failure),
+            False if a critical auth error occurred that should stop the listener.
         """
         try:
             processor = self.client._get_job_processor(job, self.shutdown_event)
             processor.process()
             return True
-        except TokenExpiredError:
+        except (TokenExpiredError, AuthError):
             self.orchestrator_service.signal_auth_expired()
             logging.warning(f"Auth expired during processing of job {job.get('id')}.")
             raise  # Re-raise to be caught by outer exception handler
@@ -37,7 +48,7 @@ class JobListener:
         finally:
             self.client.current_job = None
 
-    def listen_for_jobs(self):
+    def listen_for_jobs(self) -> None:
         """Listen for jobs from the orchestrator (for dedicated providers)."""
         while not self.shutdown_event.is_set():
             job = None
@@ -78,10 +89,10 @@ class JobListener:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
             if not (job and job.get('id')):
-                self.shutdown_event.wait(10)
+                    self.shutdown_event.wait(TimeoutConfig.JOB_POLL_INTERVAL)
         logging.info("Shutdown event received. Exiting job listening loop.")
 
-    def _get_service_type_for_job(self, job):
+    def _get_service_type_for_job(self, job: Dict[str, Any]) -> Optional[str]:
         """Get the service type for a job based on its workflow type."""
         workflow_type = job.get('workflow_type', 'image_to_video')
         try:
@@ -90,7 +101,7 @@ class JobListener:
             # Unknown workflow type, fall back to service_type from job
             return job.get('service_type')
 
-    def listen_for_jobs_auto(self):
+    def listen_for_jobs_auto(self) -> None:
         """Listen for jobs and dynamically start/stop containers with image pre-fetching."""
         logging.info("Entering auto job listening loop with Docker image pre-fetching.")
         
@@ -215,7 +226,7 @@ class JobListener:
                     logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 
                 if not found_processable_job:
-                    self.shutdown_event.wait(10)
+                    self.shutdown_event.wait(TimeoutConfig.JOB_POLL_INTERVAL)
         finally:
             logging.info("Shutdown event received or loop exited. Exiting auto job listening loop.")
             

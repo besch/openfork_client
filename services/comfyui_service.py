@@ -9,8 +9,11 @@ import http.client
 import threading
 from queue import Queue, Empty
 import logging
-from typing import Union
+from typing import Union, Dict, Any, Optional, List
 import requests
+
+from config import TimeoutConfig
+from exceptions import AuthError
 from services.orchestrator_service import TokenExpiredError
 
 class ComfyUIClient:
@@ -27,9 +30,19 @@ class ComfyUIClient:
             return base.replace("wss://", "https://")
         return base.replace("ws://", "http://")
 
-    def wait_for_ready(self, shutdown_event: threading.Event, timeout=180):
-        """Waits for the ComfyUI server to be available."""
-        logging.info("Waiting for ComfyUI server to be ready...")
+    def wait_for_ready(self, shutdown_event: threading.Event, timeout: Optional[int] = None) -> bool:
+        """Waits for the ComfyUI server to be available.
+        
+        Args:
+            shutdown_event: Event to signal shutdown
+            timeout: Maximum seconds to wait (default: TimeoutConfig.COMFYUI_READY_TIMEOUT)
+            
+        Returns:
+            True if server became ready, False otherwise
+        """
+        if timeout is None:
+            timeout = TimeoutConfig.COMFYUI_READY_TIMEOUT
+        logging.info(f"Waiting for ComfyUI server to be ready (timeout: {timeout}s)...")
         start_time = time.time()
         url = f"{self.http_base}/object_info"
         while time.time() - start_time < timeout:
@@ -142,8 +155,30 @@ class ComfyUIClient:
                     q.put(e) # Signal error to the main thread
                 break
 
-    def get_workflow_output(self, prompt_id: str, job_id: str, orchestrator_service, terminal_node_ids: Union[list[str], None] = None, timeout_sec: int = 7200, shutdown_event: threading.Event = None) -> Union[dict, None, str]:
-        """Get the output of a completed workflow by listening on WS in a separate thread."""
+    def get_workflow_output(
+        self,
+        prompt_id: str,
+        job_id: str,
+        orchestrator_service,
+        terminal_node_ids: Optional[List[str]] = None,
+        timeout_sec: Optional[int] = None,
+        shutdown_event: Optional[threading.Event] = None
+    ) -> Union[Dict[str, Any], None, str]:
+        """Get the output of a completed workflow by listening on WS in a separate thread.
+        
+        Args:
+            prompt_id: The ComfyUI prompt ID
+            job_id: The DGN job ID for cancellation polling
+            orchestrator_service: Service for checking job status
+            terminal_node_ids: Optional list of node IDs that must complete
+            timeout_sec: Maximum seconds to wait (default: TimeoutConfig.WORKFLOW_TIMEOUT)
+            shutdown_event: Optional event to signal shutdown
+            
+        Returns:
+            Dict of outputs, 'interrupted' string, or None on failure
+        """
+        if timeout_sec is None:
+            timeout_sec = TimeoutConfig.WORKFLOW_TIMEOUT
         if not prompt_id:
             logging.warning("get_workflow_output called with empty prompt_id.")
             return None

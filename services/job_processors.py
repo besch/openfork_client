@@ -7,7 +7,20 @@ This module re-exports all processor classes from the new modular structure
 for backward compatibility with existing code that imports from here.
 
 New code should import directly from services.processors instead.
+
+.. deprecated::
+    This module will be removed in a future version.
+    Use ``from services.processors import ...`` instead.
 """
+
+import warnings
+
+warnings.warn(
+    "Import from services.processors instead of services.job_processors. "
+    "This module will be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 from services.processors import (
     BaseJobProcessor,

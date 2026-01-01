@@ -19,3 +19,4 @@ python-dateutil==2.9.0.post0
 six==1.16.0
 python-dotenv==1.0.1
 ffmpeg-python==0.2.0
+tenacity==8.2.3
