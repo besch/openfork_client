@@ -6,13 +6,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install DGN client dependencies (with --break-system-packages for PEP 668)
-# Include tenacity for retry logic
+# Include tenacity for retry logic, docker for container management
 RUN pip3 install --break-system-packages \
     requests python-dotenv websocket-client py-cpuinfo GPUtil psutil \
-    httpx supabase websockets ffmpeg-python tenacity
+    httpx supabase websockets ffmpeg-python tenacity docker
 
-# Pre-pull popular models during build for faster startup
-RUN /bin/sh -c "ollama serve & pid=\$! && sleep 10 && ollama pull phi3:mini && ollama pull gemma2:2b && kill \$pid"
+# Pre-pull models during build for faster startup (mistral for JSON output)
+RUN /bin/sh -c "ollama serve & pid=\$! && sleep 10 && ollama pull mistral:7b-instruct && kill \$pid"
 
 # Bake DGN client into image at build time for efficiency
 # This avoids downloading files on every container start

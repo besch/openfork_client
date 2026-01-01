@@ -30,8 +30,8 @@ class LLMGenerationJobProcessor(BaseJobProcessor):
             return
 
         inputs = self.job.get("inputs", {})
-        # Default to gemma:2b (better at following JSON output instructions than phi3)
-        model_name = inputs.get("model", "gemma:2b")
+        # Default to mistral:7b-instruct (better at JSON output than smaller models)
+        model_name = inputs.get("model", "mistral:7b-instruct")
             
         system_prompt = inputs.get("system_prompt", "You are a helpful assistant.")
         temperature = inputs.get("temperature", 0.7)
@@ -95,23 +95,42 @@ class LLMGenerationJobProcessor(BaseJobProcessor):
     def _generate_text(
         self, api_base: str, model_name: str, system_prompt: str, temperature: float, max_tokens: int, seed: int
     ):
-        """Generate text using Ollama."""
+        """Generate text using Ollama with structured output for reliable JSON."""
         try:
-            full_prompt = f"{system_prompt}\n\nUser: {self.positive_prompt}\n\nAssistant:"
+            # JSON schema for script scenes - forces Ollama to output valid JSON
+            json_schema = {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Scene title"},
+                        "description": {"type": "string", "description": "Visual description"},
+                        "aspect_ratio": {"type": "string", "enum": ["16:9", "9:16"]},
+                        "camera_movement": {"type": "string", "enum": ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "dolly-in", "push-in", "pull-back"]},
+                        "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10}
+                    },
+                    "required": ["name", "description", "aspect_ratio", "camera_movement", "duration_seconds"]
+                }
+            }
 
+            # Use chat API with format parameter for structured output
             payload = {
                 "model": model_name,
-                "prompt": full_prompt,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": self.positive_prompt}
+                ],
                 "stream": False,
+                "format": json_schema,
                 "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed},
             }
 
-            logging.info(f"Calling Ollama API at {api_base}/api/generate with model {model_name}")
-            response = requests.post(f"{api_base}/api/generate", json=payload, timeout=1200)
+            logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
+            response = requests.post(f"{api_base}/api/chat", json=payload, timeout=1200)
             response.raise_for_status()
 
             result = response.json()
-            generated_text = result.get("response", "")
+            generated_text = result.get("message", {}).get("content", "")
 
             if not generated_text:
                 self._fail_job(f"Ollama returned empty response. Full result: {result}")
