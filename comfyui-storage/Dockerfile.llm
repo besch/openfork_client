@@ -28,7 +28,7 @@ RUN curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootst
 RUN echo "$(date -Iseconds)" > /opt/dgn-client/.installed
 
 # Copy startup script
-COPY llm-start.sh /start.sh
+COPY comfyui-storage/llm-start.sh /start.sh
 RUN chmod +x /start.sh
 
 # Override entrypoint to use our custom script

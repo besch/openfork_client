@@ -4,7 +4,7 @@ def generate_manifest():
     # Directories to include
     include_dirs = ["services", "utils"]
     # Files to include in root
-    include_files = ["cli.py", "dgn_client.py", "config.py", "requirements.txt", "start_cloud.sh"]
+    include_files = ["cli.py", "dgn_client.py", "config.py", "exceptions.py", "requirements.txt", "start_cloud.sh"]
     
     manifest = []
     
