@@ -34,7 +34,7 @@ from .image.zimage import ZImageTextToImageProcessor, ZImageControlNetProcessor,
 from .image.qwen import QwenImageEditProcessor, QwenImageInpaintProcessor, QwenImageT2IProcessor
 
 # Text processors
-from .text.llm import LLMGenerationJobProcessor
+from .llm.llm import LLMJobProcessor
 
 __all__ = [
     "BaseJobProcessor",
@@ -64,7 +64,7 @@ __all__ = [
     "QwenImageEditProcessor",
     "QwenImageInpaintProcessor",
     "QwenImageT2IProcessor",
-    "LLMGenerationJobProcessor",
+    "LLMJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",
     "SVIShotImageToVideoJobProcessor",
