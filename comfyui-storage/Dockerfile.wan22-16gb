@@ -1,8 +1,8 @@
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 # Dockerfile for WAN 2.2 (16GB VRAM version)
 # Uses Q6_K GGUF quantization for higher quality generation
-# Supports both text-to-video and image-to-video workflows
+# Supports both text-to-video and image-to-video workflows (Updated to match 8GB env)
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
@@ -20,23 +20,24 @@ RUN apt-get update && apt-get install -y \
 
 RUN python -m pip install --upgrade pip
 
-# Install PyTorch with CUDA 12.1 (widely compatible with cloud GPUs)
-RUN python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Install PyTorch with CUDA 12.8 wheels explicitly (Matching 8GB version)
+RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
 
-# Install dependencies
+# Install other dependencies as before, including gitpython to fix 'git' module error
 RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
 
+# Set working directory back to /opt/ComfyUI
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI
+# Clone ComfyUI and custom nodes as before
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
 RUN python -m pip install -r requirements.txt
 
-# Clone ComfyUI Manager
+# Clone ComfyUI Manager into custom_nodes
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
+# Install ComfyUI Manager Python dependencies
 RUN python -m pip install GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub>0.20
 
-# Clone required custom nodes
 RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
 RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
 RUN git clone https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF
@@ -53,7 +54,7 @@ RUN apt-get update && apt-get install -y \
 # Install uv for ComfyUI-Manager
 RUN python -m pip install uv
 
-# Create model directories
+# Create model directories (ensure they exist for wgets below)
 RUN mkdir -p /opt/ComfyUI/models/unet \
     && mkdir -p /opt/ComfyUI/models/vae \
     && mkdir -p /opt/ComfyUI/models/text_encoders \
