@@ -128,9 +128,19 @@ def setup_client(args):
         else:
             logging.info("No cached Docker images found")
 
+    # In headless mode, the Docker container only has ONE service's models installed
+    # So we must restrict supported_services to only that service, not all VRAM-compatible ones
+    from config import HEADLESS_MODE
+    if HEADLESS_MODE and args.service != 'auto':
+        # Only claim to support the exact service this container has
+        registration_services = [args.service]
+        logging.info(f"Headless mode: restricting supported_services to [{args.service}] (Docker image only has this service)")
+    else:
+        registration_services = list(client.compatible_services)
+    
     provider_id = client.orchestrator_service.register_with_orchestrator(
         service_type=args.service,
-        supported_services=list(client.compatible_services),
+        supported_services=registration_services,
         cached_images=cached_images,
         accept_policy=client.accept_policy
     )
