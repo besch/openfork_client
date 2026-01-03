@@ -1,72 +1,57 @@
-FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+# Foley Audio Generation Docker Image - OPTIMIZED
+
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y \
+# System dependencies - combined with cleanup
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 python3.11-venv python3.11-distutils python3.11-dev curl git \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils \
+    curl git libgl1-mesa-glx libgl1-mesa-dri \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN python -m pip install --upgrade pip
+# Python packages - combined
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv
 
-# Install PyTorch with CUDA 12.8 wheels explicitly
-RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
-
-# Install other dependencies as before, including gitpython to fix 'git' module error
-RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
-
-# Set working directory back to /opt/ComfyUI
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI and custom nodes as before
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+# Clone repos with --depth=1, remove .git, install requirements
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
+    && git clone --depth=1 https://github.com/if-ai/ComfyUI_HunyuanVideoFoley.git custom_nodes/ComfyUI_HunyuanVideoFoley \
+    && rm -rf custom_nodes/ComfyUI_HunyuanVideoFoley/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI_HunyuanVideoFoley/requirements.txt \
+    && git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
+    && rm -rf custom_nodes/VideoHelperSuite/.git \
+    && python -m pip install --no-cache-dir --force-reinstall \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
+    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true
 
-# Clone ComfyUI Manager into custom_nodes
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
-
-# Clone HunyuanVideoFoley
-RUN git clone https://github.com/if-ai/ComfyUI_HunyuanVideoFoley.git /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley
-
-# Clone VideoHelperSuite
-RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
-
-# Install dependencies for custom nodes
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/requirements.txt
-RUN python -m pip install timm decord
-RUN python -m pip install -U av
-
-# Install main requirements
-RUN python -m pip install -r requirements.txt
-
-# Force reinstall correct torch version
-RUN python -m pip install --force-reinstall torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
-
-# Run install script for foley
-# This is now run at container startup via CMD to ensure models are in the mounted volume
-# RUN python /opt/ComfyUI/custom_nodes/ComfyUI_HunyuanVideoFoley/install.py
-
-# Install additional system dependencies for OpenCV
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx libgl1-mesa-dri \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv for ComfyUI-Manager
-RUN python -m pip install uv
-
-# --- Copy Models for Foley Workflow ---
-# Copy user configurations and custom nodes
+# Copy user configurations
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
 # Copy Foley-specific models
-# Note: These paths assume the standard locations for models downloaded by the install script.
 COPY --chown=user:user ./storage/ComfyUI/models/foley/hunyuanvideo-foley-xxl/hunyuanvideo_foley.fp8_e5m2.pth /opt/ComfyUI/models/foley/hunyuanvideo-foley-xxl/
 COPY --chown=user:user ./storage/ComfyUI/models/checkpoints/Hunyuan-DiT-v1.2-fp16.safetensors /opt/ComfyUI/models/checkpoints/
 COPY --chown=user:user ./storage/ComfyUI/models/checkpoints/t2v_checkpoint.pt /opt/ComfyUI/models/checkpoints/
@@ -74,7 +59,5 @@ COPY --chown=user:user ./storage/ComfyUI/models/vae/sd-v1-5-vae-ft-mse.safetenso
 COPY --chown=user:user ./storage/ComfyUI/models/clip_vision/clip_vit_l_14.safetensors /opt/ComfyUI/models/clip_vision/
 COPY --chown=user:user ./storage/ComfyUI/models/t5/t5-v1_1-xxl /opt/ComfyUI/models/t5/
 
-
-# Set final working directory and command
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]

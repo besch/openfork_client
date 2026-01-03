@@ -1,78 +1,68 @@
 # syntax=docker/dockerfile:1.4
+# Z-Image Turbo Docker Image - OPTIMIZED
+# NOTE: Keeping devel for SageAttention compilation at runtime
+
 FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y \
+# System dependencies - combined with cleanup
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 python3.11-venv python3.11-distutils python3.11-dev curl git wget \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN python -m pip install --upgrade pip
+# Python packages - combined
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg ninja uv
 
-# Install PyTorch with CUDA 12.8 wheels explicitly
-RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+# Clone SageAttention for runtime compilation
+RUN git clone --depth=1 https://github.com/thu-ml/SageAttention.git /opt/sageattention \
+    && rm -rf /opt/sageattention/.git
 
-# Install base dependencies
-RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
-
-# Install SageAttention dependencies
-RUN python -m pip install ninja
-RUN git clone https://github.com/thu-ml/SageAttention.git /opt/sageattention
-
-# Set working directory
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-RUN python -m pip install -r requirements.txt
+# Clone repos with --depth=1, remove .git
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
+    && git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes.git custom_nodes/comfyui-kjnodes \
+    && rm -rf custom_nodes/comfyui-kjnodes/.git \
+    && git clone --depth=1 https://github.com/WASasquatch/was-node-suite-comfyui.git custom_nodes/was-node-suite-comfyui \
+    && rm -rf custom_nodes/was-node-suite-comfyui/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/was-node-suite-comfyui/requirements.txt \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Install ComfyUI Manager
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
-
-# Install custom nodes
-RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
-RUN git clone https://github.com/WASasquatch/was-node-suite-comfyui.git /opt/ComfyUI/custom_nodes/was-node-suite-comfyui
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/was-node-suite-comfyui/requirements.txt
-
-# Copy user configurations and custom nodes
+# Copy user configurations
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
-# --- Download Models for Z-Image-Turbo Workflow ---
-RUN mkdir -p /opt/ComfyUI/models/text_encoders /opt/ComfyUI/models/diffusion_models /opt/ComfyUI/models/vae /opt/ComfyUI/models/model_patches
+# Create model directories and download models (combined)
+RUN mkdir -p models/text_encoders models/diffusion_models models/vae models/model_patches \
+    && wget -q -O models/text_encoders/qwen_3_4b.safetensors \
+        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
+    && wget -q -O models/diffusion_models/z_image_turbo_bf16.safetensors \
+        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors" \
+    && wget -q -O models/vae/ae.safetensors \
+        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" \
+    && wget -q -O models/model_patches/Z-Image-Turbo-Fun-Controlnet-Union.safetensors \
+        "https://huggingface.co/alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union/resolve/main/Z-Image-Turbo-Fun-Controlnet-Union.safetensors"
 
-# Text encoder (Qwen 3 4B for Z-Image)
-RUN wget -O /opt/ComfyUI/models/text_encoders/qwen_3_4b.safetensors \
-    https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors
-
-# Diffusion model (Z-Image-Turbo bf16)
-RUN wget -O /opt/ComfyUI/models/diffusion_models/z_image_turbo_bf16.safetensors \
-    https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors
-
-# VAE
-RUN wget -O /opt/ComfyUI/models/vae/ae.safetensors \
-    https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors
-
-# ControlNet Union model for image editing
-RUN wget -O /opt/ComfyUI/models/model_patches/Z-Image-Turbo-Fun-Controlnet-Union.safetensors \
-    https://huggingface.co/alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union/resolve/main/Z-Image-Turbo-Fun-Controlnet-Union.safetensors
-
-# Install additional system dependencies for OpenCV
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx libgl1-mesa-dri \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv for ComfyUI-Manager
-RUN python -m pip install uv
-
-# Set final working directory and command
 WORKDIR /opt/ComfyUI
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]

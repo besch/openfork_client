@@ -1,98 +1,73 @@
+# TurboDiffusion Docker Image - OPTIMIZED
+# NOTE: Keeping devel for flash-attn and turbo_diffusion_ops CUDA compilation
+
 FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONPATH=/opt/TurboDiffusion:/opt/TurboDiffusion/turbodiffusion
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# System dependencies - combined
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
+    && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-venv python3.11-distutils python3.11-dev \
     curl git wget ffmpeg libgl1-mesa-glx libgl1-mesa-dri \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN python -m pip install --upgrade pip
+# Python packages - combined
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.8.0+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        psutil ninja packaging wheel setuptools \
+        "triton>=3.3.0" einops numpy pillow loguru "imageio[ffmpeg]" \
+        pandas pyyaml omegaconf attrs fvcore ftfy regex transformers nvidia-ml-py \
+        accelerate diffusers sentencepiece opencv-python av \
+        scipy scikit-image lmdb tensorboard lpips matplotlib tqdm requests \
+        fastapi uvicorn python-multipart aiofiles
 
-# Install PyTorch with CUDA 12.8 - TurboDiffusion recommends torch==2.8.0
-RUN python -m pip install torch==2.8.0+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
+# Install flash-attn (skip on failure)
+RUN MAX_JOBS=2 python -m pip install --no-cache-dir flash-attn --no-build-isolation || echo "flash-attn skipped"
 
-# Install build prerequisites
-RUN python -m pip install psutil ninja packaging wheel setuptools
-
-# Install flash-attn (skip building, use pip cache or prebuilt)
-RUN MAX_JOBS=2 python -m pip install flash-attn --no-build-isolation || echo "flash-attn skipped"
-
-# Install TurboDiffusion official dependencies (from pyproject.toml)
-RUN python -m pip install \
-    "triton>=3.3.0" \
-    einops \
-    numpy \
-    pillow \
-    loguru \
-    "imageio[ffmpeg]" \
-    pandas \
-    pyyaml \
-    omegaconf \
-    attrs \
-    fvcore \
-    ftfy \
-    regex \
-    transformers \
-    nvidia-ml-py
-
-# Install additional dependencies for AI workflows
-RUN python -m pip install accelerate diffusers sentencepiece opencv-python av
-
-# Install imaginaire minimal dependencies (submodule requirements)
-RUN python -m pip install scipy scikit-image lmdb tensorboard lpips matplotlib tqdm requests
-
-# Clone TurboDiffusion source
+# Clone TurboDiffusion
 WORKDIR /opt
-RUN git clone --depth 1 https://github.com/thu-ml/TurboDiffusion.git
+RUN git clone --depth=1 https://github.com/thu-ml/TurboDiffusion.git \
+    && cd TurboDiffusion \
+    && rm -rf .git \
+    && git submodule update --init --recursive
+
 WORKDIR /opt/TurboDiffusion
-RUN git submodule update --init --recursive
 
-# Build turbo_diffusion_ops CUDA extension (required for quantized inference)
-# This builds the custom CUDA kernels for int8 quantization and fast norms
-RUN MAX_JOBS=2 python -m pip install -e . --no-build-isolation || echo "turbo_diffusion_ops build skipped"
+# Build turbo_diffusion_ops CUDA extension
+RUN MAX_JOBS=2 python -m pip install --no-cache-dir -e . --no-build-isolation || echo "turbo_diffusion_ops build skipped"
 
-# Add TurboDiffusion to Python path
-ENV PYTHONPATH=/opt/TurboDiffusion:/opt/TurboDiffusion/turbodiffusion
+# Install SpargeAttn (skip on failure)
+RUN python -m pip install --no-cache-dir git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation || echo "SpargeAttn skipped"
 
-# Install SpargeAttn for SageSLA (faster attention) - skip on failure
-RUN python -m pip install git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation || echo "SpargeAttn skipped"
-
-# Install FastAPI for REST API server
-RUN python -m pip install fastapi uvicorn python-multipart aiofiles
-
-# Create directories for models and outputs
-RUN mkdir -p /opt/TurboDiffusion/checkpoints /opt/TurboDiffusion/outputs /opt/TurboDiffusion/inputs
-
-# Download VAE and text encoder
-WORKDIR /opt/TurboDiffusion/checkpoints
-RUN wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/Wan2.1_VAE.pth" && \
-    wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth"
-
-# Download T2V model (1.3B quantized - works on 8GB GPUs)
-RUN wget -q -O TurboWan2.1-T2V-1.3B-480P-quant.pth \
-    "https://huggingface.co/TurboDiffusion/TurboWan2.1-T2V-1.3B-480P/resolve/main/TurboWan2.1-T2V-1.3B-480P-quant.pth"
-
-# Download I2V models (14B quantized dual-expert)
-RUN wget -q -O TurboWan2.2-I2V-A14B-high-720P-quant.pth \
-    "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-high-720P-quant.pth" && \
-    wget -q -O TurboWan2.2-I2V-A14B-low-720P-quant.pth \
-    "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-low-720P-quant.pth"
+# Create directories and download models (combined)
+RUN mkdir -p checkpoints outputs inputs \
+    && cd checkpoints \
+    && wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/Wan2.1_VAE.pth" \
+    && wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth" \
+    && wget -q -O TurboWan2.1-T2V-1.3B-480P-quant.pth \
+        "https://huggingface.co/TurboDiffusion/TurboWan2.1-T2V-1.3B-480P/resolve/main/TurboWan2.1-T2V-1.3B-480P-quant.pth" \
+    && wget -q -O TurboWan2.2-I2V-A14B-high-720P-quant.pth \
+        "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-high-720P-quant.pth" \
+    && wget -q -O TurboWan2.2-I2V-A14B-low-720P-quant.pth \
+        "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-low-720P-quant.pth"
 
 # Copy the API server script
 COPY comfyui-storage/turbodiffusion_api_server.py /opt/TurboDiffusion/api_server.py
 
 WORKDIR /opt/TurboDiffusion
-
 EXPOSE 8000
-
 CMD ["python", "-m", "uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]

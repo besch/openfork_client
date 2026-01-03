@@ -1,72 +1,65 @@
 # syntax=docker/dockerfile:1.4
-FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+# Chatterbox TTS Docker Image - OPTIMIZED
+
+# Use runtime instead of devel - saves ~3-5GB
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y \
+# System dependencies - combined with --no-install-recommends and cleanup
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 python3.11-venv python3.11-distutils python3.11-dev curl git wget \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri ffmpeg \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN python -m pip install --upgrade pip
+# Python packages - combined into single layer
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg gguf uv huggingface_hub
 
-# Install PyTorch with CUDA 12.8 wheels explicitly
-RUN python -m pip install torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128
-
-# Install base dependencies
-RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
-
-# Set working directory
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-RUN python -m pip install -r requirements.txt
-
-# Install ComfyUI Manager
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
-
-# Install common custom nodes
-RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes
-RUN git clone https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF
-RUN python -m pip install --upgrade gguf
-RUN git clone https://github.com/WASasquatch/was-node-suite-comfyui.git /opt/ComfyUI/custom_nodes/was-node-suite-comfyui
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/was-node-suite-comfyui/requirements.txt
-
-# Install ComfyUI-Chatterbox node (wildminder/ComfyUI-Chatterbox)
-RUN git clone https://github.com/wildminder/ComfyUI-Chatterbox.git /opt/ComfyUI/custom_nodes/ComfyUI-Chatterbox
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-Chatterbox/requirements.txt
-
-# Install audio separation node
-RUN git clone https://github.com/christian-byrne/audio-separation-nodes-comfyui.git /opt/ComfyUI/custom_nodes/audio-separation-nodes-comfyui
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/audio-separation-nodes-comfyui/requirements.txt
-
-# Install additional system dependencies for OpenCV and audio processing
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx libgl1-mesa-dri ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv for ComfyUI-Manager
-RUN python -m pip install uv
+# Clone all repos with --depth=1, remove .git directories, install requirements
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
+    && git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes.git custom_nodes/comfyui-kjnodes \
+    && rm -rf custom_nodes/comfyui-kjnodes/.git \
+    && git clone --depth=1 https://github.com/city96/ComfyUI-GGUF.git custom_nodes/ComfyUI-GGUF \
+    && rm -rf custom_nodes/ComfyUI-GGUF/.git \
+    && git clone --depth=1 https://github.com/WASasquatch/was-node-suite-comfyui.git custom_nodes/was-node-suite-comfyui \
+    && rm -rf custom_nodes/was-node-suite-comfyui/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/was-node-suite-comfyui/requirements.txt \
+    && git clone --depth=1 https://github.com/wildminder/ComfyUI-Chatterbox.git custom_nodes/ComfyUI-Chatterbox \
+    && rm -rf custom_nodes/ComfyUI-Chatterbox/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Chatterbox/requirements.txt \
+    && git clone --depth=1 https://github.com/christian-byrne/audio-separation-nodes-comfyui.git custom_nodes/audio-separation-nodes-comfyui \
+    && rm -rf custom_nodes/audio-separation-nodes-comfyui/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/audio-separation-nodes-comfyui/requirements.txt \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
+    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true
 
 # Copy user configurations
 COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
 
-# Install huggingface-cli for model downloads
-RUN python -m pip install huggingface_hub
+# Create model directory for Chatterbox (models auto-download on first use)
+RUN mkdir -p models/tts/chatterbox
 
-# Create model directory for Chatterbox
-# Models are auto-downloaded on first use to: /opt/ComfyUI/models/tts/chatterbox/
-RUN mkdir -p /opt/ComfyUI/models/tts/chatterbox
-
-# Set final working directory and command
 WORKDIR /opt/ComfyUI
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]

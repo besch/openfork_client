@@ -1,76 +1,57 @@
 # syntax=docker/dockerfile:1.4
-# DiffRhythm CLI-based Docker image for OpenFork
-# Uses official DiffRhythm with GPU support for 8GB VRAM (RTX 4060)
+# DiffRhythm CLI Docker Image - OPTIMIZED
 
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
+ENV PHONEMIZER_ESPEAK_PATH=/usr/bin
+ENV HF_HOME=/app/pretrained
+ENV TRANSFORMERS_CACHE=/app/pretrained
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# System dependencies - combined with --no-install-recommends
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.10 python3.10-venv python3.10-distutils python3.10-dev \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-distutils \
     curl git wget ffmpeg espeak-ng \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Set working directory
 WORKDIR /app
 
-# Clone DiffRhythm repository
-RUN git clone https://github.com/ASLP-lab/DiffRhythm.git /app
+# Clone DiffRhythm and install all dependencies in one layer
+RUN git clone --depth=1 https://github.com/ASLP-lab/DiffRhythm.git /app \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests
 
-# Install Python dependencies
-RUN python -m pip install --upgrade pip
-RUN python -m pip install torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
-RUN python -m pip install -r requirements.txt
-
-# Install API server dependencies
-RUN python -m pip install fastapi uvicorn[standard] python-multipart requests
-
-# Set environment variables for espeak
-ENV PHONEMIZER_ESPEAK_LIBRARY=/usr/lib/x86_64-linux-gnu/libespeak-ng.so.1
-ENV PHONEMIZER_ESPEAK_PATH=/usr/bin
-
-# Create directories for input/output and model cache
+# Create directories
 RUN mkdir -p /app/input /app/output /app/pretrained
 
-# ============================================
-# PRE-DOWNLOAD ALL MODELS AT BUILD TIME
-# This prevents runtime downloads and makes container startup fast
-# ============================================
-
-# Download DiffRhythm CFM model (main inference model)
+# Download all models in single layer
 RUN python -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download('ASLP-lab/DiffRhythm-1_2', 'cfm_model.pt', cache_dir='./pretrained')"
-
-# Download DiffRhythm VAE model (audio decoder)
-RUN python -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download('ASLP-lab/DiffRhythm-vae', 'vae_model.pt', cache_dir='./pretrained')"
-
-# Download MuQ-MuLan model (music understanding - this is the big one!)
-RUN python -c "from muq import MuQMuLan; \
-    MuQMuLan.from_pretrained('OpenMuQ/MuQ-MuLan-large', cache_dir='./pretrained')"
-
-# Also download the full model variant for longer songs (optional but prevents future downloads)
-RUN python -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download('ASLP-lab/DiffRhythm-1_2-full', 'cfm_model.pt', cache_dir='./pretrained')" || true
-
-# Set HuggingFace cache to use our pretrained folder
-ENV HF_HOME=/app/pretrained
-ENV TRANSFORMERS_CACHE=/app/pretrained
+    hf_hub_download('ASLP-lab/DiffRhythm-1_2', 'cfm_model.pt', cache_dir='./pretrained')" \
+    && python -c "from huggingface_hub import hf_hub_download; \
+    hf_hub_download('ASLP-lab/DiffRhythm-vae', 'vae_model.pt', cache_dir='./pretrained')" \
+    && python -c "from muq import MuQMuLan; \
+    MuQMuLan.from_pretrained('OpenMuQ/MuQ-MuLan-large', cache_dir='./pretrained')" \
+    && (python -c "from huggingface_hub import hf_hub_download; \
+    hf_hub_download('ASLP-lab/DiffRhythm-1_2-full', 'cfm_model.pt', cache_dir='./pretrained')" || true) \
+    && rm -rf ~/.cache/huggingface ~/.cache/pip
 
 # Copy the API wrapper script
 COPY diffrhythm_api.py /app/diffrhythm_api.py
 
-# Expose port for API
 EXPOSE 8000
-
-# Default command - run the API server
 CMD ["python", "diffrhythm_api.py"]

@@ -1,74 +1,61 @@
-# LTX-Video 2B Docker Image (12GB VRAM)
+# LTX-Video 2B Docker Image (12GB VRAM) - OPTIMIZED
 # Uses ltx-video-2b-v0.9.1 model with T5 FP8 text encoder
 
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+# Use runtime instead of devel - saves ~3-5GB
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y \
+# System dependencies - combined with --no-install-recommends
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 python3.11-venv python3.11-distutils python3.11-dev curl git wget \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN python -m pip install --upgrade pip
-
-# Install PyTorch with CUDA 12.1 (more widely compatible with cloud GPUs)
-RUN python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# Install dependencies
-RUN python -m pip install gitpython PyYAML opencv-python imageio-ffmpeg
+# Python packages - combined into single layer
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg \
+        GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub \
+        color-matcher matplotlib mss toml rich uv
 
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-RUN python -m pip install -r requirements.txt
-
-# Clone ComfyUI Manager
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
-RUN python -m pip install GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub>0.20
-
-# Install ComfyUI-LTXVideo custom nodes
-RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git /opt/ComfyUI/custom_nodes/ComfyUI-LTXVideo
-RUN python -m pip install -r /opt/ComfyUI/custom_nodes/ComfyUI-LTXVideo/requirements.txt || true
-
-# Clone VideoHelperSuite for video output
-RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite
-
-# Install additional requirements
-RUN python -m pip install color-matcher matplotlib huggingface_hub mss toml rich
-
-# Install additional system dependencies for OpenCV
-RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx libgl1-mesa-dri \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv for ComfyUI-Manager
-RUN python -m pip install uv
+# Clone all repos with --depth=1, remove .git directories, install requirements
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
+    && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
+    && git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
+    && rm -rf custom_nodes/VideoHelperSuite/.git \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
+    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true
 
 # Create model directories
-RUN mkdir -p /opt/ComfyUI/models/checkpoints \
-    && mkdir -p /opt/ComfyUI/models/text_encoders \
-    && mkdir -p /opt/ComfyUI/models/clip
+RUN mkdir -p models/checkpoints models/text_encoders models/clip
 
-# Download LTX-Video 2B model (main checkpoint ~4GB)
-RUN wget -O /opt/ComfyUI/models/checkpoints/ltx-video-2b-v0.9.1.safetensors \
-    "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.1.safetensors"
-
-# Download T5 XXL FP8 text encoder (~5GB)
-RUN wget -O /opt/ComfyUI/models/text_encoders/t5xxl_fp8_e4m3fn.safetensors \
-    "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors"
-
-# Create symlink in clip folder for compatibility
-RUN ln -s /opt/ComfyUI/models/text_encoders/t5xxl_fp8_e4m3fn.safetensors \
-    /opt/ComfyUI/models/clip/t5xxl_fp8_e4m3fn.safetensors
+# Download models (combined into single layer)
+RUN wget -q -O models/checkpoints/ltx-video-2b-v0.9.1.safetensors \
+        "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.1.safetensors" \
+    && wget -q -O models/text_encoders/t5xxl_fp8_e4m3fn.safetensors \
+        "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors" \
+    && ln -s /opt/ComfyUI/models/text_encoders/t5xxl_fp8_e4m3fn.safetensors models/clip/t5xxl_fp8_e4m3fn.safetensors
 
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
