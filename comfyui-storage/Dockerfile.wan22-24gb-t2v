@@ -1,0 +1,81 @@
+# =============================================================================
+# Dockerfile for WAN 2.2 24GB - TEXT-TO-VIDEO ONLY
+# Uses Q8_0 GGUF quantization for near-lossless quality generation
+# Optimized for size - contains only T2V models
+# =============================================================================
+
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget \
+    libgl1-mesa-glx libgl1-mesa-dri \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Install Python packages
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg \
+        GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub \
+        color-matcher matplotlib mss toml rich gguf uv \
+    && rm -rf ~/.cache/pip
+
+WORKDIR /opt/ComfyUI
+
+# Clone all repos, remove .git directories
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf /opt/ComfyUI/.git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager \
+    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI-Manager/.git \
+    && git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes.git /opt/ComfyUI/custom_nodes/comfyui-kjnodes \
+    && rm -rf /opt/ComfyUI/custom_nodes/comfyui-kjnodes/.git \
+    && git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git /opt/ComfyUI/custom_nodes/VideoHelperSuite \
+    && rm -rf /opt/ComfyUI/custom_nodes/VideoHelperSuite/.git \
+    && git clone --depth=1 https://github.com/city96/ComfyUI-GGUF.git /opt/ComfyUI/custom_nodes/ComfyUI-GGUF \
+    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI-GGUF/.git \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
+    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
+    && rm -rf ~/.cache/pip
+
+# Create model directories
+RUN mkdir -p /opt/ComfyUI/models/unet \
+    /opt/ComfyUI/models/vae \
+    /opt/ComfyUI/models/text_encoders \
+    /opt/ComfyUI/models/loras
+
+# --- Download WAN 2.2 Q8_0 Models - T2V ONLY ---
+# Text Encoder + VAE (shared, ~5.3GB total)
+RUN wget --tries=3 --timeout=300 -q -O /opt/ComfyUI/models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors" \
+    && wget --tries=3 --timeout=300 -q -O /opt/ComfyUI/models/vae/wan_2.1_vae.safetensors \
+        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
+
+# T2V UNETs - Q8_0 quantization (~15.4GB each = ~31GB total)
+RUN wget --tries=3 --timeout=600 -q -O /opt/ComfyUI/models/unet/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf \
+        "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf" \
+    && wget --tries=3 --timeout=600 -q -O /opt/ComfyUI/models/unet/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf \
+        "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf"
+
+# T2V LoRA for step distillation
+RUN wget --tries=3 --timeout=300 -q -O /opt/ComfyUI/models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors \
+        "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors"
+
+WORKDIR /opt/ComfyUI
+CMD ["python", "main.py", "--listen"]
