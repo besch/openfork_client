@@ -123,10 +123,7 @@ def setup_client(args):
     if client.download_manager and client.services_config:
         all_service_types = list(client.services_config.keys())
         cached_images = client.download_manager.get_cached_service_types(all_service_types)
-        if cached_images:
-            logging.info(f"Found {len(cached_images)} cached Docker images: {', '.join(cached_images)}")
-        else:
-            logging.info("No cached Docker images found")
+
 
     # In headless mode, the Docker container only has ONE service's models installed
     # So we must restrict supported_services to only that service, not all VRAM-compatible ones

@@ -126,13 +126,7 @@ class DGNClient:
             for service_name, service_config in self.services_config.items():
                 if can_run_service(service_config, self.available_vram):
                     self.compatible_services.add(service_name)
-                else:
-                    required = service_config.get("vram_required_mb", 0)
-                    logging.warning(
-                        f"Service '{service_name}' requires {get_vram_requirement_display(required)} VRAM, "
-                        f"but only {get_vram_requirement_display(self.available_vram)} available. "
-                        f"Jobs for this service will be skipped."
-                    )
+
             
             if self.compatible_services:
                 logging.info(f"GPU VRAM: {get_vram_requirement_display(self.available_vram)}")
