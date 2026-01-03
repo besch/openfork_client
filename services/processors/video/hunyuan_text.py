@@ -8,7 +8,7 @@ import logging
 from config import DEV_MODE
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
-from utils.comfyui_workflow_utils import inject_prompt_into_text_to_video_workflow
+from utils.comfyui_workflow_utils import inject_prompt_into_hunyuan_video_workflow
 
 
 class HunyuanTextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
@@ -30,7 +30,7 @@ class HunyuanTextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
 
-        wf_ready = inject_prompt_into_text_to_video_workflow(
+        wf_ready = inject_prompt_into_hunyuan_video_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps,
             flow_shift=flow_shift, sampler=sampler, scheduler=scheduler

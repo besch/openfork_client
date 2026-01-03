@@ -10,7 +10,7 @@ from services.docker_manager import docker_manager
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
 from utils.comfyui_workflow_utils import (
-    inject_prompt_and_image_into_workflow,
+    inject_prompt_and_image_into_ltx_video_workflow,
     materialize_start_image,
 )
 
@@ -82,7 +82,7 @@ class LTXImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
 
-        wf_ready = inject_prompt_and_image_into_workflow(
+        wf_ready = inject_prompt_and_image_into_ltx_video_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps,
             flow_shift=flow_shift, sampler=sampler, scheduler=scheduler

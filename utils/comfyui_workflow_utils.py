@@ -236,6 +236,352 @@ def inject_prompt_into_text_to_video_workflow(
 
     return api_graph
 
+def inject_prompt_into_ltx_video_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    aspect_ratio: str = "16:9",
+    cfg_scale: Optional[float] = None,
+    steps: Optional[int] = None,
+    sampler: Optional[str] = None,
+    scheduler: Optional[str] = None
+):
+    """
+    Loads a ComfyUI API-formatted workflow, injects prompts for LTX-Video.
+    LTX-Video uses a different node structure than other models:
+    - Node 3: Positive prompt (CLIPTextEncode)
+    - Node 4: Negative prompt (CLIPTextEncode)
+    - Node 6: EmptyLTXVLatentVideo (for dimensions)
+    - Node 7: RandomNoise (for seed)
+    - Node 8: KSamplerSelect (for sampler)
+    - Node 9: BasicScheduler (for scheduler and steps)
+    - Node 10: CFGGuider (for cfg_scale)
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Node 3 is positive prompt, Node 4 is negative prompt (different from generic workflows!)
+    if '3' in api_graph and 'inputs' in api_graph['3'] and 'text' in api_graph['3']['inputs']:
+        api_graph['3']['inputs']['text'] = prompt
+        logging.info(f"Injected positive prompt into LTX node 3: {prompt[:50]}...")
+    else:
+        logging.warning("Could not find positive prompt node 3 in LTX workflow")
+
+    if '4' in api_graph and 'inputs' in api_graph['4'] and 'text' in api_graph['4']['inputs']:
+        api_graph['4']['inputs']['text'] = negative_prompt
+        logging.info(f"Injected negative prompt into LTX node 4")
+    else:
+        logging.warning("Could not find negative prompt node 4 in LTX workflow")
+
+    # Inject dimensions into EmptyLTXVLatentVideo (Node 6)
+    if '6' in api_graph and api_graph['6'].get("class_type") == "EmptyLTXVLatentVideo":
+        width, height = get_dimensions(aspect_ratio)
+        api_graph['6']['inputs']['width'] = width
+        api_graph['6']['inputs']['height'] = height
+        logging.info(f"Injected dimensions into LTX node 6: {width}x{height}")
+
+    # Randomize seed for RandomNoise node (Node 7)
+    if '7' in api_graph and api_graph['7'].get("class_type") == "RandomNoise":
+        new_seed = random.randint(0, 2**63 - 1)
+        api_graph['7']['inputs']['noise_seed'] = new_seed
+        logging.info(f"Randomized seed in LTX node 7: {new_seed}")
+    else:
+        logging.warning("Could not find RandomNoise node 7 to randomize seed")
+
+    # Inject sampler into KSamplerSelect (Node 8)
+    if sampler is not None and '8' in api_graph and api_graph['8'].get("class_type") == "KSamplerSelect":
+        api_graph['8']['inputs']['sampler_name'] = sampler
+        logging.info(f"Injected sampler into LTX node 8: {sampler}")
+
+    # Inject scheduler and steps into BasicScheduler (Node 9)
+    if '9' in api_graph and api_graph['9'].get("class_type") == "BasicScheduler":
+        if scheduler is not None:
+            api_graph['9']['inputs']['scheduler'] = scheduler
+            logging.info(f"Injected scheduler into LTX node 9: {scheduler}")
+        if steps is not None:
+            api_graph['9']['inputs']['steps'] = steps
+            logging.info(f"Injected steps into LTX node 9: {steps}")
+
+    # Inject cfg_scale into CFGGuider (Node 10)
+    if cfg_scale is not None and '10' in api_graph and api_graph['10'].get("class_type") == "CFGGuider":
+        api_graph['10']['inputs']['cfg'] = cfg_scale
+        logging.info(f"Injected cfg into LTX node 10: {cfg_scale}")
+
+    # Replace date token in filename_prefix for VHS_VideoCombine node
+    for node in api_graph.values():
+        if node.get("class_type") == "VHS_VideoCombine":
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
+
+    return api_graph
+
+def inject_prompt_and_image_into_ltx_video_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    start_image_filename: str, 
+    aspect_ratio: str = "16:9",
+    cfg_scale: Optional[float] = None,
+    steps: Optional[int] = None,
+    sampler: Optional[str] = None,
+    scheduler: Optional[str] = None
+):
+    """
+    Loads a ComfyUI API-formatted workflow, injects prompts and image for LTX-Video image-to-video.
+    LTX-Video image-to-video uses this node structure:
+    - Node 3: Positive prompt (CLIPTextEncode)
+    - Node 4: Negative prompt (CLIPTextEncode)
+    - Node 6: LoadImage (for start image)
+    - Node 7: RandomNoise (for seed)
+    - Node 8: KSamplerSelect (for sampler)
+    - Node 9: BasicScheduler (for scheduler and steps)
+    - Node 12: CFGGuider (for cfg_scale) - different node than text-to-video!
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Node 3 is positive prompt, Node 4 is negative prompt
+    if '3' in api_graph and 'inputs' in api_graph['3'] and 'text' in api_graph['3']['inputs']:
+        api_graph['3']['inputs']['text'] = prompt
+        logging.info(f"Injected positive prompt into LTX i2v node 3: {prompt[:50]}...")
+    else:
+        logging.warning("Could not find positive prompt node 3 in LTX i2v workflow")
+
+    if '4' in api_graph and 'inputs' in api_graph['4'] and 'text' in api_graph['4']['inputs']:
+        api_graph['4']['inputs']['text'] = negative_prompt
+        logging.info(f"Injected negative prompt into LTX i2v node 4")
+    else:
+        logging.warning("Could not find negative prompt node 4 in LTX i2v workflow")
+
+    # Inject start image into LoadImage node (Node 6)
+    if '6' in api_graph and api_graph['6'].get("class_type") == "LoadImage":
+        api_graph['6']['inputs']['image'] = start_image_filename
+        logging.info(f"Injected start image into LTX i2v node 6: {start_image_filename}")
+    else:
+        logging.warning("Could not find LoadImage node 6 in LTX i2v workflow")
+
+    # Randomize seed for RandomNoise node (Node 7)
+    if '7' in api_graph and api_graph['7'].get("class_type") == "RandomNoise":
+        new_seed = random.randint(0, 2**63 - 1)
+        api_graph['7']['inputs']['noise_seed'] = new_seed
+        logging.info(f"Randomized seed in LTX i2v node 7: {new_seed}")
+    else:
+        logging.warning("Could not find RandomNoise node 7 to randomize seed")
+
+    # Inject sampler into KSamplerSelect (Node 8)
+    if sampler is not None and '8' in api_graph and api_graph['8'].get("class_type") == "KSamplerSelect":
+        api_graph['8']['inputs']['sampler_name'] = sampler
+        logging.info(f"Injected sampler into LTX i2v node 8: {sampler}")
+
+    # Inject scheduler and steps into BasicScheduler (Node 9)
+    if '9' in api_graph and api_graph['9'].get("class_type") == "BasicScheduler":
+        if scheduler is not None:
+            api_graph['9']['inputs']['scheduler'] = scheduler
+            logging.info(f"Injected scheduler into LTX i2v node 9: {scheduler}")
+        if steps is not None:
+            api_graph['9']['inputs']['steps'] = steps
+            logging.info(f"Injected steps into LTX i2v node 9: {steps}")
+
+    # Inject cfg_scale into CFGGuider (Node 12 for i2v, not 10!)
+    if cfg_scale is not None and '12' in api_graph and api_graph['12'].get("class_type") == "CFGGuider":
+        api_graph['12']['inputs']['cfg'] = cfg_scale
+        logging.info(f"Injected cfg into LTX i2v node 12: {cfg_scale}")
+
+    # Replace date token in filename_prefix for VHS_VideoCombine node
+    for node in api_graph.values():
+        if node.get("class_type") == "VHS_VideoCombine":
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
+
+    return api_graph
+
+def inject_prompt_into_hunyuan_video_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    aspect_ratio: str = "16:9",
+    cfg_scale: Optional[float] = None,
+    steps: Optional[int] = None,
+    flow_shift: Optional[float] = None,
+    sampler: Optional[str] = None,
+    scheduler: Optional[str] = None
+):
+    """
+    Loads a ComfyUI API-formatted workflow, injects prompts for HunyuanVideo 1.5.
+    HunyuanVideo uses this node structure:
+    - Node 44: Positive prompt (CLIPTextEncode)
+    - Node 93: Negative prompt (CLIPTextEncode)
+    - Node 129: RandomNoise (for seed)
+    - Node 130: KSamplerSelect (for sampler)
+    - Node 128: BasicScheduler (for scheduler and steps)
+    - Node 131: CFGGuider (for cfg_scale)
+    - Node 132: ModelSamplingSD3 (for flow_shift)
+    - Node 133: EmptyHunyuanLatentVideo (for dimensions)
+    - Node 101: CreateVideo (needs fps parameter)
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Node 44 is positive prompt, Node 93 is negative prompt
+    if '44' in api_graph and 'inputs' in api_graph['44'] and 'text' in api_graph['44']['inputs']:
+        api_graph['44']['inputs']['text'] = prompt
+        logging.info(f"Injected positive prompt into HunyuanVideo node 44: {prompt[:50]}...")
+    else:
+        logging.warning("Could not find positive prompt node 44 in HunyuanVideo workflow")
+
+    if '93' in api_graph and 'inputs' in api_graph['93'] and 'text' in api_graph['93']['inputs']:
+        api_graph['93']['inputs']['text'] = negative_prompt
+        logging.info(f"Injected negative prompt into HunyuanVideo node 93")
+    else:
+        logging.warning("Could not find negative prompt node 93 in HunyuanVideo workflow")
+
+    # Inject dimensions into EmptyHunyuanLatentVideo (Node 133)
+    if '133' in api_graph and api_graph['133'].get("class_type") == "EmptyHunyuanLatentVideo":
+        width, height = get_dimensions(aspect_ratio)
+        api_graph['133']['inputs']['width'] = width
+        api_graph['133']['inputs']['height'] = height
+        logging.info(f"Injected dimensions into HunyuanVideo node 133: {width}x{height}")
+
+    # Randomize seed for RandomNoise node (Node 129)
+    if '129' in api_graph and api_graph['129'].get("class_type") == "RandomNoise":
+        new_seed = random.randint(0, 2**63 - 1)
+        api_graph['129']['inputs']['noise_seed'] = new_seed
+        logging.info(f"Randomized seed in HunyuanVideo node 129: {new_seed}")
+    else:
+        logging.warning("Could not find RandomNoise node 129 to randomize seed")
+
+    # Inject sampler into KSamplerSelect (Node 130)
+    if sampler is not None and '130' in api_graph and api_graph['130'].get("class_type") == "KSamplerSelect":
+        api_graph['130']['inputs']['sampler_name'] = sampler
+        logging.info(f"Injected sampler into HunyuanVideo node 130: {sampler}")
+
+    # Inject scheduler and steps into BasicScheduler (Node 128)
+    if '128' in api_graph and api_graph['128'].get("class_type") == "BasicScheduler":
+        if scheduler is not None:
+            api_graph['128']['inputs']['scheduler'] = scheduler
+            logging.info(f"Injected scheduler into HunyuanVideo node 128: {scheduler}")
+        if steps is not None:
+            api_graph['128']['inputs']['steps'] = steps
+            logging.info(f"Injected steps into HunyuanVideo node 128: {steps}")
+
+    # Inject cfg_scale into CFGGuider (Node 131)
+    if cfg_scale is not None and '131' in api_graph and api_graph['131'].get("class_type") == "CFGGuider":
+        api_graph['131']['inputs']['cfg'] = cfg_scale
+        logging.info(f"Injected cfg into HunyuanVideo node 131: {cfg_scale}")
+
+    # Inject flow_shift into ModelSamplingSD3 (Node 132)
+    if flow_shift is not None and '132' in api_graph and api_graph['132'].get("class_type") == "ModelSamplingSD3":
+        api_graph['132']['inputs']['shift'] = flow_shift
+        logging.info(f"Injected flow_shift into HunyuanVideo node 132: {flow_shift}")
+
+    # Fix CreateVideo node (Node 101) - add missing fps parameter
+    if '101' in api_graph and api_graph['101'].get("class_type") == "CreateVideo":
+        # Ensure fps is set (defaults to frame_rate if not present)
+        if 'fps' not in api_graph['101']['inputs']:
+            frame_rate = api_graph['101']['inputs'].get('frame_rate', 24)
+            api_graph['101']['inputs']['fps'] = frame_rate
+            logging.info(f"Added missing fps parameter to HunyuanVideo CreateVideo node 101: {frame_rate}")
+
+    return api_graph
+
+def inject_prompt_and_image_into_hunyuan_video_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    start_image_filename: str,
+    aspect_ratio: str = "16:9",
+    cfg_scale: Optional[float] = None,
+    steps: Optional[int] = None,
+    flow_shift: Optional[float] = None,
+    sampler: Optional[str] = None,
+    scheduler: Optional[str] = None
+):
+    """
+    Loads a ComfyUI API-formatted workflow, injects prompts and image for HunyuanVideo 1.5 image-to-video.
+    HunyuanVideo i2v uses this node structure:
+    - Node 1: LoadImage (for start image)
+    - Node 44: Positive prompt (CLIPTextEncode)
+    - Node 93: Negative prompt (CLIPTextEncode)
+    - Node 78: HunyuanImageToVideo (handles dimensions and conditioning)
+    - Node 129: RandomNoise (for seed)
+    - Node 130: KSamplerSelect (for sampler)
+    - Node 128: BasicScheduler (for scheduler and steps)
+    - Node 131: CFGGuider (for cfg_scale)
+    - Node 132: ModelSamplingSD3 (for flow_shift)
+    - Node 101: CreateVideo (needs fps parameter)
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Node 44 is positive prompt, Node 93 is negative prompt
+    if '44' in api_graph and 'inputs' in api_graph['44'] and 'text' in api_graph['44']['inputs']:
+        api_graph['44']['inputs']['text'] = prompt
+        logging.info(f"Injected positive prompt into HunyuanVideo i2v node 44: {prompt[:50]}...")
+    else:
+        logging.warning("Could not find positive prompt node 44 in HunyuanVideo i2v workflow")
+
+    if '93' in api_graph and 'inputs' in api_graph['93'] and 'text' in api_graph['93']['inputs']:
+        api_graph['93']['inputs']['text'] = negative_prompt
+        logging.info(f"Injected negative prompt into HunyuanVideo i2v node 93")
+    else:
+        logging.warning("Could not find negative prompt node 93 in HunyuanVideo i2v workflow")
+
+    # Inject start image into LoadImage node (Node 1)
+    if '1' in api_graph and api_graph['1'].get("class_type") == "LoadImage":
+        api_graph['1']['inputs']['image'] = start_image_filename
+        logging.info(f"Injected start image into HunyuanVideo i2v node 1: {start_image_filename}")
+    else:
+        logging.warning("Could not find LoadImage node 1 in HunyuanVideo i2v workflow")
+
+    # Inject dimensions into HunyuanImageToVideo (Node 78)
+    if '78' in api_graph and api_graph['78'].get("class_type") == "HunyuanImageToVideo":
+        width, height = get_dimensions(aspect_ratio)
+        api_graph['78']['inputs']['width'] = width
+        api_graph['78']['inputs']['height'] = height
+        logging.info(f"Injected dimensions into HunyuanVideo i2v node 78: {width}x{height}")
+
+    # Randomize seed for RandomNoise node (Node 129)
+    if '129' in api_graph and api_graph['129'].get("class_type") == "RandomNoise":
+        new_seed = random.randint(0, 2**63 - 1)
+        api_graph['129']['inputs']['noise_seed'] = new_seed
+        logging.info(f"Randomized seed in HunyuanVideo i2v node 129: {new_seed}")
+    else:
+        logging.warning("Could not find RandomNoise node 129 to randomize seed")
+
+    # Inject sampler into KSamplerSelect (Node 130)
+    if sampler is not None and '130' in api_graph and api_graph['130'].get("class_type") == "KSamplerSelect":
+        api_graph['130']['inputs']['sampler_name'] = sampler
+        logging.info(f"Injected sampler into HunyuanVideo i2v node 130: {sampler}")
+
+    # Inject scheduler and steps into BasicScheduler (Node 128)
+    if '128' in api_graph and api_graph['128'].get("class_type") == "BasicScheduler":
+        if scheduler is not None:
+            api_graph['128']['inputs']['scheduler'] = scheduler
+            logging.info(f"Injected scheduler into HunyuanVideo i2v node 128: {scheduler}")
+        if steps is not None:
+            api_graph['128']['inputs']['steps'] = steps
+            logging.info(f"Injected steps into HunyuanVideo i2v node 128: {steps}")
+
+    # Inject cfg_scale into CFGGuider (Node 131)
+    if cfg_scale is not None and '131' in api_graph and api_graph['131'].get("class_type") == "CFGGuider":
+        api_graph['131']['inputs']['cfg'] = cfg_scale
+        logging.info(f"Injected cfg into HunyuanVideo i2v node 131: {cfg_scale}")
+
+    # Inject flow_shift into ModelSamplingSD3 (Node 132)
+    if flow_shift is not None and '132' in api_graph and api_graph['132'].get("class_type") == "ModelSamplingSD3":
+        api_graph['132']['inputs']['shift'] = flow_shift
+        logging.info(f"Injected flow_shift into HunyuanVideo i2v node 132: {flow_shift}")
+
+    # Fix CreateVideo node (Node 101) - add missing fps parameter
+    if '101' in api_graph and api_graph['101'].get("class_type") == "CreateVideo":
+        # Ensure fps is set (defaults to frame_rate if not present)
+        if 'fps' not in api_graph['101']['inputs']:
+            frame_rate = api_graph['101']['inputs'].get('frame_rate', 24)
+            api_graph['101']['inputs']['fps'] = frame_rate
+            logging.info(f"Added missing fps parameter to HunyuanVideo i2v CreateVideo node 101: {frame_rate}")
+
+    return api_graph
+
 def inject_prompt_into_qwen_workflow(workflow_api_data: Dict, prompt: str, negative_prompt: str, aspect_ratio: str = "1:1"):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for Qwen.
