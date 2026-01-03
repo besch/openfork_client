@@ -133,6 +133,17 @@ class DGNClient:
                 logging.info(f"Compatible services: {', '.join(sorted(self.compatible_services))}")
             else:
                 logging.warning("No compatible services found for current GPU!")
+            
+            # Log incompatible services for debugging
+            incompatible_services = set(self.services_config.keys()) - self.compatible_services
+            if incompatible_services:
+                logging.debug("Incompatible services:")
+                for service_name in incompatible_services:
+                    required = self.services_config[service_name].get("vram_required_mb", 0)
+                    if required > self.available_vram:
+                        logging.debug(f"  - {service_name}: requires {required}MB, have {self.available_vram}MB")
+                    else:
+                        logging.debug(f"  - {service_name}: unknown incompatibility (VRAM check passed?)")
 
             logging.info("DGN configuration loaded successfully from orchestrator.")
             
