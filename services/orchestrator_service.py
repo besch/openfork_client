@@ -31,6 +31,19 @@ class OrchestratorService:
         self.token_update_lock = threading.Lock()
         self._last_auth_expired_signal = 0
         self._auth_failed_permanently = False
+        
+        # PERFORMANCE: Use a Session for HTTP connection pooling
+        # This reuses TCP connections across requests, reducing latency for
+        # frequent operations like heartbeats and status updates
+        self._session = requests.Session()
+        # Configure connection pool size for parallel operations
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=0  # We handle retries via tenacity
+        )
+        self._session.mount('http://', adapter)
+        self._session.mount('https://', adapter)
 
     def update_tokens(self, access_token: str, refresh_token: str):
         """Thread-safe method to update auth tokens."""
@@ -123,7 +136,8 @@ class OrchestratorService:
              request_headers['Content-Type'] = 'application/json'
         
         try:
-            response = requests.request(method, url, headers=request_headers, **kwargs)
+            # Use session for connection pooling
+            response = self._session.request(method, url, headers=request_headers, **kwargs)
         except requests.exceptions.ConnectionError as e:
             logging.warning(f"Connection error to {url}, will retry: {e}")
             raise  # Let tenacity handle the retry
