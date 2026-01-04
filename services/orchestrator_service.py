@@ -490,8 +490,12 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self, service_type: str, supported_services: list = None, cached_images: list = None, accept_policy: str = "all") -> Union[str, None]:
-        """Register the client with the orchestrator."""
+    def register_with_orchestrator(self, service_type: str, supported_services: list = None, cached_images: list = None, accept_policy: str = "all") -> Union[Dict[str, str], None]:
+        """Register the client with the orchestrator.
+        
+        Returns:
+            A dict with 'provider_id' and 'user_id' keys on success, or None on failure.
+        """
         hardware_profile = get_hardware_profile()
         
         # In API key mode, the server will get user_id from the API key
@@ -547,7 +551,12 @@ class OrchestratorService:
             )
             response.raise_for_status()
             logging.info("Successfully registered with the Orchestrator.")
-            return response.json().get('provider_id')
+            data = response.json()
+            # Return both provider_id and user_id (user_id is returned for API key mode)
+            return {
+                "provider_id": data.get('provider_id'),
+                "user_id": data.get('user_id') or user_id  # Fall back to local user_id for OAuth mode
+            }
         except requests.exceptions.RequestException as e:
             logging.error(f"Error registering with the Orchestrator: {e.response.text if e.response else e}")
             return None

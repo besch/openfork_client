@@ -132,17 +132,33 @@ def setup_client(args):
         # Only claim to support the exact service this container has
         registration_services = [args.service]
         logging.info(f"Headless mode: restricting supported_services to [{args.service}] (Docker image only has this service)")
+        
+        # Headless clients exist to provide network capacity, not for personal use
+        # Force accept_policy to 'all' to ensure they serve the public network
+        if client.accept_policy != 'all':
+            logging.warning(f"Headless mode: overriding accept_policy '{client.accept_policy}' -> 'all' (headless clients serve public network only)")
+            client.accept_policy = 'all'
+            client.allowed_ids = []  # Clear any user-specific filtering
     else:
         registration_services = list(client.compatible_services)
     
-    provider_id = client.orchestrator_service.register_with_orchestrator(
+    registration_result = client.orchestrator_service.register_with_orchestrator(
         service_type=args.service,
         supported_services=registration_services,
         cached_images=cached_images,
         accept_policy=client.accept_policy
     )
-    if not provider_id:
+    if not registration_result:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
+    
+    provider_id = registration_result.get("provider_id")
+    user_id = registration_result.get("user_id")
+    
+    # For 'mine' policy (Electron/desktop clients only), ensure allowed_ids contains the user's ID
+    if client.accept_policy == "mine" and user_id:
+        if user_id not in client.allowed_ids:
+            client.allowed_ids.append(user_id)
+            logging.info(f"'mine' policy: Added user_id from registration to allowed_ids")
     
     # Update download manager with provider_id for reporting newly cached images
     if client.download_manager:

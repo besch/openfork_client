@@ -135,8 +135,11 @@ class ClientConfig:
         
         docker = DockerConfig.from_environment()
         # In headless mode, skip Docker operations (ComfyUI runs in same container)
+        # and enforce 'all' policy (headless clients serve the public network)
         if HEADLESS_MODE:
             docker.skip_docker = True
+            provider.accept_policy = "all"
+            provider.allowed_targets = []
         
         return cls(
             orchestrator_url=orchestrator_url,

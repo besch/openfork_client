@@ -55,7 +55,7 @@ class DGNClient:
         # Initialize download manager for Docker image pre-fetching (only when not headless)
         self.download_manager = DockerDownloadManager(docker_manager) if docker_manager else None
 
-        if self.accept_policy == "mine":
+        if self.accept_policy == "mine" and not self.orchestrator_service.use_api_key:
             user_id = self.orchestrator_service._get_user_id_from_token()
             if user_id:
                 self.allowed_ids.append(user_id)
