@@ -243,6 +243,7 @@ def inject_prompt_into_ltx_video_workflow(
     aspect_ratio: str = "16:9",
     cfg_scale: Optional[float] = None,
     steps: Optional[int] = None,
+    flow_shift: Optional[float] = None,  # Accepted but unused - LTX workflow doesn't use it
     sampler: Optional[str] = None,
     scheduler: Optional[str] = None
 ):
