@@ -91,11 +91,12 @@ def inject_prompt_and_image_into_workflow(
     steps: Optional[int] = None,
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
-    scheduler: Optional[str] = None
+    scheduler: Optional[str] = None,
+    seed: Optional[int] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
-    Also randomizes seed for image-to-video generation.
+    Also sets seed for image-to-video generation (random if not provided).
     Optionally injects cfg_scale and steps into KSampler nodes.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
@@ -124,9 +125,10 @@ def inject_prompt_and_image_into_workflow(
                 datestr = datetime.now().strftime("%Y-%m-%d")
                 node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
 
-    # Randomize seed for KSamplerAdvanced nodes (typically node 57 for high noise)
+    # Set seed for KSamplerAdvanced nodes (use provided seed or generate random)
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '57' in api_graph and 'inputs' in api_graph['57']:
-        api_graph['57']['inputs']['noise_seed'] = random.randint(0, 2**63 - 1)
+        api_graph['57']['inputs']['noise_seed'] = actual_seed
 
     # Inject cfg and steps into KSampler nodes
     if cfg_scale is not None or steps is not None:
@@ -161,11 +163,12 @@ def inject_prompt_into_text_to_video_workflow(
     steps: Optional[int] = None,
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
-    scheduler: Optional[str] = None
+    scheduler: Optional[str] = None,
+    seed: Optional[int] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
-    Also randomizes seed for varied outputs.
+    Also sets seed for varied outputs (random if not provided).
     Optionally injects cfg_scale and steps into KSamplerAdvanced nodes.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
@@ -188,12 +191,12 @@ def inject_prompt_into_text_to_video_workflow(
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
 
-    # Randomize seed for node 57 (high noise sampler)
+    # Set seed for node 57 (use provided seed or generate random)
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '57' in api_graph and 'inputs' in api_graph['57']:
-        new_seed = random.randint(0, 2**63 - 1)
-        api_graph['57']['inputs']['noise_seed'] = new_seed
+        api_graph['57']['inputs']['noise_seed'] = actual_seed
     else:
-        logging.warning("Could not find sampler node 57 to randomize seed")
+        logging.warning("Could not find sampler node 57 to set seed")
 
     # Inject cfg and steps into KSamplerAdvanced nodes (57 and 58)
     if cfg_scale is not None or steps is not None:
@@ -245,7 +248,8 @@ def inject_prompt_into_ltx_video_workflow(
     steps: Optional[int] = None,
     flow_shift: Optional[float] = None,  # Accepted but unused - LTX workflow doesn't use it
     sampler: Optional[str] = None,
-    scheduler: Optional[str] = None
+    scheduler: Optional[str] = None,
+    seed: Optional[int] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for LTX-Video.
@@ -280,13 +284,13 @@ def inject_prompt_into_ltx_video_workflow(
         api_graph['6']['inputs']['height'] = height
         logging.info(f"Injected dimensions into LTX node 6: {width}x{height}")
 
-    # Randomize seed for RandomNoise node (Node 7)
+    # Set seed for RandomNoise node (Node 7) - use provided or generate random
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '7' in api_graph and api_graph['7'].get("class_type") == "RandomNoise":
-        new_seed = random.randint(0, 2**63 - 1)
-        api_graph['7']['inputs']['noise_seed'] = new_seed
-        logging.info(f"Randomized seed in LTX node 7: {new_seed}")
+        api_graph['7']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Set seed in LTX node 7: {actual_seed}")
     else:
-        logging.warning("Could not find RandomNoise node 7 to randomize seed")
+        logging.warning("Could not find RandomNoise node 7 to set seed")
 
     # Inject sampler into KSamplerSelect (Node 8)
     if sampler is not None and '8' in api_graph and api_graph['8'].get("class_type") == "KSamplerSelect":
@@ -326,7 +330,8 @@ def inject_prompt_and_image_into_ltx_video_workflow(
     cfg_scale: Optional[float] = None,
     steps: Optional[int] = None,
     sampler: Optional[str] = None,
-    scheduler: Optional[str] = None
+    scheduler: Optional[str] = None,
+    seed: Optional[int] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image for LTX-Video image-to-video.
@@ -361,13 +366,13 @@ def inject_prompt_and_image_into_ltx_video_workflow(
     else:
         logging.warning("Could not find LoadImage node 6 in LTX i2v workflow")
 
-    # Randomize seed for RandomNoise node (Node 7)
+    # Set seed for RandomNoise node (Node 7) - use provided or generate random
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '7' in api_graph and api_graph['7'].get("class_type") == "RandomNoise":
-        new_seed = random.randint(0, 2**63 - 1)
-        api_graph['7']['inputs']['noise_seed'] = new_seed
-        logging.info(f"Randomized seed in LTX i2v node 7: {new_seed}")
+        api_graph['7']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Set seed in LTX i2v node 7: {actual_seed}")
     else:
-        logging.warning("Could not find RandomNoise node 7 to randomize seed")
+        logging.warning("Could not find RandomNoise node 7 to set seed")
 
     # Inject sampler into KSamplerSelect (Node 8)
     if sampler is not None and '8' in api_graph and api_graph['8'].get("class_type") == "KSamplerSelect":
@@ -407,7 +412,8 @@ def inject_prompt_into_hunyuan_video_workflow(
     steps: Optional[int] = None,
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
-    scheduler: Optional[str] = None
+    scheduler: Optional[str] = None,
+    seed: Optional[int] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for HunyuanVideo 1.5.
@@ -444,13 +450,13 @@ def inject_prompt_into_hunyuan_video_workflow(
         api_graph['133']['inputs']['height'] = height
         logging.info(f"Injected dimensions into HunyuanVideo node 133: {width}x{height}")
 
-    # Randomize seed for RandomNoise node (Node 129)
+    # Set seed for RandomNoise node (Node 129) - use provided or generate random
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '129' in api_graph and api_graph['129'].get("class_type") == "RandomNoise":
-        new_seed = random.randint(0, 2**63 - 1)
-        api_graph['129']['inputs']['noise_seed'] = new_seed
-        logging.info(f"Randomized seed in HunyuanVideo node 129: {new_seed}")
+        api_graph['129']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Set seed in HunyuanVideo node 129: {actual_seed}")
     else:
-        logging.warning("Could not find RandomNoise node 129 to randomize seed")
+        logging.warning("Could not find RandomNoise node 129 to set seed")
 
     # Inject sampler into KSamplerSelect (Node 130)
     if sampler is not None and '130' in api_graph and api_graph['130'].get("class_type") == "KSamplerSelect":
@@ -496,7 +502,8 @@ def inject_prompt_and_image_into_hunyuan_video_workflow(
     steps: Optional[int] = None,
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
-    scheduler: Optional[str] = None
+    scheduler: Optional[str] = None,
+    seed: Optional[int] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image for HunyuanVideo 1.5 image-to-video.
@@ -541,13 +548,13 @@ def inject_prompt_and_image_into_hunyuan_video_workflow(
         api_graph['78']['inputs']['height'] = height
         logging.info(f"Injected dimensions into HunyuanVideo i2v node 78: {width}x{height}")
 
-    # Randomize seed for RandomNoise node (Node 129)
+    # Set seed for RandomNoise node (Node 129) - use provided or generate random
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '129' in api_graph and api_graph['129'].get("class_type") == "RandomNoise":
-        new_seed = random.randint(0, 2**63 - 1)
-        api_graph['129']['inputs']['noise_seed'] = new_seed
-        logging.info(f"Randomized seed in HunyuanVideo i2v node 129: {new_seed}")
+        api_graph['129']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Set seed in HunyuanVideo i2v node 129: {actual_seed}")
     else:
-        logging.warning("Could not find RandomNoise node 129 to randomize seed")
+        logging.warning("Could not find RandomNoise node 129 to set seed")
 
     # Inject sampler into KSamplerSelect (Node 130)
     if sampler is not None and '130' in api_graph and api_graph['130'].get("class_type") == "KSamplerSelect":

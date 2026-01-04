@@ -29,11 +29,12 @@ class WAN22TextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         flow_shift = inputs.get("flow_shift")
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
+        seed = inputs.get("seed")
 
         wf_ready = inject_prompt_into_text_to_video_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps, 
-            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler
+            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler, seed=seed
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
