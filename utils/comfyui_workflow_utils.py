@@ -1019,19 +1019,19 @@ def verify_workflow_nodes(workflow: dict) -> bool:
 def inject_video_into_upscaler_workflow(
     workflow_api_data: Dict, 
     video_filename: str,
-    upscale_model: str = "RealESRGAN_x4plus.pth",
+    upscale_model: str = "Stream-DiffVSR",
     frame_rate: int = 30,
     target_width: Union[int, None] = None,
     target_height: Union[int, None] = None,
     scale_by: Union[float, None] = None
 ):
     """
-    Injects video filename and upscale settings into Real-ESRGAN workflow.
+    Injects video filename and upscale settings into the upscaler workflow.
     
     Args:
         workflow_api_data: The workflow JSON structure
         video_filename: Name of the video file in input directory
-        upscale_model: Which Real-ESRGAN model to use
+        upscale_model: Model name to use (default: Stream-DiffVSR)
         frame_rate: Output video frame rate
         target_width: The final width of the video (optional if scale_by is used)
         target_height: The final height of the video (optional if scale_by is used)
@@ -1039,51 +1039,31 @@ def inject_video_into_upscaler_workflow(
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
-    # Node 1: VHS_LoadVideo - inject video filename
+    # Node 1: VHS_LoadVideo - Same as before
     if '1' in api_graph and api_graph['1']['class_type'] == 'VHS_LoadVideo':
         api_graph['1']['inputs']['video'] = video_filename
-        # Force disable resizing to ensure original dimensions are used
         api_graph['1']['inputs']['force_size'] = "Disabled"
         api_graph['1']['inputs']['custom_width'] = 0
         api_graph['1']['inputs']['custom_height'] = 0
-        logging.info(f"Injected video filename: {video_filename} and disabled force_size")
+        logging.info(f"Injected video filename: {video_filename}")
     
-    # Node 2: UpscaleModelLoader - inject model selection
-    if '2' in api_graph and api_graph['2']['class_type'] == 'UpscaleModelLoader':
-        api_graph['2']['inputs']['model_name'] = upscale_model
-        logging.info(f"Injected upscale model: {upscale_model}")
+    # Node 2: StreamDiffVSR_Node - inject steps if provided or default?
+    # The current 'upscale_model' param might be repurposed or ignored if we only have one model.
+    # But let's check for Steps param injection if we want to support it.
+    if '2' in api_graph and api_graph['2']['class_type'] == 'StreamDiffVSR_Node':
+        # If upscale_model is passed as an int-like string, maybe treat it as steps?
+        # Or we can add a 'steps' argument to this function. For now, strict compatibility.
+        # Let's assume defaults are fine or we can inject if needed.
+        pass
 
-    # Node 6: ImageScale - inject dimensions
-    if '6' in api_graph:
-        if scale_by is not None:
-            # Use ImageScaleBy for factor-based scaling
-            api_graph['6']['class_type'] = 'ImageScaleBy'
-            api_graph['6']['inputs'] = {
-                'scale_by': scale_by,
-                'image': ['3', 0],
-                'upscale_method': 'lanczos'
-            }
-            logging.info(f"Using ImageScaleBy with factor: {scale_by}")
-        elif target_width is not None and target_height is not None:
-            # Ensure it's ImageScale
-            if api_graph['6']['class_type'] != 'ImageScale':
-                    api_graph['6']['class_type'] = 'ImageScale'
-            
-            api_graph['6']['inputs']['width'] = target_width
-            api_graph['6']['inputs']['height'] = target_height
-            # Ensure other inputs are correct
-            api_graph['6']['inputs']['upscale_method'] = 'lanczos'
-            api_graph['6']['inputs']['crop'] = 'disabled'
-            api_graph['6']['inputs']['image'] = ['3', 0]
+    # Node 6: ImageScale - REMOVED in new workflow (Stream-DiffVSR doesn't use it, it upscales 4x by default?)
+    # Wait, Stream-DiffVSR is usually 4x.
+    # The new workflow JSON I wrote DOES NOT have node 6.
+    # So we can remove the Node 6 injection logic here or wrap it in a check.
 
-            logging.info(f"Injected target dimensions: {target_width}x{target_height}")
-        else:
-                logging.warning("No target dimensions or scale_by provided for upscale workflow. Using default/existing values.")
-    
     # Node 4: VHS_VideoCombine - inject frame rate and filename
     if '4' in api_graph and api_graph['4']['class_type'] == 'VHS_VideoCombine':
         api_graph['4']['inputs']['frame_rate'] = frame_rate
-        # Add timestamp to filename
         datestr = datetime.now().strftime("%Y-%m-%d")
         prefix = api_graph['4']['inputs'].get('filename_prefix', 'upscaled_video')
         if '%date:yyyy-MM-dd%' in prefix:

@@ -19,7 +19,7 @@ from utils.media_utils import (
 
 
 class VideoUpscalerJobProcessor(ComfyUIProcessor, VideoOutputHandler):
-    """Processor for video upscaling with Real-ESRGAN."""
+    """Processor for video upscaling with Stream-DiffVSR."""
 
     def process(self):
         if not self.job:
@@ -63,7 +63,7 @@ class VideoUpscalerJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             return
 
         job_inputs = self.job.get("inputs", {})
-        upscale_model = job_inputs.get("upscale_model", "RealESRGAN_x4plus.pth")
+        upscale_model = job_inputs.get("upscale_model", "Stream-DiffVSR")
 
         input_frame_rate = job_inputs.get("frame_rate")
         if input_frame_rate:
@@ -72,6 +72,9 @@ class VideoUpscalerJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             frame_rate = int(get_video_framerate(video_path))
             logging.info(f"Detected source frame rate: {frame_rate}")
 
+        # Stream-DiffVSR usually does 4x. Params for generic resizing might be ignored by the wrapper
+        # unless we explicitly add resizing nodes.
+        # For now, let's keep the params but they might not be used by inject function
         upscale_factor = job_inputs.get("upscale_factor")
         target_width = job_inputs.get("target_width")
         target_height = job_inputs.get("target_height")

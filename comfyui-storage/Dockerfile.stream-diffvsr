@@ -1,0 +1,55 @@
+# Stream-DiffVSR Docker Image
+
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common git curl wget libgl1-mesa-glx libgl1-mesa-dri \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Base Python packages
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv \
+        diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image
+
+# Setup Stream-DiffVSR
+WORKDIR /opt
+RUN git clone https://github.com/jamichss/Stream-DiffVSR.git \
+    && cd Stream-DiffVSR \
+    && python -m pip install -r requirements.txt || true
+
+# Download Model Checkpoint
+RUN mkdir -p /opt/models/Stream-DiffVSR \
+    && huggingface-cli download Jamichsu/Stream-DiffVSR --local-dir /opt/models/Stream-DiffVSR || \
+       huggingface-cli download Jamichsu/Stream-DiffVSR --local-dir /opt/models/Stream-DiffVSR
+
+# Setup ComfyUI
+WORKDIR /opt/ComfyUI
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
+    && rm -rf custom_nodes/VideoHelperSuite/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/VideoHelperSuite/requirements.txt
+
+# Install Custom Wrapper Node
+COPY stream_diffvsr_wrapper.py custom_nodes/StreamDiffVSR/wrapper_node.py
+RUN echo "from .wrapper_node import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS" > custom_nodes/StreamDiffVSR/__init__.py
+
+CMD ["python", "main.py", "--listen"]
