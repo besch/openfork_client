@@ -63,4 +63,4 @@ RUN wget -q -O models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
         "https://huggingface.co/Comfy-Org/sigclip_vision_384/resolve/main/sigclip_vision_patch14_384.safetensors"
 
 WORKDIR /opt/ComfyUI
-CMD ["python", "main.py", "--listen"]
+CMD ["python", "main.py", "--listen", "--lowvram"]

@@ -46,7 +46,6 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
 # Create model directories
 RUN mkdir -p models/text_encoders models/diffusion_models models/vae models/clip_vision
 
-# Download models (combined)
 RUN wget -q -O models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
         "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
     && wget -q -O models/text_encoders/byt5_small_glyphxl_fp16.safetensors \
@@ -61,4 +60,4 @@ RUN wget -q -O models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
         "https://huggingface.co/Comfy-Org/sigclip_vision_384/resolve/main/sigclip_vision_patch14_384.safetensors"
 
 WORKDIR /opt/ComfyUI
-CMD ["python", "main.py", "--listen"]
+CMD ["python", "main.py", "--listen", "--lowvram"]

@@ -2,7 +2,7 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-video-2b-v0.9.1.safetensors"
+        "ckpt_name": "ltxv-2b-0.9.6-distilled-04-25.safetensors"
       },
       "class_type": "CheckpointLoaderSimple"
     },
@@ -79,7 +79,7 @@
     },
     "12": {
       "inputs": {
-        "cfg": 3.5,
+        "cfg": 3,
         "model": ["1", 0],
         "positive": ["5", 0],
         "negative": ["5", 1]

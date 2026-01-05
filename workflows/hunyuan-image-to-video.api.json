@@ -18,7 +18,7 @@
     "12": {
       "inputs": {
         "unet_name": "hunyuanvideo1.5_720p_i2v_fp16.safetensors",
-        "weight_dtype": "default"
+        "weight_dtype": "fp8_e4m3fn"
       },
       "class_type": "UNETLoader"
     },
@@ -66,9 +66,9 @@
     },
     "78": {
       "inputs": {
-        "width": 1280,
-        "height": 720,
-        "length": 97,
+        "width": 848,
+        "height": 480,
+        "length": 121,
         "batch_size": 1,
         "positive": ["44", 0],
         "negative": ["93", 0],
