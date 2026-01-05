@@ -1,4 +1,11 @@
 # YUME 1.5 Docker Image
+# 
+# This image provides YUME 1.5 (Yume-5B-720P) for interactive world generation.
+# YUME uses a custom diffusion pipeline built on FastVideo/HunyuanVideo.
+# ComfyUI is used as the orchestration layer for integration with OpenFork.
+#
+# Reference: https://github.com/stdstu12/YUME
+# Model: https://huggingface.co/stdstu123/Yume-5B-720P
 
 FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
@@ -7,14 +14,16 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
+ENV TOKENIZERS_PARALLELISM=false
+ENV YUME_MODEL_PATH=/opt/models/Yume
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common git curl wget libgl1-mesa-glx libgl1-mesa-dri \
-    ffmpeg \
+    ffmpeg libsm6 libxext6 \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-distutils \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && apt-get clean \
@@ -28,18 +37,20 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv \
         diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image \
-        ftfy regex tqdm matplotlib tensorboard
+        ftfy regex tqdm matplotlib tensorboard bitsandbytes scipy packaging
 
-# Setup YUME
+# Clone YUME repository
 WORKDIR /opt
-RUN git clone https://github.com/stdstu12/YUME.git \
+RUN git clone --depth=1 https://github.com/stdstu12/YUME.git \
     && cd YUME \
-    && python -m pip install -r requirements.txt || true
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt || true \
+    && python -m pip install --no-cache-dir -e . || true
 
-# Download Model Checkpoint
+# Download Model Checkpoint (Yume-5B-720P from HuggingFace)
 RUN mkdir -p /opt/models/Yume \
-    && huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume || \
-       huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume
+    && huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume \
+    && ln -sf /opt/models/Yume /opt/YUME/Yume-5B-720p
 
 # Setup ComfyUI
 WORKDIR /opt/ComfyUI
@@ -50,8 +61,14 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && rm -rf custom_nodes/VideoHelperSuite/.git \
     && python -m pip install --no-cache-dir -r custom_nodes/VideoHelperSuite/requirements.txt
 
+# Create YUME custom node directory
+RUN mkdir -p custom_nodes/YUME
+
 # Install Custom Wrapper Node
 COPY yume_wrapper.py custom_nodes/YUME/wrapper_node.py
 RUN echo "from .wrapper_node import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS" > custom_nodes/YUME/__init__.py
 
-CMD ["python", "main.py", "--listen"]
+# Expose ComfyUI port
+EXPOSE 8188
+
+CMD ["python", "main.py", "--listen", "0.0.0.0"]

@@ -1,48 +1,50 @@
 {
-  "1": {
-    "inputs": {
-      "image": "example.png",
-      "upload": "image"
+  "prompt": {
+    "1": {
+      "inputs": {
+        "image": "example.png",
+        "upload": "image"
+      },
+      "class_type": "LoadImage",
+      "_meta": {
+        "title": "Load Image"
+      }
     },
-    "class_type": "LoadImage",
-    "_meta": {
-      "title": "Load Image"
-    }
-  },
-  "2": {
-    "inputs": {
-      "prompt": "prompt",
-      "n_prompt": "low quality, distorted, bad animation",
-      "num_frames": 49,
-      "width": 1280,
-      "height": 720,
-      "steps": 30,
-      "cfg": 7.0,
-      "seed": 0,
-      "start_image": [
-        "1",
-        0
-      ]
+    "2": {
+      "inputs": {
+        "prompt": "The camera slowly pans across the scene, revealing more of the world.",
+        "n_prompt": "low quality, distorted, bad animation, blurry, watermark",
+        "num_frames": 49,
+        "width": 1280,
+        "height": 720,
+        "steps": 30,
+        "cfg": 7.0,
+        "seed": 0,
+        "start_image": ["1", 0]
+      },
+      "class_type": "YUME_Node",
+      "_meta": {
+        "title": "YUME World Generator"
+      }
     },
-    "class_type": "YUME_Node",
-    "_meta": {
-      "title": "YUME World Generator"
-    }
-  },
-  "3": {
-    "inputs": {
-      "frame_rate": 24,
-      "format": "video/h264-mp4",
-      "save_output": true,
-      "filename_prefix": "Yume_Video",
-      "images": [
-        "2",
-        0
-      ]
-    },
-    "class_type": "VHS_VideoCombine",
-    "_meta": {
-      "title": "Video Combine 🎥🅥🅗🅢"
+    "3": {
+      "inputs": {
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "%date:yyyy-MM-dd%/yume_i2v_",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 19,
+        "save_metadata": true,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true,
+        "images": ["2", 0]
+      },
+      "class_type": "VHS_VideoCombine",
+      "_meta": {
+        "title": "Video Combine 🎥🅥🅗🅢"
+      }
     }
   }
 }
