@@ -89,7 +89,9 @@ class JobListener:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
             if not (job and job.get('id')):
-                    self.shutdown_event.wait(TimeoutConfig.JOB_POLL_INTERVAL)
+                    # Use faster polling frequency for headless cloud instances
+                    poll_interval = TimeoutConfig.HEADLESS_JOB_POLL_INTERVAL if HEADLESS_MODE else TimeoutConfig.JOB_POLL_INTERVAL
+                    self.shutdown_event.wait(poll_interval)
         logging.info("Shutdown event received. Exiting job listening loop.")
 
     def _get_service_type_for_job(self, job: Dict[str, Any]) -> Optional[str]:
@@ -278,7 +280,9 @@ class JobListener:
                     logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
 
                 if not found_processable_job:
-                    self.shutdown_event.wait(TimeoutConfig.JOB_POLL_INTERVAL)
+                    # Use faster polling frequency for headless cloud instances
+                    poll_interval = TimeoutConfig.HEADLESS_JOB_POLL_INTERVAL if HEADLESS_MODE else TimeoutConfig.JOB_POLL_INTERVAL
+                    self.shutdown_event.wait(poll_interval)
         finally:
             logging.info("Shutdown event received or loop exited. Exiting auto job listening loop.")
             

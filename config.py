@@ -68,6 +68,9 @@ class TimeoutConfig:
     # Interval between job polling requests when no job is available
     JOB_POLL_INTERVAL = int(os.getenv("JOB_POLL_INTERVAL", "10"))
     
+    # Faster polling interval for headless cloud clients (they are dedicated & cheap to check)
+    HEADLESS_JOB_POLL_INTERVAL = int(os.getenv("HEADLESS_JOB_POLL_INTERVAL", "2"))
+    
     # WebSocket connection timeout
     WEBSOCKET_TIMEOUT = int(os.getenv("WEBSOCKET_TIMEOUT", "600"))
     

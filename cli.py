@@ -139,6 +139,12 @@ def setup_client(args):
             logging.warning(f"Headless mode: overriding accept_policy '{client.accept_policy}' -> 'all' (headless clients serve public network only)")
             client.accept_policy = 'all'
             client.allowed_ids = []  # Clear any user-specific filtering
+        
+        # In dedicated headless mode, the container is always ready with the image
+        # So we force report it as cached to ensure TIER 0 routing
+        if args.service not in cached_images:
+            cached_images.append(args.service)
+            logging.info(f"Headless mode: auto-adding {args.service} to cached_images (container is pre-baked)")
     else:
         registration_services = list(client.compatible_services)
     
