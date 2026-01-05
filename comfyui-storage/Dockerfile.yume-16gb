@@ -47,9 +47,23 @@ RUN git clone --depth=1 https://github.com/stdstu12/YUME.git \
     && python -m pip install --no-cache-dir -r requirements.txt || true \
     && python -m pip install --no-cache-dir -e . || true
 
-# Download Model Checkpoint (Yume-5B-720P from HuggingFace)
-RUN mkdir -p /opt/models/Yume \
-    && huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume \
+# Download Model Checkpoint (Split into layers to ensure reliable docker push)
+# attempting to push a single 30GB layer often causes 502 Bad Gateway errors.
+# By splitting downloads, we create smaller, manageable layers (~10GB each).
+
+RUN mkdir -p /opt/models/Yume
+
+# Layer 1: Config files & VAE (Small)
+RUN huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume \
+    --include "*.json" "*.yaml" "*.md" ".gitattributes" "*VAE*"
+
+# Layer 2: T5 Text Encoder (~5-10GB)
+RUN huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume \
+    --include "*t5*"
+
+# Layer 3: Main Diffusion Model (~10-15GB) & Symlink
+RUN huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume \
+    --include "*.safetensors" \
     && ln -sf /opt/models/Yume /opt/YUME/Yume-5B-720p
 
 # Setup ComfyUI
