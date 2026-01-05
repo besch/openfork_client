@@ -101,6 +101,51 @@ class JobListener:
             # Unknown workflow type, fall back to service_type from job
             return job.get('service_type')
 
+    def _handle_prefetch_suggestions(self, download_manager) -> None:
+        """Fetch and apply pre-fetch suggestions from the server.
+        
+        When idle (no processable jobs), this proactively downloads Docker images
+        that the server identifies as high-demand based on network-wide analysis:
+        - Jobs pending in queue by service_type
+        - Current cache coverage across all providers
+        - This provider's capabilities
+        
+        This improves network efficiency by ensuring images are ready before
+        jobs need them. The server considers:
+        - Number of pending jobs per service_type
+        - Number of providers with that image cached vs downloading
+        - Cache deficit (pending jobs - cached providers)
+        
+        NOTE: This does NOT affect credits in any way. Credits are calculated
+        based on actual processing time and VRAM usage when jobs complete.
+        Pre-fetching is purely for reducing job wait times.
+        """
+        if not download_manager:
+            return
+        
+        # Don't fetch suggestions if we already have downloads in progress
+        # This prevents queue explosion and respects MAX_CONCURRENT_DOWNLOADS
+        if download_manager._active_downloads or download_manager._download_queue:
+            return
+        
+        try:
+            suggestions = self.orchestrator_service.get_prefetch_suggestions(self.provider_id)
+            
+            if suggestions:
+                logging.info(f"Received pre-fetch suggestions from server: {suggestions}")
+                
+                # Start downloads for suggested service types (download manager handles queueing)
+                for service_type in suggestions[:2]:  # Limit to 2 to avoid queue buildup
+                    if not download_manager.has_image(service_type) and \
+                       not download_manager.is_downloading(service_type) and \
+                       not download_manager.is_queued(service_type):
+                        logging.info(f"Pre-fetching suggested image: {service_type}")
+                        download_manager.start_background_download(service_type)
+        except Exception as e:
+            # Non-critical - just log and continue
+            logging.debug(f"Failed to get/apply pre-fetch suggestions: {e}")
+
+
     def listen_for_jobs_auto(self) -> None:
         """Listen for jobs and dynamically start/stop containers with image pre-fetching."""
         logging.info("Entering auto job listening loop with Docker image pre-fetching.")
@@ -207,10 +252,17 @@ class JobListener:
                                         logging.debug(f"Image for service '{service_type}' already downloading/queued.")
                                     # Continue to check next job
                         
+                        # Handle pre-fetch suggestions when idle
+                        # This proactively downloads images for high-demand workflows
+                        # NOTE: This does NOT affect credits - it's purely for network efficiency
+                        if not found_processable_job:
+                            self._handle_prefetch_suggestions(download_manager)
+                        
                         if not found_processable_job and available_jobs:
                             logging.info("All available jobs require images that are still downloading. Waiting...")
                         elif not found_processable_job:
                             logging.info("No new jobs found in this check.")
+
                             
                 except TokenExpiredError:
                     self.orchestrator_service.signal_auth_expired()

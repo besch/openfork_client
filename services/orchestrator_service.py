@@ -683,4 +683,68 @@ class OrchestratorService:
             logging.warning(f"Failed to report cached images: {e}")
             return False
 
+    def report_download_state(self, provider_id: str, service_type: str, action: str) -> bool:
+        """
+        Report Docker image download state change to the server.
+        
+        This enables server-side tracking for smart job routing - jobs are prioritized
+        to providers that have the required image cached or downloading.
+        
+        NOTE: This does NOT affect credits. Credits are calculated based on actual
+        processing time and VRAM usage, not cache state.
+        
+        Args:
+            provider_id: The provider's ID
+            service_type: The service type being downloaded (e.g., 'wan22-12gb')
+            action: One of 'start', 'finish', or 'cancel'
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            response = self._make_request(
+                'post',
+                f"{self.orchestrator_url}/api/dgn/provider-download-state",
+                json={
+                    "providerId": provider_id,
+                    "service_type": service_type,
+                    "action": action
+                }
+            )
+            response.raise_for_status()
+            logging.debug(f"Reported download state: {service_type} - {action}")
+            return True
+        except requests.exceptions.RequestException as e:
+            # Non-critical - don't fail if reporting fails
+            logging.warning(f"Failed to report download state: {e}")
+            return False
+
+    def get_prefetch_suggestions(self, provider_id: str) -> list[str]:
+        """
+        Get pre-fetch suggestions from the server based on network demand.
+        
+        The server analyzes pending jobs and cache coverage to suggest which
+        Docker images this provider should download proactively.
+        
+        NOTE: This is purely for network efficiency. It does NOT affect credits.
+        
+        Args:
+            provider_id: The provider's ID
+            
+        Returns:
+            List of service types to consider pre-fetching
+        """
+        try:
+            response = self._make_request(
+                'get',
+                f"{self.orchestrator_url}/api/dgn/provider-download-state",
+                params={"providerId": provider_id}
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get('suggestions', [])
+        except requests.exceptions.RequestException as e:
+            logging.debug(f"Failed to get prefetch suggestions: {e}")
+            return []
+
 

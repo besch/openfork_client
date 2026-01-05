@@ -147,8 +147,20 @@ class DockerDownloadManager:
                 return True
     
     def _download_worker(self, service_type: str):
-        """Worker function that runs in a background thread to download an image."""
+        """Worker function that runs in a background thread to download an image.
+        
+        Reports download state to server for 3-tier cache priority routing:
+        - 'start' -> adds to downloading_images (tier 1 - downloading)
+        - 'finish' -> moves to cached_images (tier 0 - cached)
+        - 'cancel' -> removes from downloading_images (on failure)
+        
+        NOTE: This does NOT affect credits. Credits are based on processing
+        time and VRAM, not cache state. This is purely for routing efficiency.
+        """
         try:
+            # Report download start to server (enables tier 1 routing)
+            self._report_download_state(service_type, "start")
+            
             image_name = self.docker_manager.get_image_name(service_type)
             logging.info(f"Background download starting for image: {image_name}")
             
@@ -159,33 +171,55 @@ class DockerDownloadManager:
                 self._download_status[service_type] = DownloadStatus.COMPLETED
                 logging.info(f"Background download completed for {service_type}")
             
-            # Report newly cached image to server for smart job assignment
+            # Report download completion to server (moves to tier 0 - cached)
             # This doesn't affect credits - credits are based on processing time, not caching
-            self._report_cached_image(service_type)
+            self._report_download_state(service_type, "finish")
                 
         except Exception as e:
             logging.error(f"Background download failed for {service_type}: {e}")
             with self._lock:
                 self._download_status[service_type] = DownloadStatus.FAILED
+            # Report download failure to server (removes from downloading)
+            self._report_download_state(service_type, "cancel")
         finally:
             # Clean up and start next queued download
             self._finish_download(service_type)
     
-    def _report_cached_image(self, service_type: str):
-        """Report a newly cached image to the server for smart job assignment."""
+    def _report_download_state(self, service_type: str, action: str):
+        """Report download state change to server for smart job routing.
+        
+        This enables 3-tier cache priority in job assignment:
+        - Tier 0 (cached): Image ready, can process immediately
+        - Tier 1 (downloading): Image being pulled, will be ready soon
+        - Tier 2 (miss): Image not available, requires full download
+        
+        NOTE: This does NOT affect credits. Credits are calculated based on
+        actual processing time and VRAM usage, not cache state.
+        
+        Args:
+            service_type: The service type (e.g., 'wan22-12gb')
+            action: One of 'start', 'finish', or 'cancel'
+        """
         if not self.orchestrator_service or not self.provider_id:
             return
         
         try:
-            self.orchestrator_service.report_cached_images(
+            self.orchestrator_service.report_download_state(
                 provider_id=self.provider_id,
-                cached_images=[service_type],
-                mode="add"
+                service_type=service_type,
+                action=action
             )
-            logging.info(f"Reported cached image '{service_type}' to server")
+            logging.debug(f"Reported download state: {service_type} -> {action}")
         except Exception as e:
             # Non-critical - don't fail if reporting fails
-            logging.warning(f"Failed to report cached image to server: {e}")
+            logging.warning(f"Failed to report download state to server: {e}")
+    
+    def _report_cached_image(self, service_type: str):
+        """Legacy method - now uses report_download_state('finish').
+        
+        Kept for backward compatibility with existing code.
+        """
+        self._report_download_state(service_type, "finish")
     
     def _finish_download(self, service_type: str):
         """Clean up after a download finishes and start the next queued download."""
