@@ -8,7 +8,7 @@ import os
 import json
 import threading
 from config import ROOT_DIR
-from .docker_utils import docker_cp
+from .docker_utils import docker_cp, get_subprocess_hidden_kwargs
 
 class DockerDevManager:
     def __init__(self):
@@ -50,7 +50,7 @@ class DockerDevManager:
     def _run_command(self, command: list):
         try:
             # Using cwd ensures docker-compose can find relative paths in the .yaml files
-            subprocess.run(command, check=True, capture_output=True, text=True, cwd=self.compose_dir)
+            subprocess.run(command, check=True, capture_output=True, text=True, cwd=self.compose_dir, **get_subprocess_hidden_kwargs())
             logging.info(f"Successfully ran command: {' '.join(command)}")
         except subprocess.CalledProcessError as e:
             logging.error(f"Error running command: {' '.join(command)}")
@@ -63,7 +63,7 @@ class DockerDevManager:
         command = ['docker-compose', '-f', compose_file, 'ps', '-q']
         try:
             # Run command to get container ID
-            result = subprocess.run(command, check=True, capture_output=True, text=True, cwd=self.compose_dir)
+            result = subprocess.run(command, check=True, capture_output=True, text=True, cwd=self.compose_dir, **get_subprocess_hidden_kwargs())
             container_id = result.stdout.strip()
             if not container_id:
                 raise RuntimeError(f"Could not determine container ID for service '{service_type}'. Is it running?")
@@ -107,7 +107,7 @@ class DockerDevManager:
         command = ['docker', 'cp', source_on_host, dest_path]
         logging.info(f"Copying file to container: {' '.join(command)}")
         try:
-            subprocess.run(command, check=True, capture_output=True, text=True, timeout=300)
+            subprocess.run(command, check=True, capture_output=True, text=True, timeout=300, **get_subprocess_hidden_kwargs())
             logging.info(f"Successfully ran command: {' '.join(command)}")
         except subprocess.TimeoutExpired:
             logging.error(f"Timeout during docker cp operation for {source_on_host} to container {service_type}")

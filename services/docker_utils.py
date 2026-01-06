@@ -5,6 +5,31 @@ import time
 import os
 import tempfile
 
+
+def get_subprocess_hidden_kwargs():
+    """
+    Returns kwargs for subprocess.run() that hide the console window on Windows.
+    
+    On Windows, subprocess calls to console applications (like docker, ffmpeg, ffprobe)
+    will briefly flash a terminal window unless properly suppressed. This function
+    returns the correct kwargs to prevent this.
+    
+    Returns:
+        dict: Kwargs to pass to subprocess.run() or similar functions.
+    """
+    kwargs = {}
+    if os.name == 'nt':
+        # Use STARTUPINFO with STARTF_USESHOWWINDOW to properly hide the console window.
+        # CREATE_NO_WINDOW alone doesn't always work, and DETACHED_PROCESS can cause issues.
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        kwargs['startupinfo'] = startupinfo
+        # CREATE_NO_WINDOW prevents child processes from opening a console
+        kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+    return kwargs
+
+
 def docker_cp(source_path: str, dest_path: str, shutdown_event: threading.Event):
     """Executes a 'docker cp' command with Windows-specific workarounds for Docker Desktop hangs."""
     if shutdown_event.is_set():
@@ -14,15 +39,15 @@ def docker_cp(source_path: str, dest_path: str, shutdown_event: threading.Event)
     command = ['docker', 'cp', source_path, dest_path]
     logging.info(f"Executing command: {' '.join(command)}")
     
+    # Get Windows-specific kwargs to hide console window
+    hidden_kwargs = get_subprocess_hidden_kwargs()
+    
     try:
         if os.name == 'nt':
-            # On Windows, use a wrapper script to avoid pipe inheritance issues
-            # that cause docker cp to hang with Docker Desktop
+            # On Windows, use shell=True and no pipe redirection to avoid
+            # handle inheritance issues that cause docker cp to hang with Docker Desktop
             timeout = 600
-            start_time = time.time()
             
-            # Run docker cp with shell=True and no pipe redirection
-            # This avoids the handle inheritance that causes hangs
             result = subprocess.run(
                 ' '.join(command),
                 shell=True,
@@ -31,8 +56,7 @@ def docker_cp(source_path: str, dest_path: str, shutdown_event: threading.Event)
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, 
                 stderr=subprocess.DEVNULL,
-                # Detach from console
-                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+                **hidden_kwargs
             )
             
             if result.returncode != 0:

@@ -4,6 +4,7 @@ import logging
 from typing import Union
 import os
 import json
+from services.docker_utils import get_subprocess_hidden_kwargs
 
 def get_audio_duration(file_path: str) -> float:
     """Gets the duration of an audio file using ffprobe."""
@@ -15,7 +16,7 @@ def get_audio_duration(file_path: str) -> float:
         file_path
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60, **get_subprocess_hidden_kwargs())
         return float(result.stdout.strip())
     except subprocess.TimeoutExpired:
         logging.error(f"Timeout getting audio duration for {file_path}")
@@ -34,7 +35,7 @@ def get_video_duration(file_path: str) -> float:
         file_path
     ]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
+        result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=60, **get_subprocess_hidden_kwargs())
         return float(result.stdout.strip())
     except subprocess.TimeoutExpired:
         logging.error(f"Timeout getting video duration for {file_path}")
@@ -57,7 +58,7 @@ def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = 100) -
         thumbnail_path
     ]
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=120)
+        subprocess.run(command, check=True, capture_output=True, timeout=120, **get_subprocess_hidden_kwargs())
         logging.info(f"Thumbnail generated at {thumbnail_path}")
         return True
     except subprocess.TimeoutExpired:
@@ -182,7 +183,7 @@ def generate_placeholder_video(output_path: str, duration: int = 5) -> bool:
         output_path
     ]
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=60)
+        subprocess.run(command, check=True, capture_output=True, timeout=60, **get_subprocess_hidden_kwargs())
         logging.info(f"Placeholder video generated at {output_path}")
         return True
     except subprocess.TimeoutExpired:
@@ -204,7 +205,7 @@ def get_video_framerate(video_path: str) -> float:
             video_path
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60, **get_subprocess_hidden_kwargs())
         data = json.loads(result.stdout)
         
         if 'streams' in data and len(data['streams']) > 0:
@@ -250,7 +251,7 @@ def get_video_dimensions(video_path: str) -> tuple:
             video_path
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60, **get_subprocess_hidden_kwargs())
         data = json.loads(result.stdout)
         
         if 'streams' in data and len(data['streams']) > 0:
@@ -370,7 +371,8 @@ def extract_last_frame(video_path: str, output_image_path: str, timeout: int = 6
             check=True,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            **get_subprocess_hidden_kwargs()
         )
         logging.info(f"Successfully extracted last frame to {output_image_path}")
         logging.debug(f"ffmpeg stdout: {process.stdout}")
