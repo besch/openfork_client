@@ -20,6 +20,7 @@ from .video.upscaler import VideoUpscalerJobProcessor
 from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
 from .video.svi_shot import SVIShotImageToVideoJobProcessor
 from .video.svi_film import SVIFilmImageToVideoJobProcessor
+from .video.yume import YumeTextToVideoJobProcessor, YumeImageToVideoJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -69,6 +70,8 @@ __all__ = [
     "ChatterboxVoiceCloneJobProcessor",
     "SVIShotImageToVideoJobProcessor",
     "SVIFilmImageToVideoJobProcessor",
+    "YumeTextToVideoJobProcessor",
+    "YumeImageToVideoJobProcessor",
 ]
 
 

@@ -1394,6 +1394,7 @@ def inject_image_into_zimage_inpaint_workflow(
 def inject_prompt_into_yume_workflow(
     workflow_api_data: Dict, 
     prompt: str,
+    negative_prompt: str = "low quality, distorted, bad animation, blurry, watermark",
     frame_rate: int = 24,
     steps: int = 30,
     cfg: float = 7.0,
@@ -1408,6 +1409,7 @@ def inject_prompt_into_yume_workflow(
     Args:
         workflow_api_data: The workflow JSON structure (raw, not wrapped in 'prompt' key since YUME uses flat structure)
         prompt: Text prompt for world generation
+        negative_prompt: Negative prompt to avoid unwanted elements (default: quality-focused)
         frame_rate: Output video frame rate (default 24)
         steps: Number of sampling steps (default 30)
         cfg: Classifier-free guidance scale (default 7.0)
@@ -1433,6 +1435,7 @@ def inject_prompt_into_yume_workflow(
     for node_id, node in api_graph.items():
         if node.get("class_type") == "YUME_Node":
             node["inputs"]["prompt"] = prompt
+            node["inputs"]["n_prompt"] = negative_prompt
             node["inputs"]["steps"] = steps
             node["inputs"]["cfg"] = cfg
             node["inputs"]["seed"] = seed
@@ -1457,6 +1460,7 @@ def inject_image_into_yume_workflow(
     workflow_api_data: Dict, 
     image_path: str,
     prompt: str,
+    negative_prompt: str = "low quality, distorted, bad animation, blurry, watermark",
     frame_rate: int = 24,
     steps: int = 30,
     cfg: float = 7.0,
@@ -1472,6 +1476,7 @@ def inject_image_into_yume_workflow(
         workflow_api_data: The workflow JSON structure
         image_path: Path/filename of the start image in input directory
         prompt: Text prompt for world generation
+        negative_prompt: Negative prompt to avoid unwanted elements (default: quality-focused)
         frame_rate: Output video frame rate (default 24)
         steps: Number of sampling steps (default 30)
         cfg: Classifier-free guidance scale (default 7.0)
@@ -1506,6 +1511,7 @@ def inject_image_into_yume_workflow(
     for node_id, node in api_graph.items():
         if node.get("class_type") == "YUME_Node":
             node["inputs"]["prompt"] = prompt
+            node["inputs"]["n_prompt"] = negative_prompt
             node["inputs"]["steps"] = steps
             node["inputs"]["cfg"] = cfg
             node["inputs"]["seed"] = seed

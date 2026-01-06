@@ -55,6 +55,8 @@ from services.processors import (
     LLMJobProcessor,
     SVIShotImageToVideoJobProcessor,
     SVIFilmImageToVideoJobProcessor,
+    YumeTextToVideoJobProcessor,
+    YumeImageToVideoJobProcessor,
 )
 
 __all__ = [
@@ -90,6 +92,8 @@ __all__ = [
     "ChatterboxVoiceCloneJobProcessor",
     "SVIShotImageToVideoJobProcessor",
     "SVIFilmImageToVideoJobProcessor",
+    "YumeTextToVideoJobProcessor",
+    "YumeImageToVideoJobProcessor",
 ]
 
 
