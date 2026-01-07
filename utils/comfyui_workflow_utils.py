@@ -490,6 +490,16 @@ def inject_prompt_into_hunyuan_video_workflow(
             api_graph['101']['inputs']['fps'] = frame_rate
             logging.info(f"Added missing fps parameter to HunyuanVideo CreateVideo node 101: {frame_rate}")
 
+    # Update SaveVideo filename_prefix if present
+    for node_id, node in api_graph.items():
+        if node.get("class_type") == "SaveVideo":
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
+                logging.info(f"Updated filename_prefix in SaveVideo node {node_id}")
+            break
+
     return api_graph
 
 def inject_prompt_and_image_into_hunyuan_video_workflow(
@@ -587,6 +597,16 @@ def inject_prompt_and_image_into_hunyuan_video_workflow(
             frame_rate = api_graph['101']['inputs'].get('frame_rate', 24)
             api_graph['101']['inputs']['fps'] = frame_rate
             logging.info(f"Added missing fps parameter to HunyuanVideo i2v CreateVideo node 101: {frame_rate}")
+
+    # Update SaveVideo filename_prefix if present
+    for node_id, node in api_graph.items():
+        if node.get("class_type") == "SaveVideo":
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
+                logging.info(f"Updated filename_prefix in SaveVideo node {node_id}")
+            break
 
     return api_graph
 
