@@ -104,7 +104,35 @@ if [ -d "/opt/ComfyUI" ]; then
   (cd /opt/ComfyUI && $PYTHON_EXE main.py --listen > /tmp/comfyui.log 2>&1) &
   echo "ComfyUI startup initiated (logging to /tmp/comfyui.log)"
 else
-  echo "Warning: /opt/ComfyUI not found. Pod might be LLM-only."
+  echo "Warning: /opt/ComfyUI not found. Pod might be LLM-only or REST-based (YUME, DiffRhythm, etc.)."
+fi
+
+# Start YUME REST API if present (for yume-16gb containers)
+# YUME uses a FastAPI server on port 8000 instead of ComfyUI
+if [ -f "/opt/dgn-client/yume_api.py" ]; then
+  echo "Found YUME API script. Starting in background..."
+  (cd /opt/dgn-client && $PYTHON_EXE yume_api.py > /tmp/yume_api.log 2>&1) &
+  YUME_PID=$!
+  echo "YUME API startup initiated (PID: $YUME_PID, logging to /tmp/yume_api.log)"
+  
+  # Wait for YUME API to be ready
+  echo "Waiting for YUME API to be ready..."
+  MAX_WAIT=120
+  WAITED=0
+  while [ $WAITED -lt $MAX_WAIT ]; do
+    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
+      echo "YUME API is ready!"
+      break
+    fi
+    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
+    sleep 2
+    WAITED=$((WAITED + 2))
+  done
+  
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "WARNING: YUME API did not become ready within $MAX_WAIT seconds."
+    echo "Check /tmp/yume_api.log for errors."
+  fi
 fi
 
 # Create directories
