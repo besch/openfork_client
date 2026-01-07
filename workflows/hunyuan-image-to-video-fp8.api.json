@@ -126,21 +126,21 @@
       },
       "class_type": "VAEDecode"
     },
-    "101": {
-      "inputs": {
-        "frame_rate": 24,
-        "images": ["8", 0]
-      },
-      "class_type": "CreateVideo"
-    },
     "102": {
       "inputs": {
-        "filename_prefix": "hunyuan_i2v_fp8",
-        "format": "auto",
-        "codec": "h264",
-        "video": ["101", 0]
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "%date:yyyy-MM-dd%/hunyuan_i2v_fp8_",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv420p",
+        "crf": 19,
+        "save_metadata": true,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true,
+        "images": ["8", 0]
       },
-      "class_type": "SaveVideo"
+      "class_type": "VHS_VideoCombine"
     }
   }
 }
