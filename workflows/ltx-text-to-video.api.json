@@ -2,7 +2,7 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+        "ckpt_name": "ltxv-2b-0.9.8-distilled.safetensors"
       },
       "class_type": "CheckpointLoaderSimple"
     },
@@ -60,7 +60,7 @@
     "9": {
       "inputs": {
         "scheduler": "simple",
-        "steps": 30,
+        "steps": 20,
         "denoise": 1,
         "model": ["1", 0]
       },
@@ -68,7 +68,7 @@
     },
     "10": {
       "inputs": {
-        "cfg": 3,
+        "cfg": 4,
         "model": ["1", 0],
         "positive": ["5", 0],
         "negative": ["5", 1]

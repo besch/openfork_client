@@ -1,5 +1,5 @@
 # LTX-Video 2B Docker Image (12GB VRAM) - OPTIMIZED
-# Uses ltxv-2b-0.9.6-distilled model with T5 FP8 text encoder
+# Uses ltxv-2b-0.9.8-distilled model with T5 FP8 text encoder (upgraded from 0.9.6)
 
 # Use runtime instead of devel - saves ~3-5GB
 FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
@@ -51,8 +51,9 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
 RUN mkdir -p models/checkpoints models/text_encoders models/clip
 
 # Download models (combined into single layer)
-RUN wget -q -O models/checkpoints/ltxv-2b-0.9.6-distilled-04-25.safetensors \
-        "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.6-distilled-04-25.safetensors" \
+# Using LTX Video 0.9.8 distilled - significant quality improvements over 0.9.6
+RUN wget -q -O models/checkpoints/ltxv-2b-0.9.8-distilled.safetensors \
+        "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.8-distilled.safetensors" \
     && wget -q -O models/text_encoders/t5xxl_fp8_e4m3fn.safetensors \
         "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors" \
     && ln -s /opt/ComfyUI/models/text_encoders/t5xxl_fp8_e4m3fn.safetensors models/clip/t5xxl_fp8_e4m3fn.safetensors
