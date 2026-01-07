@@ -1447,10 +1447,16 @@ def inject_prompt_into_yume_workflow(
     else:
         logging.warning("Could not find YUME_Node in workflow")
     
-    # Update VHS_VideoCombine frame rate if present
+    # Update VHS_VideoCombine frame rate and filename_prefix
     for node_id, node in api_graph.items():
         if node.get("class_type") == "VHS_VideoCombine":
             node["inputs"]["frame_rate"] = frame_rate
+            
+            # Replace date token in filename_prefix
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
             break
     
     return api_graph
@@ -1523,10 +1529,17 @@ def inject_image_into_yume_workflow(
     else:
         logging.warning("Could not find YUME_Node in workflow")
     
-    # Update VHS_VideoCombine frame rate if present
+    # Update VHS_VideoCombine frame rate and filename_prefix
     for node_id, node in api_graph.items():
         if node.get("class_type") == "VHS_VideoCombine":
             node["inputs"]["frame_rate"] = frame_rate
+            
+            # Replace date token in filename_prefix
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
+            
             break
     
     return api_graph
