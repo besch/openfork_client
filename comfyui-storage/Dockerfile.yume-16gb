@@ -38,7 +38,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv \
         diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image \
         ftfy regex tqdm matplotlib tensorboard bitsandbytes scipy packaging \
-        fastapi uvicorn python-multipart pillow
+        fastapi uvicorn python-multipart pillow easydict
 
 # Clone YUME repository
 WORKDIR /opt
