@@ -1,8 +1,8 @@
-# YUME 1.5 Docker Image
+# YUME 1.5 Docker Image (REST API Backend)
 # 
 # This image provides YUME 1.5 (Yume-5B-720P) for interactive world generation.
 # YUME uses a custom diffusion pipeline built on FastVideo/HunyuanVideo.
-# ComfyUI is used as the orchestration layer for integration with OpenFork.
+# Uses a REST API server instead of ComfyUI for better compatibility.
 #
 # Reference: https://github.com/stdstu12/YUME
 # Model: https://huggingface.co/stdstu123/Yume-5B-720P
@@ -37,7 +37,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv \
         diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image \
-        ftfy regex tqdm matplotlib tensorboard bitsandbytes scipy packaging
+        ftfy regex tqdm matplotlib tensorboard bitsandbytes scipy packaging \
+        fastapi uvicorn python-multipart pillow
 
 # Clone YUME repository
 WORKDIR /opt
@@ -66,23 +67,15 @@ RUN huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume
     --include "*.safetensors" \
     && ln -sf /opt/models/Yume /opt/YUME/Yume-5B-720p
 
-# Setup ComfyUI
-WORKDIR /opt/ComfyUI
-RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
-    && rm -rf .git \
-    && python -m pip install --no-cache-dir -r requirements.txt \
-    && git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
-    && rm -rf custom_nodes/VideoHelperSuite/.git \
-    && python -m pip install --no-cache-dir -r custom_nodes/VideoHelperSuite/requirements.txt
+# Create directories for API
+RUN mkdir -p /opt/output /opt/input
 
-# Create YUME custom node directory
-RUN mkdir -p custom_nodes/YUME
+# Copy the REST API server
+WORKDIR /opt/dgn-client
+COPY yume_api.py /opt/dgn-client/yume_api.py
 
-# Install Custom Wrapper Node
-COPY yume_wrapper.py custom_nodes/YUME/wrapper_node.py
-RUN echo "from .wrapper_node import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS" > custom_nodes/YUME/__init__.py
+# Expose REST API port
+EXPOSE 8000
 
-# Expose ComfyUI port
-EXPOSE 8188
-
-CMD ["python", "main.py", "--listen", "0.0.0.0"]
+# Run the YUME REST API server
+CMD ["python", "-u", "/opt/dgn-client/yume_api.py"]

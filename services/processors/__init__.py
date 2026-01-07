@@ -21,6 +21,7 @@ from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI
 from .video.svi_shot import SVIShotImageToVideoJobProcessor
 from .video.svi_film import SVIFilmImageToVideoJobProcessor
 from .video.yume import YumeTextToVideoJobProcessor, YumeImageToVideoJobProcessor
+from .video.yume_cli import YumeTextToVideoCLIJobProcessor, YumeImageToVideoCLIJobProcessor, YumeCLIJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -72,6 +73,9 @@ __all__ = [
     "SVIFilmImageToVideoJobProcessor",
     "YumeTextToVideoJobProcessor",
     "YumeImageToVideoJobProcessor",
+    "YumeTextToVideoCLIJobProcessor",
+    "YumeImageToVideoCLIJobProcessor",
+    "YumeCLIJobProcessor",
 ]
 
 

@@ -57,6 +57,9 @@ from services.processors import (
     SVIFilmImageToVideoJobProcessor,
     YumeTextToVideoJobProcessor,
     YumeImageToVideoJobProcessor,
+    YumeTextToVideoCLIJobProcessor,
+    YumeImageToVideoCLIJobProcessor,
+    YumeCLIJobProcessor,
 )
 
 __all__ = [
@@ -94,6 +97,9 @@ __all__ = [
     "SVIFilmImageToVideoJobProcessor",
     "YumeTextToVideoJobProcessor",
     "YumeImageToVideoJobProcessor",
+    "YumeTextToVideoCLIJobProcessor",
+    "YumeImageToVideoCLIJobProcessor",
+    "YumeCLIJobProcessor",
 ]
 
 
