@@ -249,6 +249,37 @@ class ComfyUIClient:
                         raise out
                 except Empty:
                     logging.debug("Queue empty, continuing to wait for messages.")
+                    # Fallback check if it's been a while without activity
+                    if time.time() - last_poll_ts > 30:
+                        try:
+                            # 1. Log Queue Status
+                            queue_blocks = requests.get(f"{self.http_base}/queue", timeout=5).json()
+                            running_len = len(queue_blocks.get('queue_running', []))
+                            pending_len = len(queue_blocks.get('queue_pending', []))
+                            logging.info(f"ComfyUI Status Check: Running={running_len}, Pending={pending_len}")
+                            
+                            if running_len > 0:
+                                # What is currently running?
+                                current = queue_blocks['queue_running'][0]
+                                logging.info(f"Currently executing: {current[1]} (prompt_id: {current[1]})")
+
+                            # 2. Tail ComfyUI Log in Headless Mode (Debug)
+                            from config import HEADLESS_MODE
+                            if HEADLESS_MODE and (time.time() - start_ts > 60) and running_len == 0 and pending_len > 0:
+                                logging.warning("Job seems stuck pending. Tailing /tmp/comfyui.log:")
+                                try:
+                                    with open("/tmp/comfyui.log", "r") as f:
+                                        # Read last 2KB
+                                        f.seek(0, 2)
+                                        fsize = f.tell()
+                                        f.seek(max(fsize - 2048, 0), 0)
+                                        print(f"--- COMFYUI LOG TAIL ---\n{f.read()}\n------------------------")
+                                except Exception as log_e:
+                                    logging.warning(f"Could not read comfyui.log: {log_e}")
+
+                        except Exception as e:
+                            logging.warning(f"Status check failed: {e}")
+                            
                     continue
 
                 if isinstance(out, str):
