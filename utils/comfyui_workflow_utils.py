@@ -403,6 +403,104 @@ def inject_prompt_and_image_into_ltx_video_workflow(
 
     return api_graph
 
+def inject_prompt_into_ltx2_video_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    aspect_ratio: str = "16:9",
+    seed: Optional[int] = None
+):
+    """
+    Loads a ComfyUI API-formatted workflow, injects prompts for LTX-2.
+    LTX-2 uses Gemma-3 text encoder and different node structure:
+    - Node 2: LTXVGemmaCLIPModelLoader (Gemma-3 text encoder)
+    - Node 3: CLIPTextEncode (positive prompt)
+    - Node 4: LTXVConditioning
+    - Node 5: EmptyImage (for dimensions)
+    - Node 8: RandomNoise (for seed)
+    - Node 9: LTXVSampler (main sampler)
+    - Node 11: CreateVideo
+    - Node 12: SaveVideo
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Node 3 is the prompt node (CLIPTextEncode)
+    if '3' in api_graph and 'inputs' in api_graph['3'] and 'text' in api_graph['3']['inputs']:
+        api_graph['3']['inputs']['text'] = prompt
+        logging.info(f"Injected positive prompt into LTX-2 node 3: {prompt[:50]}...")
+    else:
+        logging.warning("Could not find prompt node 3 in LTX-2 workflow")
+
+    # Inject dimensions into EmptyImage (Node 5)
+    if '5' in api_graph and api_graph['5'].get("class_type") == "EmptyImage":
+        width, height = get_dimensions(aspect_ratio)
+        api_graph['5']['inputs']['width'] = width
+        api_graph['5']['inputs']['height'] = height
+        logging.info(f"Injected dimensions into LTX-2 node 5: {width}x{height}")
+
+    # Set seed for RandomNoise node (Node 8) - use provided or generate random
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
+    if '8' in api_graph and api_graph['8'].get("class_type") == "RandomNoise":
+        api_graph['8']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Set seed in LTX-2 node 8: {actual_seed}")
+    
+    # Also inject seed into LTXVSampler if it has noise_seed input (Node 9)
+    if '9' in api_graph and 'inputs' in api_graph['9']:
+        if 'noise_seed' in api_graph['9']['inputs']:
+            api_graph['9']['inputs']['noise_seed'] = actual_seed
+
+    return api_graph
+
+def inject_prompt_and_image_into_ltx2_video_workflow(
+    workflow_api_data: Dict, 
+    prompt: str, 
+    negative_prompt: str, 
+    start_image_filename: str, 
+    aspect_ratio: str = "16:9",
+    seed: Optional[int] = None
+):
+    """
+    Loads a ComfyUI API-formatted workflow, injects prompts and image for LTX-2 image-to-video.
+    LTX-2 I2V uses this node structure:
+    - Node 2: LTXVGemmaCLIPModelLoader (Gemma-3 text encoder)
+    - Node 3: CLIPTextEncode (positive prompt)
+    - Node 4: LTXVConditioning
+    - Node 5: LoadImage (for start image)
+    - Node 8: RandomNoise (for seed)
+    - Node 9: VAEEncode (encode start image)
+    - Node 10: LTXVSampler (main sampler)
+    - Node 12: CreateVideo
+    - Node 13: SaveVideo
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Node 3 is the prompt node (CLIPTextEncode)
+    if '3' in api_graph and 'inputs' in api_graph['3'] and 'text' in api_graph['3']['inputs']:
+        api_graph['3']['inputs']['text'] = prompt
+        logging.info(f"Injected positive prompt into LTX-2 i2v node 3: {prompt[:50]}...")
+    else:
+        logging.warning("Could not find prompt node 3 in LTX-2 i2v workflow")
+
+    # Inject start image into LoadImage node (Node 5)
+    if '5' in api_graph and api_graph['5'].get("class_type") == "LoadImage":
+        api_graph['5']['inputs']['image'] = start_image_filename
+        logging.info(f"Injected start image into LTX-2 i2v node 5: {start_image_filename}")
+    else:
+        logging.warning("Could not find LoadImage node 5 in LTX-2 i2v workflow")
+
+    # Set seed for RandomNoise node (Node 8) - use provided or generate random
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
+    if '8' in api_graph and api_graph['8'].get("class_type") == "RandomNoise":
+        api_graph['8']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Set seed in LTX-2 i2v node 8: {actual_seed}")
+    
+    # Also inject seed into LTXVSampler if it has noise_seed input (Node 10)
+    if '10' in api_graph and 'inputs' in api_graph['10']:
+        if 'noise_seed' in api_graph['10']['inputs']:
+            api_graph['10']['inputs']['noise_seed'] = actual_seed
+
+    return api_graph
+
 def inject_prompt_into_hunyuan_video_workflow(
     workflow_api_data: Dict, 
     prompt: str, 

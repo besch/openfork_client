@@ -1,0 +1,104 @@
+{
+  "prompt": {
+    "1": {
+      "inputs": {
+        "ckpt_name": "ltx-2-19b-distilled.safetensors"
+      },
+      "class_type": "CheckpointLoaderSimple"
+    },
+    "2": {
+      "inputs": {
+        "model_path": "gemma-3-12b-it-qat-q4_0-unquantized/model-00001-of-00005.safetensors",
+        "ckpt_name": "ltx-2-19b-distilled.safetensors",
+        "max_length": 512
+      },
+      "class_type": "LTXVGemmaCLIPModelLoader"
+    },
+    "3": {
+      "inputs": {
+        "text": "A cinematic video prompt placeholder",
+        "clip": ["2", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "4": {
+      "inputs": {
+        "positive": ["3", 0],
+        "negative": ["3", 0],
+        "frame_rate": 24
+      },
+      "class_type": "LTXVConditioning"
+    },
+    "5": {
+      "inputs": {
+        "image": "start_image.png"
+      },
+      "class_type": "LoadImage"
+    },
+    "6": {
+      "inputs": {
+        "length": 121
+      },
+      "class_type": "PrimitiveInt",
+      "_meta": {"title": "length"}
+    },
+    "7": {
+      "inputs": {
+        "value": 24
+      },
+      "class_type": "PrimitiveFloat",
+      "_meta": {"title": "Frame Rate"}
+    },
+    "8": {
+      "inputs": {
+        "noise_seed": 0
+      },
+      "class_type": "RandomNoise"
+    },
+    "9": {
+      "inputs": {
+        "pixels": ["5", 0],
+        "vae": ["1", 2]
+      },
+      "class_type": "VAEEncode"
+    },
+    "10": {
+      "inputs": {
+        "model": ["1", 0],
+        "positive": ["4", 0],
+        "negative": ["4", 1],
+        "vae": ["1", 2],
+        "latent_image": ["9", 0],
+        "length": 121,
+        "frame_rate": 24,
+        "noise_seed": 0,
+        "denoise": 0.85
+      },
+      "class_type": "LTXVSampler",
+      "_meta": {"title": "LTX-2 Sampler"}
+    },
+    "11": {
+      "inputs": {
+        "samples": ["10", 0],
+        "vae": ["1", 2]
+      },
+      "class_type": "VAEDecode"
+    },
+    "12": {
+      "inputs": {
+        "images": ["11", 0],
+        "fps": 24
+      },
+      "class_type": "CreateVideo"
+    },
+    "13": {
+      "inputs": {
+        "video": ["12", 0],
+        "filename_prefix": "ltx2_i2v",
+        "codec": "auto",
+        "quality": "auto"
+      },
+      "class_type": "SaveVideo"
+    }
+  }
+}

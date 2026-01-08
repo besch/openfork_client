@@ -16,6 +16,8 @@ from .video.hunyuan_text import HunyuanTextToVideoJobProcessor
 from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
 from .video.ltx_text import LTXTextToVideoJobProcessor
 from .video.ltx_image import LTXImageToVideoJobProcessor
+from .video.ltx2_text import LTX2TextToVideoJobProcessor
+from .video.ltx2_image import LTX2ImageToVideoJobProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
 from .video.svi_shot import SVIShotImageToVideoJobProcessor
@@ -51,6 +53,8 @@ __all__ = [
     "HunyuanImageToVideoJobProcessor",
     "LTXTextToVideoJobProcessor",
     "LTXImageToVideoJobProcessor",
+    "LTX2TextToVideoJobProcessor",
+    "LTX2ImageToVideoJobProcessor",
     "VideoUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",

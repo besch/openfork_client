@@ -1,0 +1,67 @@
+# LTX-2 19B FP8 Docker Image (16GB VRAM)
+# Uses ltx-2-19b-distilled-fp8 model with Gemma-3-12b text encoder
+
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri git-lfs \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Python packages
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg \
+        GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub \
+        color-matcher matplotlib mss toml rich uv sentencepiece
+
+WORKDIR /opt/ComfyUI
+
+# Clone ComfyUI and custom nodes
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
+    && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
+    && git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
+    && rm -rf custom_nodes/VideoHelperSuite/.git \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
+    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true
+
+# Create model directories
+RUN mkdir -p models/checkpoints models/text_encoders models/latent_upscale_models models/loras
+
+# Download LTX-2 FP8 model (~10GB)
+RUN wget -q --show-progress -O models/checkpoints/ltx-2-19b-distilled-fp8.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-fp8.safetensors"
+
+# Download spatial upscaler
+RUN wget -q --show-progress -O models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors"
+
+# Download Gemma-3 text encoder (quantized version - much smaller)
+RUN git lfs install \
+    && git clone --depth=1 https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized \
+        models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized \
+    && rm -rf models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/.git
+
+WORKDIR /opt/ComfyUI
+CMD ["python", "main.py", "--listen", "--lowvram"]
