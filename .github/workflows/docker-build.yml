@@ -26,9 +26,9 @@ jobs:
           #   image: beschiak/openfork-ltx2-24gb
           
           # # Yume
-          # - setup: yume-16gb
-          #   dockerfile: Dockerfile.yume-16gb
-          #   image: beschiak/openfork-yume-16gb
+          - setup: yume-16gb
+            dockerfile: Dockerfile.yume-16gb
+            image: beschiak/openfork-yume-16gb
 
           # # Wan 2.2
           # - setup: wan22-16gb

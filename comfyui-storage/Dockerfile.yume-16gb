@@ -40,6 +40,9 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         ftfy regex tqdm matplotlib tensorboard bitsandbytes scipy packaging \
         fastapi uvicorn python-multipart pillow easydict
 
+# Install flash-attn (requires CUDA devel tools and must be after torch)
+RUN python -m pip install --no-cache-dir flash-attn --no-build-isolation
+
 # Clone YUME repository
 WORKDIR /opt
 RUN git clone --depth=1 https://github.com/stdstu12/YUME.git \
