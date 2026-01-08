@@ -31,36 +31,23 @@
     },
     "5": {
       "inputs": {
-        "image": "start_image.png"
+        "image": "start_image.png",
+        "upload": "image"
       },
       "class_type": "LoadImage"
     },
     "6": {
       "inputs": {
-        "length": 97
-      },
-      "class_type": "PrimitiveInt",
-      "_meta": {"title": "length"}
-    },
-    "7": {
-      "inputs": {
-        "value": 24
-      },
-      "class_type": "PrimitiveFloat",
-      "_meta": {"title": "Frame Rate"}
-    },
-    "8": {
-      "inputs": {
-        "noise_seed": 0
-      },
-      "class_type": "RandomNoise"
-    },
-    "9": {
-      "inputs": {
         "pixels": ["5", 0],
         "vae": ["1", 2]
       },
       "class_type": "VAEEncode"
+    },
+    "7": {
+      "inputs": {
+        "noise_seed": 0
+      },
+      "class_type": "RandomNoise"
     },
     "10": {
       "inputs": {
@@ -68,33 +55,36 @@
         "positive": ["4", 0],
         "negative": ["4", 1],
         "vae": ["1", 2],
-        "latent_image": ["9", 0],
-        "length": 97,
-        "frame_rate": 24,
-        "noise_seed": 0,
-        "denoise": 0.85
+        "width": 768,
+        "height": 512,
+        "num_frames": 97,
+        "steps": 30,
+        "cfg": 3.0,
+        "seed": 0,
+        "sampler": "euler",
+        "optional_cond_images": ["5", 0]
       },
-      "class_type": "LTXVSampler",
-      "_meta": {"title": "LTX-2 Sampler"}
+      "class_type": "LTXVBaseSampler",
+      "_meta": {"title": "LTX-2 Base Sampler"}
     },
-    "11": {
+    "9": {
       "inputs": {
         "samples": ["10", 0],
         "vae": ["1", 2]
       },
       "class_type": "VAEDecode"
     },
-    "12": {
+    "11": {
       "inputs": {
-        "images": ["11", 0],
+        "images": ["9", 0],
         "fps": 24
       },
       "class_type": "CreateVideo"
     },
-    "13": {
+    "12": {
       "inputs": {
-        "video": ["12", 0],
-        "filename_prefix": "ltx2_i2v",
+        "video": ["11", 0],
+        "filename_prefix": "ltx2_i2v_16gb",
         "codec": "auto",
         "quality": "auto"
       },

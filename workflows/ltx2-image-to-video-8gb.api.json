@@ -49,37 +49,41 @@
       },
       "class_type": "RandomNoise"
     },
-    "8": {
+    "10": {
       "inputs": {
         "model": ["1", 0],
         "positive": ["4", 0],
         "negative": ["4", 1],
         "vae": ["1", 2],
-        "latent": ["6", 0],
-        "length": 73,
-        "frame_rate": 24,
-        "noise_seed": 0
+        "width": 544,
+        "height": 320,
+        "num_frames": 73,
+        "steps": 30,
+        "cfg": 3.0,
+        "seed": 0,
+        "sampler": "euler",
+        "optional_cond_images": ["5", 0]
       },
-      "class_type": "LTXVSampler",
-      "_meta": {"title": "LTX-2 Sampler"}
+      "class_type": "LTXVBaseSampler",
+      "_meta": {"title": "LTX-2 Base Sampler"}
     },
     "9": {
       "inputs": {
-        "samples": ["8", 0],
+        "samples": ["10", 0],
         "vae": ["1", 2]
       },
       "class_type": "VAEDecode"
     },
-    "10": {
+    "11": {
       "inputs": {
         "images": ["9", 0],
         "fps": 24
       },
       "class_type": "CreateVideo"
     },
-    "11": {
+    "12": {
       "inputs": {
-        "video": ["10", 0],
+        "video": ["11", 0],
         "filename_prefix": "ltx2_i2v_8gb",
         "codec": "auto",
         "quality": "auto"

@@ -29,29 +29,6 @@
       },
       "class_type": "LTXVConditioning"
     },
-    "5": {
-      "inputs": {
-        "width": 960,
-        "height": 544,
-        "length": 1,
-        "color": 0
-      },
-      "class_type": "EmptyImage"
-    },
-    "6": {
-      "inputs": {
-        "length": 121
-      },
-      "class_type": "PrimitiveInt",
-      "_meta": {"title": "length"}
-    },
-    "7": {
-      "inputs": {
-        "value": 24
-      },
-      "class_type": "PrimitiveFloat",
-      "_meta": {"title": "Frame Rate"}
-    },
     "8": {
       "inputs": {
         "noise_seed": 0
@@ -64,13 +41,16 @@
         "positive": ["4", 0],
         "negative": ["4", 1],
         "vae": ["1", 2],
-        "empty_latent_image": ["5", 0],
-        "length": 121,
-        "frame_rate": 24,
-        "noise_seed": 0
+        "width": 1024,
+        "height": 576,
+        "num_frames": 121,
+        "steps": 30,
+        "cfg": 3.0,
+        "seed": 0,
+        "sampler": "euler"
       },
-      "class_type": "LTXVSampler",
-      "_meta": {"title": "LTX-2 Sampler"}
+      "class_type": "LTXVBaseSampler",
+      "_meta": {"title": "LTX-2 Base Sampler"}
     },
     "10": {
       "inputs": {
@@ -89,7 +69,7 @@
     "12": {
       "inputs": {
         "video": ["11", 0],
-        "filename_prefix": "ltx2_t2v",
+        "filename_prefix": "ltx2_t2v_24gb",
         "codec": "auto",
         "quality": "auto"
       },
