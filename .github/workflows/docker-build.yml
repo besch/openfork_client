@@ -75,7 +75,7 @@ jobs:
           IMAGE_TAG="${{ matrix.image }}:latest"
           echo "Building ${IMAGE_TAG}..."
           docker build -f ${{ matrix.dockerfile }} \
-            --build-arg HF_TOKEN=${{ secrets.HF_TOKEN }} \
+            --build-arg HUGGINGFACE_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }} \
             -t ${IMAGE_TAG} .
 
       - name: Push to Docker Hub (with Retry)
