@@ -38,7 +38,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv \
         diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image \
         ftfy regex tqdm matplotlib tensorboard bitsandbytes scipy packaging \
-        fastapi uvicorn python-multipart pillow easydict
+        fastapi uvicorn python-multipart pillow easydict \
+        pytorch-lightning peft yacs moviepy fvcore pytorchvideo liger_kernel triton
 
 # Install flash-attn (requires CUDA devel tools and must be after torch)
 RUN python -m pip install --no-cache-dir flash-attn --no-build-isolation
