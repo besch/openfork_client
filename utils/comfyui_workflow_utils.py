@@ -416,27 +416,41 @@ def inject_prompt_into_ltx2_video_workflow(
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for LTX-2.
     Also handles Camera Control LoRA injection if camera_movement is specified.
+    
+    New workflow structure:
+    - Node 3: Positive prompt (CLIPTextEncode)
+    - Node 9: BasicScheduler (steps)
+    - Node 10: RandomNoise (seed)
+    - Node 11: LTXVBaseSampler (width, height, num_frames)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
-    # Node 3 is the prompt node (CLIPTextEncode)
+    # Node 3 is the positive prompt node (CLIPTextEncode)
     if '3' in api_graph and 'inputs' in api_graph['3'] and 'text' in api_graph['3']['inputs']:
         api_graph['3']['inputs']['text'] = prompt
         logging.info(f"Injected positive prompt into LTX-2 node 3: {prompt[:50]}...")
     else:
         logging.warning("Could not find prompt node 3 in LTX-2 workflow")
 
-    # Inject dimensions into LTXVBaseSampler (Node 9)
+    # Generate seed
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
-    if '9' in api_graph and 'inputs' in api_graph['9']:
+    
+    # Inject seed into RandomNoise (Node 10)
+    if '10' in api_graph and api_graph['10'].get("class_type") == "RandomNoise":
+        api_graph['10']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Injected seed into LTX-2 RandomNoise node 10: {actual_seed}")
+
+    # Inject steps into BasicScheduler (Node 9)
+    if steps is not None and '9' in api_graph and api_graph['9'].get("class_type") == "BasicScheduler":
+        api_graph['9']['inputs']['steps'] = steps
+        logging.info(f"Injected steps into LTX-2 BasicScheduler node 9: {steps}")
+
+    # Inject dimensions into LTXVBaseSampler (Node 11)
+    if '11' in api_graph and api_graph['11'].get("class_type") == "LTXVBaseSampler":
         width, height = get_dimensions(aspect_ratio)
-        api_graph['9']['inputs']['width'] = width
-        api_graph['9']['inputs']['height'] = height
-        api_graph['9']['inputs']['seed'] = actual_seed
-        logging.info(f"Injected dimensions into LTX-2 node 9: {width}x{height}")
-        if steps is not None:
-            api_graph['9']['inputs']['steps'] = steps
-            logging.info(f"Injected steps into LTX-2 node 9: {steps}")
+        api_graph['11']['inputs']['width'] = width
+        api_graph['11']['inputs']['height'] = height
+        logging.info(f"Injected dimensions into LTX-2 LTXVBaseSampler node 11: {width}x{height}")
 
     # Inject Camera Control LoRA
     if camera_movement and camera_movement != "none":
@@ -460,6 +474,13 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image for LTX-2 image-to-video.
     Also handles Camera Control LoRA injection.
+    
+    New workflow structure:
+    - Node 3: Positive prompt (CLIPTextEncode)
+    - Node 9: BasicScheduler (steps)
+    - Node 10: RandomNoise (seed)
+    - Node 11: LTXVBaseSampler (width, height, num_frames)
+    - Node 15: LoadImage (start image)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -470,21 +491,32 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     else:
         logging.warning("Could not find prompt node 3 in LTX-2 i2v workflow")
 
-    # Inject start image into LoadImage node (Node 5)
-    if '5' in api_graph and api_graph['5'].get("class_type") == "LoadImage":
-        api_graph['5']['inputs']['image'] = start_image_filename
-        logging.info(f"Injected start image into LTX-2 i2v node 5: {start_image_filename}")
+    # Inject start image into LoadImage node (Node 15)
+    if '15' in api_graph and api_graph['15'].get("class_type") == "LoadImage":
+        api_graph['15']['inputs']['image'] = start_image_filename
+        logging.info(f"Injected start image into LTX-2 i2v node 15: {start_image_filename}")
     else:
-        logging.warning("Could not find LoadImage node 5 in LTX-2 i2v workflow")
+        logging.warning("Could not find LoadImage node 15 in LTX-2 i2v workflow")
 
-    # Set seed and dimensions in LTXVBaseSampler (Node 10)
+    # Generate seed
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
-    if '10' in api_graph and 'inputs' in api_graph['10']:
-        api_graph['10']['inputs']['seed'] = actual_seed
-        logging.info(f"Set seed in LTX-2 i2v node 10: {actual_seed}")
-        if steps is not None:
-            api_graph['10']['inputs']['steps'] = steps
-            logging.info(f"Injected steps into LTX-2 i2v node 10: {steps}")
+    
+    # Inject seed into RandomNoise (Node 10)
+    if '10' in api_graph and api_graph['10'].get("class_type") == "RandomNoise":
+        api_graph['10']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Injected seed into LTX-2 i2v RandomNoise node 10: {actual_seed}")
+
+    # Inject steps into BasicScheduler (Node 9)
+    if steps is not None and '9' in api_graph and api_graph['9'].get("class_type") == "BasicScheduler":
+        api_graph['9']['inputs']['steps'] = steps
+        logging.info(f"Injected steps into LTX-2 i2v BasicScheduler node 9: {steps}")
+
+    # Inject dimensions into LTXVBaseSampler (Node 11)
+    if '11' in api_graph and api_graph['11'].get("class_type") == "LTXVBaseSampler":
+        width, height = get_dimensions(aspect_ratio)
+        api_graph['11']['inputs']['width'] = width
+        api_graph['11']['inputs']['height'] = height
+        logging.info(f"Injected dimensions into LTX-2 i2v LTXVBaseSampler node 11: {width}x{height}")
 
     # Inject Camera Control LoRA
     if camera_movement and camera_movement != "none":

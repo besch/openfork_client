@@ -8,8 +8,8 @@
     },
     "2": {
       "inputs": {
-        "model_path": "gemma-3-12b-it-qat-q4_0-unquantized/model-00001-of-00005.safetensors",
-        "ckpt_name": "ltx-2-19b-dev-fp4.safetensors",
+        "gemma_path": "gemma-3-12b-it-qat-q4_0-unquantized/model-00001-of-00005.safetensors",
+        "ltxv_path": "ltx-2-19b-dev-fp4.safetensors",
         "max_length": 512
       },
       "class_type": "LTXVGemmaCLIPModelLoader"
@@ -23,53 +23,92 @@
     },
     "4": {
       "inputs": {
+        "text": "",
+        "clip": ["2", 0]
+      },
+      "class_type": "CLIPTextEncode",
+      "_meta": {"title": "Negative"}
+    },
+    "5": {
+      "inputs": {
         "positive": ["3", 0],
-        "negative": ["3", 0],
+        "negative": ["4", 0],
         "frame_rate": 24
       },
       "class_type": "LTXVConditioning"
     },
+    "6": {
+      "inputs": {
+        "model": ["1", 0],
+        "block_indices": "14, 19"
+      },
+      "class_type": "LTXVApplySTG"
+    },
+    "7": {
+      "inputs": {
+        "model": ["6", 0],
+        "positive": ["5", 0],
+        "negative": ["5", 1],
+        "cfg": 3.0,
+        "stg": 1.0,
+        "rescale": 0.7
+      },
+      "class_type": "STGGuider"
+    },
     "8": {
+      "inputs": {
+        "sampler_name": "euler"
+      },
+      "class_type": "KSamplerSelect"
+    },
+    "9": {
+      "inputs": {
+        "model": ["1", 0],
+        "scheduler": "normal",
+        "steps": 30,
+        "denoise": 1.0
+      },
+      "class_type": "BasicScheduler"
+    },
+    "10": {
       "inputs": {
         "noise_seed": 0
       },
       "class_type": "RandomNoise"
     },
-    "9": {
+    "11": {
       "inputs": {
         "model": ["1", 0],
-        "positive": ["4", 0],
-        "negative": ["4", 1],
         "vae": ["1", 2],
         "width": 544,
         "height": 320,
         "num_frames": 73,
-        "steps": 30,
-        "cfg": 3.0,
-        "seed": 0,
-        "sampler": "euler"
+        "guider": ["7", 0],
+        "sampler": ["8", 0],
+        "sigmas": ["9", 0],
+        "noise": ["10", 0]
       },
-      "class_type": "LTXVBaseSampler",
-      "_meta": {"title": "LTX-2 Base Sampler"}
+      "class_type": "LTXVBaseSampler"
     },
-    "10": {
+    "12": {
       "inputs": {
-        "samples": ["9", 0],
+        "samples": ["11", 0],
         "vae": ["1", 2]
       },
       "class_type": "VAEDecode"
     },
-    "11": {
+    "13": {
       "inputs": {
-        "images": ["10", 0],
+        "images": ["12", 0],
         "fps": 24
       },
       "class_type": "CreateVideo"
     },
-    "12": {
+    "14": {
       "inputs": {
-        "video": ["11", 0],
+        "video": ["13", 0],
         "filename_prefix": "ltx2_t2v_8gb",
+        "format": "auto",
         "codec": "auto",
         "quality": "auto"
       },
