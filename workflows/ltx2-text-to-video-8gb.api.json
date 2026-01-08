@@ -1,0 +1,99 @@
+{
+  "prompt": {
+    "1": {
+      "inputs": {
+        "ckpt_name": "ltx-2-19b-dev-fp4.safetensors"
+      },
+      "class_type": "CheckpointLoaderSimple"
+    },
+    "2": {
+      "inputs": {
+        "model_path": "gemma-3-12b-it-qat-q4_0-unquantized/model-00001-of-00005.safetensors",
+        "ckpt_name": "ltx-2-19b-dev-fp4.safetensors",
+        "max_length": 512
+      },
+      "class_type": "LTXVGemmaCLIPModelLoader"
+    },
+    "3": {
+      "inputs": {
+        "text": "A cinematic video prompt placeholder",
+        "clip": ["2", 0]
+      },
+      "class_type": "CLIPTextEncode"
+    },
+    "4": {
+      "inputs": {
+        "positive": ["3", 0],
+        "negative": ["3", 0],
+        "frame_rate": 24
+      },
+      "class_type": "LTXVConditioning"
+    },
+    "5": {
+      "inputs": {
+        "width": 544,
+        "height": 320,
+        "length": 1,
+        "color": 0
+      },
+      "class_type": "EmptyImage"
+    },
+    "6": {
+      "inputs": {
+        "length": 73
+      },
+      "class_type": "PrimitiveInt",
+      "_meta": {"title": "length"}
+    },
+    "7": {
+      "inputs": {
+        "value": 24
+      },
+      "class_type": "PrimitiveFloat",
+      "_meta": {"title": "Frame Rate"}
+    },
+    "8": {
+      "inputs": {
+        "noise_seed": 0
+      },
+      "class_type": "RandomNoise"
+    },
+    "9": {
+      "inputs": {
+        "model": ["1", 0],
+        "positive": ["4", 0],
+        "negative": ["4", 1],
+        "vae": ["1", 2],
+        "empty_latent_image": ["5", 0],
+        "length": 73,
+        "frame_rate": 24,
+        "noise_seed": 0
+      },
+      "class_type": "LTXVSampler",
+      "_meta": {"title": "LTX-2 Sampler"}
+    },
+    "10": {
+      "inputs": {
+        "samples": ["9", 0],
+        "vae": ["1", 2]
+      },
+      "class_type": "VAEDecode"
+    },
+    "11": {
+      "inputs": {
+        "images": ["10", 0],
+        "fps": 24
+      },
+      "class_type": "CreateVideo"
+    },
+    "12": {
+      "inputs": {
+        "video": ["11", 0],
+        "filename_prefix": "ltx2_t2v_8gb",
+        "codec": "auto",
+        "quality": "auto"
+      },
+      "class_type": "SaveVideo"
+    }
+  }
+}

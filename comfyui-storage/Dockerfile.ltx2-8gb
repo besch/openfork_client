@@ -1,5 +1,6 @@
-# LTX-2 19B Distilled Docker Image (24GB VRAM)
-# Uses full ltx-2-19b-distilled model with Gemma-3-12b text encoder
+# LTX-2 19B FP4 Docker Image (8GB VRAM with RAM offloading)
+# Uses ltx-2-19b-dev-fp4 model with Gemma-3-12b text encoder
+# Requires --lowvram flag to offload weights to system RAM
 
 FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
@@ -49,9 +50,9 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
 # Create model directories
 RUN mkdir -p models/checkpoints models/text_encoders models/latent_upscale_models models/loras
 
-# Download LTX-2 full distilled model (~38GB)
-RUN wget -q --show-progress -O models/checkpoints/ltx-2-19b-distilled.safetensors \
-        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled.safetensors"
+# Download LTX-2 FP4 model (~20GB) - most VRAM efficient
+RUN wget -q --show-progress -O models/checkpoints/ltx-2-19b-dev-fp4.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp4.safetensors"
 
 # Download spatial upscaler
 RUN wget -q --show-progress -O models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
@@ -81,4 +82,5 @@ RUN wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-
 COPY storage/ComfyUI/models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/ models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/
 
 WORKDIR /opt/ComfyUI
-CMD ["python", "main.py", "--listen"]
+# Use --lowvram to offload model weights to RAM, --reserve-vram 1 keeps 1GB free for system
+CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1"]

@@ -57,6 +57,26 @@ RUN wget -q --show-progress -O models/checkpoints/ltx-2-19b-distilled-fp8.safete
 RUN wget -q --show-progress -O models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
         "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors"
 
+# Download distilled LoRA for faster generation (fewer steps)
+RUN wget -q --show-progress -O models/loras/ltx-2-19b-distilled-lora-384.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors"
+
+# Download Camera Control LoRAs
+RUN wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-in.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In/resolve/main/ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-out.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out/resolve/main/ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-left.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left/resolve/main/ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-right.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right/resolve/main/ltx-2-19b-lora-camera-control-dolly-right.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-jib-up.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Up/resolve/main/ltx-2-19b-lora-camera-control-jib-up.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-jib-down.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Down/resolve/main/ltx-2-19b-lora-camera-control-jib-down.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-static.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
+
 # Copy Gemma-3 text encoder (download manually from https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized)
 COPY storage/ComfyUI/models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/ models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/
 

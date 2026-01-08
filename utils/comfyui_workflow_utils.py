@@ -408,19 +408,14 @@ def inject_prompt_into_ltx2_video_workflow(
     prompt: str, 
     negative_prompt: str, 
     aspect_ratio: str = "16:9",
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    steps: Optional[int] = None,
+    camera_movement: Optional[str] = None,
+    camera_movement_strength: float = 1.0
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for LTX-2.
-    LTX-2 uses Gemma-3 text encoder and different node structure:
-    - Node 2: LTXVGemmaCLIPModelLoader (Gemma-3 text encoder)
-    - Node 3: CLIPTextEncode (positive prompt)
-    - Node 4: LTXVConditioning
-    - Node 5: EmptyImage (for dimensions)
-    - Node 8: RandomNoise (for seed)
-    - Node 9: LTXVSampler (main sampler)
-    - Node 11: CreateVideo
-    - Node 12: SaveVideo
+    Also handles Camera Control LoRA injection if camera_movement is specified.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -438,16 +433,25 @@ def inject_prompt_into_ltx2_video_workflow(
         api_graph['5']['inputs']['height'] = height
         logging.info(f"Injected dimensions into LTX-2 node 5: {width}x{height}")
 
-    # Set seed for RandomNoise node (Node 8) - use provided or generate random
+    # Set seed for RandomNoise (Node 8)
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '8' in api_graph and api_graph['8'].get("class_type") == "RandomNoise":
         api_graph['8']['inputs']['noise_seed'] = actual_seed
         logging.info(f"Set seed in LTX-2 node 8: {actual_seed}")
     
-    # Also inject seed into LTXVSampler if it has noise_seed input (Node 9)
+    # Inject steps and seed into LTXVSampler (Node 9)
     if '9' in api_graph and 'inputs' in api_graph['9']:
         if 'noise_seed' in api_graph['9']['inputs']:
             api_graph['9']['inputs']['noise_seed'] = actual_seed
+        if steps is not None and 'steps' in api_graph['9']['inputs']:
+            api_graph['9']['inputs']['steps'] = steps
+            logging.info(f"Injected steps into LTX-2 node 9: {steps}")
+
+    # Inject Camera Control LoRA
+    if camera_movement and camera_movement != "none":
+        lora_filename = get_camera_lora_filename(camera_movement)
+        if lora_filename:
+            inject_lora_ltx2(api_graph, lora_filename, strength=camera_movement_strength)
 
     return api_graph
 
@@ -457,20 +461,14 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     negative_prompt: str, 
     start_image_filename: str, 
     aspect_ratio: str = "16:9",
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    steps: Optional[int] = None,
+    camera_movement: Optional[str] = None,
+    camera_movement_strength: float = 1.0
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image for LTX-2 image-to-video.
-    LTX-2 I2V uses this node structure:
-    - Node 2: LTXVGemmaCLIPModelLoader (Gemma-3 text encoder)
-    - Node 3: CLIPTextEncode (positive prompt)
-    - Node 4: LTXVConditioning
-    - Node 5: LoadImage (for start image)
-    - Node 8: RandomNoise (for seed)
-    - Node 9: VAEEncode (encode start image)
-    - Node 10: LTXVSampler (main sampler)
-    - Node 12: CreateVideo
-    - Node 13: SaveVideo
+    Also handles Camera Control LoRA injection.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -488,18 +486,82 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     else:
         logging.warning("Could not find LoadImage node 5 in LTX-2 i2v workflow")
 
-    # Set seed for RandomNoise node (Node 8) - use provided or generate random
+    # Set seed for RandomNoise (Node 8)
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '8' in api_graph and api_graph['8'].get("class_type") == "RandomNoise":
         api_graph['8']['inputs']['noise_seed'] = actual_seed
         logging.info(f"Set seed in LTX-2 i2v node 8: {actual_seed}")
     
-    # Also inject seed into LTXVSampler if it has noise_seed input (Node 10)
+    # Inject steps and seed into LTXVSampler (Node 10)
     if '10' in api_graph and 'inputs' in api_graph['10']:
         if 'noise_seed' in api_graph['10']['inputs']:
             api_graph['10']['inputs']['noise_seed'] = actual_seed
+        if steps is not None and 'steps' in api_graph['10']['inputs']:
+            api_graph['10']['inputs']['steps'] = steps
+            logging.info(f"Injected steps into LTX-2 i2v node 10: {steps}")
+
+    # Inject Camera Control LoRA
+    if camera_movement and camera_movement != "none":
+        lora_filename = get_camera_lora_filename(camera_movement)
+        if lora_filename:
+            inject_lora_ltx2(api_graph, lora_filename, strength=camera_movement_strength)
 
     return api_graph
+
+def get_camera_lora_filename(movement: str) -> Optional[str]:
+    mapping = {
+        "dolly-in": "ltx-2-19b-lora-camera-control-dolly-in.safetensors",
+        "dolly-out": "ltx-2-19b-lora-camera-control-dolly-out.safetensors",
+        "dolly-left": "ltx-2-19b-lora-camera-control-dolly-left.safetensors",
+        "dolly-right": "ltx-2-19b-lora-camera-control-dolly-right.safetensors",
+        "jib-up": "ltx-2-19b-lora-camera-control-jib-up.safetensors",
+        "jib-down": "ltx-2-19b-lora-camera-control-jib-down.safetensors",
+        "static": "ltx-2-19b-lora-camera-control-static.safetensors"
+    }
+    return mapping.get(movement)
+
+def inject_lora_ltx2(api_graph: Dict, lora_name: str, strength: float = 1.0):
+    """
+    Injects a LoraLoader node into the LTX-2 workflow.
+    Intercepts connection between ModelLoader (Node 1) and Sampler (Node 9 or 10).
+    Also handles CLIP path from GemmaLoader (Node 2) to Prompt (Node 3).
+    """
+    lora_id = "100"
+    
+    # Find Model Loader (Node 1 - CheckpointLoaderSimple)
+    # and Gemma Loader (Node 2 - LTXVGemmaCLIPModelLoader)
+    # This is specific to our LTX-2 workflows
+    
+    # Add LoraLoader node
+    api_graph[lora_id] = {
+        "inputs": {
+            "lora_name": lora_name,
+            "strength_model": strength,
+            "strength_clip": 1.0,
+            "model": ["1", 0], # From CheckpointLoaderSimple
+            "clip": ["2", 0]   # From GemmaLoader
+        },
+        "class_type": "LoraLoader",
+        "_meta": {"title": "Camera Control LoRA"}
+    }
+    logging.info(f"Added LoraLoader node {lora_id} for {lora_name}")
+
+    # Re-route Sampler (Node 9 in T2V, Node 10 in I2V) model input
+    # Check T2V sampler
+    if '9' in api_graph and api_graph['9'].get("class_type") == "LTXVSampler":
+        api_graph['9']['inputs']['model'] = [lora_id, 0]
+        logging.info(f"Rerouted T2V Sampler model input to LoRA")
+    
+    # Check I2V sampler
+    if '10' in api_graph and api_graph['10'].get("class_type") == "LTXVSampler":
+        api_graph['10']['inputs']['model'] = [lora_id, 0]
+        logging.info(f"Rerouted I2V Sampler model input to LoRA")
+
+    # Re-route CLIP for Prompt Node (Node 3)
+    # Prompt node usually takes CLIP from Node 2. Now it should take from LoraLoader (output 1)
+    if '3' in api_graph and 'inputs' in api_graph['3']:
+        api_graph['3']['inputs']['clip'] = [lora_id, 1]
+        logging.info(f"Rerouted Prompt Node CLIP input to LoRA")
 
 def inject_prompt_into_hunyuan_video_workflow(
     workflow_api_data: Dict, 
