@@ -426,24 +426,15 @@ def inject_prompt_into_ltx2_video_workflow(
     else:
         logging.warning("Could not find prompt node 3 in LTX-2 workflow")
 
-    # Inject dimensions into EmptyImage (Node 5)
-    if '5' in api_graph and api_graph['5'].get("class_type") == "EmptyImage":
-        width, height = get_dimensions(aspect_ratio)
-        api_graph['5']['inputs']['width'] = width
-        api_graph['5']['inputs']['height'] = height
-        logging.info(f"Injected dimensions into LTX-2 node 5: {width}x{height}")
-
-    # Set seed for RandomNoise (Node 8)
+    # Inject dimensions into LTXVBaseSampler (Node 9)
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
-    if '8' in api_graph and api_graph['8'].get("class_type") == "RandomNoise":
-        api_graph['8']['inputs']['noise_seed'] = actual_seed
-        logging.info(f"Set seed in LTX-2 node 8: {actual_seed}")
-    
-    # Inject steps and seed into LTXVSampler (Node 9)
     if '9' in api_graph and 'inputs' in api_graph['9']:
-        if 'noise_seed' in api_graph['9']['inputs']:
-            api_graph['9']['inputs']['noise_seed'] = actual_seed
-        if steps is not None and 'steps' in api_graph['9']['inputs']:
+        width, height = get_dimensions(aspect_ratio)
+        api_graph['9']['inputs']['width'] = width
+        api_graph['9']['inputs']['height'] = height
+        api_graph['9']['inputs']['seed'] = actual_seed
+        logging.info(f"Injected dimensions into LTX-2 node 9: {width}x{height}")
+        if steps is not None:
             api_graph['9']['inputs']['steps'] = steps
             logging.info(f"Injected steps into LTX-2 node 9: {steps}")
 
@@ -486,17 +477,12 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     else:
         logging.warning("Could not find LoadImage node 5 in LTX-2 i2v workflow")
 
-    # Set seed for RandomNoise (Node 8)
+    # Set seed and dimensions in LTXVBaseSampler (Node 10)
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
-    if '8' in api_graph and api_graph['8'].get("class_type") == "RandomNoise":
-        api_graph['8']['inputs']['noise_seed'] = actual_seed
-        logging.info(f"Set seed in LTX-2 i2v node 8: {actual_seed}")
-    
-    # Inject steps and seed into LTXVSampler (Node 10)
     if '10' in api_graph and 'inputs' in api_graph['10']:
-        if 'noise_seed' in api_graph['10']['inputs']:
-            api_graph['10']['inputs']['noise_seed'] = actual_seed
-        if steps is not None and 'steps' in api_graph['10']['inputs']:
+        api_graph['10']['inputs']['seed'] = actual_seed
+        logging.info(f"Set seed in LTX-2 i2v node 10: {actual_seed}")
+        if steps is not None:
             api_graph['10']['inputs']['steps'] = steps
             logging.info(f"Injected steps into LTX-2 i2v node 10: {steps}")
 
