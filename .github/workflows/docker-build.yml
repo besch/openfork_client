@@ -69,39 +69,34 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and Push (with Retry)
-        timeout-minutes: 120
+      - name: Build Docker Image
         run: |
           cd comfyui-storage
+          IMAGE_TAG="${{ matrix.image }}:latest"
+          echo "Building ${IMAGE_TAG}..."
+          docker build -f ${{ matrix.dockerfile }} \
+            --build-arg HF_TOKEN=${{ secrets.HF_TOKEN }} \
+            -t ${IMAGE_TAG} .
+
+      - name: Push to Docker Hub (with Retry)
+        timeout-minutes: 30
+        run: |
+          IMAGE_TAG="${{ matrix.image }}:latest"
           MAX_RETRIES=3
           RETRY_DELAY=15
-          
-          IMAGE_TAG="${{ matrix.image }}:latest"
           
           count=0
           until [ $count -ge $MAX_RETRIES ]
           do
-            echo "Attempting build/push $((count+1))/$MAX_RETRIES for ${IMAGE_TAG}..."
+            echo "Attempting push $((count+1))/$MAX_RETRIES for ${IMAGE_TAG}..."
+            docker push ${IMAGE_TAG} && break
             
-            # Build
-            docker build -f ${{ matrix.dockerfile }} \
-              --build-arg HF_TOKEN=${{ secrets.HF_TOKEN }} \
-              -t ${IMAGE_TAG} . \
-              && \
-            docker push ${IMAGE_TAG} \
-              && break
-
-            exit_code=$?
             count=$((count+1))
-            echo "Command failed with exit code $exit_code. Retrying in $RETRY_DELAY seconds..."
-            
-            # Prune everything to ensure clean state and free space for retry if needed
-            docker system prune -a -f || true
-            
+            echo "Push failed. Retrying in $RETRY_DELAY seconds..."
             sleep $RETRY_DELAY
           done
 
           if [ $count -ge $MAX_RETRIES ]; then
-            echo "Failed after $MAX_RETRIES attempts."
+            echo "Push failed after $MAX_RETRIES attempts."
             exit 1
           fi
