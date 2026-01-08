@@ -1,0 +1,107 @@
+name: Build Docker Images
+
+on:
+  push:
+    paths:
+      - 'comfyui-storage/Dockerfile.*'
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # LTX-2
+          - setup: ltx2-8gb
+            dockerfile: Dockerfile.ltx2-8gb
+            image: beschiak/openfork-ltx2-8gb
+          - setup: ltx2-16gb
+            dockerfile: Dockerfile.ltx2-16gb
+            image: beschiak/openfork-ltx2-16gb
+          - setup: ltx2-24gb
+            dockerfile: Dockerfile.ltx2-24gb
+            image: beschiak/openfork-ltx2-24gb
+          
+          # Yume
+          - setup: yume-16gb
+            dockerfile: Dockerfile.yume-16gb
+            image: beschiak/openfork-yume-16gb
+
+          # Wan 2.2
+          - setup: wan22-16gb
+            dockerfile: Dockerfile.wan22-16gb
+            image: beschiak/openfork-wan22-16gb
+          
+          # Hunyuan
+          - setup: hunyuan-video-16gb
+            dockerfile: Dockerfile.hunyuan-video-16gb
+            image: beschiak/openfork-hunyuan-video-16gb
+          - setup: hunyuan-video-24gb
+            dockerfile: Dockerfile.hunyuan-video-24gb
+            image: beschiak/openfork-hunyuan-video-24gb
+
+          # LTX-Video 1.0
+          - setup: ltxvideo-12gb
+            dockerfile: Dockerfile.ltxvideo-12gb
+            image: beschiak/openfork-ltxvideo-12gb
+
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+          
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push (with Retry)
+        timeout-minutes: 120
+        run: |
+          cd comfyui-storage
+          MAX_RETRIES=3
+          RETRY_DELAY=15
+          
+          IMAGE_TAG="${{ matrix.image }}:latest"
+          
+          count=0
+          until [ $count -ge $MAX_RETRIES ]
+          do
+            echo "Attempting build/push $((count+1))/$MAX_RETRIES for ${IMAGE_TAG}..."
+            
+            # Build
+            docker build -f ${{ matrix.dockerfile }} \
+              --build-arg HF_TOKEN=${{ secrets.HF_TOKEN }} \
+              -t ${IMAGE_TAG} . \
+              && \
+            docker push ${IMAGE_TAG} \
+              && break
+
+            exit_code=$?
+            count=$((count+1))
+            echo "Command failed with exit code $exit_code. Retrying in $RETRY_DELAY seconds..."
+            
+            # Prune everything to ensure clean state and free space for retry if needed
+            docker system prune -a -f || true
+            
+            sleep $RETRY_DELAY
+          done
+
+          if [ $count -ge $MAX_RETRIES ]; then
+            echo "Failed after $MAX_RETRIES attempts."
+            exit 1
+          fi
