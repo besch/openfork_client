@@ -25,28 +25,28 @@ jobs:
           #   dockerfile: Dockerfile.ltx2-24gb
           #   image: beschiak/openfork-ltx2-24gb
           
-          # Yume
-          - setup: yume-16gb
-            dockerfile: Dockerfile.yume-16gb
-            image: beschiak/openfork-yume-16gb
+          # # Yume
+          # - setup: yume-16gb
+          #   dockerfile: Dockerfile.yume-16gb
+          #   image: beschiak/openfork-yume-16gb
 
-          # Wan 2.2
-          - setup: wan22-16gb
-            dockerfile: Dockerfile.wan22-16gb
-            image: beschiak/openfork-wan22-16gb
+          # # Wan 2.2
+          # - setup: wan22-16gb
+          #   dockerfile: Dockerfile.wan22-16gb
+          #   image: beschiak/openfork-wan22-16gb
           
-          # Hunyuan
-          - setup: hunyuan-video-16gb
-            dockerfile: Dockerfile.hunyuan-video-16gb
-            image: beschiak/openfork-hunyuan-video-16gb
-          - setup: hunyuan-video-24gb
-            dockerfile: Dockerfile.hunyuan-video-24gb
-            image: beschiak/openfork-hunyuan-video-24gb
+          # # Hunyuan
+          # - setup: hunyuan-video-16gb
+          #   dockerfile: Dockerfile.hunyuan-video-16gb
+          #   image: beschiak/openfork-hunyuan-video-16gb
+          # - setup: hunyuan-video-24gb
+          #   dockerfile: Dockerfile.hunyuan-video-24gb
+          #   image: beschiak/openfork-hunyuan-video-24gb
 
-          # LTX-Video 1.0
-          - setup: ltxvideo-12gb
-            dockerfile: Dockerfile.ltxvideo-12gb
-            image: beschiak/openfork-ltxvideo-12gb
+          # # LTX-Video 1.0
+          # - setup: ltxvideo-12gb
+          #   dockerfile: Dockerfile.ltxvideo-12gb
+          #   image: beschiak/openfork-ltxvideo-12gb
 
     steps:
       - name: Free Disk Space (Ubuntu)
