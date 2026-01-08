@@ -57,11 +57,22 @@ RUN wget -q --show-progress -O models/checkpoints/ltx-2-19b-distilled.safetensor
 RUN wget -q --show-progress -O models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
         "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors"
 
-# Download Gemma-3 text encoder (quantized version)
-RUN git lfs install \
-    && git clone --depth=1 https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized \
-        models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized \
-    && rm -rf models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/.git
+# Download Gemma-3 text encoder files directly (bypasses HuggingFace auth)
+RUN mkdir -p models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/model-00001-of-00005.safetensors \
+        "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00001-of-00005.safetensors" \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/model-00002-of-00005.safetensors \
+        "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00002-of-00005.safetensors" \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/model-00003-of-00005.safetensors \
+        "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00003-of-00005.safetensors" \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/model-00004-of-00005.safetensors \
+        "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00004-of-00005.safetensors" \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/model-00005-of-00005.safetensors \
+        "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model-00005-of-00005.safetensors" \
+    && wget -q -O models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/config.json \
+        "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/config.json" \
+    && wget -q -O models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/model.safetensors.index.json \
+        "https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized/resolve/main/model.safetensors.index.json"
 
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
