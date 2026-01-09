@@ -133,10 +133,16 @@ def generate_video_sync(
         
         logger.info(f"Running command: {' '.join(cmd)}")
         
-        # Set environment
+        # Set environment for single-GPU inference
         env = os.environ.copy()
         env["TOKENIZERS_PARALLELISM"] = "false"
         env["CUDA_VISIBLE_DEVICES"] = "0"
+        # Required for YUME's distributed training code (single-GPU mode)
+        env["LOCAL_RANK"] = "0"
+        env["RANK"] = "0"
+        env["WORLD_SIZE"] = "1"
+        env["MASTER_ADDR"] = "localhost"
+        env["MASTER_PORT"] = "12355"
         
         # Run the inference
         result = subprocess.run(
