@@ -253,6 +253,13 @@ def main():
         from config import HEADLESS_MODE
         if not HEADLESS_MODE:
             docker_manager.run_container(service_type=args.service)
+            # Start log streaming for dedicated service
+            log_thread = threading.Thread(
+                target=docker_manager.stream_logs,
+                args=(args.service, SHUTDOWN_EVENT),
+                daemon=True
+            )
+            log_thread.start()
         else:
             logging.info(f"Headless mode detected - skipping Docker management. ComfyUI should be running at 127.0.0.1:8188")
     

@@ -215,6 +215,15 @@ class JobListener:
                                         if not HEADLESS_MODE:
                                             logging.info("Starting container...")
                                             docker_manager.run_container(service_type=actual_service_type)
+                                            
+                                            # Start log streaming in a background thread
+                                            # This allows seeing ComfyUI/container logs in the DGN client console
+                                            log_thread = threading.Thread(
+                                                target=docker_manager.stream_logs,
+                                                args=(actual_service_type, self.shutdown_event),
+                                                daemon=True
+                                            )
+                                            log_thread.start()
                                         else:
                                             logging.info("Headless mode - container already running, skipping Docker management.")
                                         

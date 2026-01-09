@@ -117,3 +117,49 @@ class DockerDevManager:
             logging.error(f"Stderr: {e.stderr}")
             logging.error(f"Stdout: {e.stdout}")
             raise
+
+    def stream_logs(self, service_type: str, shutdown_event: threading.Event):
+        """Streams logs from the container to the application logger."""
+        try:
+            container_id = self.get_container_id(service_type)
+            # Use docker logs -f to follow
+            command = ['docker', 'logs', '-f', container_id]
+            logging.info(f"Starting log stream for service '{service_type}' (ID: {container_id})")
+
+            # subprocess.Popen to read stdout in real-time
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                bufsize=1  # Line buffered
+            )
+
+            # Read lines in a loop
+            while not shutdown_event.is_set() and process.poll() is None:
+                # We use readline() but we need to handle blocking. 
+                # Since we are in a thread, blocking is okay-ish, but if shutdown_event is set
+                # we want to exit. However, readline() manages its own blocking.
+                # A common valid approach for "interruptible readline" is using selectors or a timeout,
+                # but standard readline is simplest. We'll simply check shutdown after each line.
+                try:
+                    line = process.stdout.readline()
+                    if not line:
+                        break
+                    logging.info(f"[{service_type}] {line.strip()}")
+                except Exception:
+                    break
+            
+            # Clean up the subprocess
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+
+        except Exception as e:
+            # It's possible get_container_id fails if container isn't ready yet
+            logging.debug(f"Log streaming failed/interrupted for '{service_type}': {e}")

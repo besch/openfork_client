@@ -128,3 +128,25 @@ class DockerProdManager:
         container_name = self.get_container_name(service_type)
         dest_path = f"{container_name}:{dest_in_container}"
         docker_cp(source_on_host, dest_path, shutdown_event)
+
+    def stream_logs(self, service_type: str, shutdown_event: threading.Event):
+        """Streams logs from the container to the application logger."""
+        container_name = self.get_container_name(service_type)
+        logging.info(f"Starting log stream for container '{container_name}'")
+        
+        try:
+            container = self.client.containers.get(container_name)
+            # stream=True returns a generator processing the logs
+            for line in container.logs(stream=True, follow=True):
+                if shutdown_event.is_set():
+                    break
+                if line:
+                    decoded_line = line.decode('utf-8', errors='replace').strip()
+                    if decoded_line:
+                        logging.info(f"[{service_type}] {decoded_line}")
+        except docker.errors.NotFound:
+            logging.warning(f"Container '{container_name}' not found for logging.")
+        except Exception as e:
+            # If the container stops, we might get an APIError or similar, which is expected
+            if not shutdown_event.is_set():
+                logging.debug(f"Log streaming interrupted for '{container_name}': {e}")
