@@ -83,6 +83,16 @@ RUN huggingface-cli download unsloth/gemma-3-12b-it-bnb-4bit \
     --local-dir models/text_encoders/gemma-3-12b-it-bnb-4bit \
     --exclude "*.md" ".gitattributes"
 
+# Download tokenizer files from base Gemma model (required for ComfyUI SentencePiece tokenizer)
+RUN wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/tokenizer.model \
+        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/tokenizer.model" \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/tokenizer.json \
+        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/tokenizer.json" \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/tokenizer_config.json \
+        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/tokenizer_config.json" \
+    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/special_tokens_map.json \
+        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/special_tokens_map.json"
+
 # Download projections file for DualClipLoader
 RUN wget -q --show-progress -O models/text_encoders/ltx-2-19b-dev-fp4_projections_only.safetensors \
         "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/ltx-2-19b-dev-fp4_projections_only.safetensors"
