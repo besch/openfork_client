@@ -29,7 +29,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg \
         GitPython PyGithub matrix-client==0.4.0 transformers huggingface-hub \
-        color-matcher matplotlib mss toml rich uv sentencepiece
+        color-matcher matplotlib mss toml rich uv sentencepiece bitsandbytes
 
 WORKDIR /opt/ComfyUI
 
@@ -78,8 +78,7 @@ RUN wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-
     && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-static.safetensors \
         "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
 
-# Download Unsloth 4-bit Gemma-3 text encoder (better structure compared to single-file FP8)
-# This uses huggingface-cli which is installed in the python packages step
+# Download Unsloth 4-bit Gemma-3 text encoder
 RUN huggingface-cli download unsloth/gemma-3-12b-it-bnb-4bit \
     --local-dir models/text_encoders/gemma-3-12b-it-bnb-4bit \
     --exclude "*.md" ".gitattributes"
