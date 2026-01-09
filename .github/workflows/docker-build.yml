@@ -12,15 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # matrix:
-        # include:
+      matrix:
+        include:
           # LTX-2
           # - setup: ltx2-8gb
           #   dockerfile: Dockerfile.ltx2-8gb
           #   image: beschiak/openfork-ltx2-8gb
-          # - setup: ltx2-16gb
-          #   dockerfile: Dockerfile.ltx2-16gb
-          #   image: beschiak/openfork-ltx2-16gb
+          - setup: ltx2-16gb
+            dockerfile: Dockerfile.ltx2-16gb
+            image: beschiak/openfork-ltx2-16gb
           # - setup: ltx2-24gb
           #   dockerfile: Dockerfile.ltx2-24gb
           #   image: beschiak/openfork-ltx2-24gb
