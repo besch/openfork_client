@@ -78,20 +78,10 @@ RUN wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-
     && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-static.safetensors \
         "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
 
-# Download Unsloth 4-bit Gemma-3 text encoder
+# Download Unsloth 4-bit Gemma-3 text encoder (includes tokenizer files)
 RUN huggingface-cli download unsloth/gemma-3-12b-it-bnb-4bit \
-    --local-dir models/text_encoders/gemma-3-12b-it-bnb-4bit \
+    --local-dir models/text_encoders/gemma-3-12b-it-unsloth-bnb-4bit \
     --exclude "*.md" ".gitattributes"
-
-# Download tokenizer files from base Gemma model (required for ComfyUI SentencePiece tokenizer)
-RUN wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/tokenizer.model \
-        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/tokenizer.model" \
-    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/tokenizer.json \
-        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/tokenizer.json" \
-    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/tokenizer_config.json \
-        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/tokenizer_config.json" \
-    && wget -q --show-progress -O models/text_encoders/gemma-3-12b-it-bnb-4bit/special_tokens_map.json \
-        "https://huggingface.co/google/gemma-3-12b-it/resolve/main/special_tokens_map.json"
 
 # Download projections file for DualClipLoader
 RUN wget -q --show-progress -O models/text_encoders/ltx-2-19b-dev-fp4_projections_only.safetensors \
