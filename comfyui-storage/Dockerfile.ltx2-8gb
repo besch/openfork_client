@@ -89,4 +89,5 @@ RUN wget -q --show-progress -O models/text_encoders/ltx-2-19b-dev-fp4_projection
 
 WORKDIR /opt/ComfyUI
 # Use --lowvram to offload model weights to RAM, --reserve-vram 1 keeps 1GB free for system
-CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1"]
+# Use --cpu-vae to force VAE decoding on CPU (required for 8GB VRAM after main model uses most memory)
+CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1", "--cpu-vae"]
