@@ -3,10 +3,6 @@
 
 FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
-# HuggingFace token for accessing gated models
-ARG HUGGINGFACE_TOKEN
-ENV HF_TOKEN=${HUGGINGFACE_TOKEN}
-
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
@@ -53,50 +49,42 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
 # Create model directories
 RUN mkdir -p models/checkpoints models/text_encoders models/latent_upscale_models models/loras
 
-# Download LTX-2 FP8 model (~10GB) - using huggingface-cli for authenticated downloads
-RUN huggingface-cli download Lightricks/LTX-2 ltx-2-19b-distilled-fp8.safetensors \
-    --local-dir models/checkpoints --local-dir-use-symlinks False
+# Download LTX-2 FP8 model (~10GB)
+RUN wget -q --show-progress -O models/checkpoints/ltx-2-19b-distilled-fp8.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-fp8.safetensors"
 
 # Download spatial upscaler
-RUN huggingface-cli download Lightricks/LTX-2 ltx-2-spatial-upscaler-x2-1.0.safetensors \
-    --local-dir models/latent_upscale_models --local-dir-use-symlinks False
+RUN wget -q --show-progress -O models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors"
 
 # Download distilled LoRA for faster generation (fewer steps)
-RUN huggingface-cli download Lightricks/LTX-2 ltx-2-19b-distilled-lora-384.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False
+RUN wget -q --show-progress -O models/loras/ltx-2-19b-distilled-lora-384.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors"
 
-# Download Camera Control LoRAs (each from their own repo)
-RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In \
-    ltx-2-19b-lora-camera-control-dolly-in.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False \
-    && huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out \
-    ltx-2-19b-lora-camera-control-dolly-out.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False \
-    && huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left \
-    ltx-2-19b-lora-camera-control-dolly-left.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False \
-    && huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right \
-    ltx-2-19b-lora-camera-control-dolly-right.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False \
-    && huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Up \
-    ltx-2-19b-lora-camera-control-jib-up.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False \
-    && huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Down \
-    ltx-2-19b-lora-camera-control-jib-down.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False \
-    && huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Static \
-    ltx-2-19b-lora-camera-control-static.safetensors \
-    --local-dir models/loras --local-dir-use-symlinks False
+# Download Camera Control LoRAs
+RUN wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-in.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In/resolve/main/ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-out.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out/resolve/main/ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-left.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left/resolve/main/ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-right.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right/resolve/main/ltx-2-19b-lora-camera-control-dolly-right.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-jib-up.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Up/resolve/main/ltx-2-19b-lora-camera-control-jib-up.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-jib-down.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Down/resolve/main/ltx-2-19b-lora-camera-control-jib-down.safetensors" \
+    && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-static.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
 
 # Download Unsloth 4-bit Gemma-3 text encoder (includes tokenizer files)
 RUN huggingface-cli download unsloth/gemma-3-12b-it-bnb-4bit \
     --local-dir models/text_encoders/gemma-3-12b-it-unsloth-bnb-4bit \
     --exclude "*.md" ".gitattributes"
 
-# Download projections file for DualClipLoader
-RUN huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-    ltx-2-19b-dev-fp4_projections_only.safetensors \
-    --local-dir models/text_encoders --local-dir-use-symlinks False
+# Download projections file for DualClipLoader (same for all LTX-2 variants)
+RUN wget -q --show-progress -O models/text_encoders/ltx-2-19b-dev-fp4_projections_only.safetensors \
+        "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/ltx-2-19b-dev-fp4_projections_only.safetensors"
 
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "2"]

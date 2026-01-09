@@ -9,18 +9,20 @@ on:
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    # Use larger runner for more disk space (150GB SSD vs 14GB)
+    # Available sizes: ubuntu-latest-4-cores, ubuntu-latest-8-cores, ubuntu-latest-16-cores
+    runs-on: ubuntu-latest-4-cores
     strategy:
       fail-fast: false
-      matrix:
-        include:
+      # matrix:
+        # include:
           # LTX-2
           # - setup: ltx2-8gb
           #   dockerfile: Dockerfile.ltx2-8gb
           #   image: beschiak/openfork-ltx2-8gb
-          - setup: ltx2-16gb
-            dockerfile: Dockerfile.ltx2-16gb
-            image: beschiak/openfork-ltx2-16gb
+          # - setup: ltx2-16gb
+          #   dockerfile: Dockerfile.ltx2-16gb.cloud
+          #   image: beschiak/openfork-ltx2-16gb
           # - setup: ltx2-24gb
           #   dockerfile: Dockerfile.ltx2-24gb
           #   image: beschiak/openfork-ltx2-24gb
