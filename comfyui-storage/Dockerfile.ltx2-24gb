@@ -77,10 +77,9 @@ RUN wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-
     && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-static.safetensors \
         "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
 
-# Download Unsloth 4-bit Gemma-3 text encoder (includes all tokenizer files)
-RUN huggingface-cli download unsloth/gemma-3-12b-it-bnb-4bit \
-    --local-dir models/text_encoders/gemma-3-12b-it-unsloth-bnb-4bit \
-    --exclude "*.md" ".gitattributes"
+# Download GitMylo's ComfyUI-compatible FP8 Gemma text encoder (single file, works with DualCLIPLoader)
+RUN wget -q --show-progress -O models/text_encoders/gemma_3_12B_it_fp8_e4m3fn.safetensors \
+        "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/gemma_3_12B_it_fp8_e4m3fn.safetensors"
 
 # Download projections file for DualClipLoader (same for all LTX-2 variants)
 RUN wget -q --show-progress -O models/text_encoders/ltx-2-19b-dev-fp4_projections_only.safetensors \
