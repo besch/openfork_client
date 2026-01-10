@@ -48,5 +48,6 @@ services/processors/video/yume.py
 services/processors/video/yume_cli.py
 start_cloud.sh
 utils/comfyui_workflow_utils.py
+utils/log_tailer.py
 utils/media_utils.py
 utils/shutdown_handler.py
