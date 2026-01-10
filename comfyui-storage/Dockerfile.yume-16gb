@@ -69,7 +69,7 @@ RUN huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume
 # Layer 3: Main Diffusion Model (~10-15GB) & Symlink
 RUN huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume \
     --include "*.safetensors" \
-    && ln -sf /opt/models/Yume /opt/YUME/Yume-5B-720p
+    && ln -sf /opt/models/Yume /opt/YUME/Yume-5B-720P
 
 # Create directories for API
 RUN mkdir -p /opt/output /opt/input
