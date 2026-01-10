@@ -30,8 +30,26 @@ class JobListener:
             False if a critical auth error occurred that should stop the listener.
         """
         try:
+            # Emit JOB_START event
+            print(json.dumps({
+                "type": "JOB_START",
+                "payload": {
+                    "id": job.get('id'),
+                    "workflow_type": job.get('workflow_type', 'unknown'),
+                    "service_type": self._get_service_type_for_job(job)
+                }
+            }), flush=True)
+
             processor = self.client._get_job_processor(job, self.shutdown_event)
             processor.process()
+            
+            # Emit JOB_COMPLETE event
+            print(json.dumps({
+                "type": "JOB_COMPLETE",
+                "payload": {
+                    "id": job.get('id')
+                }
+            }), flush=True)
             return True
         except (TokenExpiredError, AuthError):
             self.orchestrator_service.signal_auth_expired()
@@ -42,6 +60,15 @@ class JobListener:
                 f"An error occurred while processing job {job.get('id')}: {e}",
                 exc_info=True,
             )
+            # Emit JOB_FAILED event
+            print(json.dumps({
+                "type": "JOB_FAILED",
+                "payload": {
+                    "id": job.get('id'),
+                    "error": str(e)
+                }
+            }), flush=True)
+
             if job and job.get('id'):
                 self.orchestrator_service.update_job_status(job.get('id'), 'failed')
             return True
