@@ -62,6 +62,10 @@ class DockerPullProgressLogger:
         downloading = sum(1 for l in self.layers.values() if l.get("status") == "Downloading")
         extracting = sum(1 for l in self.layers.values() if l.get("status") == "Extracting")
         
+        # If we are at 100%, we are likely waiting for docker to finish internal processing
+        if self.calculate_overall_progress() >= 100:
+            return "Processing"
+            
         if extracting > 0:
             return "Extracting"
         elif downloading > 0:
@@ -147,8 +151,14 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
         logger.parse_progress_event(event)
         logger.emit_progress()
         
-    # Emit final 100% progress and completion
+    # Emit final 100% progress which will now show "Processing"
+    # This covers the delay between pull stream finishing and images.get() returning
     logger.emit_progress(force=True)
+    
+    # This call can take some time as Docker finalizes the image layers
+    image = docker_client.images.get(image_name)
+    
+    # Now we are truly done
     logger.emit_complete()
     
-    return docker_client.images.get(image_name)
+    return image
