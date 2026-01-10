@@ -115,13 +115,86 @@ def build_and_push_image(config: ImageConfig) -> bool:
     return True
 
 
+
+def parse_delay(delay_str: str) -> int:
+    """
+    Parse a delay string into seconds.
+    Supports formats:
+    - "10" -> 10 seconds
+    - "10s" -> 10 seconds
+    - "10m" -> 600 seconds
+    - "10h" -> 36000 seconds
+    - "in 10 minutes" -> 600 seconds
+    """
+    import re
+    
+    # Normalize string
+    delay_str = delay_str.lower().strip()
+    
+    # Remove "in " prefix if present
+    if delay_str.startswith("in "):
+        delay_str = delay_str[3:].strip()
+        
+    # Simple number check
+    if delay_str.isdigit():
+        return int(delay_str)
+        
+    # Parse units
+    # Match number followed by optional space and unit
+    match = re.match(r'^(\d+)\s*(s|sec|seconds?|m|min|minutes?|h|hrs?|hours?)$', delay_str)
+    
+    if not match:
+        raise ValueError(f"Invalid delay format: {delay_str}")
+        
+    value = int(match.group(1))
+    unit = match.group(2)
+    
+    if unit.startswith('s'):
+        return value
+    elif unit.startswith('m'):
+        return value * 60
+    elif unit.startswith('h'):
+        return value * 3600
+        
+    return value
+
+
 def main():
     """
     Main entry point - builds and pushes all configured images.
     """
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Docker Build and Push Script with Retry Logic")
+    parser.add_argument("--delay", type=str, help="Msg to start delay e.g. 'in 10 minutes', '10m', '300s'")
+    
+    args = parser.parse_args()
+    
     print("\n" + "="*60)
     print("🐳 Docker Build and Push Script")
     print("="*60)
+    
+    if args.delay:
+        try:
+            delay_seconds = parse_delay(args.delay)
+            print(f"⏳ Delayed start requested: {args.delay}")
+            print(f"   Waiting {delay_seconds} seconds before starting...")
+            
+            # Show countdown for longer delays
+            if delay_seconds > 60:
+                while delay_seconds > 0:
+                    if delay_seconds % 60 == 0:
+                        print(f"   {delay_seconds // 60} minutes remaining...")
+                    time.sleep(1)
+                    delay_seconds -= 1
+            else:
+                time.sleep(delay_seconds)
+                
+            print("\n⏰ Delay finished. Starting build process now.")
+        except ValueError as e:
+            print(f"❌ Error parsing delay: {e}")
+            sys.exit(1)
+            
     print(f"Images to process: {len(IMAGES)}")
     print(f"Max retries per operation: {MAX_RETRIES}")
     print(f"Retry delay: {RETRY_DELAY_SECONDS} seconds")
