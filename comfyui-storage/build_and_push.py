@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+"""
+Docker Build and Push Script with Retry Logic
+
+Builds and pushes Docker images one at a time with retry capability.
+"""
+
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from typing import List
+
+
+@dataclass
+class ImageConfig:
+    dockerfile: str
+    tag: str
+
+
+# Define the images to build and push
+IMAGES: List[ImageConfig] = [
+    ImageConfig("Dockerfile.yume-16gb", "beschiak/openfork-yume-16gb:latest"),
+    # ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
+    ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest"),
+    ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
+]
+
+MAX_RETRIES = 2
+RETRY_DELAY_SECONDS = 600  # 10 minutes
+
+
+def run_command(command: List[str], description: str) -> bool:
+    """
+    Run a command and return True if successful, False otherwise.
+    """
+    print(f"\n{'='*60}")
+    print(f"🔹 {description}")
+    print(f"   Command: {' '.join(command)}")
+    print('='*60)
+    
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            text=True,
+        )
+        print(f"✅ {description} - SUCCESS")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ {description} - FAILED (exit code: {e.returncode})")
+        return False
+    except Exception as e:
+        print(f"❌ {description} - ERROR: {e}")
+        return False
+
+
+def build_image(dockerfile: str, tag: str) -> bool:
+    """
+    Build a Docker image with retry logic.
+    """
+    command = ["docker", "build", "-f", dockerfile, "-t", tag, "."]
+    
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"\n📦 Build attempt {attempt}/{MAX_RETRIES} for {tag}")
+        
+        if run_command(command, f"Building {tag}"):
+            return True
+        
+        if attempt < MAX_RETRIES:
+            print(f"⏳ Waiting {RETRY_DELAY_SECONDS} seconds before retry...")
+            time.sleep(RETRY_DELAY_SECONDS)
+    
+    return False
+
+
+def push_image(tag: str) -> bool:
+    """
+    Push a Docker image with retry logic.
+    """
+    command = ["docker", "push", tag]
+    
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"\n🚀 Push attempt {attempt}/{MAX_RETRIES} for {tag}")
+        
+        if run_command(command, f"Pushing {tag}"):
+            return True
+        
+        if attempt < MAX_RETRIES:
+            print(f"⏳ Waiting {RETRY_DELAY_SECONDS} seconds before retry...")
+            time.sleep(RETRY_DELAY_SECONDS)
+    
+    return False
+
+
+def build_and_push_image(config: ImageConfig) -> bool:
+    """
+    Build and push a single image. Returns True if both operations succeed.
+    """
+    print(f"\n{'#'*60}")
+    print(f"# Processing: {config.dockerfile} -> {config.tag}")
+    print('#'*60)
+    
+    # Build the image
+    if not build_image(config.dockerfile, config.tag):
+        print(f"\n💥 FAILED to build {config.tag} after {MAX_RETRIES} attempts")
+        return False
+    
+    # Push the image
+    if not push_image(config.tag):
+        print(f"\n💥 FAILED to push {config.tag} after {MAX_RETRIES} attempts")
+        return False
+    
+    print(f"\n🎉 Successfully built and pushed {config.tag}")
+    return True
+
+
+def main():
+    """
+    Main entry point - builds and pushes all configured images.
+    """
+    print("\n" + "="*60)
+    print("🐳 Docker Build and Push Script")
+    print("="*60)
+    print(f"Images to process: {len(IMAGES)}")
+    print(f"Max retries per operation: {MAX_RETRIES}")
+    print(f"Retry delay: {RETRY_DELAY_SECONDS} seconds")
+    
+    successful = []
+    failed = []
+    
+    for config in IMAGES:
+        if build_and_push_image(config):
+            successful.append(config.tag)
+        else:
+            failed.append(config.tag)
+    
+    # Summary
+    print("\n" + "="*60)
+    print("📊 SUMMARY")
+    print("="*60)
+    
+    if successful:
+        print(f"\n✅ Successfully built and pushed ({len(successful)}):")
+        for tag in successful:
+            print(f"   - {tag}")
+    
+    if failed:
+        print(f"\n❌ Failed ({len(failed)}):")
+        for tag in failed:
+            print(f"   - {tag}")
+    
+    print("\n" + "="*60)
+    
+    if failed:
+        print("⚠️  Some images failed to build or push!")
+        sys.exit(1)
+    else:
+        print("🎉 All images built and pushed successfully!")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
