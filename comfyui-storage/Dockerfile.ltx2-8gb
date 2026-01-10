@@ -47,8 +47,12 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
     && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true
 
+# Patch embeddings_connector.py to fix LTX-2 stalling (device mismatch)
+RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
+
+
 # Create model directories
-RUN mkdir -p models/checkpoints models/text_encoders models/latent_upscale_models models/loras
+RUN mkdir -p models/checkpoints models/clip/gemma-3-12b-it-fp8 models/latent_upscale_models models/loras
 
 # Download LTX-2 FP4 model (~20GB) - most VRAM efficient
 RUN wget -q --show-progress -O models/checkpoints/ltx-2-19b-dev-fp4.safetensors \
@@ -78,13 +82,19 @@ RUN wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-dolly-
     && wget -q --show-progress -O models/loras/ltx-2-19b-lora-camera-control-static.safetensors \
         "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
 
-# Download GitMylo's ComfyUI-compatible FP8 Gemma text encoder (single file, works with DualCLIPLoader)
-RUN wget -q --show-progress -O models/text_encoders/gemma_3_12B_it_fp8_e4m3fn.safetensors \
-        "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/gemma_3_12B_it_fp8_e4m3fn.safetensors"
-
-# Download projections file for DualClipLoader
-RUN wget -q --show-progress -O models/text_encoders/ltx-2-19b-dev-fp4_projections_only.safetensors \
-        "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/ltx-2-19b-dev-fp4_projections_only.safetensors"
+# Download GitMylo's ComfyUI-compatible FP8 Gemma text encoder and Unsloth components
+RUN wget -q --show-progress -O models/clip/gemma-3-12b-it-fp8/gemma_3_12B_it_fp8_e4m3fn.safetensors \
+        "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/gemma_3_12B_it_fp8_e4m3fn.safetensors" \
+    && wget -q --show-progress -O models/clip/gemma-3-12b-it-fp8/ltx-2-19b-dev-fp4_projections_only.safetensors \
+        "https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn/resolve/main/ltx-2-19b-dev-fp4_projections_only.safetensors" \
+    && wget -q --show-progress -O models/clip/gemma-3-12b-it-fp8/tokenizer.model \
+        "https://huggingface.co/unsloth/gemma-2-9b/resolve/main/tokenizer.model" \
+    && wget -q --show-progress -O models/clip/gemma-3-12b-it-fp8/tokenizer.json \
+        "https://huggingface.co/unsloth/gemma-2-9b/resolve/main/tokenizer.json" \
+    && wget -q --show-progress -O models/clip/gemma-3-12b-it-fp8/tokenizer_config.json \
+        "https://huggingface.co/unsloth/gemma-2-9b/resolve/main/tokenizer_config.json" \
+    && wget -q --show-progress -O models/clip/gemma-3-12b-it-fp8/special_tokens_map.json \
+        "https://huggingface.co/unsloth/gemma-2-9b/resolve/main/special_tokens_map.json"
 
 WORKDIR /opt/ComfyUI
 # Use --lowvram to offload model weights to RAM, --reserve-vram 1 keeps 1GB free for system
