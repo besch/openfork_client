@@ -253,6 +253,15 @@ class JobListener:
                                             log_thread.start()
                                         else:
                                             logging.info("Headless mode - container already running, skipping Docker management.")
+                                            # Start log tailer for headless mode
+                                            from utils.log_tailer import LogTailer
+                                            tailer = LogTailer("/tmp/comfyui.log", service_type=actual_service_type)
+                                            log_thread = threading.Thread(
+                                                target=tailer.tail,
+                                                args=(self.shutdown_event,),
+                                                daemon=True
+                                            )
+                                            log_thread.start()
                                         
                                         # Check if service uses ComfyUI backend from configuration
                                         service_config = self.client.services_config.get(actual_service_type, {})

@@ -262,6 +262,16 @@ def main():
             log_thread.start()
         else:
             logging.info(f"Headless mode detected - skipping Docker management. ComfyUI should be running at 127.0.0.1:8188")
+            # Start log tailer for headless mode
+            # Assuming ComfyUI logs to /tmp/comfyui.log in the container
+            from utils.log_tailer import LogTailer
+            tailer = LogTailer("/tmp/comfyui.log", service_type=args.service)
+            log_thread = threading.Thread(
+                target=tailer.tail,
+                args=(SHUTDOWN_EVENT,),
+                daemon=True
+            )
+            log_thread.start()
     
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()
