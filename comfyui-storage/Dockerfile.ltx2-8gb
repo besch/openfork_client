@@ -99,4 +99,4 @@ RUN wget -q --show-progress -O models/clip/gemma-3-12b-it-fp8/gemma_3_12B_it_fp8
 WORKDIR /opt/ComfyUI
 # Use --lowvram to offload model weights to RAM, --reserve-vram 1 keeps 1GB free for system
 # Use --cpu-vae to force VAE decoding on CPU (required for 8GB VRAM after main model uses most memory)
-CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1", "--cpu-vae"]
+CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "2.0", "--cpu-vae", "--use-split-cross-attention"]
