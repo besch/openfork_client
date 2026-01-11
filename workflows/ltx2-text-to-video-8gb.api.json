@@ -93,7 +93,9 @@
     "12": {
       "inputs": {
         "samples": ["11", 0],
-        "vae": ["1", 2]
+        "vae": ["1", 2],
+        "tile_size": 128,
+        "overlap": 64
       },
       "class_type": "VAEDecode"
     },
