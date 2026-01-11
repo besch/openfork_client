@@ -20,10 +20,10 @@ class ImageConfig:
 
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
-    # ImageConfig("Dockerfile.yume-16gb", "beschiak/openfork-yume-16gb:latest"),
-    ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
-    ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest"),
-    ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
+    ImageConfig("Dockerfile.yume-16gb", "beschiak/openfork-yume-16gb:latest"),
+    # ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
+    # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest"),
+    # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
 ]
 
 MAX_RETRIES = 2
@@ -59,7 +59,7 @@ def build_image(dockerfile: str, tag: str) -> bool:
     """
     Build a Docker image with retry logic.
     """
-    command = ["docker", "build", "-f", dockerfile, "-t", tag, "."]
+    command = ["docker", "build", "--build-arg", "HUGGINGFACE_TOKEN", "-f", dockerfile, "-t", tag, "."]
     
     for attempt in range(1, MAX_RETRIES + 1):
         print(f"\n📦 Build attempt {attempt}/{MAX_RETRIES} for {tag}")

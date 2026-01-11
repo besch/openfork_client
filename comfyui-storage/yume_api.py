@@ -4,6 +4,7 @@ YUME REST API Server for OpenFork DGN Client
 
 Provides a simple HTTP API for video generation from text or images.
 Uses subprocess to call the official YUME inference scripts.
+Implements a Request Queue to prevent OOM / internal concurrency clashes.
 
 Reference: https://github.com/stdstu12/YUME
 Model: https://huggingface.co/stdstu123/Yume-5B-720P
@@ -15,9 +16,9 @@ import uuid
 import subprocess
 import logging
 import shutil
-import tempfile
+import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Form
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -27,10 +28,14 @@ import torch
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="YUME API", version="1.0.0")
+app = FastAPI(title="YUME API", version="1.1.0")
 
 # Job storage
 jobs = {}
+
+# Queue for processing jobs sequentially
+job_queue = asyncio.Queue()
+processing_lock = asyncio.Lock()
 
 # Directories
 YUME_DIR = Path("/opt/YUME")
@@ -54,10 +59,55 @@ class GenerateRequest(BaseModel):
 class JobStatus(BaseModel):
     """Job status response."""
     job_id: str
-    status: str  # pending, processing, completed, failed
+    status: str  # pending, queued, processing, completed, failed
     output_path: Optional[str] = None
     error: Optional[str] = None
     progress: Optional[int] = None
+    queue_position: Optional[int] = None
+
+
+async def worker_loop():
+    """Background worker that processes jobs from the queue one at a time."""
+    logger.info("Worker loop started")
+    while True:
+        job_id = await job_queue.get()
+        try:
+            logger.info(f"Worker picked up job {job_id}")
+            async with processing_lock:
+                 # Check if job was cancelled while in queue
+                if job_id not in jobs:
+                    logger.info(f"Job {job_id} was removed/cancelled before processing")
+                    continue
+                
+                # Update status
+                jobs[job_id]["status"] = "processing"
+                
+                # Extract parameters
+                job_data = jobs[job_id]
+                params = job_data["params"]
+                
+                # Execute generation (blocking subprocess call wrapped in executor)
+                await asyncio.to_thread(
+                    generate_video_sync,
+                    job_id,
+                    params.get("prompt"),
+                    params.get("negative_prompt"),
+                    params.get("num_frames"),
+                    params.get("width"),
+                    params.get("height"),
+                    params.get("steps"),
+                    params.get("cfg"),
+                    params.get("seed"),
+                    params.get("image_path")
+                )
+                
+        except Exception as e:
+            logger.error(f"Worker loop error processing job {job_id}: {e}")
+            if job_id in jobs:
+                jobs[job_id]["status"] = "failed"
+                jobs[job_id]["error"] = str(e)
+        finally:
+            job_queue.task_done()
 
 
 def generate_video_sync(
@@ -74,8 +124,6 @@ def generate_video_sync(
 ):
     """Synchronous video generation using subprocess to call YUME inference."""
     try:
-        jobs[job_id]["status"] = "processing"
-        
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         INPUT_DIR.mkdir(parents=True, exist_ok=True)
         
@@ -186,10 +234,6 @@ def generate_video_sync(
             all_files = list(job_output_dir.rglob("*"))
             logger.error(f"No output video found. Files in {job_output_dir}: {all_files}")
             raise RuntimeError(f"Output video was not created. Found files: {[f.name for f in all_files]}")
-        
-        # Cleanup temp input
-        shutil.rmtree(job_input_dir, ignore_errors=True)
-        shutil.rmtree(job_output_dir, ignore_errors=True)
             
     except subprocess.TimeoutExpired:
         logger.error(f"Job {job_id} timed out")
@@ -199,6 +243,16 @@ def generate_video_sync(
         logger.error(f"Job {job_id} failed: {e}", exc_info=True)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
+    finally:
+        # Final cleanup attempt
+        try:
+             # Cleanup temp input/output dirs
+            if 'job_input_dir' in locals():
+                shutil.rmtree(job_input_dir, ignore_errors=True)
+            if 'job_output_dir' in locals():
+                shutil.rmtree(job_output_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 @app.on_event("startup")
@@ -221,6 +275,9 @@ async def startup_event():
     else:
         logger.warning(f"Model directory not found: {MODEL_DIR}")
 
+    # Start the background worker loop
+    asyncio.create_task(worker_loop())
+
 
 @app.get("/health")
 async def health_check():
@@ -229,41 +286,42 @@ async def health_check():
         "status": "healthy",
         "cuda_available": torch.cuda.is_available(),
         "yume_available": YUME_DIR.exists(),
-        "model_available": MODEL_DIR.exists()
+        "model_available": MODEL_DIR.exists(),
+        "queue_size": job_queue.qsize(),
+        "processing_active": processing_lock.locked()
     }
 
 
 @app.post("/generate", response_model=JobStatus)
 async def generate_text_to_video(request: GenerateRequest, background_tasks: BackgroundTasks):
     """
-    Start text-to-video generation job.
-    Returns job_id that can be used to poll for status.
+    Queue text-to-video generation job.
+    Returns job_id immediately. Job tracks in "pending"/"queued" state until picked up.
     """
     job_id = str(uuid.uuid4())
     
     jobs[job_id] = {
-        "status": "pending",
+        "status": "queued",
         "output_path": None,
         "error": None,
-        "progress": 0
+        "progress": 0,
+        "params": {
+            "prompt": request.prompt,
+            "negative_prompt": request.negative_prompt,
+            "num_frames": request.num_frames,
+            "width": request.width,
+            "height": request.height,
+            "steps": request.steps,
+            "cfg": request.cfg,
+            "seed": request.seed,
+            "image_path": None
+        }
     }
     
-    # Run generation in background
-    background_tasks.add_task(
-        generate_video_sync,
-        job_id,
-        request.prompt,
-        request.negative_prompt,
-        request.num_frames,
-        request.width,
-        request.height,
-        request.steps,
-        request.cfg,
-        request.seed,
-        None  # No image for T2V
-    )
+    # Add to asyncio queue
+    await job_queue.put(job_id)
     
-    return JobStatus(job_id=job_id, status="pending")
+    return JobStatus(job_id=job_id, status="queued", queue_position=job_queue.qsize())
 
 
 @app.post("/generate-i2v", response_model=JobStatus)
@@ -278,12 +336,12 @@ async def generate_image_to_video(
     seed: int = Form(0),
 ):
     """
-    Start image-to-video generation job.
-    Returns job_id that can be used to poll for status.
+    Queue image-to-video generation job.
+    Returns job_id immediately. Job tracks in "pending"/"queued" state until picked up.
     """
     job_id = str(uuid.uuid4())
     
-    # Save uploaded image
+    # Save uploaded image immediately so we have it for the worker
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     image_path = INPUT_DIR / f"{job_id}_input.jpg"
     
@@ -291,40 +349,44 @@ async def generate_image_to_video(
         content = await image.read()
         f.write(content)
     
-    # Get image dimensions
+    # Get image dimensions to clamp/validate
     from PIL import Image
-    img = Image.open(image_path)
-    width, height = img.size
-    # Clamp to valid YUME dimensions
-    width = min(max(width, 512), 1920)
-    height = min(max(height, 288), 1080)
-    # Make divisible by 64
-    width = (width // 64) * 64
-    height = (height // 64) * 64
+    try:
+        img = Image.open(image_path)
+        width, height = img.size
+        # Clamp to valid YUME dimensions
+        width = min(max(width, 512), 1920)
+        height = min(max(height, 288), 1080)
+        # Make divisible by 64
+        width = (width // 64) * 64
+        height = (height // 64) * 64
+    except Exception as e:
+        logger.error(f"Error processing image {job_id}: {e}")
+        # Use defaults if image fails
+        width, height = 1280, 720
     
     jobs[job_id] = {
-        "status": "pending",
+        "status": "queued",
         "output_path": None,
         "error": None,
-        "progress": 0
+        "progress": 0,
+        "params": {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "num_frames": num_frames,
+            "width": width,
+            "height": height,
+            "steps": steps,
+            "cfg": cfg,
+            "seed": seed,
+            "image_path": str(image_path)
+        }
     }
     
-    # Run generation in background
-    background_tasks.add_task(
-        generate_video_sync,
-        job_id,
-        prompt,
-        negative_prompt,
-        num_frames,
-        width,
-        height,
-        steps,
-        cfg,
-        seed,
-        str(image_path)
-    )
+    # Add to asyncio queue
+    await job_queue.put(job_id)
     
-    return JobStatus(job_id=job_id, status="pending")
+    return JobStatus(job_id=job_id, status="queued", queue_position=job_queue.qsize())
 
 
 @app.get("/status/{job_id}", response_model=JobStatus)
@@ -334,12 +396,21 @@ async def get_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = jobs[job_id]
+    
+    # Calculate rough queue position if queued
+    q_pos = None
+    if job["status"] == "queued":
+        # Note: This is an approximation as we can't easily peek into asyncio.Queue
+        # reliable enough for exact position, but strictly speaking it's in the queue
+        pass 
+
     return JobStatus(
         job_id=job_id,
         status=job["status"],
         output_path=job.get("output_path"),
         error=job.get("error"),
-        progress=job.get("progress")
+        progress=job.get("progress"),
+        queue_position=None # Not easily trackable in basic queue
     )
 
 
