@@ -1,0 +1,11 @@
+# Ignore large model directories and temporary files
+**/models/*
+**/temp-models/*
+**/storage/*
+**/output/*
+**/venv/*
+**/.git/*
+**/.cache/*
+**/__pycache__/*
+*.pyc
+*.ipynb
