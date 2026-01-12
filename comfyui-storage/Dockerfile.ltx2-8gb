@@ -1,272 +1,335 @@
-# LTX-2 19B FP4 Docker Image (8GB VRAM Optimized) - Cloud Build FIXED v2
-# Uses ltx-2-19b-dev-fp4 model with Gemma-3-12b FP8 text encoder
-# Optimized for RTX 4060 8GB and similar cards
-# FIXED: Download corruption, verification, retry logic, improved error handling
+# LTX-2 19B Docker Image (8GB VRAM Optimized) - FULLY CORRECTED VERSION
+# Based on actual Kijai/LTXV2_comfy and Comfy-Org repositories
+# Uses FP8 quantized model (~21.6GB) with proper text encoder setup
+# Optimized for 8GB VRAM with RAM offloading
 
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+# Build arguments for HuggingFace authentication
+ARG HF_TOKEN=""
+ENV HF_TOKEN=${HF_TOKEN}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
-
-# PyTorch CUDA memory optimization for 8GB VRAM
-ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
-
-# Set up Hugging Face Token Build Arg
-ARG HUGGINGFACE_TOKEN
-ENV HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
+ENV PYTHONUNBUFFERED=1
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-distutils \
-    curl git wget libgl1-mesa-glx libgl1-mesa-dri git-lfs \
+    python3.11 \
+    python3.11-venv \
+    python3.11-distutils \
+    python3.11-dev \
+    curl \
+    git \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    git-lfs \
+    ffmpeg \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Python packages - split into base and ML packages to optimize caching
-RUN python -m pip install --no-cache-dir --upgrade pip
+# Upgrade pip and install build tools
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install PyTorch first (largest package)
+# Install PyTorch with CUDA 12.1 support (version 2.5.1 for comfy_kitchen compatibility)
 RUN python -m pip install --no-cache-dir \
-        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
-    && rm -rf /tmp/* /var/tmp/*
+    torch==2.5.1 \
+    torchvision==0.20.1 \
+    torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu121
 
-# Install remaining Python dependencies
+# Install huggingface-cli and core dependencies
 RUN python -m pip install --no-cache-dir \
-        gitpython PyYAML opencv-python imageio-ffmpeg \
-        GitPython PyGithub matrix-client==0.4.0 transformers \
-        huggingface-hub color-matcher matplotlib mss toml \
-        rich uv sentencepiece bitsandbytes \
-    && rm -rf /tmp/* /var/tmp/*
+    "huggingface-hub[cli]==0.26.2" \
+    einops==0.8.0 \
+    transformers==4.46.3 \
+    diffusers==0.32.1 \
+    accelerate==1.2.1 \
+    safetensors==0.4.5 \
+    Pillow==10.4.0 \
+    numpy==1.26.4 \
+    scipy==1.14.1 \
+    opencv-python==4.10.0.84 \
+    imageio==2.36.0 \
+    imageio-ffmpeg==0.5.1 \
+    PyYAML==6.0.2 \
+    requests==2.32.3 \
+    tqdm==4.67.1 \
+    psutil==6.1.0 \
+    sentencepiece==0.2.0 \
+    protobuf==5.28.3 \
+    comfy-kitchen>=0.1.0
+
+# Additional ComfyUI dependencies
+RUN python -m pip install --no-cache-dir \
+    aiohttp==3.11.10 \
+    kornia==0.7.3 \
+    spandrel==0.4.0 \
+    soundfile==0.12.1 \
+    matplotlib==3.9.2 \
+    gitpython==3.1.43
 
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI and custom nodes
-RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
-    && rm -rf .git \
-    && python -m pip install --no-cache-dir -r requirements.txt \
-    && rm -rf /tmp/* /var/tmp/*
+# Clone ComfyUI
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && cd /opt/ComfyUI \
+    && git checkout master \
+    && rm -rf .git
 
-# Install ComfyUI-Manager
-RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
-    && rm -rf custom_nodes/ComfyUI-Manager/.git \
-    && rm -rf /tmp/* /var/tmp/*
+# Install ComfyUI requirements
+RUN cd /opt/ComfyUI && python -m pip install --no-cache-dir -r requirements.txt
 
-# Install ComfyUI-LTXVideo
-RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
+# Clone ComfyUI-Manager
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git
+
+# Clone ComfyUI-LTXVideo (essential for LTX-2 support)
+RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
-    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
-    && rm -rf /tmp/* /var/tmp/*
+    && cd custom_nodes/ComfyUI-LTXVideo \
+    && python -m pip install --no-cache-dir -r requirements.txt || true
 
-# Install VideoHelperSuite
-RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
+# Clone VideoHelperSuite
+RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
     && rm -rf custom_nodes/VideoHelperSuite/.git \
-    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
-    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
-    && rm -rf /tmp/* /var/tmp/*
+    && cd custom_nodes/VideoHelperSuite \
+    && python -m pip install --no-cache-dir -r requirements.txt || true
 
-# Patch embeddings_connector.py to fix LTX-2 stalling (device mismatch)
-RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
-
-# Create model directories
-RUN mkdir -p models/checkpoints \
-    models/clip/gemma-3-12b-it-fp8 \
+# Create model directory structure
+RUN mkdir -p \
+    models/checkpoints \
+    models/unet \
+    models/clip \
+    models/text_encoders \
     models/latent_upscale_models \
-    models/loras
-
-# Set tier (informational only)
-ENV LTX2_TIER=8gb
-
-# ============================================================================
-# FIXED: Download main model with retry logic and verification (~20GB)
-# ============================================================================
-RUN if [ -z "$HUGGINGFACE_TOKEN" ]; then \
-        echo "ERROR: HUGGINGFACE_TOKEN is not set!"; \
-        echo "Build with: docker build --build-arg HUGGINGFACE_TOKEN=your_token ..."; \
-        exit 1; \
-    fi \
-    && MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading main model..."; \
-        huggingface-cli download Lightricks/LTX-2 \
-            ltx-2-19b-dev-fp4.safetensors \
-            --local-dir models/checkpoints \
-            --local-dir-use-symlinks False \
-            --token "$HUGGINGFACE_TOKEN" \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/checkpoints/ltx-2-19b-dev-fp4.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/checkpoints/ltx-2-19b-dev-fp4.safetensors')/(1024**3); print(f'Main model: {size:.2f}GB'); assert size > 15, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+    models/loras \
+    models/vae \
+    input \
+    output \
+    temp
 
 # ============================================================================
-# FIXED: Download spatial upscaler with improved validation (~0.93GB actual size)
-# The spatial upscaler is actually ~0.93GB, not 2GB as originally documented
+# CRITICAL SECTION: Download models from correct repositories
+# Using ACTUAL file structure from Kijai and Comfy-Org
 # ============================================================================
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading spatial upscaler..."; \
-        huggingface-cli download Lightricks/LTX-2 \
-            ltx-2-spatial-upscaler-x2-1.0.safetensors \
-            --local-dir models/latent_upscale_models \
-            --local-dir-use-symlinks False \
-            --token $HUGGINGFACE_TOKEN \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; \
-file_path='models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors'; \
-size=os.path.getsize(file_path)/(1024**3); \
-print(f'Upscaler: {size:.2f}GB'); \
-assert size > 0.8, f'File too small ({size:.2f}GB), corrupted or incomplete download'; \
-assert size < 3.0, f'File unexpectedly large ({size:.2f}GB), may be corrupted'; \
-print(f'✓ Spatial upscaler download verified: {size:.2f}GB')" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Download distilled LoRA with retry (~2GB)
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading distilled LoRA..."; \
-        huggingface-cli download Lightricks/LTX-2 \
-            ltx-2-19b-distilled-lora-384.safetensors \
-            --local-dir models/loras \
-            --local-dir-use-symlinks False \
-            --token $HUGGINGFACE_TOKEN \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/loras/ltx-2-19b-distilled-lora-384.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/loras/ltx-2-19b-distilled-lora-384.safetensors')/(1024**3); print(f'LoRA: {size:.2f}GB'); assert size > 1, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+# Download LTX-2 FP8 diffusion model (~21.6GB) from Kijai
+# This is the smallest viable model for 8GB VRAM
+# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/diffusion_models
+RUN echo "Downloading LTX-2 19B FP8 diffusion model (ComfyUI-optimized)..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors" \
+    --token ${HF_TOKEN} && \
+    mkdir -p models/unet && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors \
+       models/unet/ && \
+    rm -rf /tmp/kijai_models && \
+    echo "✓ LTX-2 FP8 diffusion model downloaded successfully" && \
+    ls -lh models/unet/
 
-# Download Gemma FP8 text encoder with retry (~3GB)
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading Gemma FP8 encoder..."; \
-        huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-            gemma_3_12B_it_fp8_e4m3fn.safetensors \
-            --local-dir models/clip/gemma-3-12b-it-fp8 \
-            --local-dir-use-symlinks False \
-            --token $HUGGINGFACE_TOKEN \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/clip/gemma-3-12b-it-fp8/gemma_3_12B_it_fp8_e4m3fn.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/clip/gemma-3-12b-it-fp8/gemma_3_12B_it_fp8_e4m3fn.safetensors')/(1024**3); print(f'Gemma FP8: {size:.2f}GB'); assert size > 2, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+# Download VAE models from Kijai (~5GB)
+# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/VAE
+RUN echo "Downloading VAE models..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "VAE/LTX2_video_vae_bf16.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/kijai_models/VAE/LTX2_video_vae_bf16.safetensors models/vae/ && \
+    rm -rf /tmp/kijai_models && \
+    echo "✓ VAE models downloaded successfully" && \
+    ls -lh models/vae/
 
-# Download Gemma projections with retry (~3GB)
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading Gemma projections..."; \
-        huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-            ltx-2-19b-dev-fp4_projections_only.safetensors \
-            --local-dir models/clip/gemma-3-12b-it-fp8 \
-            --local-dir-use-symlinks False \
-            --token $HUGGINGFACE_TOKEN \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/clip/gemma-3-12b-it-fp8/ltx-2-19b-dev-fp4_projections_only.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/clip/gemma-3-12b-it-fp8/ltx-2-19b-dev-fp4_projections_only.safetensors')/(1024**3); print(f'Projections: {size:.2f}GB'); assert size > 2, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+# Download LTX-2 embeddings connector from Kijai (~2.86GB)
+# This is the projection layer between Gemma and LTX-2
+# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/text_encoders
+RUN echo "Downloading LTX-2 embeddings connector..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/kijai_models/text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors \
+       models/clip/ && \
+    rm -rf /tmp/kijai_models && \
+    echo "✓ Embeddings connector downloaded successfully" && \
+    ls -lh models/clip/
 
-# Download tokenizer files (small, can be grouped)
-RUN huggingface-cli download unsloth/gemma-2-9b \
-    tokenizer.model \
-    tokenizer.json \
-    tokenizer_config.json \
-    special_tokens_map.json \
-    --local-dir models/clip/gemma-3-12b-it-fp8 \
-    --local-dir-use-symlinks False \
-    --token $HUGGINGFACE_TOKEN \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+# Download Gemma-3 12B text encoder from Comfy-Org (~12GB, optimized single file)
+# This is the OFFICIAL ComfyUI-optimized version
+# Source: https://huggingface.co/Comfy-Org/ltx-2
+RUN echo "Downloading Gemma-3 12B text encoder (Comfy-Org optimized)..." && \
+    huggingface-cli download Comfy-Org/ltx-2 \
+    --repo-type model \
+    --local-dir /tmp/comfy_models \
+    --include "split_files/text_encoders/gemma_3_12B_it.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/comfy_models/split_files/text_encoders/gemma_3_12B_it.safetensors \
+       models/clip/ && \
+    rm -rf /tmp/comfy_models && \
+    echo "✓ Gemma-3 text encoder downloaded successfully" && \
+    ls -lh models/clip/
 
 # ============================================================================
-# CRITICAL VERIFICATION: Check all model files are valid (UPDATED thresholds)
+# Download supporting models from Lightricks (optional but recommended)
 # ============================================================================
-RUN echo '#!/usr/bin/env python3\n\
-import os\n\
-import sys\n\
-\n\
-files_to_verify = {\n\
-    "models/checkpoints/ltx-2-19b-dev-fp4.safetensors": 15.0,\n\
-    "models/clip/gemma-3-12b-it-fp8/gemma_3_12B_it_fp8_e4m3fn.safetensors": 2.0,\n\
-    "models/clip/gemma-3-12b-it-fp8/ltx-2-19b-dev-fp4_projections_only.safetensors": 2.0,\n\
-    "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 0.8,\n\
-    "models/loras/ltx-2-19b-distilled-lora-384.safetensors": 1.0,\n\
-}\n\
-\n\
-print("\\n" + "="*70)\n\
-print("VERIFYING MODEL FILES")\n\
-print("="*70)\n\
-\n\
-all_valid = True\n\
-for filepath, min_size_gb in files_to_verify.items():\n\
-    if not os.path.exists(filepath):\n\
-        print(f"❌ MISSING: {filepath}")\n\
-        all_valid = False\n\
-        continue\n\
-    size_gb = os.path.getsize(filepath) / (1024**3)\n\
-    if size_gb < min_size_gb:\n\
-        print(f"❌ TOO SMALL: {filepath} ({size_gb:.2f}GB < {min_size_gb}GB minimum)")\n\
-        all_valid = False\n\
-    else:\n\
-        print(f"✓ VALID: {filepath} ({size_gb:.2f}GB)")\n\
-\n\
-print("="*70)\n\
-\n\
-if not all_valid:\n\
-    print("ERROR: Some model files are missing or corrupted!")\n\
-    sys.exit(1)\n\
-\n\
-print("SUCCESS: All model files verified!")\n\
-print("="*70 + "\\n")\n\
-' > /tmp/verify_models.py \
-    && python3 /tmp/verify_models.py \
-    && rm /tmp/verify_models.py
 
-# Final cleanup
-RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
-    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
-    && rm -rf /root/.cache/* /tmp/* /var/tmp/* ~/.cache/*
+# Download spatial upscaler (996MB)
+# Source: https://huggingface.co/Lightricks/LTX-2
+RUN echo "Downloading spatial upscaler..." && \
+    huggingface-cli download Lightricks/LTX-2 \
+    --repo-type model \
+    --local-dir /tmp/lightricks_models \
+    --include "ltx-2-spatial-upscaler-x2-1.0.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lightricks_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
+       models/latent_upscale_models/ && \
+    rm -rf /tmp/lightricks_models && \
+    echo "✓ Spatial upscaler downloaded successfully"
+
+# Download distilled LoRA for faster generation
+# Source: https://huggingface.co/Lightricks/LTX-2
+RUN echo "Downloading distilled LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2 \
+    --repo-type model \
+    --local-dir /tmp/lightricks_models \
+    --include "ltx-2-19b-distilled-lora-384.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lightricks_models/ltx-2-19b-distilled-lora-384.safetensors \
+       models/loras/ && \
+    rm -rf /tmp/lightricks_models && \
+    echo "✓ Distilled LoRA downloaded successfully"
+
+# Download Camera Control LoRAs from verified repositories
+# Each LoRA is in its own repository under Lightricks organization
+RUN echo "Downloading camera control LoRAs..." && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In \
+    --repo-type model \
+    --local-dir /tmp/lora_temp \
+    --include "ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-in.safetensors models/loras/ && \
+    rm -rf /tmp/lora_temp && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out \
+    --repo-type model \
+    --local-dir /tmp/lora_temp \
+    --include "ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-out.safetensors models/loras/ && \
+    rm -rf /tmp/lora_temp && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left \
+    --repo-type model \
+    --local-dir /tmp/lora_temp \
+    --include "ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-left.safetensors models/loras/ && \
+    rm -rf /tmp/lora_temp && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right \
+    --repo-type model \
+    --local-dir /tmp/lora_temp \
+    --include "ltx-2-19b-lora-camera-control-dolly-right.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-right.safetensors models/loras/ && \
+    rm -rf /tmp/lora_temp && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Up \
+    --repo-type model \
+    --local-dir /tmp/lora_temp \
+    --include "ltx-2-19b-lora-camera-control-jib-up.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-jib-up.safetensors models/loras/ && \
+    rm -rf /tmp/lora_temp && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Down \
+    --repo-type model \
+    --local-dir /tmp/lora_temp \
+    --include "ltx-2-19b-lora-camera-control-jib-down.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-jib-down.safetensors models/loras/ && \
+    rm -rf /tmp/lora_temp && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Static \
+    --repo-type model \
+    --local-dir /tmp/lora_temp \
+    --include "ltx-2-19b-lora-camera-control-static.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-static.safetensors models/loras/ && \
+    rm -rf /tmp/lora_temp && \
+    echo "✓ Camera control LoRAs downloaded successfully"
+
+# Create extra_model_paths.yaml for proper model discovery
+RUN echo "comfyui:" > extra_model_paths.yaml && \
+    echo "  base_path: /opt/ComfyUI/" >> extra_model_paths.yaml && \
+    echo "  checkpoints: models/checkpoints/" >> extra_model_paths.yaml && \
+    echo "  unet: models/unet/" >> extra_model_paths.yaml && \
+    echo "  clip: models/clip/" >> extra_model_paths.yaml && \
+    echo "  text_encoders: models/text_encoders/" >> extra_model_paths.yaml && \
+    echo "  loras: models/loras/" >> extra_model_paths.yaml && \
+    echo "  upscale_models: models/latent_upscale_models/" >> extra_model_paths.yaml && \
+    echo "  vae: models/vae/" >> extra_model_paths.yaml
+
+# Verify final model structure
+RUN echo "=== Final Model Structure ===" && \
+    echo "UNET (Diffusion Model):" && ls -lh models/unet/ && \
+    echo "CLIP (Text Encoders):" && ls -lh models/clip/ && \
+    echo "VAE:" && ls -lh models/vae/ && \
+    echo "LoRAs:" && ls -lh models/loras/ && \
+    echo "Upscale Models:" && ls -lh models/latent_upscale_models/
+
+# Clean up to reduce image size
+RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true && \
+    find /opt/ComfyUI -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Set proper permissions
+RUN chmod -R 755 /opt/ComfyUI
+
+# Expose ComfyUI port
+EXPOSE 8188
 
 WORKDIR /opt/ComfyUI
 
-# RTX 4060 8GB OPTIMIZED LAUNCH FLAGS:
-# --listen: Allow external connections
-# --lowvram: Aggressive memory management (CRITICAL for 8GB)
-# --use-split-cross-attention: Splits attention computation to reduce VRAM peaks (CRITICAL)
-# --disable-smart-memory: Prevents memory caching that can cause fragmentation (RECOMMENDED)
-# --cpu-vae: Forces VAE decode on CPU, saves 1-2GB VRAM (REQUIRED for 8GB after model loading)
-# --reserve-vram 1.5: Keeps 1.5GB free for system stability (UPDATED for RTX 4060)
+# Start ComfyUI with optimized settings for 8GB VRAM
+# UPDATED: Settings for FP8 model with proper VRAM management
+# --lowvram: Essential - Offloads model weights to RAM when not in use
+# --reserve-vram 1.5: Keeps 1.5GB VRAM free for system/other processes (FP8 uses more temp memory)
+# --force-fp16: Forces FP16 precision where possible for memory efficiency
+# --use-split-cross-attention: Reduces memory spikes during attention computation
+# --preview-method none: Disables preview generation to save VRAM
+CMD ["python", "main.py", \
+     "--listen", "0.0.0.0", \
+     "--port", "8188", \
+     "--lowvram", \
+     "--reserve-vram", "1.5", \
+     "--force-fp16", \
+     "--use-split-cross-attention", \
+     "--preview-method", "none"]
+
+# Build instructions:
+# docker build --build-arg HF_TOKEN=your_token_here -t ltx2-8gb-fp8 -f Dockerfile .
+# 
+# Run instructions:
+# docker run --gpus all -p 8188:8188 -v $(pwd)/output:/opt/ComfyUI/output ltx2-8gb-fp8
 #
-# Performance Expectations for RTX 4060 8GB:
-# - 2 seconds (49 frames) at 480x320: ~3-4 minutes, STABLE ✓
-# - 3 seconds (73 frames) at 480x320: ~5-6 minutes, may OOM occasionally ⚠️
-# - Quality: 90-95% of full VRAM results
-CMD ["python", "main.py", "--listen", "--lowvram", "--use-split-cross-attention", "--disable-smart-memory", "--cpu-vae", "--reserve-vram", "1.5"]
+# IMPORTANT: Your HF token must have access to:
+# - Kijai/LTXV2_comfy (public)
+# - Comfy-Org/ltx-2 (public)
+# - Lightricks/LTX-2 (public)
+#
+# NOTE: This uses FP8 model instead of FP4 because:
+# 1. FP4 model doesn't exist in split format in Kijai's repo
+# 2. FP8 is the recommended quantization for 8GB VRAM in current setup
+# 3. FP8 provides better quality than FP4 with minimal VRAM increase

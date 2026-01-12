@@ -1,33 +1,34 @@
 {
   "prompt": {
+    "comment": "LTX-2 Text-to-Video 8GB VRAM Workflow - Updated for Kijai FP8 models",
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-2-19b-dev-fp4.safetensors"
+        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors"
       },
-      "class_type": "CheckpointLoaderSimple",
+      "class_type": "UNETLoader",
       "_meta": {
-        "title": "Load LTX-2 FP4 Model (8GB optimized)"
+        "title": "Load Diffusion Model"
       }
     },
     "2": {
       "inputs": {
-        "clip_name1": "gemma-3-12b-it-fp8/gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "clip_name2": "gemma-3-12b-it-fp8/ltx-2-19b-dev-fp4_projections_only.safetensors",
+        "clip_name1": "gemma_3_12B_it.safetensors",
+        "clip_name2": "ltx-2-19b-embeddings_connector_dev_bf16.safetensors",
         "type": "ltxv"
       },
       "class_type": "DualCLIPLoader",
       "_meta": {
-        "title": "Load FP8 Text Encoder (Critical for 8GB)"
+        "title": "Load Text Encoders (Gemma + LTX Connector)"
       }
     },
     "3": {
       "inputs": {
-        "text": "A cinematic video prompt placeholder",
+        "text": "A cinematic video prompt placeholder - replace with your prompt",
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
-        "title": "Positive Prompt"
+        "title": "Encode Positive Prompt"
       }
     },
     "4": {
@@ -37,7 +38,7 @@
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
-        "title": "Negative Prompt"
+        "title": "Encode Negative Prompt (empty for LTX-2)"
       }
     },
     "5": {
@@ -46,154 +47,117 @@
         "negative": ["4", 0],
         "frame_rate": 24
       },
-      "class_type": "LTXVConditioning"
+      "class_type": "LTXVConditioning",
+      "_meta": {
+        "title": "LTX-V Conditioning"
+      }
     },
     "6": {
       "inputs": {
-        "model": ["1", 0],
-        "block_indices": "14, 19"
+        "width": 544,
+        "height": 320,
+        "length": 1,
+        "color": 0
       },
-      "class_type": "LTXVApplySTG"
+      "class_type": "EmptyImage",
+      "_meta": {
+        "title": "Empty Latent Image (Initial Frame)"
+      }
     },
     "7": {
       "inputs": {
-        "model": ["6", 0],
-        "positive": ["5", 0],
-        "negative": ["5", 1],
-        "cfg": 3.0,
-        "stg": 1.0,
-        "rescale": 0.7
+        "length": 73
       },
-      "class_type": "STGGuider"
+      "class_type": "PrimitiveInt",
+      "_meta": {
+        "title": "Frame Count (73 = 3 seconds at 24fps)"
+      }
     },
     "8": {
       "inputs": {
-        "sampler_name": "euler"
+        "value": 24
       },
-      "class_type": "KSamplerSelect"
+      "class_type": "PrimitiveFloat",
+      "_meta": {
+        "title": "Frame Rate"
+      }
     },
     "9": {
       "inputs": {
-        "model": ["1", 0],
-        "scheduler": "normal",
-        "steps": 25,
-        "denoise": 1.0
+        "noise_seed": 0
       },
-      "class_type": "BasicScheduler",
+      "class_type": "RandomNoise",
       "_meta": {
-        "title": "Scheduler (25 steps conservative, use distilled LoRA for fewer steps)"
+        "title": "Random Noise Seed (0 = random each time)"
       }
     },
     "10": {
       "inputs": {
-        "noise_seed": 0
+        "model": ["1", 0],
+        "positive": ["5", 0],
+        "negative": ["5", 1],
+        "vae": ["11", 0],
+        "empty_latent_image": ["6", 0],
+        "length": 73,
+        "frame_rate": 24,
+        "noise_seed": 0,
+        "steps": 30,
+        "cfg": 3.0,
+        "sampler_name": "euler",
+        "scheduler": "simple"
       },
-      "class_type": "RandomNoise"
+      "class_type": "LTXVSampler",
+      "_meta": {
+        "title": "LTX-2 Sampler"
+      }
     },
     "11": {
       "inputs": {
-        "model": ["1", 0],
-        "vae": ["1", 2],
-        "width": 544,
-        "height": 320,
-        "num_frames": 73,
-        "guider": ["7", 0],
-        "sampler": ["8", 0],
-        "sigmas": ["9", 0],
-        "noise": ["10", 0]
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
       },
-      "class_type": "LTXVBaseSampler",
+      "class_type": "VAELoader",
       "_meta": {
-        "title": "8GB Optimized: 544x320 (close to 480p), 73 frames (3 seconds)",
-        "notes": "Conservative settings for 8GB VRAM. For 5s clips use 121 frames (risky). Avoid going above 544x320."
+        "title": "Load VAE"
       }
     },
     "12": {
       "inputs": {
-        "samples": ["11", 0],
-        "vae": ["1", 2],
-        "tile_size": 128,
-        "overlap": 64
+        "samples": ["10", 0],
+        "vae": ["11", 0],
+        "tile_size": 256
       },
-      "class_type": "VAEDecode",
+      "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "VAE Decode with Aggressive Tiling (CRITICAL for 8GB)",
-        "notes": "tile_size: 128 is very aggressive for <6GB free. Use 192 for 6-7GB, 256 for 7-8GB free VRAM."
+        "title": "VAE Decode (Tiled for 8GB VRAM)"
       }
     },
     "13": {
       "inputs": {
         "images": ["12", 0],
-        "fps": 24
+        "fps": 24,
+        "codec": "h264",
+        "quality": 23,
+        "format": "video/h264-mp4"
       },
-      "class_type": "CreateVideo"
+      "class_type": "CreateVideo",
+      "_meta": {
+        "title": "Create Video File"
+      }
     },
     "14": {
       "inputs": {
         "video": ["13", 0],
         "filename_prefix": "ltx2_t2v_8gb",
-        "format": "auto",
-        "codec": "auto",
-        "quality": "auto"
+        "codec": "h264",
+        "quality": "high"
       },
-      "class_type": "SaveVideo"
-    }
-  },
-  "_meta": {
-    "8gb_optimization_notes": {
-      "critical_settings": {
-        "model": "FP4 checkpoint (ltx-2-19b-dev-fp4.safetensors)",
-        "text_encoder": "FP8 Gemma (gemma_3_12B_it_fp8_e4m3fn.safetensors)",
-        "resolution": "544x320 (conservative 480p equivalent)",
-        "frames": "73 (3 seconds at 24fps)",
-        "tile_size": "128 (aggressive, increase to 192-256 if VRAM allows)",
-        "tile_overlap": "64 pixels"
-      },
-      "recommended_variations": {
-        "stable_3s": {
-          "width": 544,
-          "height": 320,
-          "num_frames": 73,
-          "tile_size": 192,
-          "expected_vram": "6-7GB"
-        },
-        "risky_5s": {
-          "width": 544,
-          "height": 320,
-          "num_frames": 121,
-          "tile_size": 128,
-          "expected_vram": "7-8GB",
-          "note": "May OOM, restart ComfyUI between generations"
-        },
-        "lower_quality_longer": {
-          "width": 480,
-          "height": 320,
-          "num_frames": 145,
-          "tile_size": 128,
-          "expected_vram": "7-8GB",
-          "note": "Lower resolution for longer clips"
-        }
-      },
-      "performance_expectations": {
-        "rtx_3060_8gb": "4-6 min for 3s, 7-10 min for 5s",
-        "rtx_3070_8gb": "3-5 min for 3s, 5-8 min for 5s",
-        "quality": "90-95% of full VRAM results"
-      },
-      "workflow_tips": [
-        "Always restart ComfyUI between generations to clear memory fragmentation",
-        "Close all other GPU applications before generating",
-        "For longer videos, generate multiple 3s clips and combine in post",
-        "Consider post-generation upscaling (480p to 1080p) with Video2X or Real-ESRGAN",
-        "Disable audio features to save 1-2GB VRAM, add audio in post-production",
-        "Monitor VRAM with nvidia-smi during generation"
-      ],
-      "troubleshooting": {
-        "oom_during_load": "Use FP8 encoder, ensure --lowvram flag is set",
-        "oom_during_sampling": "Reduce num_frames to 73 or 49, lower resolution",
-        "oom_during_decode": "Reduce tile_size to 128 or 96, ensure --cpu-vae is enabled",
-        "slow_performance": "Expected 2-3x slower than 12GB+ cards, check GPU is being used",
-        "inconsistent_results": "Restart ComfyUI fresh before each generation"
+      "class_type": "SaveVideo",
+      "_meta": {
+        "title": "Save Video"
       }
     }
+  },
+  "extra_data": {
+    "notes": "This workflow uses:\n- FP8 diffusion model from Kijai (~21.6GB)\n- Gemma-3 12B text encoder from Comfy-Org\n- LTX-2 embeddings connector from Kijai\n- Tiled VAE decoding for 8GB VRAM\n\nOptimized for 8GB VRAM with --lowvram flag.\nAdjust resolution (node 6) and frames (node 7) for your VRAM capacity."
   }
 }
