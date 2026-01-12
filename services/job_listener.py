@@ -30,16 +30,6 @@ class JobListener:
             False if a critical auth error occurred that should stop the listener.
         """
         try:
-            # Emit JOB_START event
-            print(json.dumps({
-                "type": "JOB_START",
-                "payload": {
-                    "id": job.get('id'),
-                    "workflow_type": job.get('workflow_type', 'unknown'),
-                    "service_type": self._get_service_type_for_job(job)
-                }
-            }), flush=True)
-
             processor = self.client._get_job_processor(job, self.shutdown_event)
             processor.process()
             
@@ -94,6 +84,16 @@ class JobListener:
                         self.client.current_job = job
                         logging.info(f"Received job: {job['id']}")
                         
+                        # Emit JOB_START event
+                        print(json.dumps({
+                            "type": "JOB_START",
+                            "payload": {
+                                "id": job.get('id'),
+                                "workflow_type": job.get('workflow_type', 'unknown'),
+                                "service_type": self._get_service_type_for_job(job)
+                            }
+                        }), flush=True)
+
                         # Process the job using the shared helper
                         self._process_job_safely(job)
                         
@@ -239,6 +239,16 @@ class JobListener:
                                         self.client.active_service_type = actual_service_type
                                         logging.info(f"Job requires service '{actual_service_type}'.")
                                         
+                                        # Emit JOB_START early to update UI while container starts/warms up
+                                        print(json.dumps({
+                                            "type": "JOB_START",
+                                            "payload": {
+                                                "id": job.get('id'),
+                                                "workflow_type": job.get('workflow_type', 'unknown'),
+                                                "service_type": actual_service_type
+                                            }
+                                        }), flush=True)
+
                                         if not HEADLESS_MODE:
                                             logging.info("Starting container...")
                                             docker_manager.run_container(service_type=actual_service_type)
@@ -274,6 +284,16 @@ class JobListener:
                                             else:
                                                 if not self.shutdown_event.is_set():
                                                     logging.error(f"ComfyUI for service '{actual_service_type}' failed to start. Failing job.")
+                                                    
+                                                    # Emit JOB_FAILED since we started the job in UI
+                                                    print(json.dumps({
+                                                        "type": "JOB_FAILED",
+                                                        "payload": {
+                                                            "id": job.get('id'),
+                                                            "error": "ComfyUI failed to start"
+                                                        }
+                                                    }), flush=True)
+
                                                     self.orchestrator_service.update_job_status(job_id, 'failed')
                                                     self.client.current_job = None
                                         else:
@@ -323,6 +343,23 @@ class JobListener:
                     break  # Exit the loop, Electron will restart the client
                 except Exception as e:
                     logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
+                    if job and job.get('id'):
+                        logging.error(f"Failure occurred with active job {job.get('id')}. Cleaning up...")
+                        # Emit JOB_FAILED event
+                        print(json.dumps({
+                            "type": "JOB_FAILED",
+                            "payload": {
+                                "id": job.get('id'),
+                                "error": str(e)
+                            }
+                        }), flush=True)
+                        
+                        try:
+                            self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+                        except:
+                            logging.error("Failed to update job status to failed.")
+                        
+                        self.client.current_job = None
 
                 if not found_processable_job:
                     # Use faster polling frequency for headless cloud instances
