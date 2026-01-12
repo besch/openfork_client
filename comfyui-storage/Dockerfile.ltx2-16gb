@@ -127,7 +127,7 @@ assert size < 3.0, f'File unexpectedly large ({size:.2f}GB), may be corrupted'; 
 print(f'✓ Spatial upscaler download verified: {size:.2f}GB')" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Download distilled LoRA
+# Download distilled LoRA (FIXED: Updated size check from 3.0 to 8.0 GB)
 RUN MAX_RETRIES=3; \
     for i in $(seq 1 $MAX_RETRIES); do \
         echo "Attempt $i/$MAX_RETRIES: Downloading distilled LoRA..."; \
@@ -144,8 +144,8 @@ RUN MAX_RETRIES=3; \
         }; \
     done \
     && python3 -c "import os; size=os.path.getsize('models/loras/ltx-2-19b-distilled-lora-384.safetensors')/(1024**3); print(f'LoRA: {size:.2f}GB'); assert size > 0.8, f'File too small ({size:.2f}GB), corrupted or incomplete download'; \
-assert size < 3.0, f'File unexpectedly large ({size:.2f}GB), may be corrupted'; \
-print(f'✓ Spatial upscaler download verified: {size:.2f}GB')" \
+assert size < 8.0, f'File unexpectedly large ({size:.2f}GB), may be corrupted'; \
+print(f'✓ LoRA download verified: {size:.2f}GB')" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Download full Gemma-3 12B text encoder BF16 (~24GB total)
@@ -178,7 +178,7 @@ RUN huggingface-cli download google/gemma-3-12b-it \
     --token "$HUGGINGFACE_TOKEN" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Verify all models
+# Verify all models (FIXED: Updated LoRA minimum size)
 RUN echo '#!/usr/bin/env python3\n\
 import os\n\
 import sys\n\
@@ -187,7 +187,7 @@ files_to_verify = {\n\
     "models/checkpoints/ltx-2-19b-distilled-fp8.safetensors": 25.0,\n\
     "models/clip/gemma-3-12b-it/model.safetensors": 20.0,\n\
     "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 1.0,\n\
-    "models/loras/ltx-2-19b-distilled-lora-384.safetensors": 1.0,\n\
+    "models/loras/ltx-2-19b-distilled-lora-384.safetensors": 6.0,\n\
 }\n\
 \n\
 print("\\n" + "="*70)\n\
