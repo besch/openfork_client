@@ -3,7 +3,7 @@
     "1": {
       "inputs": {
         "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
-        "weight_dtype": "default"
+        "weight_dtype": "fp8_e4m3fn"
       },
       "class_type": "UNETLoader"
     },
