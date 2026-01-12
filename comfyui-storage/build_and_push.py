@@ -55,11 +55,14 @@ def run_command(command: List[str], description: str) -> bool:
         return False
 
 
-def build_image(dockerfile: str, tag: str) -> bool:
+def build_image(dockerfile: str, tag: str, hf_token: str = None) -> bool:
     """
     Build a Docker image with retry logic.
     """
-    command = ["docker", "build", "--build-arg", "HUGGINGFACE_TOKEN", "-f", dockerfile, "-t", tag, "."]
+    if hf_token:
+        command = ["docker", "build", "--build-arg", f"HUGGINGFACE_TOKEN={hf_token}", "-f", dockerfile, "-t", tag, "."]
+    else:
+        command = ["docker", "build", "--build-arg", "HUGGINGFACE_TOKEN", "-f", dockerfile, "-t", tag, "."]
     
     for attempt in range(1, MAX_RETRIES + 1):
         print(f"\n📦 Build attempt {attempt}/{MAX_RETRIES} for {tag}")
@@ -93,7 +96,7 @@ def push_image(tag: str) -> bool:
     return False
 
 
-def build_and_push_image(config: ImageConfig) -> bool:
+def build_and_push_image(config: ImageConfig, hf_token: str = None) -> bool:
     """
     Build and push a single image. Returns True if both operations succeed.
     """
@@ -102,7 +105,7 @@ def build_and_push_image(config: ImageConfig) -> bool:
     print('#'*60)
     
     # Build the image
-    if not build_image(config.dockerfile, config.tag):
+    if not build_image(config.dockerfile, config.tag, hf_token):
         print(f"\n💥 FAILED to build {config.tag} after {MAX_RETRIES} attempts")
         return False
     
@@ -167,6 +170,7 @@ def main():
     
     parser = argparse.ArgumentParser(description="Docker Build and Push Script with Retry Logic")
     parser.add_argument("--delay", type=str, help="Msg to start delay e.g. 'in 10 minutes', '10m', '300s'")
+    parser.add_argument("--hf-token", type=str, help="Hugging Face token for gated models")
     
     args = parser.parse_args()
     
@@ -203,7 +207,7 @@ def main():
     failed = []
     
     for config in IMAGES:
-        if build_and_push_image(config):
+        if build_and_push_image(config, args.hf_token):
             successful.append(config.tag)
         else:
             failed.append(config.tag)
