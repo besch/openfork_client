@@ -8,6 +8,8 @@ echo "Timestamp: $(date)"
 echo "Starting Ollama server..."
 export OLLAMA_NUM_PARALLEL=2
 export OLLAMA_MAX_LOADED_MODELS=1
+export OLLAMA_HOST=0.0.0.0
+export OLLAMA_ORIGINS="*"
 ollama serve &
 OLLAMA_PID=$!
 sleep 5

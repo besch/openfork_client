@@ -135,6 +135,74 @@ if [ -f "/opt/dgn-client/yume_api.py" ]; then
   fi
 fi
 
+# Start DiffRhythm REST API if present
+if [ -d "/app" ] && [ -f "/app/diffrhythm_api.py" ]; then
+  echo "Found DiffRhythm API script. Starting in background..."
+  (cd /app && $PYTHON_EXE diffrhythm_api.py > /tmp/diffrhythm_api.log 2>&1) &
+  DIFF_PID=$!
+  echo "DiffRhythm API startup initiated (PID: $DIFF_PID, logging to /tmp/diffrhythm_api.log)"
+  
+  # Wait for DiffRhythm API to be ready
+  echo "Waiting for DiffRhythm API to be ready..."
+  MAX_WAIT=120
+  WAITED=0
+  while [ $WAITED -lt $MAX_WAIT ]; do
+    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
+      echo "DiffRhythm API is ready!"
+      break
+    fi
+    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
+    sleep 2
+    WAITED=$((WAITED + 2))
+  done
+fi
+
+# Start TurboDiffusion REST API if present
+if [ -d "/opt/TurboDiffusion" ] && [ -f "/opt/TurboDiffusion/api_server.py" ]; then
+  echo "Found TurboDiffusion API script. Starting in background..."
+  (cd /opt/TurboDiffusion && $PYTHON_EXE api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
+  TURBO_PID=$!
+  echo "TurboDiffusion API startup initiated (PID: $TURBO_PID, logging to /tmp/turbodiffusion_api.log)"
+  
+  # Wait for TurboDiffusion API to be ready
+  echo "Waiting for TurboDiffusion API to be ready..."
+  MAX_WAIT=120
+  WAITED=0
+  while [ $WAITED -lt $MAX_WAIT ]; do
+    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
+      echo "TurboDiffusion API is ready!"
+      break
+    fi
+    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
+    sleep 2
+    WAITED=$((WAITED + 2))
+  done
+fi
+
+# Start Ollama server if present (for LLM containers)
+if command -v ollama &> /dev/null; then
+  echo "Found Ollama. Starting server in background..."
+  export OLLAMA_HOST=0.0.0.0
+  export OLLAMA_ORIGINS="*"
+  ollama serve > /tmp/ollama.log 2>&1 &
+  OLLAMA_PID=$!
+  echo "Ollama startup initiated (PID: $OLLAMA_PID, logging to /tmp/ollama.log)"
+  
+  # Wait for Ollama to be ready
+  echo "Waiting for Ollama to be ready..."
+  MAX_WAIT=60
+  WAITED=0
+  while [ $WAITED -lt $MAX_WAIT ]; do
+    if curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
+      echo "Ollama is ready!"
+      break
+    fi
+    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
+    sleep 2
+    WAITED=$((WAITED + 2))
+  done
+fi
+
 # Create directories
 mkdir -p /opt/dgn-client /data/.cache /data/input
 

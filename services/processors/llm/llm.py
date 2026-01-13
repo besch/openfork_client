@@ -21,7 +21,7 @@ class LLMJobProcessor(BaseJobProcessor):
             self._fail_job(f"Job object is None for LLMJobProcessor. Cannot proceed.")
             return
 
-        api_base = os.getenv("LLM_API_BASE", "http://localhost:11434")
+        api_base = os.getenv("LLM_API_BASE", "http://127.0.0.1:11434")
 
         logging.info(f"Waiting for Ollama service to be ready at {api_base}...")
         time.sleep(3)
