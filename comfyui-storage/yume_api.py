@@ -185,11 +185,15 @@ def generate_video_sync(
         env = os.environ.copy()
         env["TOKENIZERS_PARALLELISM"] = "false"
         env["CUDA_VISIBLE_DEVICES"] = "0"
+        # Suppress noisy transformers/hub warnings that hide real errors
+        env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+        env["TRANSFORMERS_VERBOSITY"] = "error"
+        env["HF_HOME"] = "/tmp/huggingface_cache"
         # Required for YUME's distributed training code (single-GPU mode)
         env["LOCAL_RANK"] = "0"
         env["RANK"] = "0"
         env["WORLD_SIZE"] = "1"
-        env["MASTER_ADDR"] = "localhost"
+        env["MASTER_ADDR"] = "127.0.0.1"
         env["MASTER_PORT"] = "12355"
         
         # Run the inference
@@ -204,13 +208,31 @@ def generate_video_sync(
         
         # Log output
         if result.stdout:
-            logger.info(f"Inference stdout: {result.stdout[-2000:]}")
+            # Only log last few lines to avoid bloating logs
+            stdout_tail = result.stdout[-2000:]
+            logger.info(f"Inference stdout tail: {stdout_tail}")
+            
         if result.stderr:
-            logger.warning(f"Inference stderr: {result.stderr[-2000:]}")
+            # Log more stderr to help debugging
+            stderr_tail = result.stderr[-4000:]
+            logger.warning(f"Inference stderr tail: {stderr_tail}")
         
         if result.returncode != 0:
             logger.error(f"Inference failed with code {result.returncode}")
-            raise RuntimeError(f"Inference failed: {result.stderr[-500:] if result.stderr else 'Unknown error'}")
+            # Try to find the actual error in stderr instead of just taking the very end
+            err_msg = "Unknown error"
+            if result.stderr:
+                # Look for common error markers
+                lines = result.stderr.splitlines()
+                # Find the last line that looks like a real error
+                important_lines = [l for l in lines if any(x in l for x in ["Error", "Exception", "Traceback", "Out of memory", "RuntimeError"])]
+                if important_lines:
+                    err_msg = important_lines[-1]
+                else:
+                    # Fallback to the last 1000 chars if no markers found
+                    err_msg = result.stderr[-1000:].strip()
+            
+            raise RuntimeError(f"Inference failed: {err_msg}")
         
         # Find the output video
         output_files = list(job_output_dir.glob("**/*.mp4"))

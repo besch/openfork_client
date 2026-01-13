@@ -8,11 +8,10 @@
     },
     "2": {
       "inputs": {
-        "clip_name1": "gemma-3-12b-it-fp8/gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "clip_name2": "gemma-3-12b-it-fp8/ltx-2-19b-dev-fp4_projections_only.safetensors",
+        "clip_name": "gemma-3-12b-it",
         "type": "ltxv"
       },
-      "class_type": "DualCLIPLoader"
+      "class_type": "CLIPLoader"
     },
     "3": {
       "inputs": {
