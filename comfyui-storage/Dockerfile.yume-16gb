@@ -17,10 +17,6 @@ ENV PIP_NO_CACHE_DIR=1
 ENV TOKENIZERS_PARALLELISM=false
 ENV YUME_MODEL_PATH=/opt/models/Yume
 
-# Expose token for gated models (InternVL / Yume)
-ARG HUGGINGFACE_TOKEN
-ENV HUGGINGFACE_TOKEN=$HUGGINGFACE_TOKEN
-
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common git curl wget libgl1-mesa-glx libgl1-mesa-dri \
@@ -56,12 +52,12 @@ RUN git clone --depth=1 https://github.com/stdstu12/YUME.git \
     && python -m pip install --no-cache-dir -r requirements.txt || true \
     && python -m pip install --no-cache-dir -e . || true
 
-# Download InternVL2 Model (Required for YUME)
-# The code expects InternVL3-2B-Instruct at a hardcoded path. We use InternVL2-2B as the public equivalent.
-RUN huggingface-cli download OpenGVLab/InternVL2-2B --local-dir /opt/models/InternVL2-2B
+# Download InternVL3 Model (Required for YUME)
+# The code expects InternVL3-2B-Instruct at a hardcoded path.
+RUN huggingface-cli download OpenGVLab/InternVL3-2B-Instruct --local-dir /opt/models/InternVL3-2B-Instruct
 
-# Patch hardcoded private paths in YUME codebase
-RUN grep -r "/mnt/petrelfs" /opt/YUME | cut -d: -f1 | sort | uniq | xargs -I {} sed -i "s|/mnt/petrelfs/maoxiaofeng/Yume_v2_release/InternVL3-2B-Instruct|/opt/models/InternVL2-2B|g" {}
+# Patch hardcoded private paths in YUME codebase to point to our local model
+RUN grep -r "/mnt/petrelfs" /opt/YUME | cut -d: -f1 | sort | uniq | xargs -I {} sed -i "s|/mnt/petrelfs/maoxiaofeng/Yume_v2_release/InternVL3-2B-Instruct|/opt/models/InternVL3-2B-Instruct|g" {}
 
 # Download Model Checkpoint (Split into layers to ensure reliable docker push)
 # attempting to push a single 30GB layer often causes 502 Bad Gateway errors.
