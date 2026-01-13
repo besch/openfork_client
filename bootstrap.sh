@@ -10,18 +10,6 @@ BRANCH="main"
 BASE_URL="https://raw.githubusercontent.com/$REPO/$BRANCH"
 API_URL="https://api.github.com/repos/$REPO/git/trees/$BRANCH?recursive=1"
 
-# Detect Python executable early for JSON parsing
-if [ -x "/usr/bin/python" ]; then
-  PYTHON_EXE="/usr/bin/python"
-elif command -v python &> /dev/null; then
-  PYTHON_EXE=$(command -v python)
-elif command -v python3 &> /dev/null; then
-  PYTHON_EXE=$(command -v python3)
-else
-  # Fallback to python3 and hope it works or user has it
-  PYTHON_EXE="python3"
-fi
-
 echo "=== OpenFork DGN Client Bootstrap ==="
 echo "Fetching file list from GitHub API..."
 
@@ -43,22 +31,11 @@ else
   
   # Parse the JSON tree and download relevant files
   # Filter: .py, .sh, .txt (requirements), .json (workflows), excluding tests and docs
-  # Parse the JSON tree and download relevant files
-  # Use Python for robust JSON parsing (handles minified or pretty-printed JSON)
-  # Filter: .py, .sh, .txt (requirements), .json (workflows), excluding tests and docs
-  echo "$TREE_JSON" | $PYTHON_EXE -c "
-import sys, json, re
-try:
-    data = json.load(sys.stdin)
-    files = [item['path'] for item in data.get('tree', [])]
-    # Filter files
-    pattern = re.compile(r'.*\.(py|sh|txt|json)$')
-    for f in files:
-        if pattern.match(f) and not f.startswith('test') and not f.startswith('docs') and '__pycache__' not in f and 'generate_manifest' not in f and not f.endswith('.spec'):
-             print(f)
-except Exception as e:
-    pass
-" | \
+  # Note: Using POSIX-compatible regex patterns for cross-platform support (Linux/Mac/Windows Git Bash)
+  echo "$TREE_JSON" | grep -E '"path":[[:space:]]*"[^"]+\.(py|sh|txt|json)"' | \
+    sed 's/.*"path":[[:space:]]*"\([^"]*\)".*/\1/' | \
+    grep -v "^test" | grep -v "^docs" | grep -v "__pycache__" | \
+    grep -v "generate_manifest" | grep -v "\.spec$" | \
     while IFS= read -r file; do
       # Ensure directory exists
       dir=$(dirname "$file")
@@ -74,6 +51,17 @@ fi
 # Install Python dependencies if requested
 if [ "$INSTALL_DEPS" = "true" ]; then
   echo "Installing Python dependencies..."
+  
+  # Detect Python executable
+  if [ -x "/usr/bin/python" ]; then
+    PYTHON_EXE="/usr/bin/python"
+  elif command -v python &> /dev/null; then
+    PYTHON_EXE=$(command -v python)
+  elif command -v python3 &> /dev/null; then
+    PYTHON_EXE=$(command -v python3)
+  else
+    PYTHON_EXE=""
+  fi
   
   if [ -n "$PYTHON_EXE" ]; then
     echo "Using $PYTHON_EXE to install dependencies..."
