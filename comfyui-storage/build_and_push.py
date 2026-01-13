@@ -60,9 +60,9 @@ def build_image(dockerfile: str, tag: str, hf_token: str = None) -> bool:
     Build a Docker image with retry logic.
     """
     if hf_token:
-        command = ["docker", "build", "--build-arg", f"HUGGINGFACE_TOKEN={hf_token}", "-f", dockerfile, "-t", tag, "."]
+        command = ["docker", "build", "--build-arg", f"HF_TOKEN={hf_token}", "-f", dockerfile, "-t", tag, "."]
     else:
-        command = ["docker", "build", "--build-arg", "HUGGINGFACE_TOKEN", "-f", dockerfile, "-t", tag, "."]
+        command = ["docker", "build", "--build-arg", "HF_TOKEN", "-f", dockerfile, "-t", tag, "."]
     
     for attempt in range(1, MAX_RETRIES + 1):
         print(f"\n📦 Build attempt {attempt}/{MAX_RETRIES} for {tag}")
