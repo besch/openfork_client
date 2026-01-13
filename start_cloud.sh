@@ -8,231 +8,176 @@ set -e
 LOG_FILE="/tmp/dgn_init.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "========================================"
-echo "=== OpenFork DGN Worker Initialization ==="
-echo "========================================"
-echo "Timestamp: $(date)"
-echo "User: $(whoami)"
-echo "Path: $PATH"
+# --- Helper Functions ---
 
-# Python detection priority:
-# 1. /usr/bin/python (Docker images symlink this to Python 3.11 with PyTorch)
-# 2. python (general fallback)
-# 3. python3 (system Python, may not have PyTorch)
-if [ -x "/usr/bin/python" ]; then
-  PYTHON_EXE="/usr/bin/python"
-elif command -v python &> /dev/null; then
-  PYTHON_EXE=$(command -v python)
-elif command -v python3 &> /dev/null; then
-  PYTHON_EXE=$(command -v python3)
-else
-  PYTHON_EXE="NOT_FOUND"
-fi
+# Log with timestamp
+log() {
+  echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+}
 
-echo "Python Executable: $PYTHON_EXE"
-$PYTHON_EXE --version 2>&1 || true
+# Find Python executable with priority
+find_python() {
+  if [ -x "/usr/bin/python" ]; then
+    echo "/usr/bin/python"
+  elif command -v python &> /dev/null; then
+    command -v python
+  elif command -v python3 &> /dev/null; then
+    command -v python3
+  else
+    echo "NOT_FOUND"
+  fi
+}
+
+# Wait for a URL to return 200 OK
+wait_for_url() {
+  local name="$1"
+  local url="$2"
+  local max_wait="${3:-120}"
+  local log_file="$4"
+  local waited=0
+  
+  log "Waiting for $name to be ready at $url..."
+  while [ $waited -lt $max_wait ]; do
+    if curl -s "$url" > /dev/null 2>&1; then
+      log "$name is ready!"
+      return 0
+    fi
+    [ $((waited % 10)) -eq 0 ] && log "  Waiting... ($waited/$max_wait seconds)"
+    sleep 2
+    waited=$((waited + 2))
+  done
+  
+  log "WARNING: $name did not become ready within $max_wait seconds."
+  [ -n "$log_file" ] && log "Check $log_file for errors."
+  return 1
+}
+
+# Ensure pip is installed for the given Python executable
+install_pip() {
+  local py_exe="$1"
+  if ! "$py_exe" -m pip --version &> /dev/null; then
+    log "pip not found, attempting to install..."
+    if "$py_exe" -m ensurepip --upgrade 2>/dev/null; then
+      log "pip installed via ensurepip"
+    else
+      log "ensurepip failed, downloading get-pip.py..."
+      curl -sL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+      "$py_exe" /tmp/get-pip.py --quiet --break-system-packages 2>/dev/null || \
+      "$py_exe" /tmp/get-pip.py --quiet
+      log "pip installed via get-pip.py"
+    fi
+  fi
+  
+  if ! "$py_exe" -m pip --version &> /dev/null; then
+    log "ERROR: Failed to install pip!"
+    return 1
+  fi
+  return 0
+}
+
+# --- Initialization ---
+
+log "========================================"
+log "=== OpenFork DGN Worker Initialization ==="
+log "========================================"
+log "User: $(whoami)"
+log "Path: $PATH"
+
+PYTHON_EXE=$(find_python)
+log "Python Executable: $PYTHON_EXE"
+"$PYTHON_EXE" --version 2>&1 || true
 
 if [ "$PYTHON_EXE" = "NOT_FOUND" ]; then
-  echo "ERROR: Python not found! Exiting."
+  log "ERROR: Python not found! Exiting."
   exit 1
 fi
 
 # Verify PyTorch is available (critical for ComfyUI)
-if ! $PYTHON_EXE -c "import torch" 2>/dev/null; then
-  echo "WARNING: PyTorch not found in $PYTHON_EXE"
-  echo "ComfyUI will likely fail to start. Check Docker image installation."
+if ! "$PYTHON_EXE" -c "import torch" 2>/dev/null; then
+  log "WARNING: PyTorch not found in $PYTHON_EXE. ComfyUI will likely fail."
 fi
 
-# Ensure pip is installed
-echo "Checking for pip..."
-if ! $PYTHON_EXE -m pip --version &> /dev/null; then
-  echo "pip not found, attempting to install..."
-  
-  # Try ensurepip first (built into Python 3.4+)
-  if $PYTHON_EXE -m ensurepip --upgrade 2>/dev/null; then
-    echo "pip installed via ensurepip"
-  else
-    # Fall back to get-pip.py (use --break-system-packages for PEP 668 / Ubuntu 24+)
-    echo "ensurepip failed, downloading get-pip.py..."
-    curl -sL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-    $PYTHON_EXE /tmp/get-pip.py --quiet --break-system-packages 2>/dev/null || \
-    $PYTHON_EXE /tmp/get-pip.py --quiet
-    echo "pip installed via get-pip.py"
-  fi
-fi
-
-# Verify pip works
-if $PYTHON_EXE -m pip --version; then
-  echo "pip is ready"
-else
-  echo "ERROR: Failed to install pip! Exiting."
-  exit 1
-fi
+install_pip "$PYTHON_EXE" || exit 1
 
 # Install ffmpeg for thumbnail generation and video duration detection
-echo "Installing ffmpeg..."
+log "Installing ffmpeg..."
 apt-get update -qq 2>/dev/null || true
 apt-get install -y -qq ffmpeg 2>/dev/null || \
-  (echo "apt-get failed, trying alternative..." && \
-   apt-get install -y ffmpeg 2>&1 || echo "Warning: ffmpeg installation failed")
+  (log "apt-get failed, trying alternative..." && \
+   apt-get install -y ffmpeg 2>&1 || log "Warning: ffmpeg installation failed")
 
 # Verify ffmpeg installed
 if command -v ffmpeg &> /dev/null; then
-  echo "ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
+  log "ffmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
 else
-  echo "WARNING: ffmpeg not available. Thumbnails and duration detection will fail."
+  log "WARNING: ffmpeg not available. Thumbnails and duration detection will fail."
 fi
 
 # Install critical dependencies
-# - setuptools: for distutils compatibility
-# - pyyaml: for ComfyUI config files
-# - transformers, Pillow, typing_extensions: ComfyUI requires these
-# - Other deps: for DGN client operation
-echo "Installing base dependencies..."
-$PYTHON_EXE -m pip install --quiet --break-system-packages \
-  setuptools pyyaml requests python-dotenv websocket-client \
-  py-cpuinfo GPUtil psutil transformers Pillow typing_extensions \
-  aiohttp einops safetensors scipy tqdm 2>/dev/null || \
-$PYTHON_EXE -m pip install --quiet \
-  setuptools pyyaml requests python-dotenv websocket-client \
-  py-cpuinfo GPUtil psutil transformers Pillow typing_extensions \
-  aiohttp einops safetensors scipy tqdm || true
+log "Installing base dependencies..."
+DEP_LIST="setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo GPUtil psutil transformers Pillow typing_extensions aiohttp einops safetensors scipy tqdm"
+"$PYTHON_EXE" -m pip install --quiet --break-system-packages $DEP_LIST 2>/dev/null || \
+"$PYTHON_EXE" -m pip install --quiet $DEP_LIST || true
 
-# Start ComfyUI in the background
+# --- Background Services ---
+
+# Start ComfyUI
 if [ -d "/opt/ComfyUI" ]; then
-  echo "Starting ComfyUI in background..."
-  (cd /opt/ComfyUI && $PYTHON_EXE main.py --listen > /tmp/comfyui.log 2>&1) &
-  echo "ComfyUI startup initiated (logging to /tmp/comfyui.log)"
+  log "Starting ComfyUI in background..."
+  (cd /opt/ComfyUI && "$PYTHON_EXE" main.py --listen > /tmp/comfyui.log 2>&1) &
+  log "ComfyUI startup initiated (logging to /tmp/comfyui.log)"
 else
-  echo "Warning: /opt/ComfyUI not found. Pod might be LLM-only or REST-based (YUME, DiffRhythm, etc.)."
+  log "Info: /opt/ComfyUI not found."
 fi
 
-# Start YUME REST API if present (for yume-16gb containers)
-# YUME uses a FastAPI server on port 8000 instead of ComfyUI
+# Start YUME REST API
 if [ -f "/opt/dgn-client/yume_api.py" ]; then
-  echo "Found YUME API script. Starting in background..."
-  (cd /opt/dgn-client && $PYTHON_EXE yume_api.py > /tmp/yume_api.log 2>&1) &
-  YUME_PID=$!
-  echo "YUME API startup initiated (PID: $YUME_PID, logging to /tmp/yume_api.log)"
-  
-  # Wait for YUME API to be ready
-  echo "Waiting for YUME API to be ready..."
-  MAX_WAIT=120
-  WAITED=0
-  while [ $WAITED -lt $MAX_WAIT ]; do
-    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
-      echo "YUME API is ready!"
-      break
-    fi
-    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
-    sleep 2
-    WAITED=$((WAITED + 2))
-  done
-  
-  if [ $WAITED -ge $MAX_WAIT ]; then
-    echo "WARNING: YUME API did not become ready within $MAX_WAIT seconds."
-    echo "Check /tmp/yume_api.log for errors."
-  fi
+  log "Found YUME API script. Starting..."
+  (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+  wait_for_url "YUME API" "http://127.0.0.1:8000/health" 120 "/tmp/yume_api.log"
 fi
 
-# Start DiffRhythm REST API if present
-if [ -d "/app" ] && [ -f "/app/diffrhythm_api.py" ]; then
-  echo "Found DiffRhythm API script. Starting in background..."
-  (cd /app && $PYTHON_EXE diffrhythm_api.py > /tmp/diffrhythm_api.log 2>&1) &
-  DIFF_PID=$!
-  echo "DiffRhythm API startup initiated (PID: $DIFF_PID, logging to /tmp/diffrhythm_api.log)"
-  
-  # Wait for DiffRhythm API to be ready
-  echo "Waiting for DiffRhythm API to be ready..."
-  MAX_WAIT=120
-  WAITED=0
-  while [ $WAITED -lt $MAX_WAIT ]; do
-    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
-      echo "DiffRhythm API is ready!"
-      break
-    fi
-    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
-    sleep 2
-    WAITED=$((WAITED + 2))
-  done
+# Start DiffRhythm REST API
+if [ -f "/app/diffrhythm_api.py" ]; then
+  log "Found DiffRhythm API script. Starting..."
+  (cd /app && "$PYTHON_EXE" diffrhythm_api.py > /tmp/diffrhythm_api.log 2>&1) &
+  wait_for_url "DiffRhythm API" "http://127.0.0.1:8000/health" 120 "/tmp/diffrhythm_api.log"
 fi
 
-# Start TurboDiffusion REST API if present
-if [ -d "/opt/TurboDiffusion" ] && [ -f "/opt/TurboDiffusion/api_server.py" ]; then
-  echo "Found TurboDiffusion API script. Starting in background..."
-  (cd /opt/TurboDiffusion && $PYTHON_EXE api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
-  TURBO_PID=$!
-  echo "TurboDiffusion API startup initiated (PID: $TURBO_PID, logging to /tmp/turbodiffusion_api.log)"
-  
-  # Wait for TurboDiffusion API to be ready
-  echo "Waiting for TurboDiffusion API to be ready..."
-  MAX_WAIT=120
-  WAITED=0
-  while [ $WAITED -lt $MAX_WAIT ]; do
-    if curl -s http://127.0.0.1:8000/health > /dev/null 2>&1; then
-      echo "TurboDiffusion API is ready!"
-      break
-    fi
-    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
-    sleep 2
-    WAITED=$((WAITED + 2))
-  done
+# Start TurboDiffusion REST API
+if [ -f "/opt/TurboDiffusion/api_server.py" ]; then
+  log "Found TurboDiffusion API script. Starting..."
+  (cd /opt/TurboDiffusion && "$PYTHON_EXE" api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
+  wait_for_url "TurboDiffusion API" "http://127.0.0.1:8000/health" 120 "/tmp/turbodiffusion_api.log"
 fi
 
-# Start Ollama server if present (for LLM containers)
+# Start Ollama server
 if command -v ollama &> /dev/null; then
-  echo "Found Ollama. Starting server in background..."
+  log "Found Ollama. Starting server..."
   export OLLAMA_HOST=0.0.0.0
   export OLLAMA_ORIGINS="*"
   ollama serve > /tmp/ollama.log 2>&1 &
-  OLLAMA_PID=$!
-  echo "Ollama startup initiated (PID: $OLLAMA_PID, logging to /tmp/ollama.log)"
-  
-  # Wait for Ollama to be ready
-  echo "Waiting for Ollama to be ready..."
-  MAX_WAIT=60
-  WAITED=0
-  while [ $WAITED -lt $MAX_WAIT ]; do
-    if curl -s http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
-      echo "Ollama is ready!"
-      break
-    fi
-    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
-    sleep 2
-    WAITED=$((WAITED + 2))
-  done
+  wait_for_url "Ollama" "http://127.0.0.1:11434/api/tags" 60 "/tmp/ollama.log"
 fi
 
-# Create directories
+# --- Client Setup ---
+
 mkdir -p /opt/dgn-client /data/.cache /data/input
 
 # Download DGN client from GitHub using bootstrap script
 cd /opt/dgn-client
-echo "Downloading DGN client files..."
+log "Downloading DGN client files..."
 export INSTALL_DEPS=true
 curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 
-echo "DGN client downloaded successfully"
-
-# Wait for ComfyUI to be ready (if it exists)
+# Wait for ComfyUI to be ready (if it was started)
 if [ -d "/opt/ComfyUI" ]; then
-  echo "Waiting for ComfyUI to be ready..."
-  MAX_WAIT=120
-  WAITED=0
-  while [ $WAITED -lt $MAX_WAIT ]; do
-    if curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; then
-      echo "ComfyUI is ready!"
-      break
-    fi
-    [ $((WAITED % 10)) -eq 0 ] && echo "  Waiting... ($WAITED/$MAX_WAIT seconds)"
-    sleep 2
-    WAITED=$((WAITED + 2))
-  done
+  wait_for_url "ComfyUI" "http://127.0.0.1:8188/system_stats" 120 "/tmp/comfyui.log"
 fi
 
 # Save restart configuration
-echo "Saving restart configuration..."
+log "Saving restart configuration..."
 cat > /opt/dgn-client/.restart-config << RESTART_CONFIG_EOF
 export DGN_CLIENT_ARGS="--dgn-api-key \"$DGN_API_KEY\" --service \"${SERVICE_TYPE:-auto}\" --accept-policy all --root-dir /opt/dgn-client --data-dir /data"
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
@@ -240,18 +185,18 @@ RESTART_CONFIG_EOF
 
 chmod +x /opt/dgn-client/.restart-config
 
-# Run the client
-echo "Starting DGN client..."
+# --- Execution ---
+
+log "Starting DGN client..."
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 
 # Test that imports work before running
-echo "Testing Python imports..."
-$PYTHON_EXE -c "
+log "Testing Python imports..."
+"$PYTHON_EXE" -c "
 import sys
 sys.path.insert(0, '/opt/dgn-client')
 try:
     from config import HEADLESS_MODE
-    print(f'HEADLESS_MODE = {HEADLESS_MODE}')
     from dgn_client import DGNClient
     print('DGNClient import successful')
 except Exception as e:
@@ -259,15 +204,9 @@ except Exception as e:
     import traceback
     traceback.print_exc()
     sys.exit(1)
-"
+" || (log "ERROR: Python imports failed." && exit 1)
 
-if [ $? -ne 0 ]; then
-  echo "ERROR: Python imports failed. Check the error above."
-  exit 1
-fi
-
-echo "Imports OK. Starting client..."
-$PYTHON_EXE cli.py \
+"$PYTHON_EXE" cli.py \
   --dgn-api-key "$DGN_API_KEY" \
   --service "${SERVICE_TYPE:-auto}" \
   --accept-policy all \
