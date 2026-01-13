@@ -165,6 +165,7 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
         return int(value * units.get(unit, 1))
 
     try:
+        from .docker_utils import get_subprocess_hidden_kwargs
         # Run docker pull command
         # unbuffer output if possible
         # We process stdout and stderr together
@@ -173,7 +174,8 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, 
             bufsize=0, # Unbuffered
-            shell=False 
+            shell=False,
+            **get_subprocess_hidden_kwargs()
         )
         
         logging.info(f"Subprocess started with PID {process.pid}")

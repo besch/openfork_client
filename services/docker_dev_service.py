@@ -13,7 +13,23 @@ from .docker_utils import docker_cp, get_subprocess_hidden_kwargs
 class DockerDevManager:
     def __init__(self):
         self.compose_dir = os.path.join(ROOT_DIR, 'comfyui-storage')
+        self.compose_cmd = self._get_compose_command()
         self._load_service_config()
+
+    def _get_compose_command(self) -> list:
+        """Determines whether to use 'docker compose' or 'docker-compose'."""
+        # Try 'docker compose' (v2) first
+        try:
+            subprocess.run(['docker', 'compose', 'version'], capture_output=True, check=True, **get_subprocess_hidden_kwargs())
+            return ['docker', 'compose']
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # Fallback to 'docker-compose' (v1)
+            try:
+                subprocess.run(['docker-compose', 'version'], capture_output=True, check=True, **get_subprocess_hidden_kwargs())
+                return ['docker-compose']
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                logging.warning("Neither 'docker compose' nor 'docker-compose' found. Dev mode may fail.")
+                return ['docker', 'compose'] # Default to v2
 
     def _load_service_config(self):
         """Loads the service config from the master services.json file."""
@@ -60,7 +76,7 @@ class DockerDevManager:
 
     def get_container_id(self, service_type: str) -> str:
         compose_file = self._get_compose_file(service_type)
-        command = ['docker-compose', '-f', compose_file, 'ps', '-q']
+        command = self.compose_cmd + ['-f', compose_file, 'ps', '-q']
         try:
             # Run command to get container ID
             result = subprocess.run(command, check=True, capture_output=True, text=True, cwd=self.compose_dir, **get_subprocess_hidden_kwargs())
@@ -84,7 +100,7 @@ class DockerDevManager:
         # The command is structured to use a specific compose file and bring the service up
         # docker-compose up is idempotent, so force_restart logic is less critical here, 
         # but we could add --force-recreate if force_restart is True.
-        command = ['docker-compose', '-f', compose_file, 'up', '--build', '-d']
+        command = self.compose_cmd + ['-f', compose_file, 'up', '--build', '-d']
         if force_restart:
             command.append('--force-recreate')
             
@@ -94,7 +110,7 @@ class DockerDevManager:
         compose_file = self._get_compose_file(service_type)
         logging.info(f"Stopping container for service '{service_type}' using compose file: {compose_file}")
         # The 'down' command stops and removes containers, networks, etc.
-        command = ['docker-compose', '-f', compose_file, 'down']
+        command = self.compose_cmd + ['-f', compose_file, 'down']
         self._run_command(command)
 
     def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str, shutdown_event: threading.Event):

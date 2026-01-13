@@ -121,15 +121,27 @@ class DockerProdManager:
         self.pull_image(image_name)
 
         logging.info(f"Starting container '{container_name}' from image '{image_name}' with ports {ports}...")
+        
+        # Determine device requests (GPU support)
+        device_requests = []
+        import platform
+        if platform.system() != "Darwin":  # macOS does not support GPU pass-through for Docker
+            try:
+                from .hardware_profiler import get_available_vram
+                if get_available_vram() > 0:
+                    device_requests = [
+                        docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
+                    ]
+            except Exception as e:
+                logging.debug(f"Could not verify GPU availability, skipping GPU request: {e}")
+
         try:
             self.client.containers.run(
                 image=image_name,
                 detach=True,
                 name=container_name,
                 ports=ports,
-                device_requests=[
-                    docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
-                ],
+                device_requests=device_requests,
                 restart_policy={"Name": "no"}
             )
             logging.info(f"Container '{container_name}' started successfully.")

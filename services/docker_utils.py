@@ -70,6 +70,7 @@ def docker_cp(source_path: str, dest_path: str, shutdown_event: threading.Event)
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
                 timeout=600
             )
             logging.info(f"Successfully ran command: {' '.join(command)}")
