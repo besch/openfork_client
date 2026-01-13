@@ -51,6 +51,37 @@ class DockerProdManager:
             return
         except docker.errors.ImageNotFound:
             logging.info(f"Image '{image_name}' not found locally. Pulling from Docker Hub...")
+            
+            # Disk space check before download
+            from .disk_space_utils import check_sufficient_space, estimate_image_size_bytes
+            import json
+            
+            estimated_size = estimate_image_size_bytes(image_name)
+            has_space, available, required = check_sufficient_space(estimated_size)
+            
+            if not has_space:
+                available_gb = available / (1024**3)
+                required_gb = required / (1024**3)
+                error_msg = (
+                    f"Insufficient disk space to download '{image_name}'. "
+                    f"Required: {required_gb:.1f} GB (including 5 GB safety buffer), "
+                    f"Available: {available_gb:.1f} GB"
+                )
+                logging.error(error_msg)
+                
+                # Emit event for desktop UI notification
+                print(json.dumps({
+                    "type": "DISK_SPACE_ERROR",
+                    "payload": {
+                        "image_name": image_name,
+                        "required_gb": round(required_gb, 1),
+                        "available_gb": round(available_gb, 1),
+                        "message": error_msg
+                    }
+                }), flush=True)
+                
+                raise OSError(error_msg)
+            
             try:
                 from .docker_progress_logger import stream_pull_with_progress
                 stream_pull_with_progress(self.client, image_name, throttle_interval=0.5)
