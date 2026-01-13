@@ -171,19 +171,18 @@ RUN echo "Downloading LTX-2 embeddings connector..." && \
     echo "✓ Embeddings connector downloaded successfully" && \
     ls -lh models/clip/
 
-# Download Gemma-3 12B text encoder from Comfy-Org (~12GB, optimized single file)
-# This is the OFFICIAL ComfyUI-optimized version
-# Source: https://huggingface.co/Comfy-Org/ltx-2
-RUN echo "Downloading Gemma-3 12B text encoder (Comfy-Org optimized)..." && \
-    huggingface-cli download Comfy-Org/ltx-2 \
+# Download Gemma-3 12B FP8 text encoder (~6GB, optimized for 8GB VRAM)
+# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
+RUN echo "Downloading Gemma-3 12B FP8 text encoder..." && \
+    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
     --repo-type model \
-    --local-dir /tmp/comfy_models \
-    --include "split_files/text_encoders/gemma_3_12B_it.safetensors" \
+    --local-dir /tmp/fp8_models \
+    --include "gemma_3_12B_it_fp8_e4m3fn.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/comfy_models/split_files/text_encoders/gemma_3_12B_it.safetensors \
+    mv /tmp/fp8_models/gemma_3_12B_it_fp8_e4m3fn.safetensors \
        models/clip/ && \
-    rm -rf /tmp/comfy_models && \
-    echo "✓ Gemma-3 text encoder downloaded successfully" && \
+    rm -rf /tmp/fp8_models && \
+    echo "✓ Gemma-3 FP8 text encoder downloaded successfully" && \
     ls -lh models/clip/
 
 # ============================================================================

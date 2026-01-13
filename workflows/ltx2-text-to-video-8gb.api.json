@@ -9,7 +9,7 @@
     },
     "2": {
       "inputs": {
-        "clip_name1": "gemma_3_12B_it.safetensors",
+        "clip_name1": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
         "clip_name2": "ltx-2-19b-embeddings_connector_dev_bf16.safetensors",
         "type": "ltxv"
       },
