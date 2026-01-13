@@ -185,16 +185,22 @@ def generate_video_sync(
         env = os.environ.copy()
         env["TOKENIZERS_PARALLELISM"] = "false"
         env["CUDA_VISIBLE_DEVICES"] = "0"
-        # Suppress noisy transformers/hub warnings that hide real errors
+        # Suppress noisy transformers/hub warnings
         env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
         env["TRANSFORMERS_VERBOSITY"] = "error"
-        env["HF_HOME"] = "/tmp/huggingface_cache"
+        # Try to use existing cache to avoid migration warnings
+        env["HF_HOME"] = os.path.expanduser("~/.cache/huggingface")
+        # Prevent runtime downloads that cause stalls/hangs
+        env["HF_HUB_OFFLINE"] = "1"
+        
         # Required for YUME's distributed training code (single-GPU mode)
         env["LOCAL_RANK"] = "0"
         env["RANK"] = "0"
         env["WORLD_SIZE"] = "1"
         env["MASTER_ADDR"] = "127.0.0.1"
-        env["MASTER_PORT"] = "12355"
+        env["MASTER_PORT"] = str(random.randint(10000, 20000)) # Random port to avoid collisions
+        
+        logger.info(f"Spawning YUME inference process: {' '.join(cmd)}")
         
         # Run the inference
         result = subprocess.run(
@@ -206,30 +212,36 @@ def generate_video_sync(
             env=env
         )
         
-        # Log output
+        # Log output summary
         if result.stdout:
-            # Only log last few lines to avoid bloating logs
             stdout_tail = result.stdout[-2000:]
-            logger.info(f"Inference stdout tail: {stdout_tail}")
+            logger.info(f"Inference stdout tail:\n{stdout_tail}")
             
         if result.stderr:
-            # Log more stderr to help debugging
-            stderr_tail = result.stderr[-4000:]
-            logger.warning(f"Inference stderr tail: {stderr_tail}")
+            # Capture much more stderr to ensure we don't miss the real error
+            stderr_tail = result.stderr[-10000:] 
+            logger.warning(f"Inference stderr tail ({len(result.stderr)} chars total):\n{stderr_tail}")
         
         if result.returncode != 0:
-            logger.error(f"Inference failed with code {result.returncode}")
-            # Try to find the actual error in stderr instead of just taking the very end
-            err_msg = "Unknown error"
+            logger.error(f"Inference process exited with non-zero code: {result.returncode}")
+            
+            # Identify the real error
+            err_msg = f"Process exited with code {result.returncode}"
             if result.stderr:
-                # Look for common error markers
                 lines = result.stderr.splitlines()
-                # Find the last line that looks like a real error
-                important_lines = [l for l in lines if any(x in l for x in ["Error", "Exception", "Traceback", "Out of memory", "RuntimeError"])]
+                # Expand error keywords to catch more failure types
+                error_keywords = [
+                    "Error", "Exception", "Traceback", "Out of memory", 
+                    "RuntimeError", "AttributeError", "TypeError", "ImportError",
+                    "FileNotFoundError", "ConnectionError", "killed", "Segmentation fault"
+                ]
+                important_lines = [l for l in lines if any(k.lower() in l.lower() for k in error_keywords)]
+                
                 if important_lines:
-                    err_msg = important_lines[-1]
+                    # Often the last few "important" lines contain the most relevant info
+                    err_msg = " | ".join(important_lines[-3:])
                 else:
-                    # Fallback to the last 1000 chars if no markers found
+                    # Fallback to the very end of stderr if no keywords matched
                     err_msg = result.stderr[-1000:].strip()
             
             raise RuntimeError(f"Inference failed: {err_msg}")
