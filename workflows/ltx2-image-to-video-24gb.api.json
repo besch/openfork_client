@@ -8,10 +8,11 @@
     },
     "2": {
       "inputs": {
-        "clip_name": "gemma-3-12b-it/model-00001-of-00005.safetensors",
-        "type": "ltxv"
+        "gemma_path": "gemma-3-12b-it/model-00001-of-00005.safetensors",
+        "ltxv_path": "ltx-2-19b-distilled.safetensors",
+        "max_length": 4096
       },
-      "class_type": "CLIPLoader"
+      "class_type": "LTXVGemmaCLIPModelLoader"
     },
     "3": {
       "inputs": {

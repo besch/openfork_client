@@ -11,10 +11,11 @@
     },
     "2": {
       "inputs": {
-        "clip_name": "gemma-3-12b-it/model-00001-of-00005.safetensors",
-        "type": "ltxv"
+        "gemma_path": "gemma-3-12b-it/model-00001-of-00005.safetensors",
+        "ltxv_path": "ltx-2-19b-distilled-fp8.safetensors",
+        "max_length": 4096
       },
-      "class_type": "CLIPLoader",
+      "class_type": "LTXVGemmaCLIPModelLoader",
       "_meta": {
         "title": "Load Gemma-3 12B Text Encoder (Full BF16)"
       }
