@@ -156,19 +156,20 @@ RUN echo "Downloading VAE models..." && \
     echo "✓ VAE models downloaded successfully" && \
     ls -lh models/vae/
 
-# Download LTX-2 embeddings connector from Kijai (~2.86GB)
-# This is the projection layer between Gemma and LTX-2
-# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/text_encoders
-RUN echo "Downloading LTX-2 embeddings connector..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
+# Download LTX-2 projections for DualCLIPLoader compatibility
+# CRITICAL: This file is specifically designed for DualCLIPLoader node
+# Using embeddings_connector causes "clip missing" errors with DualCLIPLoader
+# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
+RUN echo "Downloading LTX-2 projections for DualCLIPLoader..." && \
+    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
     --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors" \
+    --local-dir /tmp/fp8_models \
+    --include "ltx-2-19b-dev-fp4_projections_only.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/kijai_models/text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors \
+    mv /tmp/fp8_models/ltx-2-19b-dev-fp4_projections_only.safetensors \
        models/clip/ && \
-    rm -rf /tmp/kijai_models && \
-    echo "✓ Embeddings connector downloaded successfully" && \
+    rm -rf /tmp/fp8_models && \
+    echo "✓ LTX-2 projections downloaded successfully" && \
     ls -lh models/clip/
 
 # Download Gemma-3 12B FP8 text encoder (~6GB, optimized for 8GB VRAM)
