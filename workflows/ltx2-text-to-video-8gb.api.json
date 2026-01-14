@@ -86,9 +86,9 @@
       "inputs": {
         "model": ["1", 0],
         "vae": ["11", 0],
-        "width": 544,
+        "width": 480,
         "height": 320,
-        "num_frames": 73,
+        "num_frames": 49,
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],

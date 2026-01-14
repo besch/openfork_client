@@ -2,9 +2,10 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-2-19b-dev-fp4.safetensors"
+        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
+        "weight_dtype": "fp8_e4m3fn"
       },
-      "class_type": "CheckpointLoaderSimple"
+      "class_type": "UNETLoader"
     },
     "2": {
       "inputs": {
@@ -86,10 +87,10 @@
     "11": {
       "inputs": {
         "model": ["1", 0],
-        "vae": ["1", 2],
-        "width": 544,
+        "vae": ["16", 0],
+        "width": 480,
         "height": 320,
-        "num_frames": 73,
+        "num_frames": 49,
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
@@ -102,9 +103,19 @@
     "12": {
       "inputs": {
         "samples": ["11", 0],
-        "vae": ["1", 2]
+        "vae": ["16", 0],
+        "tile_size": 256,
+        "overlap": 32,
+        "temporal_size": 32,
+        "temporal_overlap": 4
       },
-      "class_type": "VAEDecode"
+      "class_type": "VAEDecodeTiled"
+    },
+    "16": {
+      "inputs": {
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
+      },
+      "class_type": "VAELoader"
     },
     "13": {
       "inputs": {

@@ -301,10 +301,13 @@ EXPOSE 8188
 
 WORKDIR /opt/ComfyUI
 
-# Start ComfyUI with optimized settings for 8GB VRAM
-# UPDATED: Settings for FP8 model with proper VRAM management
+# Start ComfyUI with AGGRESSIVE 8GB VRAM optimization settings
+# Critical for RTX 4060/3060/3070 and similar 8GB cards
+#
 # --lowvram: Essential - Offloads model weights to RAM when not in use
-# --reserve-vram 1.5: Keeps 1.5GB VRAM free for system/other processes (FP8 uses more temp memory)
+# --cpu-vae: Runs VAE decode on CPU, saves ~1-2GB VRAM (slower but stable)
+# --disable-smart-memory: Prevents memory caching that causes silent OOM crashes
+# --reserve-vram 1.0: Keeps 1GB VRAM free for CUDA kernels
 # --force-fp16: Forces FP16 precision where possible for memory efficiency
 # --use-split-cross-attention: Reduces memory spikes during attention computation
 # --preview-method none: Disables preview generation to save VRAM
@@ -312,7 +315,9 @@ CMD ["python", "main.py", \
      "--listen", "0.0.0.0", \
      "--port", "8188", \
      "--lowvram", \
-     "--reserve-vram", "1.5", \
+     "--cpu-vae", \
+     "--disable-smart-memory", \
+     "--reserve-vram", "1.0", \
      "--force-fp16", \
      "--use-split-cross-attention", \
      "--preview-method", "none"]
