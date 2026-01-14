@@ -1,0 +1,194 @@
+#!/bin/bash
+# OpenFork Docker Image Builder Script (start_build.sh)
+# This script is fetched and run by cloud containers for building Docker images
+
+set -e
+
+# Redirect all output to a log file AND stdout
+LOG_FILE="/tmp/build.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# --- Helper Functions ---
+
+log() {
+  echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+}
+
+# Report status to webhook
+report_status() {
+  local status="$1"
+  local log_chunk="$2"
+  local error="$3"
+
+  if [ -z "$BUILD_JOB_ID" ] || [ -z "$ORCHESTRATOR_URL" ]; then
+    log "WARNING: Cannot report status - missing BUILD_JOB_ID or ORCHESTRATOR_URL"
+    return
+  fi
+
+  local payload="{\"job_id\": \"$BUILD_JOB_ID\", \"status\": \"$status\""
+  
+  if [ -n "$log_chunk" ]; then
+    # Escape special characters for JSON
+    local escaped_log=$(echo "$log_chunk" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ')
+    payload="$payload, \"log_chunk\": \"$escaped_log\""
+  fi
+  
+  if [ -n "$error" ]; then
+    local escaped_error=$(echo "$error" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ')
+    payload="$payload, \"error\": \"$escaped_error\""
+  fi
+  
+  payload="$payload}"
+
+  curl -s -X POST "$ORCHESTRATOR_URL/api/build-webhook" \
+    -H "Content-Type: application/json" \
+    -d "$payload" || log "WARNING: Failed to report status"
+}
+
+# --- Initialization ---
+
+log "========================================"
+log "=== OpenFork Docker Image Builder ==="
+log "========================================"
+log "Build Job ID: $BUILD_JOB_ID"
+log "Dockerfile: $DOCKERFILE_NAME"
+log "Docker Tag: $DOCKER_TAG"
+log "Push to DockerHub: $PUSH_TO_DOCKERHUB"
+log "Run DGN Client: $RUN_DGN_CLIENT"
+
+# Check required environment variables
+if [ -z "$DOCKERFILE_NAME" ] || [ -z "$DOCKER_TAG" ]; then
+  log "ERROR: DOCKERFILE_NAME and DOCKER_TAG are required"
+  report_status "failed" "" "Missing DOCKERFILE_NAME or DOCKER_TAG"
+  exit 1
+fi
+
+# --- Install Docker ---
+
+log "Checking for Docker..."
+if ! command -v docker &> /dev/null; then
+  log "Installing Docker..."
+  apt-get update -qq
+  apt-get install -y -qq ca-certificates curl gnupg
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  apt-get update -qq
+  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+  log "Docker installed successfully"
+fi
+
+# Start Docker daemon if not running
+if ! docker info &> /dev/null; then
+  log "Starting Docker daemon..."
+  dockerd &
+  sleep 5
+  
+  # Wait for Docker to be ready
+  for i in {1..30}; do
+    if docker info &> /dev/null; then
+      log "Docker daemon is ready"
+      break
+    fi
+    sleep 1
+  done
+fi
+
+docker --version
+
+# --- Clone Repository ---
+
+log "Cloning openfork_client repository..."
+mkdir -p /opt/build
+cd /opt/build
+
+# Clone the client repo which contains Dockerfiles
+git clone --depth 1 https://github.com/besch/openfork_client.git client
+cd client/comfyui-storage
+
+# Check if dockerfile exists
+if [ ! -f "$DOCKERFILE_NAME" ]; then
+  log "ERROR: Dockerfile not found: $DOCKERFILE_NAME"
+  report_status "failed" "" "Dockerfile not found: $DOCKERFILE_NAME"
+  exit 1
+fi
+
+log "Found Dockerfile: $DOCKERFILE_NAME"
+
+# --- Build Image ---
+
+report_status "building" "Starting Docker build..."
+
+log "Building image: $DOCKER_TAG"
+log "Using Dockerfile: $DOCKERFILE_NAME"
+
+BUILD_ARGS=""
+if [ -n "$HF_TOKEN" ]; then
+  BUILD_ARGS="--build-arg HF_TOKEN=$HF_TOKEN"
+  log "HuggingFace token provided"
+fi
+
+# Run build and capture output
+BUILD_OUTPUT="/tmp/docker_build.log"
+if docker build $BUILD_ARGS -f "$DOCKERFILE_NAME" -t "$DOCKER_TAG" . 2>&1 | tee "$BUILD_OUTPUT"; then
+  log "Build completed successfully!"
+  report_status "building" "Build completed successfully"
+else
+  log "ERROR: Build failed!"
+  BUILD_ERROR=$(tail -50 "$BUILD_OUTPUT")
+  report_status "failed" "" "Docker build failed: $BUILD_ERROR"
+  exit 1
+fi
+
+# --- Push to DockerHub (if enabled) ---
+
+if [ "$PUSH_TO_DOCKERHUB" = "true" ]; then
+  if [ -z "$DOCKERHUB_USER" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+    log "ERROR: DockerHub credentials required for push"
+    report_status "failed" "" "DockerHub credentials not provided"
+    exit 1
+  fi
+
+  report_status "pushing" "Logging into DockerHub..."
+
+  log "Logging into DockerHub as $DOCKERHUB_USER..."
+  echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+  log "Pushing image: $DOCKER_TAG"
+  if docker push "$DOCKER_TAG" 2>&1 | tee /tmp/docker_push.log; then
+    log "Push completed successfully!"
+    report_status "pushing" "Push completed successfully"
+  else
+    log "ERROR: Push failed!"
+    PUSH_ERROR=$(tail -20 /tmp/docker_push.log)
+    report_status "failed" "" "Docker push failed: $PUSH_ERROR"
+    exit 1
+  fi
+fi
+
+# --- Run DGN Client (if enabled) ---
+
+if [ "$RUN_DGN_CLIENT" = "true" ]; then
+  log "Starting DGN Client..."
+  report_status "running" "Starting DGN client..."
+
+  # Set up environment for dgn_client
+  export HEADLESS_MODE="true"
+  export ORCHESTRATOR_URL_PROD="${ORCHESTRATOR_URL:-https://openfork.video}"
+
+  # Download and run the start_cloud.sh script
+  cd /opt
+  curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_cloud.sh -o start_cloud.sh
+  chmod +x start_cloud.sh
+
+  # Execute start_cloud.sh which will start ComfyUI and dgn_client
+  bash start_cloud.sh
+else
+  log "Build complete. No DGN client requested."
+  report_status "completed" "Build completed successfully"
+fi
+
+log "========================================"
+log "=== Build Script Complete ==="
+log "========================================"
