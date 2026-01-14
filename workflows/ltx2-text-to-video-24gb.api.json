@@ -11,13 +11,13 @@
     },
     "2": {
       "inputs": {
-        "gemma_path": "gemma-3-12b-it/model-00001-of-00005.safetensors",
-        "ltxv_path": "ltx-2-19b-distilled.safetensors",
-        "max_length": 4096
+        "clip_name1": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
+        "clip_name2": "ltx-2-19b-dev-fp4_projections_only.safetensors",
+        "type": "ltxv"
       },
-      "class_type": "LTXVGemmaCLIPModelLoader",
+      "class_type": "DualCLIPLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B Text Encoder (Full BF16)"
+        "title": "Load Gemma-3 12B Text Encoder (FP8 Optimized for Speed)"
       }
     },
     "3": {
@@ -113,12 +113,13 @@
         "samples": ["11", 0],
         "vae": ["1", 2],
         "tile_size": 512,
-        "overlap": 64
+        "overlap": 64,
+        "temporal_size": 64,
+        "temporal_overlap": 8
       },
-      "class_type": "VAEDecode",
+      "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "VAE Decode with Maximum Quality (24GB)",
-        "notes": "tile_size: 512 for best quality. Can use 768 or disable tiling for small resolutions."
+        "title": "VAE Decode Tiled (24GB Safe)"
       }
     },
     "13": {

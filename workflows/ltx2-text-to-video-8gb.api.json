@@ -100,7 +100,7 @@
       "inputs": {
         "samples": ["12", 0],
         "vae": ["11", 0],
-        "tile_size": 256,
+        "tile_size": 128,
         "overlap": 32,
         "temporal_size": 32,
         "temporal_overlap": 4

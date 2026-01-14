@@ -82,6 +82,12 @@ log "=== OpenFork DGN Worker Initialization ==="
 log "========================================"
 log "User: $(whoami)"
 log "Path: $PATH"
+log "TIP: LTX-2 requires a large swap file (128GB recommended) for stability when offloading."
+RESR=$(free -g | awk '/Swap/ {print $2}')
+log "Current Swap Space: ${RESR}GB"
+if [ "$RESR" -lt 64 ]; then
+  log "WARNING: Low swap space detected. If LTX-2 stalls or OOMs, increase system virtual memory."
+fi
 
 PYTHON_EXE=$(find_python)
 log "Python Executable: $PYTHON_EXE"
@@ -124,7 +130,35 @@ DEP_LIST="setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo G
 # Start ComfyUI
 if [ -d "/opt/ComfyUI" ]; then
   log "Starting ComfyUI in background..."
-  (cd /opt/ComfyUI && "$PYTHON_EXE" main.py --listen > /tmp/comfyui.log 2>&1) &
+  
+  # Determine ComfyUI launch flags based on SERVICE_TYPE
+  COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
+  
+  case "$SERVICE_TYPE" in
+    *ltx2*-8gb*|*8gb*)
+      log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --disable-smart-memory --reserve-vram 4.0 --cache-none --force-fp16 --use-split-cross-attention --use-pytorch-cross-attention --preview-method none"
+      ;;
+    *ltx2*-16gb*|*16gb*)
+      log "Applying 16GB VRAM optimizations for ComfyUI"
+      COMFY_FLAGS="$COMFY_FLAGS --highvram --reserve-vram 8.0 --use-pytorch-cross-attention"
+      ;;
+    *ltx2*-24gb*|*24gb*)
+      log "Applying 24GB VRAM optimizations for ComfyUI"
+      COMFY_FLAGS="$COMFY_FLAGS --highvram --reserve-vram 2.0 --use-pytorch-cross-attention"
+      ;;
+    *)
+      # Default to lowvram if service type is unknown but potentially heavy
+      if [[ "$SERVICE_TYPE" == *"video"* ]]; then
+        COMFY_FLAGS="$COMFY_FLAGS --lowvram"
+      else
+        COMFY_FLAGS="$COMFY_FLAGS --highvram"
+      fi
+      ;;
+  esac
+  
+  log "ComfyUI Flags: $COMFY_FLAGS"
+  (cd /opt/ComfyUI && "$PYTHON_EXE" main.py $COMFY_FLAGS > /tmp/comfyui.log 2>&1) &
   log "ComfyUI startup initiated (logging to /tmp/comfyui.log)"
 else
   log "Info: /opt/ComfyUI not found."
