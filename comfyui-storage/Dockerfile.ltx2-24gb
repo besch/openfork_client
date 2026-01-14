@@ -77,7 +77,7 @@ RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec pyt
 
 # Create model directories
 RUN mkdir -p models/checkpoints \
-    models/clip/gemma-3-12b-it \
+    models/clip \
     models/latent_upscale_models \
     models/loras
 
@@ -150,36 +150,44 @@ print(f'✓ LoRA download verified: {size:.2f}GB')" \
 
 
 
-# Download full Gemma-3 12B text encoder
-# Note: Model is sharded
+# Download Gemma-3 12B FP8 text encoder (~6GB, optimized for quality and speed)
+# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
 RUN MAX_RETRIES=3; \
     for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading Gemma-3 12B encoder (sharded)..."; \
-        huggingface-cli download google/gemma-3-12b-it \
-            --include "model-*.safetensors" "model.safetensors.index.json" \
-            --local-dir models/clip/gemma-3-12b-it \
+        echo "Attempt $i/$MAX_RETRIES: Downloading Gemma-3 12B FP8 encoder..."; \
+        huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
+            gemma_3_12B_it_fp8_e4m3fn.safetensors \
+            --local-dir models/clip \
             --local-dir-use-symlinks False \
             --token "$HF_TOKEN" \
             --resume-download \
         && break || { \
             echo "Download failed, retrying..."; \
-            rm -rf models/clip/gemma-3-12b-it/model-*.safetensors models/clip/gemma-3-12b-it/model.safetensors.index.json; \
+            rm -rf models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors* ; \
             sleep 10; \
         }; \
     done \
-    && python3 -c "import os; size=sum(os.path.getsize(os.path.join('models/clip/gemma-3-12b-it', f)) for f in os.listdir('models/clip/gemma-3-12b-it') if f.startswith('model-') and f.endswith('.safetensors'))/(1024**3); print(f'Gemma-3 (sharded): {size:.2f}GB'); assert size > 20, 'File too small, corrupted'" \
+    && python3 -c "import os; size=os.path.getsize('models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors')/(1024**3); print(f'Gemma FP8: {size:.2f}GB'); assert size > 5, 'File too small, corrupted'" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Download tokenizer and config files (standard files that are publicly accessible)
-RUN huggingface-cli download google/gemma-3-12b-it \
-    tokenizer.model \
-    tokenizer.json \
-    tokenizer_config.json \
-    special_tokens_map.json \
-    config.json \
-    --local-dir models/clip/gemma-3-12b-it \
-    --local-dir-use-symlinks False \
-    --token "$HF_TOKEN" \
+# Download LTX-2 projections for DualCLIPLoader compatibility
+# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
+RUN MAX_RETRIES=3; \
+    for i in $(seq 1 $MAX_RETRIES); do \
+        echo "Attempt $i/$MAX_RETRIES: Downloading DualCLIPLoader projections..."; \
+        huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
+            ltx-2-19b-dev-fp4_projections_only.safetensors \
+            --local-dir models/clip \
+            --local-dir-use-symlinks False \
+            --token "$HF_TOKEN" \
+            --resume-download \
+        && break || { \
+            echo "Download failed, retrying..."; \
+            rm -rf models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors* ; \
+            sleep 10; \
+        }; \
+    done \
+    && python3 -c "import os; size=os.path.getsize('models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors')/(1024**3); print(f'Projections: {size:.2f}GB'); assert size > 0.05, 'File too small, corrupted'" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Copy vision processor configs for LTXVGemmaCLIPModelLoader (from gated repo, pre-downloaded)
@@ -194,7 +202,8 @@ import sys\n\
 \n\
 files_to_verify = {\n\
     "models/checkpoints/ltx-2-19b-distilled.safetensors": 30.0,\n\
-    "models/clip/gemma-3-12b-it": 20.0,\n\
+    "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 6.0,\n\
+    "models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors": 0.05,\n\
     "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 0.8,\n\
     "models/loras/ltx-2-19b-distilled-lora-384.safetensors": 6.0,\n\
 }\n\
