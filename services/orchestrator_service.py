@@ -162,6 +162,35 @@ class OrchestratorService:
         
         return response
 
+    def _normalize_job(self, job: Optional[Dict]) -> Optional[Dict]:
+        """Normalizes a job object from Convex format to the format expected by the client."""
+        if not job:
+            return None
+        
+        # Handle Convex _id to id mapping
+        if '_id' in job and 'id' not in job:
+            job['id'] = job['_id']
+        
+        # Handle camelCase to snake_case mapping for common fields
+        mapping = {
+            'workflowType': 'workflow_type',
+            'serviceType': 'service_type',
+            'projectId': 'project_id',
+            'branchId': 'branch_id',
+            'sceneId': 'scene_id',
+            'audioClipId': 'audio_clip_id',
+            'estimatedVramGb': 'estimated_vram_gb',
+            'estimatedDurationMinutes': 'estimated_duration_minutes',
+            'storagePath': 'storage_path',
+            'thumbnailStoragePath': 'thumbnail_storage_path',
+        }
+        
+        for convex_key, client_key in mapping.items():
+            if convex_key in job and client_key not in job:
+                job[client_key] = job[convex_key]
+        
+        return job
+
     def resolve_targets(self, targets: list[str], target_type: str = 'project') -> list[str]:
         """Resolves a list of target strings to UUIDs."""
         if not targets:
@@ -228,7 +257,7 @@ class OrchestratorService:
             response.raise_for_status()
             if not response.content:
                 return None
-            return response.json()
+            return self._normalize_job(response.json())
         except ProviderNotFoundError:
             raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
@@ -292,9 +321,8 @@ class OrchestratorService:
             
             result = response.json()
             # Handle both array and object with 'jobs' key responses
-            if isinstance(result, list):
-                return result
-            return result.get('jobs', [])
+            jobs = result if isinstance(result, list) else result.get('jobs', [])
+            return [self._normalize_job(j) for j in jobs]
         except ProviderNotFoundError:
             raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
@@ -321,7 +349,7 @@ class OrchestratorService:
             response.raise_for_status()
             if not response.content:
                 return None
-            return response.json()
+            return self._normalize_job(response.json())
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching job {job_id}: {e}")
             return None
@@ -479,13 +507,35 @@ class OrchestratorService:
             logging.error(f"Could not update provider status: {e}")
 
     def _get_user_id_from_token(self) -> Union[str, None]:
-        """Decodes the user ID (sub) from the JWT access token."""
+        """Decodes the user ID from the JWT access token.
+        
+        Handles both Supabase tokens (uses 'sub' claim) and Convex tokens
+        (may use 'sub' or 'subject' claim).
+        """
+        if not self.access_token:
+            logging.error("No access token available to decode.")
+            return None
+            
         try:
-            _, payload_b64, _ = self.access_token.split('.')
+            parts = self.access_token.split('.')
+            if len(parts) != 3:
+                # Not a standard JWT format - might be a Convex session token
+                logging.warning(f"Token is not a standard JWT (has {len(parts)} parts). Cannot extract user ID.")
+                return None
+                
+            payload_b64 = parts[1]
+            # Add padding for base64 decoding
             payload_b64 += '=' * (-len(payload_b64) % 4)
             payload_json = base64.urlsafe_b64decode(payload_b64)
             payload = json.loads(payload_json)
-            return payload.get('sub')
+            
+            # Try common claims for user ID
+            user_id = payload.get('sub') or payload.get('subject') or payload.get('userId') or payload.get('user_id')
+            
+            if not user_id:
+                logging.warning(f"Could not find user ID in token claims. Available claims: {list(payload.keys())}")
+                
+            return user_id
         except Exception as e:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
