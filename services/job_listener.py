@@ -7,6 +7,7 @@ from config import HEADLESS_MODE, TimeoutConfig
 from services.docker_manager import docker_manager
 from exceptions import AuthError, ProviderError
 from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
+from services.hardware_profiler import can_run_service, get_service_incompatibility_reason
 
 
 class JobListener:
@@ -30,6 +31,34 @@ class JobListener:
             False if a critical auth error occurred that should stop the listener.
         """
         try:
+            # Safety check: Validate hardware requirements before processing
+            # This is a belt-and-suspenders check in addition to server-side filtering
+            workflow_type = job.get('workflow_type')
+            if workflow_type:
+                try:
+                    service_type = self.client.get_service_type_for_workflow(workflow_type)
+                    service_config = self.client.services_config.get(service_type, {})
+                    
+                    if service_config and not can_run_service(service_config, self.client.available_vram):
+                        reason = get_service_incompatibility_reason(service_config, self.client.available_vram)
+                        error_msg = f"Job requires service '{service_type}' but hardware is incompatible: {reason}"
+                        logging.error(error_msg)
+                        
+                        # Emit JOB_FAILED event
+                        print(json.dumps({
+                            "type": "JOB_FAILED",
+                            "payload": {
+                                "id": job.get('id'),
+                                "error": error_msg
+                            }
+                        }), flush=True)
+                        
+                        self.orchestrator_service.update_job_status(job.get('id'), 'failed')
+                        return True
+                except ValueError:
+                    # Unknown workflow type - let it proceed and fail later if needed
+                    pass
+            
             processor = self.client._get_job_processor(job, self.shutdown_event)
             processor.process()
             

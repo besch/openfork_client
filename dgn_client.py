@@ -8,7 +8,7 @@ from services.orchestrator_service import OrchestratorService, TokenExpiredError
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 from services.docker_download_manager import DockerDownloadManager
-from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display
+from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display, get_service_incompatibility_reason, get_available_system_ram
 import services.job_processors as job_processors_module
 
 
@@ -129,28 +129,29 @@ class DGNClient:
 
             
             if self.compatible_services:
-                logging.info(f"GPU VRAM: {get_vram_requirement_display(self.available_vram)}")
+                system_ram_mb = get_available_system_ram()
+                logging.info(f"GPU VRAM: {get_vram_requirement_display(self.available_vram)}, System RAM: {get_vram_requirement_display(system_ram_mb)}")
                 logging.info(f"Compatible services: {', '.join(sorted(self.compatible_services))}")
             else:
-                logging.warning("No compatible services found for current GPU!")
+                logging.warning("No compatible services found for current hardware!")
             
             # Log incompatible services for debugging
             incompatible_services = set(self.services_config.keys()) - self.compatible_services
             if incompatible_services:
                 logging.debug("Incompatible services:")
-                for service_name in incompatible_services:
-                    required = self.services_config[service_name].get("vram_required_mb", 0)
-                    if required > self.available_vram:
-                        logging.debug(f"  - {service_name}: requires {required}MB, have {self.available_vram}MB")
+                for service_name in sorted(incompatible_services):
+                    reason = get_service_incompatibility_reason(self.services_config[service_name], self.available_vram)
+                    if reason:
+                        logging.debug(f"  - {service_name}: {reason}")
                     else:
-                        logging.debug(f"  - {service_name}: unknown incompatibility (VRAM check passed?)")
+                        logging.debug(f"  - {service_name}: unknown incompatibility")
 
             logging.info("DGN configuration loaded successfully from orchestrator.")
             
-            # Note: VRAM-based job filtering is handled server-side in the SQL function
+            # Note: Hardware-based job filtering is handled server-side in the SQL function
             # get_and_assign_next_dgn_job(). Jobs are only assigned to providers whose
             # supported_services array (calculated at registration) contains the job's service_type.
-            # The client-side compatible_services is kept for informational logging only.
+            # The client-side compatible_services provides additional validation for safety.
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to fetch configuration from orchestrator: {e}")

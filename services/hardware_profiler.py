@@ -41,22 +41,93 @@ def get_available_vram() -> int:
     return 0
 
 
+def get_available_system_ram() -> int:
+    """Get the total system RAM in MB. Returns 0 if unable to query."""
+    try:
+        return int(psutil.virtual_memory().total / (1024 * 1024))  # bytes to MB
+    except Exception:
+        return 0
+
+
+def get_cpu_core_count() -> int:
+    """Get the number of CPU cores (logical). Returns 0 if unable to query."""
+    try:
+        cpu_info = cpuinfo.get_cpu_info()
+        return cpu_info.get("count", 0)
+    except Exception:
+        return 0
+
+
 def can_run_service(service_config: dict, available_vram_mb: Optional[int] = None) -> bool:
     """
-    Check if the current GPU can run a service based on VRAM requirements.
+    Check if the current system can run a service based on all hardware requirements.
     
     Args:
-        service_config: Service configuration dict containing 'vram_required_mb'
+        service_config: Service configuration dict containing:
+            - 'vram_required_mb': GPU VRAM required in MB
+            - 'cpu_ram_required_mb': System RAM required in MB (optional)
+            - 'cpu_cores_required': CPU cores required (optional)
         available_vram_mb: Optional pre-fetched VRAM in MB. If None, will query GPU.
     
     Returns:
-        True if GPU has enough VRAM, False otherwise
+        True if system meets all requirements, False otherwise
+    """
+    # Check VRAM
+    if available_vram_mb is None:
+        available_vram_mb = get_available_vram()
+    
+    required_vram = service_config.get("vram_required_mb", 0)
+    if available_vram_mb < required_vram:
+        return False
+    
+    # Check CPU RAM (only if specified in config)
+    required_cpu_ram = service_config.get("cpu_ram_required_mb")
+    if required_cpu_ram:
+        available_cpu_ram = get_available_system_ram()
+        if available_cpu_ram < required_cpu_ram:
+            return False
+    
+    # Check CPU cores (only if specified in config)
+    required_cores = service_config.get("cpu_cores_required")
+    if required_cores:
+        available_cores = get_cpu_core_count()
+        if available_cores < required_cores:
+            return False
+    
+    return True
+
+
+def get_service_incompatibility_reason(service_config: dict, available_vram_mb: Optional[int] = None) -> Optional[str]:
+    """
+    Returns a human-readable reason why a service can't run, or None if it can run.
+    
+    Args:
+        service_config: Service configuration dict
+        available_vram_mb: Optional pre-fetched VRAM in MB
+    
+    Returns:
+        String describing the incompatibility, or None if compatible
     """
     if available_vram_mb is None:
         available_vram_mb = get_available_vram()
     
     required_vram = service_config.get("vram_required_mb", 0)
-    return available_vram_mb >= required_vram
+    if available_vram_mb < required_vram:
+        return f"requires {required_vram}MB VRAM, have {available_vram_mb}MB"
+    
+    required_cpu_ram = service_config.get("cpu_ram_required_mb")
+    if required_cpu_ram:
+        available_cpu_ram = get_available_system_ram()
+        if available_cpu_ram < required_cpu_ram:
+            return f"requires {required_cpu_ram}MB system RAM, have {available_cpu_ram}MB"
+    
+    required_cores = service_config.get("cpu_cores_required")
+    if required_cores:
+        available_cores = get_cpu_core_count()
+        if available_cores < required_cores:
+            return f"requires {required_cores} CPU cores, have {available_cores}"
+    
+    return None
 
 
 def get_compatible_services(services_config: dict) -> Tuple[List[str], List[str]]:
