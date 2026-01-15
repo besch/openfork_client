@@ -20,6 +20,8 @@ import random
 from pathlib import Path
 from typing import Optional, Dict
 from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Form
+import fastapi
+import json
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import torch
@@ -320,13 +322,28 @@ async def startup_event():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Returns 503 if model is not loaded (to keep start_cloud.sh waiting)."""
+    is_loaded = MODELS.loaded
+    
+    if not is_loaded:
+        # Check if loading is still in progress (by checking if task is running)
+        # For now, just return 503 so the startup script waits
+        logger.info("Health check: Model not loaded yet")
+        return fastapi.Response(
+            content=json.dumps({
+                "status": "loading",
+                "model_loaded": False
+            }),
+            status_code=503,
+            media_type="application/json"
+        )
+        
     return {
         "status": "healthy",
         "cuda_available": torch.cuda.is_available(),
         "yume_available": YUME_DIR.exists(),
         "model_available": MODEL_DIR.exists(),
-        "model_loaded": MODELS.loaded,
+        "model_loaded": True,
         "queue_size": job_queue.qsize(),
         "processing_active": processing_lock.locked()
     }
