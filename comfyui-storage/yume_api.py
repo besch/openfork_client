@@ -123,9 +123,9 @@ def load_yume_model():
             device_id=DEVICE_ID
         )
         
-        # Store references
+        # Store references with correct attribute names
         MODELS.vae = MODELS.wan_model.vae
-        MODELS.transformer = MODELS.wan_model.dit
+        MODELS.transformer = MODELS.wan_model.model  # .model not .dit
         MODELS.text_encoder = MODELS.wan_model.text_encoder
         
         MODELS.loaded = True
@@ -237,13 +237,15 @@ def generate_video_sync(
         
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             video_frames = wan.generate(
-                prompt=prompt,
-                negative_prompt=negative_prompt if negative_prompt else None,
+                input_prompt=prompt,
+                n_prompt=negative_prompt if negative_prompt else "",
                 image=input_image,
                 frame_num=num_frames,
                 max_area=max_area,
                 sampling_steps=steps,
+                guide_scale=cfg,
                 shift=8.0,  # Default shift value for 5B model
+                seed=seed
             )
         
         logger.info(f"Generation complete, saving video...")
