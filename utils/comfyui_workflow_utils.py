@@ -445,12 +445,18 @@ def inject_prompt_into_ltx2_video_workflow(
         api_graph['9']['inputs']['steps'] = steps
         logging.info(f"Injected steps into LTX-2 BasicScheduler node 9: {steps}")
 
-    # Inject dimensions into LTXVBaseSampler (Node 11)
-    if '11' in api_graph and api_graph['11'].get("class_type") == "LTXVBaseSampler":
-        width, height = get_dimensions(aspect_ratio)
-        api_graph['11']['inputs']['width'] = width
-        api_graph['11']['inputs']['height'] = height
-        logging.info(f"Injected dimensions into LTX-2 LTXVBaseSampler node 11: {width}x{height}")
+    # Inject dimensions into LTXVBaseSampler (find by class_type for workflow compatibility)
+    sampler_found = False
+    for node_id, node in api_graph.items():
+        if node.get("class_type") == "LTXVBaseSampler":
+            width, height = get_dimensions(aspect_ratio)
+            node['inputs']['width'] = width
+            node['inputs']['height'] = height
+            logging.info(f"Injected dimensions into LTX-2 LTXVBaseSampler node {node_id}: {width}x{height}")
+            sampler_found = True
+            break
+    if not sampler_found:
+        logging.warning("Could not find LTXVBaseSampler node in LTX-2 workflow for dimension injection")
 
     # Inject Camera Control LoRA
     if camera_movement and camera_movement != "none":
@@ -511,12 +517,18 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
         api_graph['9']['inputs']['steps'] = steps
         logging.info(f"Injected steps into LTX-2 i2v BasicScheduler node 9: {steps}")
 
-    # Inject dimensions into LTXVBaseSampler (Node 11)
-    if '11' in api_graph and api_graph['11'].get("class_type") == "LTXVBaseSampler":
-        width, height = get_dimensions(aspect_ratio)
-        api_graph['11']['inputs']['width'] = width
-        api_graph['11']['inputs']['height'] = height
-        logging.info(f"Injected dimensions into LTX-2 i2v LTXVBaseSampler node 11: {width}x{height}")
+    # Inject dimensions into LTXVBaseSampler (find by class_type for workflow compatibility)
+    sampler_found = False
+    for node_id, node in api_graph.items():
+        if node.get("class_type") == "LTXVBaseSampler":
+            width, height = get_dimensions(aspect_ratio)
+            node['inputs']['width'] = width
+            node['inputs']['height'] = height
+            logging.info(f"Injected dimensions into LTX-2 i2v LTXVBaseSampler node {node_id}: {width}x{height}")
+            sampler_found = True
+            break
+    if not sampler_found:
+        logging.warning("Could not find LTXVBaseSampler node in LTX-2 i2v workflow for dimension injection")
 
     # Inject Camera Control LoRA
     if camera_movement and camera_movement != "none":
