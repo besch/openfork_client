@@ -20,10 +20,10 @@ class ImageConfig:
 
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
-    # ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
     ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest"),
-    # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
+    ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
     ImageConfig("Dockerfile.yume-16gb", "beschiak/openfork-yume-16gb:latest"),
+    # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
 ]
 
 MAX_RETRIES = 2
@@ -55,14 +55,21 @@ def run_command(command: List[str], description: str) -> bool:
         return False
 
 
-def build_image(dockerfile: str, tag: str, hf_token: str = None) -> bool:
+def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False) -> bool:
     """
     Build a Docker image with retry logic.
     """
+    command = ["docker", "build"]
+    
+    if rebuild:
+        command.append("--no-cache")
+        
     if hf_token:
-        command = ["docker", "build", "--build-arg", f"HF_TOKEN={hf_token}", "-f", dockerfile, "-t", tag, "."]
+        command.extend(["--build-arg", f"HF_TOKEN={hf_token}"])
     else:
-        command = ["docker", "build", "--build-arg", "HF_TOKEN", "-f", dockerfile, "-t", tag, "."]
+        command.extend(["--build-arg", "HF_TOKEN"])
+        
+    command.extend(["-f", dockerfile, "-t", tag, "."])
     
     for attempt in range(1, MAX_RETRIES + 1):
         print(f"\n📦 Build attempt {attempt}/{MAX_RETRIES} for {tag}")
@@ -96,7 +103,7 @@ def push_image(tag: str) -> bool:
     return False
 
 
-def build_and_push_image(config: ImageConfig, hf_token: str = None) -> bool:
+def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False) -> bool:
     """
     Build and push a single image. Returns True if both operations succeed.
     """
@@ -105,7 +112,7 @@ def build_and_push_image(config: ImageConfig, hf_token: str = None) -> bool:
     print('#'*60)
     
     # Build the image
-    if not build_image(config.dockerfile, config.tag, hf_token):
+    if not build_image(config.dockerfile, config.tag, hf_token, rebuild):
         print(f"\n💥 FAILED to build {config.tag} after {MAX_RETRIES} attempts")
         return False
     
@@ -171,6 +178,7 @@ def main():
     parser = argparse.ArgumentParser(description="Docker Build and Push Script with Retry Logic")
     parser.add_argument("--delay", type=str, help="Msg to start delay e.g. 'in 10 minutes', '10m', '300s'")
     parser.add_argument("--hf-token", type=str, help="Hugging Face token for gated models")
+    parser.add_argument("--rebuild", action="store_true", help="Force rebuild by using --no-cache")
     
     args = parser.parse_args()
     
@@ -207,7 +215,7 @@ def main():
     failed = []
     
     for config in IMAGES:
-        if build_and_push_image(config, args.hf_token):
+        if build_and_push_image(config, args.hf_token, args.rebuild):
             successful.append(config.tag)
         else:
             failed.append(config.tag)
