@@ -2,10 +2,64 @@
 # OpenFork Docker Image Builder Script (start_build.sh)
 # This script is fetched and run by cloud containers for building Docker images
 
+# --- Help ---
+show_help() {
+  cat << EOF
+OpenFork Docker Image Builder
+
+USAGE:
+  curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_build.sh | bash
+
+  Or with environment variables:
+  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=user/image:tag ./start_build.sh
+
+ENVIRONMENT VARIABLES:
+  Required:
+    DOCKERFILE_NAME       Dockerfile to build (e.g., Dockerfile.ltx2-8gb)
+    DOCKER_TAG            Docker image tag (e.g., beschiak/openfork-ltx2-8gb:latest)
+
+  Optional:
+    BUILD_JOB_ID          UUID of the build job for webhook reporting
+    ORCHESTRATOR_URL      Webhook URL for status updates (default: https://openfork.video)
+    PUSH_TO_DOCKERHUB     Set to "true" to push image after build
+    DOCKERHUB_USER        DockerHub username (required if pushing)
+    DOCKERHUB_TOKEN       DockerHub access token (required if pushing)
+    HF_TOKEN              HuggingFace token for gated models
+    RUN_DGN_CLIENT        Set to "true" to start DGN client after build
+    DGN_API_KEY           DGN API key (required if running client)
+    SERVICE_TYPE          Service type for DGN client (e.g., ltx2-video-8gb)
+    SAVE_LOGS             Set to "true" to stream logs to webhook (default: false)
+
+EXAMPLES:
+  # Build only
+  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=myuser/ltx2:test ./start_build.sh
+
+  # Build and push
+  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=myuser/ltx2:test \\
+    PUSH_TO_DOCKERHUB=true DOCKERHUB_USER=myuser DOCKERHUB_TOKEN=xxx \\
+    ./start_build.sh
+
+  # Build, push, and run DGN client
+  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=myuser/ltx2:test \\
+    PUSH_TO_DOCKERHUB=true RUN_DGN_CLIENT=true DGN_API_KEY=xxx \\
+    ./start_build.sh
+EOF
+  exit 0
+}
+
+# Check for --help flag
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+  show_help
+fi
+
 set -e
 
-# Redirect all output to a log file AND stdout
+# --- Log Configuration ---
 LOG_FILE="/tmp/build.log"
+LOG_STREAM_INTERVAL=30  # Seconds between log uploads
+LAST_LOG_POSITION=0
+
+# Redirect all output to a log file AND stdout
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # --- Helper Functions ---
@@ -21,7 +75,6 @@ report_status() {
   local error="$3"
 
   if [ -z "$BUILD_JOB_ID" ] || [ -z "$ORCHESTRATOR_URL" ]; then
-    log "WARNING: Cannot report status - missing BUILD_JOB_ID or ORCHESTRATOR_URL"
     return
   fi
 
@@ -42,8 +95,76 @@ report_status() {
 
   curl -s -X POST "$ORCHESTRATOR_URL/api/build-webhook" \
     -H "Content-Type: application/json" \
-    -d "$payload" || log "WARNING: Failed to report status"
+    -d "$payload" || true
 }
+
+# Stream logs to webhook (non-blocking)
+stream_logs() {
+  if [ "$SAVE_LOGS" != "true" ]; then
+    return
+  fi
+  
+  if [ ! -f "$LOG_FILE" ]; then
+    return
+  fi
+  
+  # Get new log content since last position
+  local current_size=$(wc -c < "$LOG_FILE")
+  if [ "$current_size" -gt "$LAST_LOG_POSITION" ]; then
+    # Extract new content, filter spam, limit size
+    local new_logs=$(tail -c +$((LAST_LOG_POSITION + 1)) "$LOG_FILE" | \
+      grep -vE '^\s*$|^\[=+\]$|^##+$|^=+$|^\s+[0-9.]+%' | \
+      head -c 50000)
+    
+    if [ -n "$new_logs" ]; then
+      report_status "" "$new_logs" ""
+    fi
+    
+    LAST_LOG_POSITION=$current_size
+  fi
+}
+
+# Background log streamer
+start_log_streamer() {
+  if [ "$SAVE_LOGS" != "true" ]; then
+    return
+  fi
+  
+  log "Log streaming enabled (interval: ${LOG_STREAM_INTERVAL}s)"
+  
+  (
+    while true; do
+      sleep "$LOG_STREAM_INTERVAL"
+      stream_logs
+    done
+  ) &
+  LOG_STREAMER_PID=$!
+}
+
+stop_log_streamer() {
+  if [ -n "$LOG_STREAMER_PID" ]; then
+    kill "$LOG_STREAMER_PID" 2>/dev/null || true
+  fi
+}
+
+# Send final logs on exit
+send_final_logs() {
+  if [ "$SAVE_LOGS" = "true" ] && [ -f "$LOG_FILE" ]; then
+    log "Uploading final logs..."
+    # Send last 100KB of logs
+    local final_logs=$(tail -c 100000 "$LOG_FILE" | \
+      grep -vE '^\s*$|^\[=+\]$|^##+$|^=+$' | \
+      head -c 100000)
+    report_status "" "$final_logs" ""
+  fi
+}
+
+# Cleanup on exit
+cleanup() {
+  stop_log_streamer
+  send_final_logs
+}
+trap cleanup EXIT
 
 # --- Initialization ---
 
@@ -55,13 +176,18 @@ log "Dockerfile: $DOCKERFILE_NAME"
 log "Docker Tag: $DOCKER_TAG"
 log "Push to DockerHub: $PUSH_TO_DOCKERHUB"
 log "Run DGN Client: $RUN_DGN_CLIENT"
+log "Save Logs: $SAVE_LOGS"
 
 # Check required environment variables
 if [ -z "$DOCKERFILE_NAME" ] || [ -z "$DOCKER_TAG" ]; then
   log "ERROR: DOCKERFILE_NAME and DOCKER_TAG are required"
+  log "Run with --help for usage information"
   report_status "failed" "" "Missing DOCKERFILE_NAME or DOCKER_TAG"
   exit 1
 fi
+
+# Start log streaming if enabled
+start_log_streamer
 
 # --- Install Docker ---
 

@@ -2,10 +2,56 @@
 # OpenFork DGN Client Cloud Startup Script (start_cloud.sh)
 # This script is fetched and run by cloud containers (RunPod, Vast.ai)
 
+# --- Help ---
+show_help() {
+  cat << EOF
+OpenFork DGN Client Cloud Startup Script
+
+USAGE:
+  curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_cloud.sh | bash
+
+  Or with environment variables:
+  DGN_API_KEY=xxx SERVICE_TYPE=ltx2-video-8gb ./start_cloud.sh
+
+ENVIRONMENT VARIABLES:
+  Required:
+    DGN_API_KEY           API key for DGN client authentication
+
+  Optional:
+    SERVICE_TYPE          Service type to advertise (default: auto)
+    DGN_ORCHESTRATOR_URL  Orchestrator URL (default: https://openfork.video)
+    HEADLESS_MODE         Set to "true" for headless operation
+    ACCEPT_POLICY         Job acceptance policy: all, mine, users, project (default: all)
+    SAVE_LOGS             Set to "true" to stream logs to webhook
+    BUILD_JOB_ID          Build job ID for log association (uses provider ID if not set)
+
+EXAMPLES:
+  # Basic startup
+  DGN_API_KEY=dgn_xxx ./start_cloud.sh
+
+  # With specific service type
+  DGN_API_KEY=dgn_xxx SERVICE_TYPE=ltx2-video-8gb ./start_cloud.sh
+
+  # With log streaming
+  DGN_API_KEY=dgn_xxx SAVE_LOGS=true ./start_cloud.sh
+EOF
+  exit 0
+}
+
+# Check for --help flag
+if [[ "$1" == "--help" ]] || [[ "$1" == "-h" ]]; then
+  show_help
+fi
+
 set -e
 
-# Redirect all output to a log file AND stdout so we can see it in cloud logs
+# --- Log Configuration ---
 LOG_FILE="/tmp/dgn_init.log"
+LOG_STREAM_INTERVAL=60  # Seconds between log uploads (longer for runtime)
+LAST_LOG_POSITION=0
+ORCHESTRATOR_URL="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
+
+# Redirect all output to a log file AND stdout so we can see it in cloud logs
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 # --- Helper Functions ---
@@ -14,6 +60,85 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 log() {
   echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
 }
+
+# Stream logs to webhook (for SAVE_LOGS mode)
+stream_logs() {
+  if [ "$SAVE_LOGS" != "true" ]; then
+    return
+  fi
+  
+  if [ ! -f "$LOG_FILE" ]; then
+    return
+  fi
+  
+  # Need a job ID to report to
+  local job_id="${BUILD_JOB_ID:-}"
+  if [ -z "$job_id" ]; then
+    return
+  fi
+  
+  # Get new log content since last position
+  local current_size=$(wc -c < "$LOG_FILE")
+  if [ "$current_size" -gt "$LAST_LOG_POSITION" ]; then
+    # Extract new content, filter spam, limit size
+    local new_logs=$(tail -c +$((LAST_LOG_POSITION + 1)) "$LOG_FILE" | \
+      grep -vE '^\s*$|^\[=+\]$|^##+$|^=+$|^\s+[0-9.]+%|ComfyUI.*progress|Downloading.*:.*%' | \
+      head -c 50000)
+    
+    if [ -n "$new_logs" ]; then
+      local escaped_log=$(echo "$new_logs" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ')
+      curl -s -X POST "$ORCHESTRATOR_URL/api/build-webhook" \
+        -H "Content-Type: application/json" \
+        -d "{\"job_id\": \"$job_id\", \"log_chunk\": \"$escaped_log\"}" || true
+    fi
+    
+    LAST_LOG_POSITION=$current_size
+  fi
+}
+
+# Background log streamer
+start_log_streamer() {
+  if [ "$SAVE_LOGS" != "true" ]; then
+    return
+  fi
+  
+  log "Log streaming enabled (interval: ${LOG_STREAM_INTERVAL}s)"
+  
+  (
+    while true; do
+      sleep "$LOG_STREAM_INTERVAL"
+      stream_logs
+    done
+  ) &
+  LOG_STREAMER_PID=$!
+}
+
+stop_log_streamer() {
+  if [ -n "$LOG_STREAMER_PID" ]; then
+    kill "$LOG_STREAMER_PID" 2>/dev/null || true
+  fi
+}
+
+# Send final logs on exit
+send_final_logs() {
+  if [ "$SAVE_LOGS" = "true" ] && [ -f "$LOG_FILE" ] && [ -n "$BUILD_JOB_ID" ]; then
+    log "Uploading final logs..."
+    local final_logs=$(tail -c 100000 "$LOG_FILE" | \
+      grep -vE '^\s*$|^\[=+\]$|^##+$|^=+$' | \
+      head -c 100000)
+    local escaped_log=$(echo "$final_logs" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr '\n' ' ')
+    curl -s -X POST "$ORCHESTRATOR_URL/api/build-webhook" \
+      -H "Content-Type: application/json" \
+      -d "{\"job_id\": \"$BUILD_JOB_ID\", \"log_chunk\": \"$escaped_log\"}" || true
+  fi
+}
+
+# Cleanup on exit
+cleanup() {
+  stop_log_streamer
+  send_final_logs
+}
+trap cleanup EXIT
 
 # Find Python executable with priority
 find_python() {
@@ -82,12 +207,16 @@ log "=== OpenFork DGN Worker Initialization ==="
 log "========================================"
 log "User: $(whoami)"
 log "Path: $PATH"
+log "Save Logs: $SAVE_LOGS"
 log "TIP: LTX-2 requires a large swap file (128GB recommended) for stability when offloading."
 RESR=$(free -g | awk '/Swap/ {print $2}')
 log "Current Swap Space: ${RESR}GB"
 if [ "$RESR" -lt 64 ]; then
   log "WARNING: Low swap space detected. If LTX-2 stalls or OOMs, increase system virtual memory."
 fi
+
+# Start log streaming if enabled
+start_log_streamer
 
 PYTHON_EXE=$(find_python)
 log "Python Executable: $PYTHON_EXE"
