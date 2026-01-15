@@ -142,13 +142,20 @@ def generate_video_sync(
         logger.info(f"Prompt: {prompt[:100]}..., Frames: {num_frames}, Resolution: {width}x{height}")
         
         # Use random seed if 0
+        import random
         if seed == 0:
-            import random
             seed = random.randint(1, 2**32 - 1)
         
-        # Build command to call YUME inference
+        # Use a random master port to avoid collisions
+        master_port = random.randint(29500, 29999)
+        
+        # Build command using torchrun for proper distributed initialization
+        # The sample_5b.py script requires torch.distributed setup which torchrun provides
         cmd = [
-            sys.executable, "-m", "fastvideo.sample.sample_5b",
+            "torchrun",
+            "--nproc_per_node", "1",
+            "--master_port", str(master_port),
+            "-m", "fastvideo.sample.sample_5b",
             "--seed", str(seed),
             "--gradient_checkpointing",
             "--train_batch_size", "1",
@@ -182,6 +189,7 @@ def generate_video_sync(
         logger.info(f"Running command: {' '.join(cmd)}")
         
         # Set environment for single-GPU inference
+        # Note: torchrun handles distributed env vars (LOCAL_RANK, RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT)
         env = os.environ.copy()
         env["TOKENIZERS_PARALLELISM"] = "false"
         env["CUDA_VISIBLE_DEVICES"] = "0"
@@ -192,13 +200,6 @@ def generate_video_sync(
         env["HF_HOME"] = os.path.expanduser("~/.cache/huggingface")
         # Prevent runtime downloads that cause stalls/hangs
         env["HF_HUB_OFFLINE"] = "1"
-        
-        # Required for YUME's distributed training code (single-GPU mode)
-        env["LOCAL_RANK"] = "0"
-        env["RANK"] = "0"
-        env["WORLD_SIZE"] = "1"
-        env["MASTER_ADDR"] = "127.0.0.1"
-        env["MASTER_PORT"] = str(random.randint(10000, 20000)) # Random port to avoid collisions
         
         logger.info(f"Spawning YUME inference process: {' '.join(cmd)}")
         
