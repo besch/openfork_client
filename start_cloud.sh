@@ -208,11 +208,11 @@ log "========================================"
 log "User: $(whoami)"
 log "Path: $PATH"
 log "Save Logs: $SAVE_LOGS"
-log "TIP: LTX-2 requires a large swap file (128GB recommended) for stability when offloading."
+log "TIP: Large models (LTX-2, YUME) require a large swap file (128GB recommended) for stability when offloading."
 RESR=$(free -g | awk '/Swap/ {print $2}')
 log "Current Swap Space: ${RESR}GB"
 if [ "$RESR" -lt 64 ]; then
-  log "WARNING: Low swap space detected. If LTX-2 stalls or OOMs, increase system virtual memory."
+  log "WARNING: Low swap space detected. If models stall or OOM, increase system virtual memory."
 fi
 
 # Start log streaming if enabled
@@ -293,11 +293,11 @@ else
   log "Info: /opt/ComfyUI not found."
 fi
 
-# Start YUME REST API
+# Start YUME REST API (needs longer timeout because model loading takes ~5 minutes)
 if [ -f "/opt/dgn-client/yume_api.py" ]; then
-  log "Found YUME API script. Starting..."
+  log "Found YUME API script. Starting (model loading may take several minutes)..."
   (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
-  wait_for_url "YUME API" "http://127.0.0.1:8000/health" 120 "/tmp/yume_api.log"
+  wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
 fi
 
 # Start DiffRhythm REST API
