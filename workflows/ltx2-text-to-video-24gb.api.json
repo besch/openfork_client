@@ -131,22 +131,19 @@
         "title": "VAE Decode Tiled (24GB Safe)"
       }
     },
-    "13": {
-      "inputs": {
-        "images": ["12", 0],
-        "fps": 24
-      },
-      "class_type": "CreateVideo"
-    },
     "14": {
       "inputs": {
-        "video": ["13", 0],
+        "images": ["12", 0],
+        "frame_rate": 24,
+        "loop_count": 0,
         "filename_prefix": "ltx2_t2v_24gb",
-        "format": "mp4",
-        "codec": "h264",
-        "quality": "high"
+        "format": "video/h264-mp4",
+        "save_metadata": true
       },
-      "class_type": "SaveVideo"
+      "class_type": "VHS_VideoCombine",
+      "_meta": {
+        "title": "Save Video (VHS)"
+      }
     }
   }
 }

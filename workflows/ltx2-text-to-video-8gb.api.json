@@ -110,19 +110,13 @@
     "14": {
       "inputs": {
         "images": ["13", 0],
-        "fps": 24
-      },
-      "class_type": "CreateVideo"
-    },
-    "15": {
-      "inputs": {
-        "video": ["14", 0],
+        "frame_rate": 24,
+        "loop_count": 0,
         "filename_prefix": "ltx2_t2v_8gb",
-        "codec": "h264",
-        "quality": "high",
-        "format": "mp4"
+        "format": "video/h264-mp4",
+        "save_metadata": true
       },
-      "class_type": "SaveVideo"
+      "class_type": "VHS_VideoCombine"
     }
   }
 }
