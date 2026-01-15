@@ -2,11 +2,12 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-2-19b-distilled.safetensors"
+        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
+        "weight_dtype": "fp8_e4m3fn"
       },
-      "class_type": "CheckpointLoaderSimple",
+      "class_type": "UNETLoader",
       "_meta": {
-        "title": "Load LTX-2 BF16 Model (24GB Maximum Performance)"
+        "title": "Load LTX-2 FP8 UNET (Split Loading for Speed)"
       }
     },
     "2": {
@@ -75,7 +76,7 @@
     "9": {
       "inputs": {
         "model": ["1", 0],
-        "scheduler": "normal",
+        "scheduler": "simple",
         "steps": 20,
         "denoise": 1.0
       },
@@ -90,10 +91,19 @@
       },
       "class_type": "RandomNoise"
     },
+    "16": {
+      "inputs": {
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
+      },
+      "class_type": "VAELoader",
+      "_meta": {
+        "title": "Load VAE (Separate for Consistent Memory Management)"
+      }
+    },
     "11": {
       "inputs": {
         "model": ["1", 0],
-        "vae": ["1", 2],
+        "vae": ["16", 0],
         "width": 1280,
         "height": 720,
         "num_frames": 97,
@@ -104,14 +114,13 @@
       },
       "class_type": "LTXVBaseSampler",
       "_meta": {
-        "title": "24GB DEFAULT: 720p, 97 frames (4 seconds)",
-        "notes": "NVIDIA official recommendation for 24GB+. Can push to 4K with settings below."
+        "title": "24GB DEFAULT: 720p, 97 frames (4 seconds)"
       }
     },
     "12": {
       "inputs": {
         "samples": ["11", 0],
-        "vae": ["1", 2],
+        "vae": ["16", 0],
         "tile_size": 512,
         "overlap": 64,
         "temporal_size": 64,
@@ -133,223 +142,11 @@
       "inputs": {
         "video": ["13", 0],
         "filename_prefix": "ltx2_t2v_24gb",
-        "format": "auto",
-        "codec": "auto",
-        "quality": "auto"
+        "format": "mp4",
+        "codec": "h264",
+        "quality": "high"
       },
       "class_type": "SaveVideo"
-    }
-  },
-  "_meta": {
-    "24gb_maximum_performance": {
-      "critical_settings": {
-        "model": "BF16 checkpoint (ltx-2-19b-v1.0.safetensors)",
-        "text_encoder": "Full Gemma-3 12B BF16",
-        "recommended_resolution": "720p (1280x720) for speed",
-        "frames": "97 (4 seconds at 24fps)",
-        "tile_size": "512 (maximum quality)",
-        "steps": "20 (good balance, use 30+ for finals)"
-      },
-      "nvidia_official_benchmarks": {
-        "rtx_4090_720p_4s_20steps": {
-          "time": "25-30 seconds",
-          "vram": "~18GB peak",
-          "quality": "Maximum",
-          "source": "NVIDIA GeForce News Jan 2026"
-        }
-      },
-      "recommended_presets": {
-        "720p_4s_ultra_fast": {
-          "width": 1280,
-          "height": 720,
-          "num_frames": 97,
-          "tile_size": 512,
-          "steps": 20,
-          "expected_time": "25-30 seconds (RTX 4090)",
-          "expected_vram": "16-18GB",
-          "success_rate": "100%",
-          "quality": "Excellent",
-          "use_case": "Fast iteration, previews"
-        },
-        "1080p_5s_production": {
-          "width": 1920,
-          "height": 1080,
-          "num_frames": 121,
-          "tile_size": 512,
-          "steps": 25,
-          "expected_time": "1-2 minutes (RTX 4090)",
-          "expected_vram": "18-20GB",
-          "success_rate": "100%",
-          "quality": "Maximum",
-          "use_case": "Production renders"
-        },
-        "1440p_5s_high_quality": {
-          "width": 2560,
-          "height": 1440,
-          "num_frames": 121,
-          "tile_size": 384,
-          "steps": 25,
-          "expected_time": "2-3 minutes (RTX 4090)",
-          "expected_vram": "20-22GB",
-          "success_rate": "95%+",
-          "quality": "Maximum",
-          "use_case": "High-end content"
-        },
-        "4k_4s_native": {
-          "width": 3840,
-          "height": 2160,
-          "num_frames": 97,
-          "tile_size": 256,
-          "steps": 30,
-          "expected_time": "9-12 minutes (RTX 4090)",
-          "expected_vram": "22-24GB",
-          "success_rate": "90%+",
-          "quality": "Maximum 4K Native",
-          "use_case": "Ultra high-end, final delivery",
-          "note": "NVIDIA states RTX 5090 needed for 4K 8s without weight streaming"
-        },
-        "4k_8s_experimental": {
-          "width": 3840,
-          "height": 2160,
-          "num_frames": 193,
-          "tile_size": 192,
-          "steps": 25,
-          "expected_time": "25-30 minutes with weight streaming",
-          "expected_vram": "Will exceed 24GB, uses system RAM",
-          "success_rate": "70%",
-          "quality": "Very Good",
-          "use_case": "Experimental, requires patience",
-          "note": "Weight streaming to system RAM, much slower"
-        }
-      },
-      "8_step_distilled_fast_mode": {
-        "model": "ltx-2-19b-8-step-v1.0.safetensors",
-        "720p_4s": {
-          "steps": 8,
-          "time": "10-15 seconds (RTX 4090)",
-          "quality": "90-95% of 20-step",
-          "use_case": "Ultra-fast iteration"
-        },
-        "1080p_5s": {
-          "steps": 8,
-          "time": "30-45 seconds (RTX 4090)",
-          "quality": "90-95% of 25-step",
-          "use_case": "Quick previews"
-        }
-      },
-      "performance_comparison": {
-        "rtx_4090_24gb": {
-          "720p_4s": "25-30 sec",
-          "1080p_5s": "1-2 min",
-          "1440p_5s": "2-3 min",
-          "4k_4s": "9-12 min",
-          "tier": "Optimal"
-        },
-        "rtx_3090_24gb": {
-          "720p_4s": "40-50 sec",
-          "1080p_5s": "2-3 min",
-          "1440p_5s": "4-6 min",
-          "4k_4s": "15-20 min",
-          "tier": "Excellent"
-        },
-        "a5000_24gb": {
-          "720p_4s": "35-45 sec",
-          "1080p_5s": "2-3 min",
-          "note": "Workstation performance",
-          "tier": "Professional"
-        }
-      },
-      "quality_features": {
-        "precision": "Full BF16 - maximum quality",
-        "temporal_consistency": "Perfect - no flicker",
-        "fine_details": "Excellent - hair, text, reflections",
-        "color_accuracy": "Perfect - full color space",
-        "audio_sync": "Perfect - synchronized generation",
-        "overall": "Production-ready, broadcast quality"
-      },
-      "workflow_strategies": {
-        "fast_iteration": {
-          "use": "8-step distilled model",
-          "resolution": "720p",
-          "steps": 8,
-          "time_per_clip": "10-15 seconds",
-          "purpose": "Rapid prompt testing"
-        },
-        "production_workflow": {
-          "preview": "720p, 20 steps, 30 sec",
-          "review": "1080p, 25 steps, 1-2 min",
-          "final": "1440p or 4K, 30 steps, 3-15 min",
-          "purpose": "Professional delivery"
-        },
-        "batch_generation": {
-          "use": "720p or 1080p",
-          "steps": 20,
-          "note": "Can generate 20-30 clips per hour at 720p"
-        }
-      },
-      "advanced_features": {
-        "audio_generation": {
-          "overhead": "2-3GB VRAM",
-          "quality": "Synchronized, high quality",
-          "recommendation": "Enable for final renders"
-        },
-        "multi_keyframe": {
-          "feature": "Image-to-video with multiple reference frames",
-          "control": "Cinematic camera movements",
-          "quality": "Character consistency"
-        },
-        "lora_control": {
-          "available": "Anime, camera movement, character LoRAs",
-          "overhead": "1-2GB per LoRA",
-          "quality": "Enhanced stylistic control"
-        }
-      },
-      "troubleshooting": {
-        "if_oom_at_4k": {
-          "reduce_tile_size_to": 192,
-          "or_reduce_frames_to": 73,
-          "or_reduce_steps_to": 20,
-          "note": "4K 8s+ needs 32GB or weight streaming"
-        },
-        "if_slow_generation": {
-          "verify_xformers": "Should be installed",
-          "check_gpu_temp": "Ensure not thermal throttling",
-          "verify_highvram_mode": "Should be enabled"
-        },
-        "for_maximum_speed": {
-          "use_8_step_model": true,
-          "reduce_steps_to": 8,
-          "keep_resolution": "720p or 1080p",
-          "expected_speedup": "3-4x faster"
-        }
-      },
-      "recommendations_by_use_case": {
-        "youtube_content": {
-          "resolution": "1080p or 1440p",
-          "duration": "4-5s clips, stitch together",
-          "steps": 25,
-          "quality": "Maximum"
-        },
-        "social_media": {
-          "resolution": "1080p (9:16 vertical)",
-          "duration": "3-5s",
-          "steps": 20,
-          "quality": "Excellent, fast turnaround"
-        },
-        "film_production": {
-          "resolution": "4K",
-          "duration": "3-4s per shot",
-          "steps": 30,
-          "quality": "Maximum, upscale to 8K if needed"
-        },
-        "rapid_prototyping": {
-          "resolution": "720p",
-          "duration": "3-4s",
-          "steps": 8,
-          "model": "8-step distilled",
-          "quality": "Good, 10-15 sec generation"
-        }
-      }
     }
   }
 }

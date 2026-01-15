@@ -269,8 +269,8 @@ if [ -d "/opt/ComfyUI" ]; then
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --disable-smart-memory --reserve-vram 4.0 --cache-none --force-fp16 --use-split-cross-attention --use-pytorch-cross-attention --preview-method none"
       ;;
     *ltx2*-16gb*|*16gb*)
-      log "Applying 16GB VRAM optimizations for ComfyUI"
-      COMFY_FLAGS="$COMFY_FLAGS --highvram --reserve-vram 8.0 --use-pytorch-cross-attention"
+      log "Applying 16GB VRAM optimizations for ComfyUI (split loading mode)"
+      COMFY_FLAGS="$COMFY_FLAGS --reserve-vram 2.0 --use-pytorch-cross-attention --cache-none"
       ;;
     *ltx2*-24gb*|*24gb*)
       log "Applying 24GB VRAM optimizations for ComfyUI"

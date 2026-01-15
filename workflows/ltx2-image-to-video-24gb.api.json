@@ -2,9 +2,13 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-2-19b-distilled.safetensors"
+        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
+        "weight_dtype": "fp8_e4m3fn"
       },
-      "class_type": "CheckpointLoaderSimple"
+      "class_type": "UNETLoader",
+      "_meta": {
+        "title": "Load LTX-2 FP8 UNET (Split Loading)"
+      }
     },
     "2": {
       "inputs": {
@@ -64,8 +68,8 @@
     "9": {
       "inputs": {
         "model": ["1", 0],
-        "scheduler": "normal",
-        "steps": 30,
+        "scheduler": "simple",
+        "steps": 25,
         "denoise": 1.0
       },
       "class_type": "BasicScheduler"
@@ -83,10 +87,16 @@
       },
       "class_type": "LoadImage"
     },
+    "16": {
+      "inputs": {
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
+      },
+      "class_type": "VAELoader"
+    },
     "11": {
       "inputs": {
         "model": ["1", 0],
-        "vae": ["1", 2],
+        "vae": ["16", 0],
         "width": 1024,
         "height": 576,
         "num_frames": 121,
@@ -102,11 +112,11 @@
     "12": {
       "inputs": {
         "samples": ["11", 0],
-        "vae": ["1", 2],
+        "vae": ["16", 0],
         "tile_size": 512,
         "overlap": 64,
-        "temporal_size": 128,
-        "temporal_overlap": 16
+        "temporal_size": 64,
+        "temporal_overlap": 8
       },
       "class_type": "VAEDecodeTiled"
     },
@@ -121,9 +131,9 @@
       "inputs": {
         "video": ["13", 0],
         "filename_prefix": "ltx2_i2v_24gb",
-        "format": "auto",
-        "codec": "auto",
-        "quality": "auto"
+        "format": "mp4",
+        "codec": "h264",
+        "quality": "high"
       },
       "class_type": "SaveVideo"
     }

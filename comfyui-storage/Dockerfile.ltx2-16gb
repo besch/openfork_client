@@ -75,36 +75,46 @@ RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.
 # Patch embeddings_connector.py
 RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
 
-# Create model directories
+# Create model directories for split loading
 RUN mkdir -p models/checkpoints \
-    models/clip/gemma-3-12b-it \
+    models/unet \
+    models/vae \
+    models/clip \
     models/latent_upscale_models \
     models/loras
 
 ENV LTX2_TIER=16gb
 
-# Download main BF16 model with retry (~27GB FP8 distilled model for 16GB VRAM)
-RUN if [ -z "$HF_TOKEN" ]; then \
-        echo "ERROR: HF_TOKEN is not set!"; \
-        exit 1; \
-    fi \
-    && MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading BF16 main model..."; \
-        huggingface-cli download Lightricks/LTX-2 \
-            ltx-2-19b-distilled-fp8.safetensors \
-            --local-dir models/checkpoints \
-            --local-dir-use-symlinks False \
-            --token "$HF_TOKEN" \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/checkpoints/ltx-2-19b-distilled-fp8.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/checkpoints/ltx-2-19b-distilled-fp8.safetensors')/(1024**3); print(f'Main model: {size:.2f}GB'); assert size > 25, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+# Download LTX-2 FP8 UNET model for UNETLoader (split loading approach)
+# This is the key change: downloads ONLY the transformer, not the full checkpoint
+# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/diffusion_models
+RUN echo "Downloading LTX-2 FP8 UNET (split model for 16GB VRAM)..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors" \
+    --token ${HF_TOKEN} && \
+    mkdir -p models/unet && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors \
+       models/unet/ && \
+    rm -rf /tmp/kijai_models && \
+    python3 -c "import os; size=os.path.getsize('models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors')/(1024**3); print(f'UNET Model: {size:.2f}GB'); assert size > 20, 'File too small, corrupted'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download VAE models from Kijai (~5GB) - required for separate VAELoader
+# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/VAE
+RUN echo "Downloading VAE model for VAELoader..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "VAE/LTX2_video_vae_bf16.safetensors" \
+    --token ${HF_TOKEN} && \
+    mkdir -p models/vae && \
+    mv /tmp/kijai_models/VAE/LTX2_video_vae_bf16.safetensors models/vae/ && \
+    rm -rf /tmp/kijai_models && \
+    python3 -c "import os; size=os.path.getsize('models/vae/LTX2_video_vae_bf16.safetensors')/(1024**3); print(f'VAE: {size:.2f}GB'); assert size > 0.1, 'File too small, corrupted'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
 
 # Download spatial upscaler
 RUN MAX_RETRIES=3; \
@@ -195,7 +205,8 @@ import os\n\
 import sys\n\
 \n\
 files_to_verify = {\n\
-    "models/checkpoints/ltx-2-19b-distilled-fp8.safetensors": 25.0,\n\
+    "models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors": 20.0,\n\
+    "models/vae/LTX2_video_vae_bf16.safetensors": 0.1,\n\
     "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 6.0,\n\
     "models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors": 0.05,\n\
     "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 0.8,\n\

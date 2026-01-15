@@ -75,36 +75,43 @@ RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.
 # Patch embeddings_connector.py
 RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
 
-# Create model directories
+# Create model directories for split loading
 RUN mkdir -p models/checkpoints \
+    models/unet \
+    models/vae \
     models/clip \
     models/latent_upscale_models \
     models/loras
 
 ENV LTX2_TIER=24gb
 
-# Download main BF16 model (~38GB)
-RUN if [ -z "$HF_TOKEN" ]; then \
-        echo "ERROR: HF_TOKEN is not set!"; \
-        exit 1; \
-    fi \
-    && MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading BF16 main model..."; \
-        huggingface-cli download Lightricks/LTX-2 \
-            ltx-2-19b-distilled.safetensors \
-            --local-dir models/checkpoints \
-            --local-dir-use-symlinks False \
-            --token "$HF_TOKEN" \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/checkpoints/ltx-2-19b-distilled.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/checkpoints/ltx-2-19b-distilled.safetensors')/(1024**3); print(f'Main model: {size:.2f}GB'); assert size > 40, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+# Download LTX-2 FP8 UNET model for UNETLoader (split loading approach)
+# This provides faster loading and better memory management even on 24GB
+# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/diffusion_models
+RUN echo "Downloading LTX-2 FP8 UNET (split model)..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors \
+       models/unet/ && \
+    rm -rf /tmp/kijai_models && \
+    python3 -c "import os; size=os.path.getsize('models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors')/(1024**3); print(f'UNET Model: {size:.2f}GB'); assert size > 20, 'File too small, corrupted'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download VAE models from Kijai - required for separate VAELoader
+# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/VAE
+RUN echo "Downloading VAE model for VAELoader..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "VAE/LTX2_video_vae_bf16.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/kijai_models/VAE/LTX2_video_vae_bf16.safetensors models/vae/ && \
+    rm -rf /tmp/kijai_models && \
+    python3 -c "import os; size=os.path.getsize('models/vae/LTX2_video_vae_bf16.safetensors')/(1024**3); print(f'VAE: {size:.2f}GB'); assert size > 0.1, 'File too small, corrupted'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Download spatial upscaler
 RUN MAX_RETRIES=3; \
