@@ -79,6 +79,20 @@ if ! command -v docker &> /dev/null; then
   log "Docker installed successfully"
 fi
 
+# Install NVIDIA Container Toolkit for GPU support in Docker
+if ! command -v nvidia-container-toolkit &> /dev/null && [ -n "$(command -v nvidia-smi 2>/dev/null)" ]; then
+  log "Installing NVIDIA Container Toolkit..."
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+  apt-get update -qq
+  apt-get install -y -qq nvidia-container-toolkit
+  # Configure Docker daemon for NVIDIA runtime
+  nvidia-ctk runtime configure --runtime=docker || true
+  log "NVIDIA Container Toolkit installed"
+fi
+
 # Start Docker daemon if not running
 if ! docker info &> /dev/null; then
   log "Starting Docker daemon..."
@@ -131,7 +145,7 @@ fi
 
 # Run build and capture output
 BUILD_OUTPUT="/tmp/docker_build.log"
-if docker build $BUILD_ARGS -f "$DOCKERFILE_NAME" -t "$DOCKER_TAG" . 2>&1 | tee "$BUILD_OUTPUT"; then
+if docker build --no-cache $BUILD_ARGS -f "$DOCKERFILE_NAME" -t "$DOCKER_TAG" . 2>&1 | tee "$BUILD_OUTPUT"; then
   log "Build completed successfully!"
   report_status "building" "Build completed successfully"
 else
@@ -170,20 +184,27 @@ fi
 # --- Run DGN Client (if enabled) ---
 
 if [ "$RUN_DGN_CLIENT" = "true" ]; then
-  log "Starting DGN Client..."
-  report_status "running" "Starting DGN client..."
+  log "Starting DGN Client using the newly built Docker image..."
+  report_status "running" "Starting DGN client container..."
 
-  # Set up environment for dgn_client
-  export HEADLESS_MODE="true"
-  export ORCHESTRATOR_URL_PROD="${ORCHESTRATOR_URL:-https://openfork.video}"
+  # Create data directory for persistent storage
+  mkdir -p /data
 
-  # Download and run the start_cloud.sh script
-  cd /opt
-  curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_cloud.sh -o start_cloud.sh
-  chmod +x start_cloud.sh
-
-  # Execute start_cloud.sh which will start ComfyUI and dgn_client
-  bash start_cloud.sh
+  # Run the newly built image as a container with GPU access
+  # The container will run start_cloud.sh which starts ComfyUI and dgn_client
+  log "Starting container from image: $DOCKER_TAG"
+  docker run --rm \
+    --gpus all \
+    --name openfork-dgn-client \
+    -e DGN_API_KEY="$DGN_API_KEY" \
+    -e DGN_ORCHESTRATOR_URL="${ORCHESTRATOR_URL:-https://openfork.video}" \
+    -e SERVICE_TYPE="$SERVICE_TYPE" \
+    -e HEADLESS_MODE="true" \
+    -e ACCEPT_POLICY="all" \
+    -e PYTHONUNBUFFERED="1" \
+    -v /data:/data \
+    "$DOCKER_TAG" \
+    bash -c "curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_cloud.sh | bash"
 else
   log "Build complete. No DGN client requested."
   report_status "completed" "Build completed successfully"
