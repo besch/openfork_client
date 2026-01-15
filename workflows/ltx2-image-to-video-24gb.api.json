@@ -127,7 +127,12 @@
         "loop_count": 0,
         "filename_prefix": "ltx2_i2v_24gb",
         "format": "video/h264-mp4",
-        "save_metadata": true
+        "pix_fmt": "yuv420p",
+        "crf": 19,
+        "save_metadata": true,
+        "trim_to_audio": false,
+        "pingpong": false,
+        "save_output": true
       },
       "class_type": "VHS_VideoCombine",
       "_meta": {
