@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-YUME REST API Server for OpenFork DGN Client
+YUME REST API Server for OpenFork DGN Client (Direct Model Loading)
 
 Provides a simple HTTP API for video generation from text or images.
-Uses subprocess to call the official YUME inference scripts.
-Implements a Request Queue to prevent OOM / internal concurrency clashes.
+Uses wan23.Yume directly for memory-efficient single-GPU inference,
+instead of subprocess with FSDP which causes OOM issues.
 
 Reference: https://github.com/stdstu12/YUME
 Model: https://huggingface.co/stdstu123/Yume-5B-720P
@@ -13,10 +13,10 @@ Model: https://huggingface.co/stdstu123/Yume-5B-720P
 import os
 import sys
 import uuid
-import subprocess
 import logging
 import shutil
 import asyncio
+import random
 from pathlib import Path
 from typing import Optional, Dict
 from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Form
@@ -28,7 +28,7 @@ import torch
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="YUME API", version="1.1.0")
+app = FastAPI(title="YUME API", version="2.0.0")
 
 # Job storage
 jobs = {}
@@ -42,6 +42,18 @@ YUME_DIR = Path("/opt/YUME")
 MODEL_DIR = Path("/opt/models/Yume")
 OUTPUT_DIR = Path("/opt/output")
 INPUT_DIR = Path("/opt/input")
+DEVICE_ID = 0
+
+# Global model storage (loaded once at startup)
+class Models:
+    device = None
+    wan_model = None
+    vae = None
+    transformer = None
+    text_encoder = None
+    loaded = False
+
+MODELS = Models()
 
 
 class GenerateRequest(BaseModel):
@@ -66,6 +78,63 @@ class JobStatus(BaseModel):
     queue_position: Optional[int] = None
 
 
+def load_yume_model():
+    """Load the YUME model using wan23.Yume for single-GPU inference."""
+    global MODELS
+    
+    if MODELS.loaded:
+        logger.info("YUME model already loaded")
+        return True
+        
+    try:
+        logger.info(f"Loading YUME model from {MODEL_DIR}...")
+        
+        # Add YUME to path
+        if str(YUME_DIR) not in sys.path:
+            sys.path.insert(0, str(YUME_DIR))
+        
+        # Enable TF32 for better performance
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        
+        # Import YUME modules
+        import importlib
+        from wan23.configs import WAN_CONFIGS
+        
+        _wan23 = importlib.import_module("wan23")
+        
+        # Set device
+        MODELS.device = torch.device(f"cuda:{DEVICE_ID}")
+        
+        # Load model using ti2v-5B config (text/image to video 5B)
+        cfg = WAN_CONFIGS["ti2v-5B"]
+        logger.info(f"Loading Yume with config: ti2v-5B")
+        
+        # Create symlink if needed
+        ckpt_dir = YUME_DIR / "Yume-5B-720P"
+        if not ckpt_dir.exists():
+            ckpt_dir.symlink_to(MODEL_DIR)
+        
+        MODELS.wan_model = _wan23.Yume(
+            config=cfg, 
+            checkpoint_dir=str(MODEL_DIR),
+            device_id=DEVICE_ID
+        )
+        
+        # Store references
+        MODELS.vae = MODELS.wan_model.vae
+        MODELS.transformer = MODELS.wan_model.dit
+        MODELS.text_encoder = MODELS.wan_model.text_encoder
+        
+        MODELS.loaded = True
+        logger.info("YUME model loaded successfully!")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to load YUME model: {e}", exc_info=True)
+        return False
+
+
 async def worker_loop():
     """Background worker that processes jobs from the queue one at a time."""
     logger.info("Worker loop started")
@@ -74,7 +143,7 @@ async def worker_loop():
         try:
             logger.info(f"Worker picked up job {job_id}")
             async with processing_lock:
-                 # Check if job was cancelled while in queue
+                # Check if job was cancelled while in queue
                 if job_id not in jobs:
                     logger.info(f"Job {job_id} was removed/cancelled before processing")
                     continue
@@ -86,7 +155,7 @@ async def worker_loop():
                 job_data = jobs[job_id]
                 params = job_data["params"]
                 
-                # Execute generation (blocking subprocess call wrapped in executor)
+                # Execute generation
                 await asyncio.to_thread(
                     generate_video_sync,
                     job_id,
@@ -122,177 +191,107 @@ def generate_video_sync(
     seed: int,
     image_path: Optional[str] = None
 ):
-    """Synchronous video generation using subprocess to call YUME inference."""
+    """Synchronous video generation using wan23.Yume directly."""
     try:
+        if not MODELS.loaded:
+            raise RuntimeError("YUME model not loaded")
+            
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        INPUT_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Create temp directories for this job
-        job_output_dir = OUTPUT_DIR / job_id
-        job_input_dir = INPUT_DIR / job_id
-        job_output_dir.mkdir(parents=True, exist_ok=True)
-        job_input_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Write caption to file
-        caption_path = job_input_dir / "caption.txt"
-        with open(caption_path, 'w', encoding='utf-8') as f:
-            f.write(prompt)
         
         logger.info(f"Generating video for job {job_id}...")
-        logger.info(f"Prompt: {prompt[:100]}..., Frames: {num_frames}, Resolution: {width}x{height}")
+        logger.info(f"Prompt: {prompt[:100]}..., Frames: {num_frames}, Resolution: {width}x{height}, Steps: {steps}")
         
         # Use random seed if 0
-        import random
         if seed == 0:
             seed = random.randint(1, 2**32 - 1)
         
-        # Use a random master port to avoid collisions
-        master_port = random.randint(29500, 29999)
+        # Set seed for reproducibility
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
         
-        # Build command using torchrun for proper distributed initialization
-        # The sample_5b.py script requires torch.distributed setup which torchrun provides
-        cmd = [
-            "torchrun",
-            "--nproc_per_node", "1",
-            "--master_port", str(master_port),
-            "-m", "fastvideo.sample.sample_5b",
-            "--seed", str(seed),
-            "--gradient_checkpointing",
-            "--train_batch_size", "1",
-            "--max_sample_steps", "600000",
-            "--mixed_precision", "bf16",
-            "--allow_tf32",
-            "--video_output_dir", str(job_output_dir),
-            "--num_euler_timesteps", str(steps),
-            "--rand_num_img", "0.6",
-            "--caption_path", str(caption_path),
-        ]
+        wan = MODELS.wan_model
+        device = MODELS.device
         
-        # Image-to-Video or Text-to-Video mode
+        # Prepare input image for I2V mode
+        input_image = None
         if image_path and Path(image_path).exists():
             logger.info(f"Mode: Image-to-Video with {image_path}")
-            jpg_dir = job_input_dir / "jpg"
-            jpg_dir.mkdir(exist_ok=True)
-            
-            # Copy and possibly resize image
             from PIL import Image
-            img = Image.open(image_path)
-            img = img.resize((width, height), Image.Resampling.LANCZOS)
-            img.save(jpg_dir / "input_0.jpg", quality=95)
+            import numpy as np
             
-            cmd.extend(["--jpg_dir", str(jpg_dir)])
+            img = Image.open(image_path).convert("RGB")
+            img = img.resize((width, height), Image.Resampling.LANCZOS)
+            input_image = np.array(img).astype(np.float32) / 255.0
+            input_image = torch.from_numpy(input_image).permute(2, 0, 1).unsqueeze(0).to(device)
         else:
             logger.info("Mode: Text-to-Video")
-            cmd.extend(["--T2V"])
-            cmd.extend(["--prompt", prompt])
         
-        logger.info(f"Running command: {' '.join(cmd)}")
+        # Calculate max_area based on resolution
+        max_area = width * height
         
-        # Set environment for single-GPU inference
-        # Note: torchrun handles distributed env vars (LOCAL_RANK, RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT)
-        env = os.environ.copy()
-        env["TOKENIZERS_PARALLELISM"] = "false"
-        env["CUDA_VISIBLE_DEVICES"] = "0"
-        # Suppress noisy transformers/hub warnings
-        env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-        env["TRANSFORMERS_VERBOSITY"] = "error"
-        # Try to use existing cache to avoid migration warnings
-        env["HF_HOME"] = os.path.expanduser("~/.cache/huggingface")
-        # Prevent runtime downloads that cause stalls/hangs
-        env["HF_HUB_OFFLINE"] = "1"
+        # Generate video
+        logger.info(f"Starting generation with seed {seed}...")
         
-        logger.info(f"Spawning YUME inference process: {' '.join(cmd)}")
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            video_frames = wan.generate(
+                prompt=prompt,
+                negative_prompt=negative_prompt if negative_prompt else None,
+                image=input_image,
+                frame_num=num_frames,
+                max_area=max_area,
+                sampling_steps=steps,
+                shift=8.0,  # Default shift value for 5B model
+            )
         
-        # Run the inference
-        result = subprocess.run(
-            cmd,
-            cwd=str(YUME_DIR),
-            capture_output=True,
-            text=True,
-            timeout=1800,  # 30 minute timeout
-            env=env
-        )
+        logger.info(f"Generation complete, saving video...")
         
-        # Log output summary
-        if result.stdout:
-            stdout_tail = result.stdout[-2000:]
-            logger.info(f"Inference stdout tail:\n{stdout_tail}")
-            
-        if result.stderr:
-            # Capture much more stderr to ensure we don't miss the real error
-            stderr_tail = result.stderr[-10000:] 
-            logger.warning(f"Inference stderr tail ({len(result.stderr)} chars total):\n{stderr_tail}")
+        # Save video
+        final_output = OUTPUT_DIR / f"{job_id}.mp4"
         
-        if result.returncode != 0:
-            logger.error(f"Inference process exited with non-zero code: {result.returncode}")
-            
-            # Identify the real error
-            err_msg = f"Process exited with code {result.returncode}"
-            if result.stderr:
-                lines = result.stderr.splitlines()
-                # Expand error keywords to catch more failure types
-                error_keywords = [
-                    "Error", "Exception", "Traceback", "Out of memory", 
-                    "RuntimeError", "AttributeError", "TypeError", "ImportError",
-                    "FileNotFoundError", "ConnectionError", "killed", "Segmentation fault"
-                ]
-                important_lines = [l for l in lines if any(k.lower() in l.lower() for k in error_keywords)]
-                
-                if important_lines:
-                    # Often the last few "important" lines contain the most relevant info
-                    err_msg = " | ".join(important_lines[-3:])
-                else:
-                    # Fallback to the very end of stderr if no keywords matched
-                    err_msg = result.stderr[-1000:].strip()
-            
-            raise RuntimeError(f"Inference failed: {err_msg}")
+        # Export video frames to file
+        from diffusers.utils import export_to_video
         
-        # Find the output video
-        output_files = list(job_output_dir.glob("**/*.mp4"))
-        if not output_files:
-            output_files = list(job_output_dir.glob("**/*.avi"))
+        # video_frames should be a list of PIL Images or numpy arrays
+        if isinstance(video_frames, torch.Tensor):
+            # Convert tensor to list of numpy arrays
+            video_frames = video_frames.cpu().numpy()
+            if video_frames.ndim == 4:  # [T, C, H, W] or [T, H, W, C]
+                if video_frames.shape[1] == 3:  # [T, C, H, W]
+                    video_frames = video_frames.transpose(0, 2, 3, 1)
+                video_frames = (video_frames * 255).astype("uint8")
+                video_frames = [frame for frame in video_frames]
         
-        if output_files:
-            # Get the most recent one
-            output_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-            actual_output = output_files[0]
-            
-            # Move to standardized location
-            final_output = OUTPUT_DIR / f"{job_id}.mp4"
-            shutil.copy2(actual_output, final_output)
-            
+        export_to_video(video_frames, str(final_output), fps=24)
+        
+        if final_output.exists():
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["output_path"] = str(final_output)
             logger.info(f"Job {job_id} completed successfully: {final_output}")
         else:
-            # List what's in output dir for debugging
-            all_files = list(job_output_dir.rglob("*"))
-            logger.error(f"No output video found. Files in {job_output_dir}: {all_files}")
-            raise RuntimeError(f"Output video was not created. Found files: {[f.name for f in all_files]}")
+            raise RuntimeError(f"Output video was not created at {final_output}")
             
-    except subprocess.TimeoutExpired:
-        logger.error(f"Job {job_id} timed out")
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = "Generation timed out after 30 minutes"
     except Exception as e:
         logger.error(f"Job {job_id} failed: {e}", exc_info=True)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
     finally:
-        # Final cleanup attempt
+        # Cleanup temp input/output dirs
         try:
-             # Cleanup temp input/output dirs
-            if 'job_input_dir' in locals():
+            job_input_dir = INPUT_DIR / job_id
+            if job_input_dir.exists():
                 shutil.rmtree(job_input_dir, ignore_errors=True)
-            if 'job_output_dir' in locals():
-                shutil.rmtree(job_output_dir, ignore_errors=True)
         except Exception:
             pass
+        
+        # Clear GPU cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Log startup info and verify YUME is available."""
+    """Log startup info and load YUME model."""
     logger.info("YUME API starting...")
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
@@ -310,6 +309,11 @@ async def startup_event():
     else:
         logger.warning(f"Model directory not found: {MODEL_DIR}")
 
+    # Load the model
+    success = load_yume_model()
+    if not success:
+        logger.error("Failed to load YUME model - API will return errors for generation requests")
+
     # Start the background worker loop
     asyncio.create_task(worker_loop())
 
@@ -322,6 +326,7 @@ async def health_check():
         "cuda_available": torch.cuda.is_available(),
         "yume_available": YUME_DIR.exists(),
         "model_available": MODEL_DIR.exists(),
+        "model_loaded": MODELS.loaded,
         "queue_size": job_queue.qsize(),
         "processing_active": processing_lock.locked()
     }
@@ -333,6 +338,9 @@ async def generate_text_to_video(request: GenerateRequest, background_tasks: Bac
     Queue text-to-video generation job.
     Returns job_id immediately. Job tracks in "pending"/"queued" state until picked up.
     """
+    if not MODELS.loaded:
+        raise HTTPException(status_code=503, detail="YUME model not loaded")
+    
     job_id = str(uuid.uuid4())
     
     jobs[job_id] = {
@@ -374,6 +382,9 @@ async def generate_image_to_video(
     Queue image-to-video generation job.
     Returns job_id immediately. Job tracks in "pending"/"queued" state until picked up.
     """
+    if not MODELS.loaded:
+        raise HTTPException(status_code=503, detail="YUME model not loaded")
+    
     job_id = str(uuid.uuid4())
     
     # Save uploaded image immediately so we have it for the worker
@@ -432,20 +443,13 @@ async def get_status(job_id: str):
     
     job = jobs[job_id]
     
-    # Calculate rough queue position if queued
-    q_pos = None
-    if job["status"] == "queued":
-        # Note: This is an approximation as we can't easily peek into asyncio.Queue
-        # reliable enough for exact position, but strictly speaking it's in the queue
-        pass 
-
     return JobStatus(
         job_id=job_id,
         status=job["status"],
         output_path=job.get("output_path"),
         error=job.get("error"),
         progress=job.get("progress"),
-        queue_position=None # Not easily trackable in basic queue
+        queue_position=None
     )
 
 
