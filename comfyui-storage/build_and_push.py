@@ -20,13 +20,12 @@ class ImageConfig:
 
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
-    ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest"),
-    ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
     ImageConfig("Dockerfile.yume-16gb", "beschiak/openfork-yume-16gb:latest"),
-    # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
+    ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
+    ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
 ]
 
-MAX_RETRIES = 2
+PUSH_ATTEMPTS = 2
 RETRY_DELAY_SECONDS = 600  # 10 minutes
 
 
@@ -57,7 +56,7 @@ def run_command(command: List[str], description: str) -> bool:
 
 def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False) -> bool:
     """
-    Build a Docker image with retry logic.
+    Build a Docker image. No retry logic for builds - failure is ignored.
     """
     command = ["docker", "build"]
     
@@ -71,41 +70,33 @@ def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool =
         
     command.extend(["-f", dockerfile, "-t", tag, "."])
     
-    for attempt in range(1, MAX_RETRIES + 1):
-        print(f"\n📦 Build attempt {attempt}/{MAX_RETRIES} for {tag}")
-        
-        if run_command(command, f"Building {tag}"):
-            return True
-        
-        if attempt < MAX_RETRIES:
-            print(f"⏳ Waiting {RETRY_DELAY_SECONDS} seconds before retry...")
-            time.sleep(RETRY_DELAY_SECONDS)
-    
-    return False
+    print(f"\n📦 Building {tag} (single attempt)")
+    return run_command(command, f"Building {tag}")
 
 
 def push_image(tag: str) -> bool:
     """
-    Push a Docker image with retry logic.
+    Push a Docker image with one retry after unsuccessful attempt (2 total).
     """
     command = ["docker", "push", tag]
     
-    for attempt in range(1, MAX_RETRIES + 1):
-        print(f"\n🚀 Push attempt {attempt}/{MAX_RETRIES} for {tag}")
+    for attempt in range(1, PUSH_ATTEMPTS + 1):
+        print(f"\n🚀 Push attempt {attempt}/{PUSH_ATTEMPTS} for {tag}")
         
         if run_command(command, f"Pushing {tag}"):
             return True
         
-        if attempt < MAX_RETRIES:
+        if attempt < PUSH_ATTEMPTS:
             print(f"⏳ Waiting {RETRY_DELAY_SECONDS} seconds before retry...")
             time.sleep(RETRY_DELAY_SECONDS)
     
     return False
 
 
-def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False) -> bool:
+def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False) -> str:
     """
-    Build and push a single image. Returns True if both operations succeed.
+    Build and push a single image. 
+    Returns: "success", "build_failed", or "push_failed"
     """
     print(f"\n{'#'*60}")
     print(f"# Processing: {config.dockerfile} -> {config.tag}")
@@ -113,16 +104,16 @@ def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: boo
     
     # Build the image
     if not build_image(config.dockerfile, config.tag, hf_token, rebuild):
-        print(f"\n💥 FAILED to build {config.tag} after {MAX_RETRIES} attempts")
-        return False
+        print(f"\n⚠️ FAILED to build {config.tag}. Ignoring build failure as requested.")
+        return "build_failed"
     
     # Push the image
     if not push_image(config.tag):
-        print(f"\n💥 FAILED to push {config.tag} after {MAX_RETRIES} attempts")
-        return False
+        print(f"\n💥 FAILED to push {config.tag} after {PUSH_ATTEMPTS} attempts")
+        return "push_failed"
     
     print(f"\n🎉 Successfully built and pushed {config.tag}")
-    return True
+    return "success"
 
 
 
@@ -208,17 +199,21 @@ def main():
             sys.exit(1)
             
     print(f"Images to process: {len(IMAGES)}")
-    print(f"Max retries per operation: {MAX_RETRIES}")
+    print(f"Push attempts: {PUSH_ATTEMPTS} (1 initial + 1 retry)")
     print(f"Retry delay: {RETRY_DELAY_SECONDS} seconds")
     
     successful = []
-    failed = []
+    build_failed = []
+    push_failed = []
     
     for config in IMAGES:
-        if build_and_push_image(config, args.hf_token, args.rebuild):
+        result = build_and_push_image(config, args.hf_token, args.rebuild)
+        if result == "success":
             successful.append(config.tag)
+        elif result == "build_failed":
+            build_failed.append(config.tag)
         else:
-            failed.append(config.tag)
+            push_failed.append(config.tag)
     
     # Summary
     print("\n" + "="*60)
@@ -230,18 +225,26 @@ def main():
         for tag in successful:
             print(f"   - {tag}")
     
-    if failed:
-        print(f"\n❌ Failed ({len(failed)}):")
-        for tag in failed:
+    if build_failed:
+        print(f"\n⚠️ Build failed (ignored) ({len(build_failed)}):")
+        for tag in build_failed:
+            print(f"   - {tag}")
+            
+    if push_failed:
+        print(f"\n❌ Push failed after retries ({len(push_failed)}):")
+        for tag in push_failed:
             print(f"   - {tag}")
     
     print("\n" + "="*60)
     
-    if failed:
-        print("⚠️  Some images failed to build or push!")
+    if push_failed:
+        print("⚠️  Some images failed to push after retries!")
         sys.exit(1)
+    elif build_failed:
+        print("💡 Some images failed to build but were ignored.")
+        sys.exit(0)
     else:
-        print("🎉 All images built and pushed successfully!")
+        print("🎉 All images processed successfully!")
         sys.exit(0)
 
 

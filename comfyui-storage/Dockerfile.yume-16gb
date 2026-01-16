@@ -38,7 +38,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image \
         ftfy regex tqdm matplotlib tensorboard bitsandbytes scipy packaging \
         fastapi uvicorn python-multipart pillow easydict \
-        pytorch-lightning peft yacs moviepy fvcore pytorchvideo liger_kernel triton
+        pytorch-lightning peft yacs moviepy fvcore pytorchvideo liger_kernel triton \
+        flask flask-cors
 
 # Install flash-attn (requires CUDA devel tools and must be after torch)
 RUN python -m pip install --no-cache-dir flash-attn --no-build-isolation
@@ -77,15 +78,19 @@ RUN huggingface-cli download stdstu123/Yume-5B-720P --local-dir /opt/models/Yume
     --include "*.safetensors" \
     && ln -sf /opt/models/Yume /opt/YUME/Yume-5B-720P
 
-# Create directories for API
+# Create directories for output
 RUN mkdir -p /opt/output /opt/input
 
-# Copy the REST API server
-WORKDIR /opt/dgn-client
-COPY yume_api.py /opt/dgn-client/yume_api.py
+# Working directory for webapp
+WORKDIR /opt/YUME
+
+# Environment variables for the webapp
+ENV WEB_PORT=8000
+ENV DEVICE_ID=0
+ENV CHECKPOINT_DIR=/opt/models/Yume
 
 # Expose REST API port
 EXPOSE 8000
 
-# Run the YUME REST API server
-CMD ["python", "-u", "/opt/dgn-client/yume_api.py"]
+# Run the official YUME webapp (has working generation logic)
+CMD ["python", "-u", "/opt/YUME/webapp_single_gpu.py"]

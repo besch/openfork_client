@@ -1,9 +1,9 @@
 """
 YUME CLI Job Processor
 
-This processor uses a REST API running inside the YUME Docker container
-instead of the ComfyUI workflow approach. This provides better compatibility
-with the official YUME codebase which uses a custom diffusion pipeline.
+This processor communicates with the official YUME webapp (webapp_single_gpu.py)
+which provides a complete video generation pipeline including diffusion sampling
+and VAE decoding.
 
 Reference: https://github.com/stdstu12/YUME
 """
@@ -24,8 +24,9 @@ from utils.comfyui_workflow_utils import get_dimensions, materialize_start_image
 
 class YumeCLIJobProcessor(BaseJobProcessor):
     """
-    Job processor that communicates with YUME via REST API.
-    The YUME container runs a FastAPI server that handles generation.
+    Job processor that communicates with YUME's official webapp.
+    The webapp handles the full generation pipeline including model loading,
+    diffusion sampling, and VAE decoding.
     """
 
     API_PORT = 8000
@@ -57,39 +58,47 @@ class YumeCLIJobProcessor(BaseJobProcessor):
         aspect_ratio = inputs.get("aspect_ratio", "16:9")
         width, height = get_dimensions(aspect_ratio, default_width=1280, default_height=720)
         
-        cfg_scale = inputs.get("cfg_scale", 7.0)
-        steps = inputs.get("steps", 30)
-        num_frames = inputs.get("num_frames", 49)
+        cfg_scale = inputs.get("cfg_scale", 5.0)  # YUME default is 5.0
+        steps = inputs.get("steps", 50)  # YUME default is 50
+        num_frames = inputs.get("num_frames", 81)  # YUME default is 81
         seed = inputs.get("seed", 0)
+        shift = inputs.get("shift", 5.0)  # YUME default shift
 
         if not self._wait_for_api():
             self._fail_job(f"YUME API did not become available for job {self.job_id}")
             return
 
-        if is_i2v:
-            remote_job_id = self._submit_i2v_generation(
-                width, height, num_frames, steps, cfg_scale, seed
-            )
-        else:
-            remote_job_id = self._submit_t2v_generation(
-                width, height, num_frames, steps, cfg_scale, seed
-            )
-        
-        if not remote_job_id:
-            self._fail_job(f"Failed to submit generation for job {self.job_id}")
-            return
-
         try:
-            result = self._poll_for_completion(remote_job_id)
-
-            if result.get("status") != "completed":
+            # Generate video synchronously via webapp
+            if is_i2v:
+                result = self._generate_i2v(
+                    width, height, num_frames, steps, cfg_scale, seed, shift
+                )
+            else:
+                result = self._generate_t2v(
+                    width, height, num_frames, steps, cfg_scale, seed, shift
+                )
+            
+            if not result.get("success"):
                 error_msg = result.get("error", "Unknown error")
                 self._fail_job(f"YUME generation failed: {error_msg}")
                 return
 
-            local_path = self._download_output(remote_job_id)
-            if not local_path:
-                self._fail_job(f"Failed to download output for job {self.job_id}")
+            # Download the output video
+            video_path = result.get("video_abs")
+            if not video_path or not os.path.exists(video_path):
+                # Try relative path via outputs endpoint
+                video_rel = result.get("video_rel")
+                if video_rel:
+                    local_path = self._download_output(video_rel)
+                else:
+                    self._fail_job(f"No output path in result for job {self.job_id}")
+                    return
+            else:
+                local_path = video_path
+
+            if not local_path or not os.path.exists(local_path):
+                self._fail_job(f"Failed to get output for job {self.job_id}")
                 return
 
             # Upload video
@@ -126,76 +135,81 @@ class YumeCLIJobProcessor(BaseJobProcessor):
         except Exception as e:
             logging.error(f"Error processing YUME job {self.job_id}: {e}", exc_info=True)
             self._fail_job(f"Error processing job: {e}")
-        finally:
-            self._cleanup_remote_job(remote_job_id)
-            # Cleanup local file
-            local_path = os.path.join(self.cache_dir, f"{self.job_id}.mp4")
-            if os.path.exists(local_path):
-                try:
-                    os.remove(local_path)
-                    logging.info(f"Cleaned up temporary file: {local_path}")
-                except OSError:
-                    pass
 
-    def _wait_for_api(self, timeout: int = 120) -> bool:
-        """Wait for the YUME API to become available."""
+    def _wait_for_api(self, timeout: int = 300) -> bool:
+        """Wait for the YUME webapp to become available and model loaded."""
         start_time = time.time()
         while time.time() - start_time < timeout:
             if self.shutdown_event.is_set():
                 return False
             try:
-                response = requests.get(f"{self.api_base_url}/health", timeout=5)
+                response = requests.get(f"{self.api_base_url}/api/status", timeout=5)
                 if response.status_code == 200:
-                    health = response.json()
-                    if health.get("yume_available") and health.get("model_available"):
-                        logging.info("YUME API is ready and model is loaded")
+                    status = response.json()
+                    models_loaded = status.get("models_loaded", False)
+                    if models_loaded:
+                        logging.info("YUME webapp is ready and models are loaded")
                         return True
                     else:
-                        logging.warning(f"YUME API health check: {health}")
+                        logging.info("YUME webapp available but models still loading...")
             except requests.exceptions.RequestException:
                 pass
             time.sleep(3)
 
-        logging.error(f"YUME API did not become available within {timeout}s")
+        logging.error(f"YUME webapp did not become available within {timeout}s")
         return False
 
-    def _submit_t2v_generation(
+    def _generate_t2v(
         self, width: int, height: int, num_frames: int, 
-        steps: int, cfg: float, seed: int
-    ) -> Optional[str]:
-        """Submit a text-to-video generation request."""
+        steps: int, cfg: float, seed: int, shift: float
+    ) -> Dict:
+        """Generate text-to-video using the webapp's /api/generate_long endpoint."""
         try:
+            # Calculate resolution for webapp (uses single number for max dimension)
+            resolution = max(width, height)
+            
             payload = {
                 "prompt": self.positive_prompt,
-                "negative_prompt": self.negative_prompt,
-                "num_frames": num_frames,
-                "width": width,
-                "height": height,
-                "steps": steps,
-                "cfg": cfg,
-                "seed": seed
+                "negative_prompt": self.negative_prompt or "",
+                "mode": "T2V",
+                "sample_num": num_frames,
+                "sample_steps": steps,
+                "guide_scale": cfg,
+                "shift": shift,
+                "resolution": resolution,
+                "seed": seed if seed != 0 else None,
+                "frame_zero": 8,  # Default latent conditioning frames
+                "memory_optimization": True,
+                "vae_memory_optimization": True,
             }
 
-            response = requests.post(f"{self.api_base_url}/generate", json=payload, timeout=30)
+            logging.info(f"Submitting T2V generation to webapp: prompt={self.positive_prompt[:50]}...")
+            response = requests.post(
+                f"{self.api_base_url}/api/generate_long",
+                json=payload,
+                timeout=self.MAX_WAIT_TIME
+            )
 
             if response.status_code == 200:
                 data = response.json()
-                remote_job_id = data.get("job_id")
-                logging.info(f"YUME T2V job submitted: {remote_job_id}")
-                return remote_job_id
+                logging.info(f"YUME webapp generation completed: {data.get('info', '')}")
+                return data
             else:
-                logging.error(f"Failed to submit T2V generation: {response.status_code} - {response.text}")
-                return None
+                error_text = response.text[:500] if response.text else "No error message"
+                logging.error(f"YUME webapp returned {response.status_code}: {error_text}")
+                return {"success": False, "error": f"HTTP {response.status_code}: {error_text}"}
 
+        except requests.exceptions.Timeout:
+            return {"success": False, "error": "Generation timed out"}
         except requests.exceptions.RequestException as e:
-            logging.error(f"Failed to submit T2V generation request: {e}")
-            return None
+            logging.error(f"Failed to call webapp generate: {e}")
+            return {"success": False, "error": str(e)}
 
-    def _submit_i2v_generation(
+    def _generate_i2v(
         self, width: int, height: int, num_frames: int,
-        steps: int, cfg: float, seed: int
-    ) -> Optional[str]:
-        """Submit an image-to-video generation request."""
+        steps: int, cfg: float, seed: int, shift: float
+    ) -> Dict:
+        """Generate image-to-video using the webapp's /api/generate_long endpoint."""
         try:
             # Materialize start image
             os.makedirs(self.input_dir, exist_ok=True)
@@ -203,27 +217,35 @@ class YumeCLIJobProcessor(BaseJobProcessor):
             
             if not start_image_filename:
                 logging.error(f"Failed to materialize start image for job {self.job_id}")
-                return None
+                return {"success": False, "error": "Failed to get start image"}
             
             image_path = os.path.join(self.input_dir, start_image_filename)
             
-            with open(image_path, "rb") as f:
-                files = {"image": (start_image_filename, f, "image/jpeg")}
-                data = {
-                    "prompt": self.positive_prompt,
-                    "negative_prompt": self.negative_prompt,
-                    "num_frames": num_frames,
-                    "steps": steps,
-                    "cfg": cfg,
-                    "seed": seed
-                }
-                
-                response = requests.post(
-                    f"{self.api_base_url}/generate-i2v",
-                    files=files,
-                    data=data,
-                    timeout=60
-                )
+            # Calculate resolution for webapp (uses single number for max dimension)
+            resolution = max(width, height)
+            
+            payload = {
+                "prompt": self.positive_prompt,
+                "negative_prompt": self.negative_prompt or "",
+                "mode": "I2V",
+                "jpg_path": image_path,  # Local path to image
+                "sample_num": num_frames,
+                "sample_steps": steps,
+                "guide_scale": cfg,
+                "shift": shift,
+                "resolution": resolution,
+                "seed": seed if seed != 0 else None,
+                "frame_zero": 8,
+                "memory_optimization": True,
+                "vae_memory_optimization": True,
+            }
+
+            logging.info(f"Submitting I2V generation to webapp with image: {image_path}")
+            response = requests.post(
+                f"{self.api_base_url}/api/generate_long",
+                json=payload,
+                timeout=self.MAX_WAIT_TIME
+            )
 
             # Cleanup local image
             if os.path.exists(image_path):
@@ -231,57 +253,31 @@ class YumeCLIJobProcessor(BaseJobProcessor):
 
             if response.status_code == 200:
                 data = response.json()
-                remote_job_id = data.get("job_id")
-                logging.info(f"YUME I2V job submitted: {remote_job_id}")
-                return remote_job_id
+                logging.info(f"YUME webapp I2V generation completed: {data.get('info', '')}")
+                return data
             else:
-                logging.error(f"Failed to submit I2V generation: {response.status_code} - {response.text}")
-                return None
+                error_text = response.text[:500] if response.text else "No error message"
+                logging.error(f"YUME webapp returned {response.status_code}: {error_text}")
+                return {"success": False, "error": f"HTTP {response.status_code}: {error_text}"}
 
+        except requests.exceptions.Timeout:
+            return {"success": False, "error": "I2V generation timed out"}
         except requests.exceptions.RequestException as e:
-            logging.error(f"Failed to submit I2V generation request: {e}")
-            return None
+            logging.error(f"Failed to call webapp generate for I2V: {e}")
+            return {"success": False, "error": str(e)}
 
-    def _poll_for_completion(self, remote_job_id: str) -> Dict:
-        """Poll the API for job completion."""
-        start_time = time.time()
-
-        while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
-                return {"status": "cancelled", "error": "Shutdown requested"}
-
-            try:
-                response = requests.get(f"{self.api_base_url}/status/{remote_job_id}", timeout=10)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    status = data.get("status")
-
-                    if status == "completed":
-                        logging.info(f"Remote job {remote_job_id} completed")
-                        return data
-                    elif status == "failed":
-                        logging.error(f"Remote job {remote_job_id} failed: {data.get('error')}")
-                        return data
-                    else:
-                        logging.debug(f"Remote job {remote_job_id} status: {status}")
-                else:
-                    logging.warning(f"Status check returned {response.status_code}")
-
-            except requests.exceptions.RequestException as e:
-                logging.warning(f"Status check failed: {e}")
-
-            time.sleep(self.POLL_INTERVAL)
-
-        return {"status": "failed", "error": "Timeout waiting for generation"}
-
-    def _download_output(self, remote_job_id: str) -> Optional[str]:
-        """Download the generated video file from the API."""
+    def _download_output(self, video_rel: str) -> Optional[str]:
+        """Download the generated video file from the webapp's outputs endpoint."""
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
             local_path = os.path.join(self.cache_dir, f"{self.job_id}.mp4")
 
-            response = requests.get(f"{self.api_base_url}/download/{remote_job_id}", timeout=120, stream=True)
+            # The webapp serves files at /outputs/<path>
+            response = requests.get(
+                f"{self.api_base_url}/outputs/{video_rel}",
+                timeout=120,
+                stream=True
+            )
 
             if response.status_code == 200:
                 with open(local_path, "wb") as f:
@@ -297,13 +293,6 @@ class YumeCLIJobProcessor(BaseJobProcessor):
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to download output: {e}")
             return None
-
-    def _cleanup_remote_job(self, remote_job_id: str):
-        """Clean up the remote job and its files."""
-        try:
-            requests.delete(f"{self.api_base_url}/job/{remote_job_id}", timeout=10)
-        except requests.exceptions.RequestException:
-            pass
 
 
 # Create aliases for both T2V and I2V - same processor handles both
