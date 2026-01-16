@@ -254,20 +254,33 @@ def generate_video_sync(
         # Save video
         final_output = OUTPUT_DIR / f"{job_id}.mp4"
         
+        # Convert video frames from YUME format (C,F,H,W) to export format
+        # Based on webapp_single_gpu.py implementation
+        if isinstance(video_frames, torch.Tensor):
+            # Convert: (C,F,H,W) -> (F,H,W,C) with PIL Images
+            v = (video_frames * 255).byte().cpu().numpy()  # (C,F,H,W)
+            v = v.transpose(1, 2, 3, 0)  # (F,H,W,C)
+            
+            from PIL import Image
+            frames = [Image.fromarray(f) for f in v]
+        elif isinstance(video_frames, list):
+            # Already a list, ensure PIL Images
+            from PIL import Image
+            import numpy as np
+            frames = []
+            for frame in video_frames:
+                if isinstance(frame, np.ndarray):
+                    frames.append(Image.fromarray(frame.astype('uint8')))
+                elif isinstance(frame, Image.Image):
+                    frames.append(frame)
+                else:
+                    raise ValueError(f"Unknown frame type: {type(frame)}")
+        else:
+            raise ValueError(f"Unknown video_frames type: {type(video_frames)}")
+        
         # Export video frames to file
         from diffusers.utils import export_to_video
-        
-        # video_frames should be a list of PIL Images or numpy arrays
-        if isinstance(video_frames, torch.Tensor):
-            # Convert tensor to list of numpy arrays
-            video_frames = video_frames.cpu().numpy()
-            if video_frames.ndim == 4:  # [T, C, H, W] or [T, H, W, C]
-                if video_frames.shape[1] == 3:  # [T, C, H, W]
-                    video_frames = video_frames.transpose(0, 2, 3, 1)
-                video_frames = (video_frames * 255).astype("uint8")
-                video_frames = [frame for frame in video_frames]
-        
-        export_to_video(video_frames, str(final_output), fps=24)
+        export_to_video(frames, str(final_output), fps=24)
         
         if final_output.exists():
             jobs[job_id]["status"] = "completed"
