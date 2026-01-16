@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 
 from config import HEADLESS_MODE, TimeoutConfig
 from services.docker_manager import docker_manager
+from services.container_monitor import ContainerMonitor
 from exceptions import AuthError, ProviderError
 from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
 from services.hardware_profiler import can_run_service, get_service_incompatibility_reason
@@ -282,6 +283,39 @@ class JobListener:
                                             logging.info("Starting container...")
                                             docker_manager.run_container(service_type=actual_service_type)
                                             
+                                            # Start container crash monitor
+                                            # This detects OOM kills and unexpected container crashes
+                                            def handle_container_crash(crashed_job_id: str, reason: str):
+                                                """Called when container crashes unexpectedly."""
+                                                logging.error(f"Container crash detected for job {crashed_job_id}: {reason}")
+                                                
+                                                # Emit JOB_FAILED event
+                                                print(json.dumps({
+                                                    "type": "JOB_FAILED",
+                                                    "payload": {
+                                                        "id": crashed_job_id,
+                                                        "error": reason
+                                                    }
+                                                }), flush=True)
+                                                
+                                                # Mark job as failed
+                                                try:
+                                                    self.orchestrator_service.update_job_status(crashed_job_id, 'failed')
+                                                except Exception as e:
+                                                    logging.error(f"Failed to update job status after crash: {e}")
+                                                
+                                                # Clean up current job
+                                                self.client.current_job = None
+                                            
+                                            container_monitor = ContainerMonitor(
+                                                docker_client=docker_manager.client,
+                                                container_name=docker_manager.get_container_name(actual_service_type),
+                                                job_id=job_id,
+                                                on_container_crash=handle_container_crash,
+                                                shutdown_event=self.shutdown_event
+                                            )
+                                            container_monitor.start()
+                                            
                                             # Start log streaming in a background thread
                                             # This allows seeing ComfyUI/container logs in the DGN client console
                                             log_thread = threading.Thread(
@@ -332,6 +366,10 @@ class JobListener:
                                         if not self.shutdown_event.is_set():
                                             logging.info(f"Job processing finished.")
                                             if not HEADLESS_MODE:
+                                                # Stop container monitor before stopping container
+                                                if 'container_monitor' in locals():
+                                                    container_monitor.stop()
+                                                
                                                 logging.info(f"Stopping container for service '{actual_service_type}'...")
                                                 docker_manager.stop_container(service_type=actual_service_type)
                                             self.client.active_service_type = None
