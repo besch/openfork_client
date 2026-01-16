@@ -65,10 +65,13 @@
       "inputs": {
         "model": ["1", 0],
         "scheduler": "simple",
-        "steps": 30,
+        "steps": 15,
         "denoise": 1.0
       },
-      "class_type": "BasicScheduler"
+      "class_type": "BasicScheduler",
+      "_meta": {
+        "title": "Scheduler (15 steps for 8GB VRAM)"
+      }
     },
     "10": {
       "inputs": {
@@ -80,7 +83,10 @@
       "inputs": {
         "vae_name": "LTX2_video_vae_bf16.safetensors"
       },
-      "class_type": "VAELoader"
+      "class_type": "VAELoader",
+      "_meta": {
+        "title": "VAE Loader (BF16)"
+      }
     },
     "12": {
       "inputs": {
@@ -88,24 +94,30 @@
         "vae": ["11", 0],
         "width": 480,
         "height": 320,
-        "num_frames": 49,
+        "num_frames": 41,
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
         "noise": ["10", 0]
       },
-      "class_type": "LTXVBaseSampler"
+      "class_type": "LTXVBaseSampler",
+      "_meta": {
+        "title": "8GB SAFE: 480x320, 41 frames (~1.7s @ 24fps)"
+      }
     },
     "13": {
       "inputs": {
         "samples": ["12", 0],
         "vae": ["11", 0],
-        "tile_size": 128,
-        "overlap": 32,
-        "temporal_size": 32,
-        "temporal_overlap": 4
+        "tile_size": 256,
+        "overlap": 48,
+        "temporal_size": 24,
+        "temporal_overlap": 6
       },
-      "class_type": "VAEDecodeTiled"
+      "class_type": "VAEDecodeTiled",
+      "_meta": {
+        "title": "VAE Decode Tiled (8GB Optimized)"
+      }
     },
     "14": {
       "inputs": {

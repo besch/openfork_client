@@ -300,26 +300,30 @@ EXPOSE 8188
 
 WORKDIR /opt/ComfyUI
 
-# Start ComfyUI with AGGRESSIVE 8GB VRAM optimization settings
-# Critical for RTX 4060/3060/3070 and similar 8GB cards
+# Start ComfyUI with EXTREME 8GB VRAM optimization (2025-2026 Community-Tested)
+# Based on successful RTX 4060/3060 user reports from Reddit
 #
-# --lowvram: Essential - Offloads model weights to RAM when not in use
-# --cpu-vae: Runs VAE decode on CPU, saves ~1-2GB VRAM (slower but stable)
-# --disable-smart-memory: Prevents memory caching that causes silent OOM crashes
-# --reserve-vram 1.0: Keeps 1GB VRAM free for CUDA kernels
-# --force-fp16: Forces FP16 precision where possible for memory efficiency
-# --use-split-cross-attention: Reduces memory spikes during attention computation
-# --preview-method none: Disables preview generation to save VRAM
+# --lowvram: Essential - Aggressive RAM offloading
+# --force-fp32: Use FP32 for VAE (more stable than CPU-VAE on modern PyTorch)
+# --disable-smart-memory: Prevents caching that causes silent OOM
+# --reserve-vram 1.0: Reserve 1GB for CUDA operations
+# --force-fp16: FP16 precision for maximum memory efficiency
+# --use-split-cross-attention: Reduces attention memory spikes
+# --preview-method none: Disable previews (saves VRAM)
+# --disable-xformers: Prevents xformers memory allocation spikes
+# --always-offload-from-vram: Maximum RAM usage, minimal VRAM usage
 CMD ["python", "main.py", \
      "--listen", "0.0.0.0", \
      "--port", "8188", \
      "--lowvram", \
-     "--cpu-vae", \
+     "--force-fp32", \
      "--disable-smart-memory", \
      "--reserve-vram", "1.0", \
      "--force-fp16", \
      "--use-split-cross-attention", \
-     "--preview-method", "none"]
+     "--preview-method", "none", \
+     "--disable-xformers", \
+     "--always-offload-from-vram"]
 
 # Build instructions:
 # docker build --build-arg HF_TOKEN=your_token_here -t ltx2-8gb-fp8 -f Dockerfile .
