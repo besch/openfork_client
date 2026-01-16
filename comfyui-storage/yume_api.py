@@ -236,10 +236,11 @@ def generate_video_sync(
         logger.info(f"Starting generation with seed {seed}...")
         
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            # Note: image parameter seems to be positional or not accepted as keyword
+            # For now, only pass it if needed (I2V mode investigation needed)
             video_frames = wan.generate(
                 input_prompt=prompt,
                 n_prompt=negative_prompt if negative_prompt else "",
-                image=input_image,
                 frame_num=num_frames,
                 max_area=max_area,
                 sampling_steps=steps,

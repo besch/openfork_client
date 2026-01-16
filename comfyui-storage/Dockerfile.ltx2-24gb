@@ -18,15 +18,19 @@ ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 ARG HF_TOKEN
 ENV HF_TOKEN=${HF_TOKEN}
 
-# System dependencies
+# System dependencies (using Ubuntu 22.04's default Python 3.10)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-distutils \
-    curl git wget libgl1-mesa-glx libgl1-mesa-dri git-lfs \
-    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    curl \
+    git \
+    wget \
+    libgl1-mesa-glx \
+    libgl1-mesa-dri \
+    git-lfs \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -202,13 +206,14 @@ COPY gemma-configs/preprocessor_config.json models/clip/gemma-3-12b-it/
 COPY gemma-configs/processor_config.json models/clip/gemma-3-12b-it/
 COPY gemma-configs/generation_config.json models/clip/gemma-3-12b-it/
 
-# Verify all models (FIXED: Updated LoRA minimum size & Directory support)
+# Verify all models (Corrected paths for FP8 UNET model)
 RUN echo '#!/usr/bin/env python3\n\
 import os\n\
 import sys\n\
 \n\
 files_to_verify = {\n\
-    "models/checkpoints/ltx-2-19b-distilled.safetensors": 30.0,\n\
+    "models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors": 20.0,\n\
+    "models/vae/LTX2_video_vae_bf16.safetensors": 4.0,\n\
     "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 6.0,\n\
     "models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors": 0.05,\n\
     "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 0.8,\n\
