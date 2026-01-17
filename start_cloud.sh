@@ -294,7 +294,11 @@ else
 fi
 
 # Start YUME REST API (needs longer timeout because model loading takes ~5 minutes)
-if [ -f "/opt/dgn-client/yume_api.py" ]; then
+if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
+  log "Found YUME API script in comfyui-storage. Starting (model loading may take several minutes)..."
+  (cd /opt/dgn-client/comfyui-storage && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+  wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
+elif [ -f "/opt/dgn-client/yume_api.py" ]; then
   log "Found YUME API script. Starting (model loading may take several minutes)..."
   (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
   wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
