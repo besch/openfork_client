@@ -255,8 +255,18 @@ def generate_video_sync(
         final_output = OUTPUT_DIR / f"{job_id}.mp4"
         
         # Convert video frames from YUME format (C,F,H,W) to export format
+        if isinstance(video_frames, tuple):
+             logger.info(f"Video frames returned as tuple of length {len(video_frames)}")
+             video_frames = video_frames[0]
+
+        # Convert video frames from YUME format (C,F,H,W) to export format
         # Based on webapp_single_gpu.py implementation
         if isinstance(video_frames, torch.Tensor):
+            logger.info(f"Video tensor shape: {video_frames.shape}")
+            # Check dimensions - usually (C, F, H, W) or (B, C, F, H, W)
+            if video_frames.dim() == 5:
+                video_frames = video_frames[0] # Remove batch dim
+            
             # Convert: (C,F,H,W) -> (F,H,W,C) with PIL Images
             v = (video_frames * 255).byte().cpu().numpy()  # (C,F,H,W)
             v = v.transpose(1, 2, 3, 0)  # (F,H,W,C)
@@ -274,7 +284,7 @@ def generate_video_sync(
                 elif isinstance(frame, Image.Image):
                     frames.append(frame)
                 else:
-                    raise ValueError(f"Unknown frame type: {type(frame)}")
+                    raise ValueError(f"Unknown frame type in list: {type(frame)}")
         else:
             raise ValueError(f"Unknown video_frames type: {type(video_frames)}")
         
