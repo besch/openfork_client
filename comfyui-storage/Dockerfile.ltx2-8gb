@@ -316,7 +316,7 @@ CMD ["python", "main.py", \
      "--listen", "0.0.0.0", \
      "--port", "8188", \
      "--lowvram", \
-     "--force-fp32", \
+     "--fp32-vae", \
      "--disable-smart-memory", \
      "--reserve-vram", "1.0", \
      "--force-fp16", \

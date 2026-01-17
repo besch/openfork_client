@@ -213,7 +213,7 @@ import sys\n\
 \n\
 files_to_verify = {\n\
     "models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors": 20.0,\n\
-    "models/vae/LTX2_video_vae_bf16.safetensors": 4.0,\n\
+    "models/vae/LTX2_video_vae_bf16.safetensors": 2.0,\n\
     "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 6.0,\n\
     "models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors": 0.05,\n\
     "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 0.8,\n\
