@@ -95,9 +95,11 @@
       "inputs": {
         "width": 1280,
         "height": 720,
-        "batch_size": 1
+        "length": 97,
+        "batch_size": 1,
+        "auto_adjust_dimensions": true
       },
-      "class_type": "EmptyLatentImage"
+      "class_type": "EmptyLTXVideoLatent"
     },
     "11": {
       "inputs": {
