@@ -91,16 +91,24 @@
         "title": "Load VAE (Separate for Consistent Memory Management)"
       }
     },
+    "20": {
+      "inputs": {
+        "width": 1280,
+        "height": 720,
+        "batch_size": 1
+      },
+      "class_type": "EmptyLatentImage"
+    },
     "11": {
       "inputs": {
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["5", 0]
+        "latent_image": ["20", 0]
       },
       "class_type": "SamplerCustom",
       "_meta": {
-        "title": "Standard Sampler (Replaces LTXVBaseSampler)"
+        "title": "Standard Sampler"
       }
     },
     "12": {
