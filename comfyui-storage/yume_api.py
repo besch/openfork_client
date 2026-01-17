@@ -301,7 +301,10 @@ def generate_video_sync(
                 else:
                     raise ValueError(f"Unknown frame type in list: {type(frame)}")
         else:
-            raise ValueError(f"Unknown video_frames type: {type(video_frames)}")
+            msg = f"Unknown video_frames type: {type(video_frames)}"
+            if isinstance(video_frames, dict):
+                msg += f" Keys: {list(video_frames.keys())}"
+            raise ValueError(msg)
         
         # Export video frames to file
         from diffusers.utils import export_to_video
