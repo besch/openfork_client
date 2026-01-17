@@ -109,7 +109,7 @@
         "sigmas": ["9", 0],
         "latent_image": ["20", 0]
       },
-      "class_type": "SamplerCustom",
+      "class_type": "SamplerCustomAdvanced",
       "_meta": {
         "title": "Standard Sampler"
       }
