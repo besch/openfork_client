@@ -49,14 +49,16 @@
       },
       "class_type": "LTXVConditioning"
     },
-    "7": {
+    "21": {
       "inputs": {
         "model": ["1", 0],
         "positive": ["5", 0],
         "negative": ["5", 1],
-        "cfg": 3.0
+        "cfg": 3.0,
+        "stg": 1.0,
+        "rescale": 0.7
       },
-      "class_type": "CFGGuider"
+      "class_type": "STGGuider"
     },
     "8": {
       "inputs": {
@@ -101,7 +103,8 @@
     },
     "11": {
       "inputs": {
-        "guider": ["7", 0],
+        "noise": ["10", 0],
+        "guider": ["21", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
         "latent_image": ["20", 0]
