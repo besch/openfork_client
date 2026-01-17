@@ -93,19 +93,14 @@
     },
     "11": {
       "inputs": {
-        "model": ["1", 0],
-        "vae": ["16", 0],
-        "width": 1280,
-        "height": 720,
-        "num_frames": 97,
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "noise": ["10", 0]
+        "latent_image": ["5", 0]
       },
-      "class_type": "LTXVBaseSampler",
+      "class_type": "SamplerCustom",
       "_meta": {
-        "title": "24GB DEFAULT: 720p, 97 frames (4 seconds)"
+        "title": "Standard Sampler (Replaces LTXVBaseSampler)"
       }
     },
     "12": {

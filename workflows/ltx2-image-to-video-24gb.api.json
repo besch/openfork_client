@@ -86,19 +86,12 @@
     },
     "11": {
       "inputs": {
-        "model": ["1", 0],
-        "vae": ["16", 0],
-        "width": 1024,
-        "height": 576,
-        "num_frames": 121,
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "noise": ["10", 0],
-        "optional_cond_images": ["15", 0],
-        "optional_cond_indices": "0"
+        "latent_image": ["5", 0]
       },
-      "class_type": "LTXVBaseSampler"
+      "class_type": "SamplerCustom"
     },
     "12": {
       "inputs": {
