@@ -258,15 +258,13 @@ DEP_LIST="setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo G
 
 # Start ComfyUI
 if [ -d "/opt/ComfyUI" ]; then
-  log "Starting ComfyUI in background..."
-  
   # Determine ComfyUI launch flags based on SERVICE_TYPE
   COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
   
   case "$SERVICE_TYPE" in
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --disable-smart-memory --reserve-vram 4.0 --cache-none --force-fp16 --use-split-cross-attention --use-pytorch-cross-attention --preview-method none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --use-pytorch-cross-attention --preview-method none"
       ;;
     *ltx2*-16gb*|*16gb*)
       log "Applying 16GB VRAM optimizations for ComfyUI (split loading mode)"
@@ -285,10 +283,16 @@ if [ -d "/opt/ComfyUI" ]; then
       fi
       ;;
   esac
-  
-  log "ComfyUI Flags: $COMFY_FLAGS"
-  (cd /opt/ComfyUI && "$PYTHON_EXE" main.py $COMFY_FLAGS > /tmp/comfyui.log 2>&1) &
-  log "ComfyUI startup initiated (logging to /tmp/comfyui.log)"
+
+  # Check if ComfyUI is already running or starting (port 8188 bound)
+  if netstat -tln | grep -q ":8188 " || ss -tln | grep -q ":8188 "; then
+    log "Port 8188 is already bound. Assuming ComfyUI is starting or running. Skipping redundant startup."
+  else
+    log "Starting ComfyUI in background..."
+    log "ComfyUI Flags: $COMFY_FLAGS"
+    (cd /opt/ComfyUI && "$PYTHON_EXE" main.py $COMFY_FLAGS > /tmp/comfyui.log 2>&1) &
+    log "ComfyUI startup initiated (logging to /tmp/comfyui.log)"
+  fi
 else
   log "Info: /opt/ComfyUI not found."
 fi
@@ -338,9 +342,16 @@ export INSTALL_DEPS=true
 curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 
-# Wait for ComfyUI to be ready (if it was started)
+# Wait for ComfyUI to be ready (if it was started or is running)
 if [ -d "/opt/ComfyUI" ]; then
-  wait_for_url "ComfyUI" "http://127.0.0.1:8188/system_stats" 120 "/tmp/comfyui.log"
+  # Determine timeout based on service tier (24GB/YUME needs more time)
+  WAIT_TIME=120
+  if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"yume"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]]; then
+    WAIT_TIME=600
+    log "Large model detected ($SERVICE_TYPE). Extending ComfyUI readiness timeout to ${WAIT_TIME}s."
+  fi
+  
+  wait_for_url "ComfyUI" "http://127.0.0.1:8188/system_stats" "$WAIT_TIME" "/tmp/comfyui.log"
 fi
 
 # Save restart configuration
