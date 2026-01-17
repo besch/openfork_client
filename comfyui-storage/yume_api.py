@@ -362,13 +362,21 @@ async def startup_event():
     else:
         logger.warning(f"Model directory not found: {MODEL_DIR}")
 
-    # Load the model
-    success = load_yume_model()
-    if not success:
-        logger.error("Failed to load YUME model - API will return errors for generation requests")
+    # Load the model in background to not block startup
+    logger.info("Scheduling background model load...")
+    asyncio.create_task(background_load_model())
 
     # Start the background worker loop
     asyncio.create_task(worker_loop())
+
+async def background_load_model():
+    """Run blocking model load in thread pool."""
+    logger.info("Starting background model load...")
+    success = await asyncio.to_thread(load_yume_model)
+    if not success:
+        logger.error("Failed to load YUME model - API will return errors for generation requests")
+    else:
+        logger.info("Model load completed successfully")
 
 
 @app.get("/health")
