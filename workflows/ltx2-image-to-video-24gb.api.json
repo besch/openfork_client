@@ -84,12 +84,21 @@
       },
       "class_type": "VAELoader"
     },
+    "20": {
+      "inputs": {
+        "width": 1024,
+        "height": 576,
+        "batch_size": 1
+      },
+      "class_type": "EmptyLatentImage"
+    },
     "11": {
       "inputs": {
+        "noise": ["10", 0],
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["5", 0]
+        "latent_image": ["20", 0]
       },
       "class_type": "SamplerCustom"
     },
