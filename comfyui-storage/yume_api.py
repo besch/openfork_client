@@ -254,10 +254,25 @@ def generate_video_sync(
         # Save video
         final_output = OUTPUT_DIR / f"{job_id}.mp4"
         
-        # Convert video frames from YUME format (C,F,H,W) to export format
         if isinstance(video_frames, tuple):
              logger.info(f"Video frames returned as tuple of length {len(video_frames)}")
              video_frames = video_frames[0]
+        elif isinstance(video_frames, dict):
+             logger.info(f"Video frames returned as dict with keys: {video_frames.keys()}")
+             # Try common keys
+             if "video" in video_frames:
+                 video_frames = video_frames["video"]
+             elif "frames" in video_frames:
+                 video_frames = video_frames["frames"]
+             elif "images" in video_frames:
+                 video_frames = video_frames["images"]
+             else:
+                 # Try to find first tensor value
+                 for k, v in video_frames.items():
+                     if isinstance(v, torch.Tensor):
+                         logger.info(f"Found tensor in key '{k}'")
+                         video_frames = v
+                         break
 
         # Convert video frames from YUME format (C,F,H,W) to export format
         # Based on webapp_single_gpu.py implementation
