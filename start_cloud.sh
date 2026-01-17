@@ -168,6 +168,11 @@ wait_for_url() {
       return 0
     fi
     [ $((waited % 10)) -eq 0 ] && log "  Waiting... ($waited/$max_wait seconds)"
+    # Output last few lines of log if waiting too long
+    if [ $waited -gt 30 ] && [ $((waited % 30)) -eq 0 ] && [ -f "$log_file" ]; then
+        log "  Last 3 lines of $log_file:"
+        tail -n 3 "$log_file" | sed 's/^/    /' || true
+    fi
     sleep 2
     waited=$((waited + 2))
   done
@@ -234,12 +239,12 @@ fi
 
 install_pip "$PYTHON_EXE" || exit 1
 
-# Install ffmpeg for thumbnail generation and video duration detection
-log "Installing ffmpeg..."
+# Install ffmpeg for thumbnail generation and video duration detection, and psmisc for fuser
+log "Installing ffmpeg and system tools..."
 apt-get update -qq 2>/dev/null || true
-apt-get install -y -qq ffmpeg 2>/dev/null || \
+apt-get install -y -qq ffmpeg psmisc net-tools 2>/dev/null || \
   (log "apt-get failed, trying alternative..." && \
-   apt-get install -y ffmpeg 2>&1 || log "Warning: ffmpeg installation failed")
+   apt-get install -y ffmpeg psmisc net-tools 2>&1 || log "Warning: installation failed")
 
 # Verify ffmpeg installed
 if command -v ffmpeg &> /dev/null; then
@@ -253,6 +258,18 @@ log "Installing base dependencies..."
 DEP_LIST="setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo GPUtil psutil transformers Pillow typing_extensions aiohttp einops safetensors scipy tqdm"
 "$PYTHON_EXE" -m pip install --quiet --break-system-packages $DEP_LIST 2>/dev/null || \
 "$PYTHON_EXE" -m pip install --quiet $DEP_LIST || true
+
+# --- Client Setup (Download FIRST) ---
+# NOTE: We download DGN client files BEFORE starting services (YUME API needs the script!)
+
+mkdir -p /opt/dgn-client /data/.cache /data/input
+
+# Download DGN client from GitHub using bootstrap script
+cd /opt/dgn-client
+log "Downloading DGN client files..."
+export INSTALL_DEPS=true
+curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
+bash bootstrap.sh
 
 # --- Background Services ---
 
@@ -298,13 +315,21 @@ else
 fi
 
 # Start YUME REST API (needs longer timeout because model loading takes ~5 minutes)
-if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
-  log "Found YUME API script in comfyui-storage. Starting (model loading may take several minutes)..."
-  (cd /opt/dgn-client/comfyui-storage && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
-  wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
-elif [ -f "/opt/dgn-client/yume_api.py" ]; then
-  log "Found YUME API script. Starting (model loading may take several minutes)..."
-  (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ] || [ -f "/opt/dgn-client/yume_api.py" ]; then
+  # Ensure port 8000 is free (kill default webapp if running)
+  if netstat -tln | grep -q ":8000 " || ss -tln | grep -q ":8000 "; then
+    log "Port 8000 is occupied. Killing existing process to start YUME API..."
+    fuser -k 8000/tcp >/dev/null 2>&1 || true
+    sleep 3
+  fi
+
+  if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
+    log "Found YUME API script in comfyui-storage. Starting (model loading may take several minutes)..."
+    (cd /opt/dgn-client/comfyui-storage && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+  else
+    log "Found YUME API script. Starting (model loading may take several minutes)..."
+    (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+  fi
   wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
 fi
 
@@ -331,16 +356,7 @@ if command -v ollama &> /dev/null; then
   wait_for_url "Ollama" "http://127.0.0.1:11434/api/tags" 60 "/tmp/ollama.log"
 fi
 
-# --- Client Setup ---
-
-mkdir -p /opt/dgn-client /data/.cache /data/input
-
-# Download DGN client from GitHub using bootstrap script
-cd /opt/dgn-client
-log "Downloading DGN client files..."
-export INSTALL_DEPS=true
-curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
-bash bootstrap.sh
+# --- Final Checks & Execution ---
 
 # Wait for ComfyUI to be ready (if it was started or is running)
 if [ -d "/opt/ComfyUI" ]; then
@@ -362,8 +378,6 @@ export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 RESTART_CONFIG_EOF
 
 chmod +x /opt/dgn-client/.restart-config
-
-# --- Execution ---
 
 log "Starting DGN client..."
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
