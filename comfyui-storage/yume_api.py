@@ -266,6 +266,13 @@ def generate_video_sync(
                  video_frames = video_frames["frames"]
              elif "images" in video_frames:
                  video_frames = video_frames["images"]
+             elif "context" in video_frames:
+                 logger.info(f"Found 'context' key. Type: {type(video_frames['context'])}")
+                 video_frames = video_frames["context"]
+                 if isinstance(video_frames, torch.Tensor):
+                     logger.info(f"Context tensor shape: {video_frames.shape}")
+                 elif isinstance(video_frames, list) and len(video_frames) > 0:
+                     logger.info(f"Context list length: {len(video_frames)}")
              else:
                  # Try to find first tensor value
                  for k, v in video_frames.items():
