@@ -264,7 +264,7 @@ if [ -d "/opt/ComfyUI" ]; then
   case "$SERVICE_TYPE" in
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --use-pytorch-cross-attention --preview-method none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
       ;;
     *ltx2*-16gb*|*16gb*)
       log "Applying 16GB VRAM optimizations for ComfyUI (split loading mode)"
