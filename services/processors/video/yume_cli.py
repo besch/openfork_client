@@ -270,7 +270,7 @@ class YumeCLIJobProcessor(BaseJobProcessor):
                     
                     # Log wait occasionally
                     if time.time() % 30 < self.POLL_INTERVAL:
-                        logging.debug(f"Job {api_job_id} is {state}...")
+                        logging.info(f"Job {api_job_id} is {state}...")
                         
                 elif response.status_code == 404:
                      return {"success": False, "error": "Job disappeared from API"}

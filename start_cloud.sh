@@ -273,6 +273,11 @@ bash bootstrap.sh
 
 # --- Background Services ---
 
+# CRITICAL FIX for PyTorch 2.4+ / CUDA 12 mismatch errors (undefined symbol: __nvJitLinkComplete_12_4)
+# We must prioritize the pip-installed nvidia libraries over system libraries
+export LD_LIBRARY_PATH=$(python3 -c "import site; print(site.getsitepackages()[0] + '/nvidia/nvjitlink/lib:' + site.getsitepackages()[0] + '/nvidia/cusparse/lib:' + site.getsitepackages()[0] + '/nvidia/cublas/lib:' + site.getsitepackages()[0] + '/nvidia/cuda_runtime/lib')"):$LD_LIBRARY_PATH
+log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
+
 # Start ComfyUI
 if [ -d "/opt/ComfyUI" ]; then
   # Determine ComfyUI launch flags based on SERVICE_TYPE
@@ -301,8 +306,19 @@ if [ -d "/opt/ComfyUI" ]; then
       ;;
   esac
 
-  # Check if ComfyUI is already running or starting (port 8188 bound)
-  if netstat -tln | grep -q ":8188 " || ss -tln | grep -q ":8188 "; then
+  # Check if ComfyUI is already starting (port 8188 bound)
+  # Use netstat (from net-tools) or fallback to /proc/net/tcp check if tools missing
+  PORT_BOUND=false
+  if command -v netstat &> /dev/null; then
+    if netstat -tln | grep -q ":8188 "; then PORT_BOUND=true; fi
+  elif command -v ss &> /dev/null; then
+     if ss -tln | grep -q ":8188 "; then PORT_BOUND=true; fi
+  else
+     # Fallback: check /proc/net/tcp for port 1FFC (8188 in hex)
+     if grep -q "1FFC" /proc/net/tcp; then PORT_BOUND=true; fi
+  fi
+
+  if [ "$PORT_BOUND" = "true" ]; then
     log "Port 8188 is already bound. Assuming ComfyUI is starting or running. Skipping redundant startup."
   else
     log "Starting ComfyUI in background..."
