@@ -49,23 +49,14 @@
       },
       "class_type": "LTXVConditioning"
     },
-    "6": {
-      "inputs": {
-        "model": ["1", 0],
-        "block_indices": "14, 19"
-      },
-      "class_type": "LTXVApplySTG"
-    },
     "7": {
       "inputs": {
-        "model": ["6", 0],
+        "model": ["1", 0],
         "positive": ["5", 0],
         "negative": ["5", 1],
-        "cfg": 3.0,
-        "stg": 1.0,
-        "rescale": 0.7
+        "cfg": 3.0
       },
-      "class_type": "STGGuider"
+      "class_type": "CFGGuider"
     },
     "8": {
       "inputs": {
