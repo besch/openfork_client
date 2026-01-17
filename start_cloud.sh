@@ -330,23 +330,25 @@ else
   log "Info: /opt/ComfyUI not found."
 fi
 
-# Start YUME REST API (needs longer timeout because model loading takes ~5 minutes)
-if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ] || [ -f "/opt/dgn-client/yume_api.py" ]; then
-  # Ensure port 8000 is free (kill default webapp if running)
-  if netstat -tln | grep -q ":8000 " || ss -tln | grep -q ":8000 "; then
-    log "Port 8000 is occupied. Killing existing process to start YUME API..."
-    fuser -k 8000/tcp >/dev/null 2>&1 || true
-    sleep 3
-  fi
+# Start YUME REST API (only if service type is yume or auto, needs longer timeout)
+if [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
+  if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ] || [ -f "/opt/dgn-client/yume_api.py" ]; then
+    # Ensure port 8000 is free (kill default webapp if running)
+    if netstat -tln | grep -q ":8000 " || ss -tln | grep -q ":8000 "; then
+      log "Port 8000 is occupied. Killing existing process to start YUME API..."
+      fuser -k 8000/tcp >/dev/null 2>&1 || true
+      sleep 3
+    fi
 
-  if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
-    log "Found YUME API script in comfyui-storage. Starting (model loading may take several minutes)..."
-    (cd /opt/dgn-client/comfyui-storage && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
-  else
-    log "Found YUME API script. Starting (model loading may take several minutes)..."
-    (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+    if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
+      log "Found YUME API script in comfyui-storage. Starting (model loading may take several minutes)..."
+      (cd /opt/dgn-client/comfyui-storage && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+    else
+      log "Found YUME API script. Starting (model loading may take several minutes)..."
+      (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+    fi
+    wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
   fi
-  wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
 fi
 
 # Start DiffRhythm REST API
