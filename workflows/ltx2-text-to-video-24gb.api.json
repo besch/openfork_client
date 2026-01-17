@@ -49,6 +49,25 @@
       },
       "class_type": "LTXVConditioning"
     },
+    "16": {
+      "inputs": {
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
+      },
+      "class_type": "VAELoader",
+      "_meta": {
+        "title": "Load VAE (Separate for Consistent Memory Management)"
+      }
+    },
+    "20": {
+      "inputs": {
+        "width": 1280,
+        "height": 720,
+        "length": 97,
+        "batch_size": 1,
+        "autopad": true
+      },
+      "class_type": "EmptyLTXVLatentVideo"
+    },
     "7": {
       "inputs": {
         "model": ["1", 0],
@@ -68,38 +87,16 @@
       "inputs": {
         "model": ["1", 0],
         "scheduler": "simple",
-        "steps": 20,
+        "steps": 25,
         "denoise": 1.0
       },
-      "class_type": "BasicScheduler",
-      "_meta": {
-        "title": "Scheduler (20 steps recommended, 30+ for maximum quality)"
-      }
+      "class_type": "BasicScheduler"
     },
     "10": {
       "inputs": {
         "noise_seed": 0
       },
       "class_type": "RandomNoise"
-    },
-    "16": {
-      "inputs": {
-        "vae_name": "LTX2_video_vae_bf16.safetensors"
-      },
-      "class_type": "VAELoader",
-      "_meta": {
-        "title": "Load VAE (Separate for Consistent Memory Management)"
-      }
-    },
-    "20": {
-      "inputs": {
-        "width": 1280,
-        "height": 720,
-        "length": 97,
-        "batch_size": 1,
-        "auto_adjust_dimensions": true
-      },
-      "class_type": "EmptyLTXVideoLatent"
     },
     "11": {
       "inputs": {
@@ -111,7 +108,7 @@
       },
       "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "Standard Sampler"
+        "title": "Standard Sampler (Advanced)"
       }
     },
     "12": {
