@@ -57,9 +57,6 @@ class YumeCLIJobProcessor(BaseJobProcessor):
         steps = inputs.get("steps", 30)
         num_frames = inputs.get("num_frames", 49)
         seed = inputs.get("seed", 0)
-        
-        # Yume API specific params
-        shift = inputs.get("shift", 7.0)
 
         if not self._wait_for_api():
             self._fail_job(f"YUME API did not become available for job {self.job_id}")

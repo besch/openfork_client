@@ -3,8 +3,7 @@
 YUME REST API Server for OpenFork DGN Client (Direct Model Loading)
 
 Provides a simple HTTP API for video generation from text or images.
-Uses wan23.Yume directly for memory-efficient single-GPU inference,
-instead of subprocess with FSDP which causes OOM issues.
+Uses wan.Yume directly for memory-efficient single-GPU inference.
 
 Reference: https://github.com/stdstu12/YUME
 Model: https://huggingface.co/stdstu123/Yume-5B-720P
@@ -14,7 +13,6 @@ import os
 import sys
 import uuid
 import logging
-import shutil
 import asyncio
 import random
 from pathlib import Path
@@ -81,7 +79,7 @@ class JobStatus(BaseModel):
 
 
 def load_yume_model():
-    """Load the YUME model using wan23.Yume for single-GPU inference."""
+    """Load the YUME model using wan.Yume for single-GPU inference."""
     global MODELS
     
     if MODELS.loaded:
@@ -99,42 +97,38 @@ def load_yume_model():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         
-        # Import YUME modules
-        import importlib
-        from wan23.configs import WAN_CONFIGS
-        
-        _wan23 = importlib.import_module("wan23")
+        # Import YUME modules - CORRECTED: Use 'wan' not 'wan23'
+        from wan import Yume
+        from wan.configs import WAN_CONFIGS
         
         # Set device
         MODELS.device = torch.device(f"cuda:{DEVICE_ID}")
         
-        # Load model using ti2v-5B config (text/image to video 5B)
-        cfg = WAN_CONFIGS["ti2v-5B"]
-        logger.info(f"Loading Yume with config: ti2v-5B")
+        # Load model - CORRECTED: Using proper config approach
+        # The model expects checkpoint_dir to contain the model files
+        logger.info(f"Initializing Yume model...")
         
-        # Create symlink if needed
+        # Create symlink if needed for compatibility
         ckpt_dir = YUME_DIR / "Yume-5B-720P"
-        if not ckpt_dir.exists():
-            ckpt_dir.symlink_to(MODEL_DIR)
+        if not ckpt_dir.exists() and MODEL_DIR.exists():
+            try:
+                ckpt_dir.symlink_to(MODEL_DIR)
+                logger.info(f"Created symlink: {ckpt_dir} -> {MODEL_DIR}")
+            except Exception as e:
+                logger.warning(f"Could not create symlink: {e}")
         
-        MODELS.wan_model = _wan23.Yume(
-            config=cfg, 
+        # Initialize the model
+        # Based on YUME's structure, we pass the checkpoint directory
+        MODELS.wan_model = Yume(
             checkpoint_dir=str(MODEL_DIR),
-            device_id=DEVICE_ID,
-            t5_cpu=True,      # Keep T5 on CPU to save ~10GB VRAM
-            init_on_cpu=True  # Initialize DiT on CPU then move to GPU
+            device_id=DEVICE_ID
         )
         
-        # Store references with correct attribute names
+        # Store references to sub-models
+        # These will be used for direct inference
         MODELS.vae = MODELS.wan_model.vae
-        MODELS.transformer = MODELS.wan_model.model  # .model not .dit
+        MODELS.transformer = MODELS.wan_model.dit  # The diffusion transformer
         MODELS.text_encoder = MODELS.wan_model.text_encoder
-        
-        # Explicitly move to GPU (since init_on_cpu=True left them on CPU)
-        logger.info("Moving models to GPU...")
-        torch.cuda.empty_cache()
-        MODELS.transformer.to(MODELS.device)
-        MODELS.vae.to(MODELS.device)
         
         MODELS.loaded = True
         logger.info("YUME model loaded successfully!")
@@ -201,23 +195,12 @@ def generate_video_sync(
     seed: int,
     image_path: Optional[str] = None
 ):
-    """Synchronous video generation using wan23.Yume with internal loop."""
-    # Local imports and helpers to keep this function self-contained
-    import numpy as np
-    from PIL import Image
-    from diffusers.utils import export_to_video
-
-    def get_sampling_sigmas(steps: int, shift: float):
-        sigma = np.linspace(1, 0, steps + 1)[:steps]
-        return (shift * sigma / (1 + (shift - 1) * sigma))
-
-    def _to_bf16(x, device):
-        if isinstance(x, torch.Tensor):
-            return x.to(device=device, dtype=torch.bfloat16)
-        if isinstance(x, (list, tuple)):
-            return type(x)(_to_bf16(t, device) for t in x)
-        return x
-
+    """
+    Synchronous video generation using wan.Yume.
+    
+    This uses the high-level generate() API from YUME which handles
+    the entire pipeline internally.
+    """
     try:
         if not MODELS.loaded:
             raise RuntimeError("YUME model not loaded")
@@ -225,11 +208,13 @@ def generate_video_sync(
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"Generating video for job {job_id}...")
-        logger.info(f"Prompt: {prompt[:100]}..., Frames: {num_frames}, Resolution: {width}x{height}, Steps: {steps}")
+        logger.info(f"Prompt: {prompt[:100]}...")
+        logger.info(f"Frames: {num_frames}, Resolution: {width}x{height}, Steps: {steps}")
         
         # Use random seed if 0
         if seed == 0:
             seed = random.randint(1, 2**32 - 1)
+            logger.info(f"Using random seed: {seed}")
         
         # Set seed for reproducibility
         torch.manual_seed(seed)
@@ -239,141 +224,77 @@ def generate_video_sync(
         wan = MODELS.wan_model
         device = MODELS.device
         
-        # Prepare input image for I2V mode (Placeholder for future I2V support)
-        if image_path:
-             logger.warning("I2V inputs received but currently using T2V loop logic. I2V specific adaptation pending.")
+        # Prepare input image for I2V mode
+        img_input = None
+        if image_path and os.path.exists(image_path):
+            from PIL import Image
+            img_input = Image.open(image_path).convert("RGB")
+            logger.info(f"Loaded input image: {image_path}")
+        
+        # Update progress
+        jobs[job_id]["progress"] = 10
         
         # Calculate max_area based on resolution
         max_area = width * height
         
-        logger.info(f"Starting generation prep with seed {seed}...")
+        logger.info(f"Starting YUME generation with seed {seed}...")
         
-        # 1. Prepare Inputs (Noise, Context) using wan.generate (which acts as prep function)
+        # Use the high-level generate() method
+        # This is the main API that YUME provides
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-            gen_ret = wan.generate(
-                input_prompt=prompt,
-                img=None, # Force T2V prep
-                size=(width, height),
-                n_prompt=negative_prompt if negative_prompt else "",
-                frame_num=num_frames,
-                max_area=max_area,
-                sampling_steps=steps, # Not used for prep but passed
-                guide_scale=cfg, # Not used for prep
-                shift=8.0, 
-                seed=seed
-            )
-            
-        # Handle return values (T2V)
-        # gen_ret is (arg_c, arg_null, noise)
-        arg_c, arg_null, noise = gen_ret
+            with torch.no_grad():
+                # The generate method returns video frames directly
+                video_output = wan.generate(
+                    input_prompt=prompt,
+                    img=img_input,  # None for T2V, PIL Image for I2V
+                    size=(width, height),
+                    n_prompt=negative_prompt if negative_prompt else "",
+                    frame_num=num_frames,
+                    max_area=max_area,
+                    sampling_steps=steps,
+                    guide_scale=cfg,
+                    shift=8.0,  # Flow matching shift parameter
+                    seed=seed
+                )
         
-        logger.info(f"Noise type: {type(noise)}")
-        if isinstance(noise, torch.Tensor):
-            logger.info(f"Noise shape: {noise.shape}")
+        jobs[job_id]["progress"] = 90
         
-        # Move to bf16
-        noise = _to_bf16(noise, device)
-        # arg_c context is already on device from generate()
-        
-        # 2. Diffusion Loop
-        logger.info("Starting diffusion sampling...")
-        
-        # Calculate latent frame zero
-        latent_frame_zero = (num_frames - 1) // 4 + 1
-        
-        shift = 8.0
-        sampling_sigmas = get_sampling_sigmas(steps, shift)
-        latent = noise.clone()
-        transformer = MODELS.transformer
-        
-        logger.info(f"Latent shape: {latent.shape}")
-        logger.info(f"arg_c keys: {arg_c.keys()}")
-        if "context" in arg_c:
-            logger.info(f"Context type: {type(arg_c['context'])}")
-            if isinstance(arg_c["context"], list):
-                logger.info(f"Context list len: {len(arg_c['context'])}")
-                logger.info(f"Context element 0 shape: {arg_c['context'][0].shape}")
-        
-        for i in range(steps):
-             # Update progress periodically
-             if i % 5 == 0:
-                 jobs[job_id]["progress"] = int((i / steps) * 100)
-             
-             # Calculate timestep vector
-             ts_scalar = [sampling_sigmas[i]*1000]
-             timestep = torch.tensor(ts_scalar).to(device)
-             tvec = timestep
-             
-             latent_model_input = [_to_bf16(latent, device)]
-             
-             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-                  # Forward pass
-                  # webapp uses flag=False for simple T2V
-                  noise_pred = transformer(latent_model_input, t=tvec, latent_frame_zero=latent_frame_zero, **arg_c, flag=False)[0]
-             
-             # Scheduler step (Euler/Flow)
-             tail = latent
-             pred_tail = noise_pred
-             if i+1 == steps:
-                 new_tail = tail + (0.0 - sampling_sigmas[i]) * pred_tail
-             else:
-                 new_tail = tail + (sampling_sigmas[i+1] - sampling_sigmas[i]) * pred_tail
-             latent = new_tail
-             
-        # 3. Decode
-        logger.info(f"Decoding latent video with shape {latent.shape}...")
-        
-        # Scaling factor for Wan2.1/Yume VAE (Standard is 0.41407)
-        scale_factor = 0.41407 
-        latent = latent / scale_factor
-        
-        with torch.no_grad():
-             vae_model = MODELS.vae
-             # If it has a 'model' attribute, it's likely a wrapper
-             if hasattr(MODELS.vae, "model"):
-                 vae_model = MODELS.vae.model
-             
-             # Crucial: Match VAE weight dtype (often float32 even if DiT is bf16)
-             vae_dtype = next(vae_model.parameters()).dtype
-             latent = latent.to(dtype=vae_dtype)
-             logger.info(f"VAE weight dtype: {vae_dtype}, Latent cast to match.")
-             
-             # Try to find the most appropriate decode method
-             if hasattr(vae_model, "z_project") and hasattr(vae_model, "decoder"):
-                 logger.info("VAE: Using manual z_project + decoder sequence")
-                 with torch.cuda.amp.autocast(dtype=vae_dtype):
-                     z = vae_model.z_project(latent)
-                     video_frames = vae_model.decoder(z)
-             elif hasattr(vae_model, "decode"):
-                 logger.info("VAE: Using vae_model.decode()")
-                 video_frames = vae_model.decode(latent)
-             elif hasattr(MODELS.vae, "decode"):
-                 logger.info("VAE: Using MODELS.vae.decode() as fallback")
-                 # Some wrappers expect a list
-                 res = MODELS.vae.decode([latent])
-                 video_frames = res[0] if isinstance(res, list) else res
-             else:
-                 raise RuntimeError(f"Could not find a valid decode method on VAE object (type: {type(vae_model)})")
-             
-             # If the result is a list/tuple, unpack it
-             if isinstance(video_frames, (list, tuple)):
-                 video_frames = video_frames[0]
-             
-             # Ensure video_frames is back on CPU for post-processing
-             video_frames = video_frames.cpu()
-             
-        # 4. Save
+        # Save the output
         final_output = OUTPUT_DIR / f"{job_id}.mp4"
         logger.info(f"Saving video to {final_output}...")
         
-        # Post-process: [-1, 1] -> [0, 255]
-        # video_frames is (C, F, H, W)
-        v = (video_frames.clamp(-1,1).add(1).div(2))
-        v = (v * 255).byte().cpu().numpy()
-        v = v.transpose(1, 2, 3, 0) # (F, H, W, C)
+        # video_output should be a list of PIL Images or numpy arrays
+        # Use diffusers' export_to_video utility
+        from diffusers.utils import export_to_video
         
-        frames = [Image.fromarray(f) for f in v]
-        export_to_video(frames, str(final_output), fps=16) # webapp default
+        # If output is already frames, export directly
+        if isinstance(video_output, list):
+            export_to_video(video_output, str(final_output), fps=16)
+        else:
+            # If it's a tensor, convert to frames
+            import numpy as np
+            from PIL import Image
+            
+            # Assuming BCHW or CTHW format
+            if isinstance(video_output, torch.Tensor):
+                video_output = video_output.cpu()
+                
+                # Convert from tensor to frames
+                # Expected format: (C, T, H, W) or (T, C, H, W)
+                if video_output.dim() == 4:
+                    if video_output.shape[0] == 3:  # (C, T, H, W)
+                        video_output = video_output.permute(1, 2, 3, 0)  # (T, H, W, C)
+                    elif video_output.shape[-1] != 3:  # (T, C, H, W)
+                        video_output = video_output.permute(0, 2, 3, 1)  # (T, H, W, C)
+                
+                # Normalize to [0, 255]
+                video_output = (video_output.clamp(-1, 1).add(1).div(2) * 255).byte().numpy()
+                
+                # Convert to list of PIL Images
+                frames = [Image.fromarray(frame) for frame in video_output]
+                export_to_video(frames, str(final_output), fps=16)
+            else:
+                raise ValueError(f"Unexpected video output type: {type(video_output)}")
         
         if final_output.exists():
             jobs[job_id]["status"] = "completed"
@@ -389,11 +310,11 @@ def generate_video_sync(
         jobs[job_id]["error"] = str(e)
     finally:
         # Cleanup input files
-        if image_path:
-             try:
-                 Path(image_path).unlink(missing_ok=True)
-             except Exception:
-                 pass
+        if image_path and os.path.exists(image_path):
+            try:
+                Path(image_path).unlink(missing_ok=True)
+            except Exception:
+                pass
         
         # Clear GPU cache
         if torch.cuda.is_available():
@@ -427,6 +348,7 @@ async def startup_event():
     # Start the background worker loop
     asyncio.create_task(worker_loop())
 
+
 async def background_load_model():
     """Run blocking model load in thread pool."""
     logger.info("Starting background model load...")
@@ -439,12 +361,10 @@ async def background_load_model():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint. Returns 503 if model is not loaded (to keep start_cloud.sh waiting)."""
+    """Health check endpoint. Returns 503 if model is not loaded."""
     is_loaded = MODELS.loaded
     
     if not is_loaded:
-        # Check if loading is still in progress (by checking if task is running)
-        # For now, just return 503 so the startup script waits
         logger.info("Health check: Model not loaded yet")
         return fastapi.Response(
             content=json.dumps({

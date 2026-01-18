@@ -30,7 +30,7 @@ EXAMPLES:
   DGN_API_KEY=dgn_xxx ./start_cloud.sh
 
   # With specific service type
-  DGN_API_KEY=dgn_xxx SERVICE_TYPE=ltx2-video-8gb ./start_cloud.sh
+  DGN_API_KEY=dgn_xxx SERVICE_TYPE=yume-video-16gb ./start_cloud.sh
 
   # With log streaming
   DGN_API_KEY=dgn_xxx SAVE_LOGS=true ./start_cloud.sh
@@ -260,7 +260,7 @@ DEP_LIST="setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo G
 "$PYTHON_EXE" -m pip install --quiet $DEP_LIST || true
 
 # --- Client Setup (Download FIRST) ---
-# NOTE: We download DGN client files BEFORE starting services (YUME API needs the script!)
+# NOTE: We download DGN client files BEFORE starting services
 
 mkdir -p /opt/dgn-client /data/.cache /data/input
 
@@ -271,9 +271,16 @@ export INSTALL_DEPS=true
 curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 
+# Verify YUME API script was downloaded
+if [ ! -f "/opt/dgn-client/yume_api.py" ]; then
+  log "ERROR: yume_api.py not found after bootstrap!"
+  log "Expected location: /opt/dgn-client/yume_api.py"
+  exit 1
+fi
+
 # --- Background Services ---
 
-# CRITICAL FIX for PyTorch 2.4+ / CUDA 12 mismatch errors (undefined symbol: __nvJitLinkComplete_12_4)
+# CRITICAL FIX for PyTorch 2.4+ / CUDA 12 mismatch errors
 # We must prioritize the pip-installed nvidia libraries over system libraries
 export LD_LIBRARY_PATH=$(python3 -c "import site; print(site.getsitepackages()[0] + '/nvidia/nvjitlink/lib:' + site.getsitepackages()[0] + '/nvidia/cusparse/lib:' + site.getsitepackages()[0] + '/nvidia/cublas/lib:' + site.getsitepackages()[0] + '/nvidia/cuda_runtime/lib')"):$LD_LIBRARY_PATH
 log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
@@ -307,7 +314,6 @@ if [ -d "/opt/ComfyUI" ]; then
   esac
 
   # Check if ComfyUI is already starting (port 8188 bound)
-  # Use netstat (from net-tools) or fallback to /proc/net/tcp check if tools missing
   PORT_BOUND=false
   if command -v netstat &> /dev/null; then
     if netstat -tln | grep -q ":8188 "; then PORT_BOUND=true; fi
@@ -332,22 +338,36 @@ fi
 
 # Start YUME REST API (only if service type is yume or auto, needs longer timeout)
 if [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
-  if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ] || [ -f "/opt/dgn-client/yume_api.py" ]; then
-    # Ensure port 8000 is free (kill default webapp if running)
-    if netstat -tln | grep -q ":8000 " || ss -tln | grep -q ":8000 "; then
+  if [ -f "/opt/dgn-client/yume_api.py" ]; then
+    # Ensure port 8000 is free
+    if netstat -tln 2>/dev/null | grep -q ":8000 " || ss -tln 2>/dev/null | grep -q ":8000 "; then
       log "Port 8000 is occupied. Killing existing process to start YUME API..."
       fuser -k 8000/tcp >/dev/null 2>&1 || true
       sleep 3
     fi
 
-    if [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
-      log "Found YUME API script in comfyui-storage. Starting (model loading may take several minutes)..."
-      (cd /opt/dgn-client/comfyui-storage && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+    # Verify YUME installation
+    if [ -d "/opt/YUME" ]; then
+      log "Found YUME installation at /opt/YUME"
+      
+      # Test that wan module is importable
+      if "$PYTHON_EXE" -c "from wan import Yume; print('✓ wan module OK')" 2>/dev/null; then
+        log "✓ YUME wan module is importable"
+      else
+        log "ERROR: Cannot import wan module!"
+        log "Attempting to fix by installing YUME..."
+        cd /opt/YUME
+        "$PYTHON_EXE" -m pip install -e . || log "WARNING: YUME install failed"
+      fi
     else
-      log "Found YUME API script. Starting (model loading may take several minutes)..."
-      (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
+      log "WARNING: /opt/YUME directory not found. YUME API may fail."
     fi
+
+    log "Starting YUME API (model loading may take several minutes)..."
+    (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
     wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
+  else
+    log "WARNING: yume_api.py not found at /opt/dgn-client/yume_api.py"
   fi
 fi
 
@@ -378,7 +398,7 @@ fi
 
 # Wait for ComfyUI to be ready (if it was started or is running)
 if [ -d "/opt/ComfyUI" ]; then
-  # Determine timeout based on service tier (24GB/YUME needs more time)
+  # Determine timeout based on service tier
   WAIT_TIME=120
   if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"yume"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]]; then
     WAIT_TIME=600
