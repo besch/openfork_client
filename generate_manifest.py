@@ -14,11 +14,18 @@ def generate_manifest():
             manifest.append(f)
             
     # Subdirectories
+    exclude_subdirs = ["storage", "temp-models", "gemma-configs", "user", "__pycache__", ".git"]
+    
     for d in include_dirs:
         if os.path.exists(d):
-            for root, _, files in os.walk(d):
+            for root, dirs, files in os.walk(d):
+                # Prune unwanted directories
+                for exclude in exclude_subdirs:
+                    if exclude in dirs:
+                        dirs.remove(exclude)
+                
                 for f in files:
-                    if (f.endswith(".py") or f.endswith(".json")) and "__pycache__" not in root:
+                    if (f.endswith(".py") or f.endswith(".json")):
                         rel_path = os.path.relpath(os.path.join(root, f), ".")
                         manifest.append(rel_path.replace("\\", "/"))
     
