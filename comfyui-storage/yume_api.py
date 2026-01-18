@@ -62,9 +62,9 @@ class GenerateRequest(BaseModel):
     """Request model for video generation."""
     prompt: str = "A beautiful landscape with rolling hills and a sunset sky"
     negative_prompt: str = "low quality, distorted, bad animation, blurry, watermark"
-    num_frames: int = 49
-    width: int = 1280
-    height: int = 720
+    num_frames: int = 13
+    width: int = 848
+    height: int = 480
     steps: int = 30
     cfg: float = 7.0
     seed: int = 0
@@ -120,13 +120,21 @@ def load_yume_model():
         MODELS.wan_model = _wan23.Yume(
             config=cfg, 
             checkpoint_dir=str(MODEL_DIR),
-            device_id=DEVICE_ID
+            device_id=DEVICE_ID,
+            t5_cpu=True,      # Keep T5 on CPU to save ~10GB VRAM
+            init_on_cpu=True  # Initialize DiT on CPU then move to GPU
         )
         
         # Store references with correct attribute names
         MODELS.vae = MODELS.wan_model.vae
         MODELS.transformer = MODELS.wan_model.model  # .model not .dit
         MODELS.text_encoder = MODELS.wan_model.text_encoder
+        
+        # Explicitly move to GPU (since init_on_cpu=True left them on CPU)
+        logger.info("Moving models to GPU...")
+        torch.cuda.empty_cache()
+        MODELS.transformer.to(MODELS.device)
+        MODELS.vae.to(MODELS.device)
         
         MODELS.loaded = True
         logger.info("YUME model loaded successfully!")
@@ -313,9 +321,46 @@ def generate_video_sync(
              latent = new_tail
              
         # 3. Decode
-        logger.info("Decoding latent video...")
-        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-             video_frames = MODELS.vae.decode([latent])[0]
+        logger.info(f"Decoding latent video with shape {latent.shape}...")
+        
+        # Scaling factor for Wan2.1/Yume VAE (Standard is 0.41407)
+        scale_factor = 0.41407 
+        latent = latent / scale_factor
+        
+        with torch.no_grad():
+             vae_model = MODELS.vae
+             # If it has a 'model' attribute, it's likely a wrapper
+             if hasattr(MODELS.vae, "model"):
+                 vae_model = MODELS.vae.model
+             
+             # Crucial: Match VAE weight dtype (often float32 even if DiT is bf16)
+             vae_dtype = next(vae_model.parameters()).dtype
+             latent = latent.to(dtype=vae_dtype)
+             logger.info(f"VAE weight dtype: {vae_dtype}, Latent cast to match.")
+             
+             # Try to find the most appropriate decode method
+             if hasattr(vae_model, "z_project") and hasattr(vae_model, "decoder"):
+                 logger.info("VAE: Using manual z_project + decoder sequence")
+                 with torch.cuda.amp.autocast(dtype=vae_dtype):
+                     z = vae_model.z_project(latent)
+                     video_frames = vae_model.decoder(z)
+             elif hasattr(vae_model, "decode"):
+                 logger.info("VAE: Using vae_model.decode()")
+                 video_frames = vae_model.decode(latent)
+             elif hasattr(MODELS.vae, "decode"):
+                 logger.info("VAE: Using MODELS.vae.decode() as fallback")
+                 # Some wrappers expect a list
+                 res = MODELS.vae.decode([latent])
+                 video_frames = res[0] if isinstance(res, list) else res
+             else:
+                 raise RuntimeError(f"Could not find a valid decode method on VAE object (type: {type(vae_model)})")
+             
+             # If the result is a list/tuple, unpack it
+             if isinstance(video_frames, (list, tuple)):
+                 video_frames = video_frames[0]
+             
+             # Ensure video_frames is back on CPU for post-processing
+             video_frames = video_frames.cpu()
              
         # 4. Save
         final_output = OUTPUT_DIR / f"{job_id}.mp4"
