@@ -23,6 +23,7 @@ IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.yume-16gb", "beschiak/openfork-yume-16gb:latest"),
     ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest"),
     ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest"),
+    ImageConfig("Dockerfile.heartmula", "beschiak/openfork-heartmula:latest"),
 ]
 
 PUSH_ATTEMPTS = 2
