@@ -193,7 +193,23 @@ def generate_video_sync(
     seed: int,
     image_path: Optional[str] = None
 ):
-    """Synchronous video generation using wan23.Yume directly."""
+    """Synchronous video generation using wan23.Yume with internal loop."""
+    # Local imports and helpers to keep this function self-contained
+    import numpy as np
+    from PIL import Image
+    from diffusers.utils import export_to_video
+
+    def get_sampling_sigmas(steps: int, shift: float):
+        sigma = np.linspace(1, 0, steps + 1)[:steps]
+        return (shift * sigma / (1 + (shift - 1) * sigma))
+
+    def _to_bf16(x, device):
+        if isinstance(x, torch.Tensor):
+            return x.to(device=device, dtype=torch.bfloat16)
+        if isinstance(x, (list, tuple)):
+            return type(x)(_to_bf16(t, device) for t in x)
+        return x
+
     try:
         if not MODELS.loaded:
             raise RuntimeError("YUME model not loaded")
@@ -215,130 +231,97 @@ def generate_video_sync(
         wan = MODELS.wan_model
         device = MODELS.device
         
-        # Prepare input image for I2V mode
-        input_image = None
-        if image_path and Path(image_path).exists():
-            logger.info(f"Mode: Image-to-Video with {image_path}")
-            from PIL import Image
-            import numpy as np
-            
-            img = Image.open(image_path).convert("RGB")
-            img = img.resize((width, height), Image.Resampling.LANCZOS)
-            input_image = np.array(img).astype(np.float32) / 255.0
-            input_image = torch.from_numpy(input_image).permute(2, 0, 1).unsqueeze(0).to(device)
-        else:
-            logger.info("Mode: Text-to-Video")
+        # Prepare input image for I2V mode (Placeholder for future I2V support)
+        if image_path:
+             logger.warning("I2V inputs received but currently using T2V loop logic. I2V specific adaptation pending.")
         
         # Calculate max_area based on resolution
         max_area = width * height
         
-        # Generate video
-        logger.info(f"Starting generation with seed {seed}...")
+        logger.info(f"Starting generation prep with seed {seed}...")
         
+        # 1. Prepare Inputs (Noise, Context) using wan.generate (which acts as prep function)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
-            # Note: image parameter seems to be positional or not accepted as keyword
-            # For now, only pass it if needed (I2V mode investigation needed)
-            video_frames = wan.generate(
+            gen_ret = wan.generate(
                 input_prompt=prompt,
+                img=None, # Force T2V prep
+                size=(width, height),
                 n_prompt=negative_prompt if negative_prompt else "",
                 frame_num=num_frames,
                 max_area=max_area,
-                sampling_steps=steps,
-                guide_scale=cfg,
-                shift=8.0,  # Default shift value for 5B model
+                sampling_steps=steps, # Not used for prep but passed
+                guide_scale=cfg, # Not used for prep
+                shift=8.0, 
                 seed=seed
             )
+            
+        # Handle return values (T2V)
+        # gen_ret is (arg_c, arg_null, noise)
+        arg_c, arg_null, noise = gen_ret
         
-        logger.info(f"Generation complete, saving video...")
+        # Move to bf16
+        noise = _to_bf16(noise, device)
+        # arg_c context is already on device from generate()
         
-        # Save video
-        final_output = OUTPUT_DIR / f"{job_id}.mp4"
+        # 2. Diffusion Loop
+        logger.info(f"Starting diffusion sampling loop for {steps} steps...")
         
-        if isinstance(video_frames, tuple):
-             logger.info(f"Video frames returned as tuple of length {len(video_frames)}")
-             video_frames = video_frames[0]
-        if isinstance(video_frames, dict):
-             logger.info(f"Video frames returned as dict with keys: {video_frames.keys()}")
-             # Try common keys
-             if "video" in video_frames:
-                 video_frames = video_frames["video"]
-             elif "frames" in video_frames:
-                 video_frames = video_frames["frames"]
-             elif "images" in video_frames:
-                 video_frames = video_frames["images"]
-             elif "context" in video_frames:
-                 logger.info(f"Found 'context' key. Type: {type(video_frames['context'])}")
-                 video_frames = video_frames["context"]
-                 if isinstance(video_frames, torch.Tensor):
-                     logger.info(f"Context tensor shape: {video_frames.shape}")
-                 elif isinstance(video_frames, list) and len(video_frames) > 0:
-                     logger.info(f"Context list length: {len(video_frames)}")
+        # Calculate latent frame zero
+        latent_frame_zero = (num_frames - 1) // 4 + 1
+        
+        shift = 8.0
+        sampling_sigmas = get_sampling_sigmas(steps, shift)
+        latent = noise.clone()
+        transformer = MODELS.transformer
+        
+        for i in range(steps):
+             # Update progress periodically
+             if i % 5 == 0:
+                 jobs[job_id]["progress"] = int((i / steps) * 100)
+             
+             # Calculate timestep vector
+             ts_scalar = [sampling_sigmas[i]*1000]
+             timestep = torch.tensor(ts_scalar).to(device)
+             tvec = timestep
+             
+             latent_model_input = [_to_bf16(latent, device)]
+             
+             with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                  # Forward pass
+                  # webapp uses flag=False for simple T2V
+                  noise_pred = transformer(latent_model_input, t=tvec, latent_frame_zero=latent_frame_zero, **arg_c, flag=False)[0]
+             
+             # Scheduler step (Euler/Flow)
+             tail = latent
+             pred_tail = noise_pred
+             if i+1 == steps:
+                 new_tail = tail + (0.0 - sampling_sigmas[i]) * pred_tail
              else:
-                 # Try to find first tensor value
-                 for k, v in video_frames.items():
-                     if isinstance(v, torch.Tensor):
-                         logger.info(f"Found tensor in key '{k}'")
-                         video_frames = v
-                         break
-
-        # Convert video frames from YUME format (C,F,H,W) to export format
-        # Based on webapp_single_gpu.py implementation
-        if isinstance(video_frames, torch.Tensor):
-            logger.info(f"Video tensor shape: {video_frames.shape}")
-            # Check dimensions - usually (C, F, H, W) or (B, C, F, H, W)
-            if video_frames.dim() == 5:
-                video_frames = video_frames[0] # Remove batch dim
-            
-            # Convert: (C,F,H,W) -> (F,H,W,C) with PIL Images
-            v = (video_frames * 255).byte().cpu().numpy()  # (C,F,H,W)
-            v = v.transpose(1, 2, 3, 0)  # (F,H,W,C)
-            
-            from PIL import Image
-            frames = [Image.fromarray(f) for f in v]
-        elif isinstance(video_frames, list):
-            # Already a list, check content
-            if len(video_frames) > 0 and isinstance(video_frames[0], torch.Tensor):
-                logger.info(f"Video frames is list of tensors. Length: {len(video_frames)}")
-                video_frames = torch.stack(video_frames)
-                # Now it falls into the tensor block below? No, we need to handle it or jump back
-                # Recursive call or just handle it here
-                logger.info(f"Stacked tensor shape: {video_frames.shape}")
-                
-                 # Check dimensions - usually (F, C, H, W) or (C, F, H, W)
-                if video_frames.dim() == 4:
-                     # Assume (F, C, H, W) from list stack
-                     # Convert to (F, H, W, C)
-                     v = (video_frames * 255).byte().cpu().numpy()
-                     v = v.transpose(0, 2, 3, 1) # (F, H, W, C)
-                     from PIL import Image
-                     frames = [Image.fromarray(f) for f in v]
-                else:
-                     # Fallback to standard flow
-                     pass
-            else:
-                from PIL import Image
-                import numpy as np
-                frames = []
-                for frame in video_frames:
-                    if isinstance(frame, np.ndarray):
-                        frames.append(Image.fromarray(frame.astype('uint8')))
-                    elif isinstance(frame, Image.Image):
-                        frames.append(frame)
-                    else:
-                        raise ValueError(f"Unknown frame type in list: {type(frame)}")
-        else:
-            msg = f"Unknown video_frames type: {type(video_frames)}"
-            if isinstance(video_frames, dict):
-                msg += f" Keys: {list(video_frames.keys())}"
-            raise ValueError(msg)
+                 new_tail = tail + (sampling_sigmas[i+1] - sampling_sigmas[i]) * pred_tail
+             latent = new_tail
+             
+        # 3. Decode
+        logger.info("Decoding latent video...")
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+             video_frames = MODELS.vae.decode([latent])[0]
+             
+        # 4. Save
+        final_output = OUTPUT_DIR / f"{job_id}.mp4"
+        logger.info(f"Saving video to {final_output}...")
         
-        # Export video frames to file
-        from diffusers.utils import export_to_video
-        export_to_video(frames, str(final_output), fps=24)
+        # Post-process: [-1, 1] -> [0, 255]
+        # video_frames is (C, F, H, W)
+        v = (video_frames.clamp(-1,1).add(1).div(2))
+        v = (v * 255).byte().cpu().numpy()
+        v = v.transpose(1, 2, 3, 0) # (F, H, W, C)
+        
+        frames = [Image.fromarray(f) for f in v]
+        export_to_video(frames, str(final_output), fps=16) # webapp default
         
         if final_output.exists():
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["output_path"] = str(final_output)
+            jobs[job_id]["progress"] = 100
             logger.info(f"Job {job_id} completed successfully: {final_output}")
         else:
             raise RuntimeError(f"Output video was not created at {final_output}")
@@ -348,13 +331,12 @@ def generate_video_sync(
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
     finally:
-        # Cleanup temp input/output dirs
-        try:
-            job_input_dir = INPUT_DIR / job_id
-            if job_input_dir.exists():
-                shutil.rmtree(job_input_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # Cleanup input files
+        if image_path:
+             try:
+                 Path(image_path).unlink(missing_ok=True)
+             except Exception:
+                 pass
         
         # Clear GPU cache
         if torch.cuda.is_available():
