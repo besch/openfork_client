@@ -296,17 +296,36 @@ def generate_video_sync(
             from PIL import Image
             frames = [Image.fromarray(f) for f in v]
         elif isinstance(video_frames, list):
-            # Already a list, ensure PIL Images
-            from PIL import Image
-            import numpy as np
-            frames = []
-            for frame in video_frames:
-                if isinstance(frame, np.ndarray):
-                    frames.append(Image.fromarray(frame.astype('uint8')))
-                elif isinstance(frame, Image.Image):
-                    frames.append(frame)
+            # Already a list, check content
+            if len(video_frames) > 0 and isinstance(video_frames[0], torch.Tensor):
+                logger.info(f"Video frames is list of tensors. Length: {len(video_frames)}")
+                video_frames = torch.stack(video_frames)
+                # Now it falls into the tensor block below? No, we need to handle it or jump back
+                # Recursive call or just handle it here
+                logger.info(f"Stacked tensor shape: {video_frames.shape}")
+                
+                 # Check dimensions - usually (F, C, H, W) or (C, F, H, W)
+                if video_frames.dim() == 4:
+                     # Assume (F, C, H, W) from list stack
+                     # Convert to (F, H, W, C)
+                     v = (video_frames * 255).byte().cpu().numpy()
+                     v = v.transpose(0, 2, 3, 1) # (F, H, W, C)
+                     from PIL import Image
+                     frames = [Image.fromarray(f) for f in v]
                 else:
-                    raise ValueError(f"Unknown frame type in list: {type(frame)}")
+                     # Fallback to standard flow
+                     pass
+            else:
+                from PIL import Image
+                import numpy as np
+                frames = []
+                for frame in video_frames:
+                    if isinstance(frame, np.ndarray):
+                        frames.append(Image.fromarray(frame.astype('uint8')))
+                    elif isinstance(frame, Image.Image):
+                        frames.append(frame)
+                    else:
+                        raise ValueError(f"Unknown frame type in list: {type(frame)}")
         else:
             msg = f"Unknown video_frames type: {type(video_frames)}"
             if isinstance(video_frames, dict):
