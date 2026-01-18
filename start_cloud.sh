@@ -350,14 +350,34 @@ if [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]] || [[ "${SERVICE_TYPE:-auto}" == "a
     if [ -d "/opt/YUME" ]; then
       log "Found YUME installation at /opt/YUME"
       
-      # Test that wan module is importable
+      # CRITICAL: Unset CUDA_VISIBLE_DEVICES so GPU is available for import
+      # (It was set to "" during Docker build to avoid CUDA init errors)
+      unset CUDA_VISIBLE_DEVICES
+      
+      # Test that wan module is importable (with GPU now available)
       if "$PYTHON_EXE" -c "from wan import Yume; print('✓ wan module OK')" 2>/dev/null; then
         log "✓ YUME wan module is importable"
       else
         log "ERROR: Cannot import wan module!"
-        log "Attempting to fix by installing YUME..."
+        log "Checking if this is due to YUME bug (CUDA init during import)..."
+        
+        # Show actual error
+        "$PYTHON_EXE" -c "from wan import Yume" 2>&1 | tail -10
+        
+        log "Attempting to re-patch and reinstall YUME..."
         cd /opt/YUME
+        
+        # Re-apply the patch in case it was overwritten
+        sed -i 's/device=torch.cuda.current_device()/device="cpu"/g' wan/modules/t5.py 2>/dev/null || true
+        
         "$PYTHON_EXE" -m pip install -e . || log "WARNING: YUME install failed"
+        
+        # Test again
+        if "$PYTHON_EXE" -c "from wan import Yume; print('✓ wan module OK after fix')" 2>/dev/null; then
+          log "✓ YUME fixed and working"
+        else
+          log "ERROR: YUME still cannot be imported. Check /tmp/yume_api.log for details."
+        fi
       fi
     else
       log "WARNING: /opt/YUME directory not found. YUME API may fail."

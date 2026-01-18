@@ -30,24 +30,22 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
         torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124 \
     && python -m pip install --no-cache-dir \
-        fastapi uvicorn[standard] python-multipart requests huggingface_hub transformers scipy
+        fastapi uvicorn[standard] python-multipart requests huggingface_hub[cli] transformers scipy bitsandbytes
 
 # Clone and install HeartLib
 RUN git clone https://github.com/HeartMuLa/heartlib.git /app/heartlib_repo \
     && cd /app/heartlib_repo \
-    && python -m pip install --no-cache-dir -e . \
-    && cp -r heartlib /app/heartlib
+    && python -m pip install --no-cache-dir -e .
 
 # Create directories
 RUN mkdir -p /app/input /app/output /app/ckpt
 
 # Download HeartMuLa models
-# Downloading to /app/ckpt as expected by the API script
-# We need HeartMuLa-oss-3B and HeartCodec-oss
-RUN python -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='HeartMuLa/HeartMuLa-oss-3B', local_dir='/app/ckpt/HeartMuLa-oss-3B'); \
-    snapshot_download(repo_id='HeartMuLa/HeartCodec-oss', local_dir='/app/ckpt/HeartCodec-oss')" \
-    && rm -rf /app/pretrained
+# Using huggingface-cli download for better reliability
+RUN pip install -U "huggingface_hub[cli]" \
+    && huggingface-cli download HeartMuLa/HeartMuLaGen --local-dir /app/ckpt \
+    && huggingface-cli download HeartMuLa/HeartMuLa-oss-3B --local-dir /app/ckpt/HeartMuLa-oss-3B \
+    && huggingface-cli download HeartMuLa/HeartCodec-oss --local-dir /app/ckpt/HeartCodec-oss
 
 # Copy the API wrapper script
 COPY heartmula_api.py /app/heartmula_api.py

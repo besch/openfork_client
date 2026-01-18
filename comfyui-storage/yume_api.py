@@ -239,13 +239,12 @@ def generate_video_sync(
         
         logger.info(f"Starting YUME generation with seed {seed}...")
         
-        # Use the high-level generate() method
-        # This is the main API that YUME provides
+        # Use the high-level generate() method to get initialization tensors
+        # This returns a tuple of (arg_c, arg_null, noise, mask2, img_lat)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             with torch.no_grad():
-                # The generate method returns video frames directly
-                video_output = wan.generate(
-                    input_prompt=prompt,
+                gen_ret = wan.generate(
+                    final_prompt=prompt,
                     img=img_input,  # None for T2V, PIL Image for I2V
                     size=(width, height),
                     n_prompt=negative_prompt if negative_prompt else "",
@@ -256,6 +255,77 @@ def generate_video_sync(
                     shift=8.0,  # Flow matching shift parameter
                     seed=seed
                 )
+
+        # Unpack return values
+        # The generate method returns 7 values:
+        # latent_model_input, timestep, arg_c, noise, model_input, clip_context, arg_null
+        
+        # Robust check: If wan.generate returns video frames (list or tensor), return them directly
+        if not isinstance(gen_ret, tuple):
+             logger.info("wan.generate returned direct video output, skipping manual loop.")
+             video_output = gen_ret
+        else:
+            # Manual diffusion loop required
+            latent_model_input_init, timestep_init, arg_c, noise, model_input_init, clip_context, arg_null = gen_ret
+            
+            is_i2v = img_input is not None
+            
+            # Setup scheduler
+            from wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+            
+            sample_scheduler = FlowUniPCMultistepScheduler(
+                num_train_timesteps=1000, 
+                shift=1,
+                use_dynamic_shifting=False
+            )
+            sample_scheduler.set_timesteps(steps, device=device, shift=8.0)
+            timesteps = sample_scheduler.timesteps
+    
+            # Main diffusion loop
+            logger.info(f"Starting diffusion loop for {steps} steps...")
+            
+            # Prepare latent model input
+            latents = noise
+            
+            current_step = 0
+            
+            with torch.no_grad():
+                for _, t in enumerate(timesteps):
+                    latent_model_input = latents
+                    timestep = [t]
+                    timestep = torch.stack(timestep).to(device)
+                    
+                    # Model forward pass
+                    noise_pred_cond = wan.model(
+                        latent_model_input, t=timestep, **arg_c)[0]
+                    noise_pred_uncond = wan.model(
+                        latent_model_input, t=timestep, **arg_null)[0]
+                    
+                    noise_pred = noise_pred_uncond + cfg * (
+                        noise_pred_cond - noise_pred_uncond)
+                    
+                    # Scheduler step
+                    temp_x0 = sample_scheduler.step(
+                        noise_pred.unsqueeze(0),
+                        t,
+                        latents[0].unsqueeze(0),
+                        return_dict=False
+                    )[0]
+                    latents = [temp_x0.squeeze(0)]
+                    
+                    # Update progress
+                    current_step += 1
+                    progress = 10 + int((current_step / steps) * 80)
+                    jobs[job_id]["progress"] = progress
+    
+            # VAE Decoding
+            logger.info("Decoding latents with VAE...")
+            x0 = latents
+            
+            with torch.no_grad():
+                videos = wan.vae.decode(x0)
+                
+            video_output = videos[0] # (C, F, H, W)
         
         jobs[job_id]["progress"] = 90
         
@@ -263,62 +333,34 @@ def generate_video_sync(
         final_output = OUTPUT_DIR / f"{job_id}.mp4"
         logger.info(f"Saving video to {final_output}...")
         
-        # video_output should be a list of PIL Images or numpy arrays
-        # Use diffusers' export_to_video utility
-        from diffusers.utils import export_to_video
-        
-        # If output is already frames, export directly
-        if isinstance(video_output, list):
-            export_to_video(video_output, str(final_output), fps=16)
-        else:
-            # If it's a tensor, convert to frames
-            import numpy as np
+        # Convert to frames
+        # Normalize to [0, 255]
+        if isinstance(video_output, torch.Tensor):
+            video_output = video_output.cpu()
+            
+            if video_output.dim() == 4:
+                # (C, F, H, W) -> (F, H, W, C)
+                video_output = video_output.permute(1, 2, 3, 0)
+            
+            video_output = (video_output.clamp(-1, 1).add(1).div(2) * 255).byte().numpy()
+            
             from PIL import Image
-            
-            # Assuming BCHW or CTHW format
-            if isinstance(video_output, torch.Tensor):
-                video_output = video_output.cpu()
-                
-                # Convert from tensor to frames
-                # Expected format: (C, T, H, W) or (T, C, H, W)
-                if video_output.dim() == 4:
-                    if video_output.shape[0] == 3:  # (C, T, H, W)
-                        video_output = video_output.permute(1, 2, 3, 0)  # (T, H, W, C)
-                    elif video_output.shape[-1] != 3:  # (T, C, H, W)
-                        video_output = video_output.permute(0, 2, 3, 1)  # (T, H, W, C)
-                
-                # Normalize to [0, 255]
-                video_output = (video_output.clamp(-1, 1).add(1).div(2) * 255).byte().numpy()
-                
-                # Convert to list of PIL Images
-                frames = [Image.fromarray(frame) for frame in video_output]
-                export_to_video(frames, str(final_output), fps=16)
-            else:
-                raise ValueError(f"Unexpected video output type: {type(video_output)}")
-        
-        if final_output.exists():
-            jobs[job_id]["status"] = "completed"
-            jobs[job_id]["output_path"] = str(final_output)
-            jobs[job_id]["progress"] = 100
-            logger.info(f"Job {job_id} completed successfully: {final_output}")
+            frames = [Image.fromarray(frame) for frame in video_output]
+        elif isinstance(video_output, list):
+             # Assuming list of PIL Images
+             frames = video_output
         else:
-            raise RuntimeError(f"Output video was not created at {final_output}")
-            
-    except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
-    finally:
-        # Cleanup input files
-        if image_path and os.path.exists(image_path):
-            try:
-                Path(image_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+             # Try to convert numpy
+             import numpy as np
+             if isinstance(video_output, np.ndarray):
+                 from PIL import Image
+                 frames = [Image.fromarray(frame) for frame in video_output]
+             else:
+                 raise ValueError(f"Unknown video output type: {type(video_output)}")
         
-        # Clear GPU cache
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # Export
+        from diffusers.utils import export_to_video
+        export_to_video(frames, str(final_output), fps=16)
 
 
 @app.on_event("startup")
