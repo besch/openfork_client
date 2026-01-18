@@ -2,7 +2,7 @@ import os
 
 def generate_manifest():
     # Directories to include
-    include_dirs = ["services", "utils"]
+    include_dirs = ["services", "utils", "comfyui-storage", "workflows"]
     # Files to include in root
     include_files = ["cli.py", "dgn_client.py", "config.py", "exceptions.py", "requirements.txt", "start_cloud.sh"]
     
@@ -18,7 +18,7 @@ def generate_manifest():
         if os.path.exists(d):
             for root, _, files in os.walk(d):
                 for f in files:
-                    if f.endswith(".py") and "__pycache__" not in root:
+                    if (f.endswith(".py") or f.endswith(".json")) and "__pycache__" not in root:
                         rel_path = os.path.relpath(os.path.join(root, f), ".")
                         manifest.append(rel_path.replace("\\", "/"))
     
