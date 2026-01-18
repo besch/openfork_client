@@ -378,6 +378,20 @@ if [ -f "/app/diffrhythm_api.py" ]; then
   wait_for_url "DiffRhythm API" "http://127.0.0.1:8000/health" 120 "/tmp/diffrhythm_api.log"
 fi
 
+# Start HeartMuLa REST API
+if [ -f "/app/heartmula_api.py" ]; then
+  log "Found HeartMuLa API script. Starting..."
+  
+  # Check if 4-bit quantization is requested via service type
+  if [[ "${SERVICE_TYPE:-auto}" == *"8gb"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"4bit"* ]]; then
+      export HEARTMULA_QUANTIZATION="4bit"
+      log "Enabling 4-bit quantization for HeartMuLa"
+  fi
+  
+  (cd /app && "$PYTHON_EXE" heartmula_api.py > /tmp/heartmula_api.log 2>&1) &
+  wait_for_url "HeartMuLa API" "http://127.0.0.1:8000/health" 300 "/tmp/heartmula_api.log"
+fi
+
 # Start TurboDiffusion REST API
 if [ -f "/opt/TurboDiffusion/api_server.py" ]; then
   log "Found TurboDiffusion API script. Starting..."
