@@ -20,12 +20,20 @@ TREE_JSON=$(curl -sL "$API_URL")
 if [ -z "$TREE_JSON" ] || [[ "$TREE_JSON" == *"rate limit"* ]]; then
   echo "Warning: GitHub API unavailable or rate limited. Falling back to manifest..."
   curl -sL "$BASE_URL/manifest.txt" -o manifest.txt
+  count=0
   while IFS= read -r file || [[ -n "$file" ]]; do
     [[ -z "$file" || "$file" =~ ^# ]] && continue
     dir=$(dirname "$file")
     [ "$dir" != "." ] && mkdir -p "$dir"
-    curl -sL "$BASE_URL/$file" -o "$file"
+    (curl -sL "$BASE_URL/$file" -o "$file" || echo "Failed: $file") &
+    
+    count=$((count+1))
+    if [ $count -ge 20 ]; then
+      wait
+      count=0
+    fi
   done < manifest.txt
+  wait
 else
   echo "Downloading client files..."
   
@@ -36,16 +44,26 @@ else
     sed 's/.*"path":[[:space:]]*"\([^"]*\)".*/\1/' | \
     grep -v "^test" | grep -v "^docs" | grep -v "__pycache__" | \
     grep -v "generate_manifest" | grep -v "\.spec$" | \
-    while IFS= read -r file; do
-      # Ensure directory exists
-      dir=$(dirname "$file")
-      if [ "$dir" != "." ]; then
-        mkdir -p "$dir"
-      fi
-      
-      echo "  -> Downloading $file"
-      curl -sL "$BASE_URL/$file" -o "$file" 2>/dev/null || echo "    (skipped)"
-    done
+    {
+      count=0
+      while IFS= read -r file; do
+        # Ensure directory exists
+        dir=$(dirname "$file")
+        if [ "$dir" != "." ]; then
+          mkdir -p "$dir"
+        fi
+        
+        echo "  -> Downloading $file"
+        (curl -sL "$BASE_URL/$file" -o "$file" 2>/dev/null || echo "    (skipped)") &
+        
+        count=$((count+1))
+        if [ $count -ge 20 ]; then
+          wait
+          count=0
+        fi
+      done
+      wait
+    }
 fi
 
 # Install Python dependencies if requested
