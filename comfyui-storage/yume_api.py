@@ -257,7 +257,7 @@ def generate_video_sync(
         if isinstance(video_frames, tuple):
              logger.info(f"Video frames returned as tuple of length {len(video_frames)}")
              video_frames = video_frames[0]
-        elif isinstance(video_frames, dict):
+        if isinstance(video_frames, dict):
              logger.info(f"Video frames returned as dict with keys: {video_frames.keys()}")
              # Try common keys
              if "video" in video_frames:
