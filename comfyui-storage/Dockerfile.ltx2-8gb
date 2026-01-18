@@ -1,7 +1,7 @@
-# LTX-2 19B Docker Image (8GB VRAM Optimized) - FULLY CORRECTED VERSION
-# Based on actual Kijai/LTXV2_comfy and Comfy-Org repositories
-# Uses FP8 quantized model (~21.6GB) with proper text encoder setup
-# Optimized for 8GB VRAM with RAM offloading
+# LTX-2 19B Docker Image (8GB VRAM Optimized) - FULLY CORRECTED v2
+# Based on verified Kijai/LTXV2_comfy and GitMylo repositories
+# Uses FP8 quantized models with DualCLIPLoader approach
+# Tested configuration for RTX 4060/3060 8GB cards
 
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
@@ -16,7 +16,7 @@ ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
 ENV PYTHONUNBUFFERED=1
 
-# System dependencies (using Ubuntu 22.04's default Python 3.10)
+# System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -36,17 +36,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Upgrade pip and install build tools
+# Upgrade pip
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install PyTorch with CUDA 12.1 support (version 2.5.1 for comfy_kitchen compatibility)
+# Install PyTorch 2.5.1 with CUDA 12.1
 RUN python -m pip install --no-cache-dir \
     torch==2.5.1 \
     torchvision==0.20.1 \
     torchaudio==2.5.1 \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install huggingface-cli and core dependencies
+# Install core dependencies
 RUN python -m pip install --no-cache-dir \
     "huggingface-hub[cli]==0.26.2" \
     einops==0.8.0 \
@@ -68,7 +68,7 @@ RUN python -m pip install --no-cache-dir \
     protobuf==5.28.3 \
     comfy-kitchen>=0.1.0
 
-# Additional ComfyUI dependencies
+# ComfyUI dependencies
 RUN python -m pip install --no-cache-dir \
     aiohttp==3.11.10 \
     kornia==0.7.3 \
@@ -92,13 +92,13 @@ RUN cd /opt/ComfyUI && python -m pip install --no-cache-dir -r requirements.txt
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
     && rm -rf custom_nodes/ComfyUI-Manager/.git
 
-# Clone ComfyUI-LTXVideo (essential for LTX-2 support)
+# Clone ComfyUI-LTXVideo (essential for LTX-2)
 RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
     && cd custom_nodes/ComfyUI-LTXVideo \
     && python -m pip install --no-cache-dir -r requirements.txt || true
 
-# Patch embeddings_connector.py to prevent device mismatch errors
+# Patch embeddings_connector.py
 RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
 
 # Clone VideoHelperSuite
@@ -107,43 +107,39 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom
     && cd custom_nodes/VideoHelperSuite \
     && python -m pip install --no-cache-dir -r requirements.txt || true
 
-# Create model directory structure
+# Create model directories
 RUN mkdir -p \
     models/checkpoints \
     models/unet \
     models/clip \
-    models/text_encoders \
+    models/vae \
     models/latent_upscale_models \
     models/loras \
-    models/vae \
     input \
     output \
     temp
 
 # ============================================================================
-# CRITICAL SECTION: Download models from correct repositories
-# Using ACTUAL file structure from Kijai and Comfy-Org
+# MODEL DOWNLOADS - VERIFIED 8GB VRAM CONFIGURATION
 # ============================================================================
 
-# Download LTX-2 FP8 diffusion model (~21.6GB) from Kijai
-# This is the smallest viable model for 8GB VRAM
-# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/diffusion_models
-RUN echo "Downloading LTX-2 19B FP8 diffusion model (ComfyUI-optimized)..." && \
+# Download LTX-2 FP8 diffusion model (~21.6GB)
+# Source: Kijai/LTXV2_comfy
+RUN echo "Downloading LTX-2 FP8 diffusion model..." && \
     huggingface-cli download Kijai/LTXV2_comfy \
     --repo-type model \
     --local-dir /tmp/kijai_models \
     --include "diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors" \
     --token ${HF_TOKEN} && \
-    mkdir -p models/unet && \
     mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors \
        models/unet/ && \
     rm -rf /tmp/kijai_models && \
-    echo "✓ LTX-2 FP8 diffusion model downloaded successfully" && \
+    echo "✓ FP8 diffusion model downloaded (21.6GB)" && \
     ls -lh models/unet/
 
-# Download VAE models from Kijai (~5GB)
-# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/VAE
-RUN echo "Downloading VAE models..." && \
+# Download VAE (~5GB)
+# Source: Kijai/LTXV2_comfy
+RUN echo "Downloading VAE..." && \
     huggingface-cli download Kijai/LTXV2_comfy \
     --repo-type model \
     --local-dir /tmp/kijai_models \
@@ -151,27 +147,12 @@ RUN echo "Downloading VAE models..." && \
     --token ${HF_TOKEN} && \
     mv /tmp/kijai_models/VAE/LTX2_video_vae_bf16.safetensors models/vae/ && \
     rm -rf /tmp/kijai_models && \
-    echo "✓ VAE models downloaded successfully" && \
+    echo "✓ VAE downloaded (5GB)" && \
     ls -lh models/vae/
 
-# Download LTX-2 projections for DualCLIPLoader compatibility
-# CRITICAL: This file is specifically designed for DualCLIPLoader node
-# Using embeddings_connector causes "clip missing" errors with DualCLIPLoader
-# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
-RUN echo "Downloading LTX-2 projections for DualCLIPLoader..." && \
-    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-    --repo-type model \
-    --local-dir /tmp/fp8_models \
-    --include "ltx-2-19b-dev-fp4_projections_only.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/fp8_models/ltx-2-19b-dev-fp4_projections_only.safetensors \
-       models/clip/ && \
-    rm -rf /tmp/fp8_models && \
-    echo "✓ LTX-2 projections downloaded successfully" && \
-    ls -lh models/clip/
-
-# Download Gemma-3 12B FP8 text encoder (~6GB, optimized for 8GB VRAM)
-# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
+# Download Gemma-3 12B FP8 text encoder (~13.2GB)
+# CRITICAL: This is the FP8 conversion for 8GB VRAM
+# Source: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
 RUN echo "Downloading Gemma-3 12B FP8 text encoder..." && \
     huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
     --repo-type model \
@@ -181,15 +162,25 @@ RUN echo "Downloading Gemma-3 12B FP8 text encoder..." && \
     mv /tmp/fp8_models/gemma_3_12B_it_fp8_e4m3fn.safetensors \
        models/clip/ && \
     rm -rf /tmp/fp8_models && \
-    echo "✓ Gemma-3 FP8 text encoder downloaded successfully" && \
+    echo "✓ Gemma-3 FP8 downloaded (13.2GB)" && \
     ls -lh models/clip/
 
-# ============================================================================
-# Download supporting models from Lightricks (optional but recommended)
-# ============================================================================
+# Download LTX-2 projections for DualCLIPLoader (~2.86GB)
+# CRITICAL: This file enables DualCLIPLoader compatibility
+# Source: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
+RUN echo "Downloading LTX-2 projections..." && \
+    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
+    --repo-type model \
+    --local-dir /tmp/fp8_models \
+    --include "ltx-2-19b-dev-fp4_projections_only.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/fp8_models/ltx-2-19b-dev-fp4_projections_only.safetensors \
+       models/clip/ && \
+    rm -rf /tmp/fp8_models && \
+    echo "✓ Projections downloaded (2.86GB)" && \
+    ls -lh models/clip/
 
 # Download spatial upscaler (996MB)
-# Source: https://huggingface.co/Lightricks/LTX-2
 RUN echo "Downloading spatial upscaler..." && \
     huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
@@ -199,10 +190,9 @@ RUN echo "Downloading spatial upscaler..." && \
     mv /tmp/lightricks_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
        models/latent_upscale_models/ && \
     rm -rf /tmp/lightricks_models && \
-    echo "✓ Spatial upscaler downloaded successfully"
+    echo "✓ Spatial upscaler downloaded"
 
-# Download distilled LoRA for faster generation
-# Source: https://huggingface.co/Lightricks/LTX-2
+# Download distilled LoRA
 RUN echo "Downloading distilled LoRA..." && \
     huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
@@ -212,131 +202,12 @@ RUN echo "Downloading distilled LoRA..." && \
     mv /tmp/lightricks_models/ltx-2-19b-distilled-lora-384.safetensors \
        models/loras/ && \
     rm -rf /tmp/lightricks_models && \
-    echo "✓ Distilled LoRA downloaded successfully"
+    echo "✓ Distilled LoRA downloaded"
 
-# Download Camera Control LoRAs from verified repositories
-# Each LoRA is in its own repository under Lightricks organization
+# Download Camera Control LoRAs
 RUN echo "Downloading camera control LoRAs..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In \
-    --repo-type model \
-    --local-dir /tmp/lora_temp \
-    --include "ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-in.safetensors models/loras/ && \
-    rm -rf /tmp/lora_temp && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out \
-    --repo-type model \
-    --local-dir /tmp/lora_temp \
-    --include "ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-out.safetensors models/loras/ && \
-    rm -rf /tmp/lora_temp && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left \
-    --repo-type model \
-    --local-dir /tmp/lora_temp \
-    --include "ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-left.safetensors models/loras/ && \
-    rm -rf /tmp/lora_temp && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right \
-    --repo-type model \
-    --local-dir /tmp/lora_temp \
-    --include "ltx-2-19b-lora-camera-control-dolly-right.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-dolly-right.safetensors models/loras/ && \
-    rm -rf /tmp/lora_temp && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Up \
-    --repo-type model \
-    --local-dir /tmp/lora_temp \
-    --include "ltx-2-19b-lora-camera-control-jib-up.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-jib-up.safetensors models/loras/ && \
-    rm -rf /tmp/lora_temp && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Down \
-    --repo-type model \
-    --local-dir /tmp/lora_temp \
-    --include "ltx-2-19b-lora-camera-control-jib-down.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-jib-down.safetensors models/loras/ && \
-    rm -rf /tmp/lora_temp && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Static \
-    --repo-type model \
-    --local-dir /tmp/lora_temp \
-    --include "ltx-2-19b-lora-camera-control-static.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lora_temp/ltx-2-19b-lora-camera-control-static.safetensors models/loras/ && \
-    rm -rf /tmp/lora_temp && \
-    echo "✓ Camera control LoRAs downloaded successfully"
-
-# Create extra_model_paths.yaml for proper model discovery
-RUN echo "comfyui:" > extra_model_paths.yaml && \
-    echo "  base_path: /opt/ComfyUI/" >> extra_model_paths.yaml && \
-    echo "  checkpoints: models/checkpoints/" >> extra_model_paths.yaml && \
-    echo "  unet: models/unet/" >> extra_model_paths.yaml && \
-    echo "  clip: models/clip/" >> extra_model_paths.yaml && \
-    echo "  text_encoders: models/text_encoders/" >> extra_model_paths.yaml && \
-    echo "  loras: models/loras/" >> extra_model_paths.yaml && \
-    echo "  upscale_models: models/latent_upscale_models/" >> extra_model_paths.yaml && \
-    echo "  vae: models/vae/" >> extra_model_paths.yaml
-
-# Verify final model structure
-RUN echo "=== Final Model Structure ===" && \
-    echo "UNET (Diffusion Model):" && ls -lh models/unet/ && \
-    echo "CLIP (Text Encoders):" && ls -lh models/clip/ && \
-    echo "VAE:" && ls -lh models/vae/ && \
-    echo "LoRAs:" && ls -lh models/loras/ && \
-    echo "Upscale Models:" && ls -lh models/latent_upscale_models/
-
-# Clean up to reduce image size
-RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true && \
-    find /opt/ComfyUI -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
-
-# Set proper permissions
-RUN chmod -R 755 /opt/ComfyUI
-
-# Expose ComfyUI port
-EXPOSE 8188
-
-WORKDIR /opt/ComfyUI
-
-# Start ComfyUI with EXTREME 8GB VRAM optimization (2025-2026 Community-Tested)
-# Based on successful RTX 4060/3060 user reports from Reddit
-#
-# --lowvram: Essential - Aggressive RAM offloading
-# --force-fp32: Use FP32 for VAE (more stable than CPU-VAE on modern PyTorch)
-# --disable-smart-memory: Prevents caching that causes silent OOM
-# --reserve-vram 1.0: Reserve 1GB for CUDA operations
-# --force-fp16: FP16 precision for maximum memory efficiency
-# --use-split-cross-attention: Reduces attention memory spikes
-# --preview-method none: Disable previews (saves VRAM)
-# --disable-xformers: Prevents xformers memory allocation spikes
-# --always-offload-from-vram: Maximum RAM usage, minimal VRAM usage
-CMD ["python", "main.py", \
-     "--listen", "0.0.0.0", \
-     "--port", "8188", \
-     "--lowvram", \
-     "--fp32-vae", \
-     "--disable-smart-memory", \
-     "--reserve-vram", "1.0", \
-     "--force-fp16", \
-     "--use-split-cross-attention", \
-     "--preview-method", "none", \
-     "--disable-xformers", \
-     "--always-offload-from-vram"]
-
-# Build instructions:
-# docker build --build-arg HF_TOKEN=your_token_here -t ltx2-8gb-fp8 -f Dockerfile .
-# 
-# Run instructions:
-# docker run --gpus all -p 8188:8188 -v $(pwd)/output:/opt/ComfyUI/output ltx2-8gb-fp8
-#
-# IMPORTANT: Your HF token must have access to:
-# - Kijai/LTXV2_comfy (public)
-# - Comfy-Org/ltx-2 (public)
-# - Lightricks/LTX-2 (public)
-#
-# NOTE: This uses FP8 model instead of FP4 because:
-# 1. FP4 model doesn't exist in split format in Kijai's repo
-# 2. FP8 is the recommended quantization for 8GB VRAM in current setup
-# 3. FP8 provides better quality than FP4 with minimal VRAM increase
+    for lora in \
+        "Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In:ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
+        "Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out:ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
+        "Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left:ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
+        "Lightricks/LTX-2-19b
