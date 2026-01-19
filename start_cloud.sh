@@ -421,6 +421,15 @@ fi
 if [ -f "/app/heartmula_api.py" ] && ([[ "${SERVICE_TYPE:-auto}" == *"heartmula"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]); then
   log "Found HeartMuLa API script. Starting..."
 
+  # DEV MODE: Update API script from downloaded repo if available
+  if [ -f "/opt/dgn-client/client/comfyui-storage/heartmula_api.py" ]; then
+      log "Updating heartmula_api.py from latest git checkout..."
+      cp /opt/dgn-client/client/comfyui-storage/heartmula_api.py /app/heartmula_api.py
+  elif [ -f "/opt/dgn-client/comfyui-storage/heartmula_api.py" ]; then
+      log "Updating heartmula_api.py from latest git checkout..."
+      cp /opt/dgn-client/comfyui-storage/heartmula_api.py /app/heartmula_api.py
+  fi
+
   # Check if heartlib is installed, if not install it
   if ! "$PYTHON_EXE" -c "import heartlib" 2>/dev/null; then
       log "HeartLib not found. Installing..."
