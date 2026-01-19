@@ -125,16 +125,24 @@ def load_yume_model():
             except Exception as e:
                 logger.warning(f"Could not create symlink: {e}")
         
-        MODELS.wan_model = _wan23.Yume(
-            config=cfg, 
-            checkpoint_dir=str(MODEL_DIR),
-            device_id=DEVICE_ID
-        )
-        
-        # Store references to sub-models
-        # These will be used for direct inference
+        logger.info(f"Instantiating _wan23.Yume with config={cfg}, checkpoint_dir={MODEL_DIR}, device_id={DEVICE_ID}")
+        try:
+            MODELS.wan_model = _wan23.Yume(
+                config=cfg, 
+                checkpoint_dir=str(MODEL_DIR),
+                device_id=DEVICE_ID
+            )
+            logger.info("_wan23.Yume instantiated successfully.")
+        except Exception as e:
+            logger.error(f"Error instantiating _wan23.Yume: {e}", exc_info=True)
+            raise
+
+        logger.info("Accessing VAE...")
+        # Store references with correct attribute names for wan23
         MODELS.vae = MODELS.wan_model.vae
-        MODELS.transformer = MODELS.wan_model.dit  # The diffusion transformer
+        logger.info("Accessing Transformer...")
+        MODELS.transformer = MODELS.wan_model.model  # .model not .dit in wan23
+        logger.info("Accessing Text Encoder...")
         MODELS.text_encoder = MODELS.wan_model.text_encoder
         
         MODELS.loaded = True
