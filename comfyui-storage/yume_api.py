@@ -10,6 +10,8 @@ Model: https://huggingface.co/stdstu123/Yume-5B-720P
 """
 
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import sys
 import uuid
 import logging
@@ -23,6 +25,7 @@ import json
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import torch
+import gc
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -331,9 +334,16 @@ def generate_video_sync(
             logger.info("Offloading VAE to CPU...")
             wan.vae.model.cpu()
             
+            # Force cleanup
+            gc.collect()
+            torch.cuda.empty_cache()
+            
             # Move model to device for generation
             logger.info("Moving Diffusion Transformation model to GPU...")
             wan.model.to(device)
+            
+            # Initial cleanup after loading
+            gc.collect()
             torch.cuda.empty_cache()
             
             current_step = 0
