@@ -145,14 +145,21 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
             try:
                 response = requests.get(f"{self.api_base_url}/health", timeout=5)
                 if response.status_code == 200:
-                    logging.info("HeartMuLa API is ready")
-                    return True
+                    data = response.json()
+                    status = data.get("status")
+                    if status == "healthy":
+                        logging.info("HeartMuLa API is ready (model loaded)")
+                        return True
+                    elif status == "model_not_loaded":
+                        logging.info("HeartMuLa API is up, but model is still loading...")
+                    else:
+                        logging.warning(f"HeartMuLa API status: {status}")
                 elif response.status_code == 503:
                      # Model loading
-                     logging.info("HeartMuLa API is loading model...")
+                     logging.info("HeartMuLa API is loading model (503)...")
             except requests.exceptions.RequestException:
                 pass
-            time.sleep(2)
+            time.sleep(5)  # Increased sleep to reduce spam
 
         logging.error(f"HeartMuLa API did not become available within {timeout}s")
         return False

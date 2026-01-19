@@ -386,7 +386,7 @@ def generate_video_sync(
                             current_latent = current_latent.unsqueeze(0)
 
                         # Debug shapes before step
-                        # logger.info(f"Step {current_step}: noise_pred={noise_pred.shape}, latent={current_latent.shape}, t={t}")
+                        logger.info(f"Step {current_step}: noise_pred={noise_pred.shape}, latent={current_latent.shape}, t={t}")
                         
                         if current_latent.dim() == 0:
                              raise ValueError(f"Latent became scalar at step {current_step}. This is unexpected.")
@@ -397,7 +397,12 @@ def generate_video_sync(
                             current_latent, 
                             return_dict=False
                         )[0]
-                        latents = [temp_x0.squeeze(0)]
+                        
+                        # Safer squeeze: only squeeze dim 0 if it exists and is 1
+                        if temp_x0.dim() == 5:
+                             latents = [temp_x0.squeeze(0)]
+                        else:
+                             latents = [temp_x0]
                         
                         current_step += 1
                         progress = 10 + int((current_step / steps) * 80)
