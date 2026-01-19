@@ -271,10 +271,22 @@ export INSTALL_DEPS=true
 curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
 bash bootstrap.sh
 
+# Fix: If yume_api.py is in subdirectory (repo structure), move it to root
+# We check likely locations from the repo structure
+if [ -f "/opt/dgn-client/client/comfyui-storage/yume_api.py" ]; then
+  log "Moving yume_api.py from client/comfyui-storage to root..."
+  mv /opt/dgn-client/client/comfyui-storage/yume_api.py /opt/dgn-client/yume_api.py
+elif [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
+  log "Moving yume_api.py from comfyui-storage to root..."
+  mv /opt/dgn-client/comfyui-storage/yume_api.py /opt/dgn-client/yume_api.py
+fi
+
 # Verify YUME API script was downloaded
 if [ ! -f "/opt/dgn-client/yume_api.py" ]; then
   log "ERROR: yume_api.py not found after bootstrap!"
   log "Expected location: /opt/dgn-client/yume_api.py"
+  log "Directory Listing of /opt/dgn-client:"
+  ls -R /opt/dgn-client
   exit 1
 fi
 
