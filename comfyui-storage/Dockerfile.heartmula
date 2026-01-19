@@ -154,8 +154,10 @@ RUN echo "" \
     && echo "" \
     && echo "=== Verification Complete ==="
 
-# Copy the API wrapper script
+# Copy the API wrapper script and diagnostic tool
 COPY heartmula_api.py /app/heartmula_api.py
+COPY diagnose_heartmula.sh /app/diagnose_heartmula.sh
+RUN chmod +x /app/diagnose_heartmula.sh
 
 # Verify Python environment
 RUN echo "" \

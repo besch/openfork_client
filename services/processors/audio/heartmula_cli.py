@@ -181,6 +181,9 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
                      if elapsed - last_status_log >= 30:
                          logging.info(f"HeartMuLa API is loading model (503)... ({elapsed}/{timeout}s)")
                          last_status_log = elapsed
+                else:
+                    # Some other code, maybe 503 while loading
+                    pass
             except requests.exceptions.RequestException as e:
                 # Only log connection errors every 60 seconds
                 if elapsed - last_status_log >= 60:

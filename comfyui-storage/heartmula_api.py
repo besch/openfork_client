@@ -2,6 +2,13 @@
 """
 HeartMuLa REST API Server for OpenFork DGN Client
 Provides a simple HTTP API for music generation using HeartMuLa model.
+
+IMPROVEMENTS:
+- Better error handling and logging during model loading
+- Progress indicators for each loading stage
+- Memory monitoring
+- Graceful degradation on errors
+- Health endpoint reports loading progress
 """
 
 import os
@@ -10,6 +17,7 @@ import uuid
 import logging
 import tempfile
 import traceback
+import gc
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timedelta
@@ -19,24 +27,29 @@ from pydantic import BaseModel, Field
 import torch
 import torchaudio
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Setup logging with more detail
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Try to import optional dependencies
 try:
     from transformers import BitsAndBytesConfig
     BITSANDBYTES_AVAILABLE = True
+    logger.info("✓ bitsandbytes available")
 except ImportError:
-    logger.warning("bitsandbytes not available - quantization will be disabled")
+    logger.warning("⚠️  bitsandbytes not available - quantization will be disabled")
     BITSANDBYTES_AVAILABLE = False
     BitsAndBytesConfig = None
 
 # Import HeartMuLa pipeline
 try:
     from heartlib import HeartMuLaGenPipeline
+    logger.info("✓ heartlib imported successfully")
 except ImportError as e:
-    logger.error(f"Failed to import HeartMuLa pipeline: {e}")
+    logger.error(f"✗ Failed to import HeartMuLa pipeline: {e}")
     logger.error("Make sure heartlib is installed: pip install -e /app/heartlib_repo")
     sys.exit(1)
 
@@ -48,7 +61,7 @@ app = FastAPI(
 
 # Job storage with timestamps for cleanup
 jobs = {}
-JOB_RETENTION_HOURS = 24  # Clean up jobs older than 24 hours
+JOB_RETENTION_HOURS = 24
 
 # Working directory
 WORK_DIR = Path("/app")
@@ -56,9 +69,15 @@ OUTPUT_DIR = WORK_DIR / "output"
 INPUT_DIR = WORK_DIR / "input"
 MODEL_DIR = WORK_DIR / "ckpt"
 
-# Global pipeline variable
+# Global pipeline variable and loading state
 pipe = None
 load_error = None
+loading_progress = {
+    "stage": "not_started",
+    "progress": 0,
+    "message": "Model not loaded yet"
+}
+
 
 class GenerateRequest(BaseModel):
     """Request model for music generation."""
@@ -75,12 +94,32 @@ class GenerateRequest(BaseModel):
 class JobStatus(BaseModel):
     """Job status response."""
     job_id: str
-    status: str  # pending, processing, completed, failed
+    status: str
     output_path: Optional[str] = None
     error: Optional[str] = None
     created_at: Optional[str] = None
     completed_at: Optional[str] = None
     estimated_duration_seconds: Optional[float] = None
+
+
+def update_loading_progress(stage: str, progress: int, message: str):
+    """Update the loading progress for health endpoint."""
+    global loading_progress
+    loading_progress = {
+        "stage": stage,
+        "progress": progress,
+        "message": message
+    }
+    logger.info(f"[{progress}%] {stage}: {message}")
+
+
+def log_memory_usage():
+    """Log current memory usage."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        logger.info(f"GPU Memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {total:.2f}GB total")
 
 
 def cleanup_old_jobs():
@@ -92,7 +131,6 @@ def cleanup_old_jobs():
         created_at = datetime.fromisoformat(job_data.get('created_at', datetime.now().isoformat()))
         if created_at < cutoff_time:
             jobs_to_delete.append(job_id)
-            # Delete output file
             if job_data.get('output_path'):
                 try:
                     Path(job_data['output_path']).unlink(missing_ok=True)
@@ -135,7 +173,10 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             "tags": request.style_prompt,
         }
         
-        # Generation - HeartMuLa saves directly to save_path
+        # Log memory before generation
+        log_memory_usage()
+        
+        # Generation
         logger.info(f"[{job_id}] Running inference (this may take several minutes)...")
         wav = pipe(
             inputs,
@@ -148,7 +189,7 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         
         # Verify output
         if output_path.exists():
-            file_size = output_path.stat().st_size / (1024 * 1024)  # MB
+            file_size = output_path.stat().st_size / (1024 * 1024)
             duration = datetime.now() - start_time
             
             jobs[job_id]["status"] = "completed"
@@ -161,7 +202,6 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             # Fallback: check if wav tensor was returned
             if isinstance(wav, torch.Tensor):
                 logger.warning(f"[{job_id}] save_path not used, saving tensor manually...")
-                # HeartMuLa uses 32kHz sample rate (verify in actual code)
                 torchaudio.save(str(output_path), wav.cpu(), 32000)
                 
                 jobs[job_id]["status"] = "completed"
@@ -170,6 +210,9 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
                 logger.info(f"[{job_id}] ✓ Saved manually")
             else:
                 raise RuntimeError(f"Output file not created and no tensor returned")
+        
+        # Log memory after generation
+        log_memory_usage()
 
     except Exception as e:
         duration = datetime.now() - start_time
@@ -183,42 +226,52 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
 
 @app.on_event("startup")
 async def startup_event():
-    """Load the model on startup."""
-    global pipe
-    logger.info("=" * 60)
+    """Load the model on startup with detailed progress tracking."""
+    global pipe, load_error
+    logger.info("=" * 80)
     logger.info("HeartMuLa API Server Starting...")
-    logger.info("=" * 60)
+    logger.info("=" * 80)
     
-    # System info
-    logger.info(f"PyTorch version: {torch.__version__}")
-    logger.info(f"CUDA available: {torch.cuda.is_available()}")
-    
-    if torch.cuda.is_available():
-        logger.info(f"CUDA version: {torch.version.cuda}")
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-        memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        logger.info(f"GPU memory: {memory_gb:.1f} GB")
-    
-    # Load pipeline
     try:
-        logger.info("Loading HeartMuLa pipeline...")
+        # Stage 0: System info
+        update_loading_progress("system_check", 5, "Checking system configuration")
+        logger.info(f"PyTorch version: {torch.__version__}")
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        
+        if torch.cuda.is_available():
+            logger.info(f"CUDA version: {torch.version.cuda}")
+            logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+            memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            logger.info(f"GPU memory: {memory_gb:.1f} GB")
+        
+        # Stage 1: Verify model files
+        update_loading_progress("file_check", 10, "Verifying model files")
         model_path = str(MODEL_DIR)
         
-        # Check if model files exist
         required_paths = [
-            MODEL_DIR / "HeartMuLa-oss-3B",
-            MODEL_DIR / "HeartCodec-oss",
-            MODEL_DIR / "gen_config.json",
-            MODEL_DIR / "tokenizer.json"
+            (MODEL_DIR / "HeartMuLa-oss-3B", "HeartMuLa model"),
+            (MODEL_DIR / "HeartCodec-oss", "HeartCodec model"),
+            (MODEL_DIR / "gen_config.json", "Generation config"),
+            (MODEL_DIR / "tokenizer.json", "Tokenizer"),
         ]
         
-        for path in required_paths:
+        missing_files = []
+        for path, name in required_paths:
             if not path.exists():
-                raise FileNotFoundError(f"Required model file not found: {path}")
+                missing_files.append(f"{name} ({path})")
+                logger.error(f"✗ Missing: {name} at {path}")
+            else:
+                logger.info(f"✓ Found: {name}")
         
-        logger.info(f"Model path: {model_path}")
+        if missing_files:
+            error_msg = f"Missing required files: {', '.join(missing_files)}"
+            update_loading_progress("failed", 0, error_msg)
+            raise FileNotFoundError(error_msg)
         
-        # Quantization setup
+        logger.info(f"✓ All model files present")
+        
+        # Stage 2: Configure quantization
+        update_loading_progress("config", 20, "Configuring model parameters")
         quantization_type = os.environ.get("HEARTMULA_QUANTIZATION", "none").lower()
         bnb_config = None
         
@@ -230,14 +283,24 @@ async def startup_event():
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_compute_dtype=torch.bfloat16
             )
+            logger.info("✓ Quantization config created")
         elif quantization_type == "4bit":
-            logger.warning("4-bit quantization requested but bitsandbytes not available")
+            logger.warning("⚠️  4-bit quantization requested but bitsandbytes not available")
         
-        # Load pipeline
+        # Stage 3: Prepare device and dtype
+        update_loading_progress("device_setup", 25, "Configuring device and dtype")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
         
         logger.info(f"Device: {device}, dtype: {dtype}")
+        log_memory_usage()
+        
+        # Stage 4: Load pipeline (this is the long part)
+        update_loading_progress("loading_pipeline", 30, "Loading HeartMuLa pipeline (this may take 10-15 minutes)...")
+        
+        logger.info("=" * 80)
+        logger.info("LOADING PIPELINE - This will take 10-15 minutes")
+        logger.info("=" * 80)
         
         pipe = HeartMuLaGenPipeline.from_pretrained(
             model_path,
@@ -247,22 +310,60 @@ async def startup_event():
             bnb_config=bnb_config
         )
         
+        update_loading_progress("pipeline_loaded", 80, "Pipeline loaded, initializing...")
+        
+        # Stage 5: Warmup (optional but helpful)
+        update_loading_progress("warmup", 90, "Running warmup generation")
+        try:
+            logger.info("Running warmup generation to compile kernels...")
+            log_memory_usage()
+            
+            # Quick 5-second warmup
+            warmup_output = OUTPUT_DIR / "warmup.wav"
+            pipe(
+                {"lyrics": "test warmup", "tags": "test"},
+                max_audio_length_ms=5000,
+                save_path=str(warmup_output),
+                topk=50,
+                temperature=1.0,
+                cfg_scale=1.5,
+            )
+            
+            if warmup_output.exists():
+                warmup_output.unlink()
+            
+            logger.info("✓ Warmup completed successfully")
+            log_memory_usage()
+        except Exception as e:
+            logger.warning(f"Warmup failed (non-critical): {e}")
+        
+        # Stage 6: Complete
+        update_loading_progress("ready", 100, "Model ready")
+        
+        # Force garbage collection
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        log_memory_usage()
+        
+        logger.info("=" * 80)
         logger.info("✓ HeartMuLa pipeline loaded successfully!")
-        logger.info("=" * 60)
+        logger.info("=" * 80)
         logger.info("Server ready to accept requests")
-        logger.info("=" * 60)
+        logger.info("=" * 80)
         
     except Exception as e:
-        global load_error
         load_error = str(e)
-        logger.error("=" * 60)
+        update_loading_progress("failed", 0, f"Loading failed: {str(e)}")
+        logger.error("=" * 80)
         logger.error("✗ FAILED TO LOAD MODEL")
-        logger.error("=" * 60)
+        logger.error("=" * 80)
         logger.error(f"Error: {e}")
         traceback.print_exc()
-        logger.error("=" * 60)
+        logger.error("=" * 80)
         logger.error("Server will start but generation will fail")
-        logger.error("=" * 60)
+        logger.error("=" * 80)
 
 
 @app.get("/")
@@ -272,6 +373,7 @@ async def root():
         "service": "HeartMuLa Music Generation API",
         "version": "1.0.0",
         "model_loaded": pipe is not None,
+        "loading_progress": loading_progress,
         "endpoints": {
             "health": "/health",
             "generate": "/generate (POST)",
@@ -284,34 +386,51 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint with detailed loading status."""
     status = "healthy"
     if pipe is None:
-        status = "error" if load_error else "model_not_loaded"
-        
-    return {
+        if load_error:
+            status = "error"
+        elif loading_progress["stage"] == "not_started":
+            status = "initializing"
+        elif loading_progress["stage"] == "failed":
+            status = "error"
+        else:
+            status = "model_loading"
+    
+    response = {
         "status": status,
+        "loading_progress": loading_progress,
         "load_error": load_error,
         "cuda_available": torch.cuda.is_available(),
         "active_jobs": len([j for j in jobs.values() if j["status"] in ["pending", "processing"]]),
         "total_jobs": len(jobs)
     }
+    
+    # Add GPU memory info
+    if torch.cuda.is_available():
+        try:
+            response["gpu_memory_allocated_gb"] = round(torch.cuda.memory_allocated() / 1024**3, 2)
+            response["gpu_memory_reserved_gb"] = round(torch.cuda.memory_reserved() / 1024**3, 2)
+            response["gpu_memory_total_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1024**3, 2)
+        except:
+            pass
+    
+    return response
 
 
 @app.post("/generate", response_model=JobStatus)
 async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
-    """
-    Start music generation job.
-    Returns job_id that can be used to poll for status.
-    
-    Estimated generation time: ~1-3 minutes for 95s of audio (RTF ≈ 1.0)
-    """
+    """Start music generation job."""
     if pipe is None:
-        raise HTTPException(status_code=503, detail="Model is not loaded. Check server logs.")
+        error_detail = "Model is not loaded. "
+        if load_error:
+            error_detail += f"Error: {load_error}"
+        elif loading_progress["stage"] != "ready":
+            error_detail += f"Still loading: {loading_progress['message']} ({loading_progress['progress']}%)"
+        raise HTTPException(status_code=503, detail=error_detail)
 
     job_id = str(uuid.uuid4())
-    
-    # Estimate duration based on audio length (RTF ≈ 1.0 baseline)
     estimated_seconds = request.max_audio_length_ms / 1000.0
     
     jobs[job_id] = {
@@ -322,11 +441,9 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
         "completed_at": None
     }
     
-    # Clean up old jobs periodically
-    if len(jobs) % 10 == 0:  # Every 10 jobs
+    if len(jobs) % 10 == 0:
         background_tasks.add_task(cleanup_old_jobs)
     
-    # Run generation in background
     background_tasks.add_task(generate_music_sync, job_id, request)
     
     return JobStatus(
@@ -389,7 +506,6 @@ async def delete_job(job_id: str):
     
     job = jobs.pop(job_id)
     
-    # Delete output file if it exists
     if job.get("output_path"):
         try:
             Path(job["output_path"]).unlink(missing_ok=True)
@@ -417,7 +533,6 @@ async def manual_cleanup():
 if __name__ == "__main__":
     import uvicorn
     
-    # Create output directory
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
     logger.info("Starting uvicorn server...")
