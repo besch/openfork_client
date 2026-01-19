@@ -46,6 +46,12 @@ fi
 set -e
 
 # --- Log Configuration ---
+# Attempt to load credentials if missing (reboot persistence)
+if [ -z "$DGN_API_KEY" ] && [ -f "/etc/dgn-api-key" ]; then
+  export DGN_API_KEY=$(cat /etc/dgn-api-key)
+  echo "Restored DGN_API_KEY from /etc/dgn-api-key"
+fi
+
 LOG_FILE="/tmp/dgn_init.log"
 LOG_STREAM_INTERVAL=60  # Seconds between log uploads (longer for runtime)
 LAST_LOG_POSITION=0
@@ -297,37 +303,64 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import site; print(site.getsitepackages()[0] + '/nvidia/nvjitlink/lib:' + site.getsitepackages()[0] + '/nvidia/cusparse/lib:' + site.getsitepackages()[0] + '/nvidia/cublas/lib:' + site.getsitepackages()[0] + '/nvidia/cuda_runtime/lib')"):$LD_LIBRARY_PATH
 log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 
-# Intelligent Resource Management
-# Detect VRAM to make smart decisions for 'auto' mode
+# --- Service Selection & Resource Management ---
+
+# Defaults
+START_YUME="false"
+START_HEARTMULA="false"
+START_DIFFRHYTHM="false"
+START_COMFYUI="true"
+ENABLE_4BIT="false"
+
 TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
 log "Detected Total VRAM: ${TOTAL_VRAM_MB} MB"
 
-SKIP_COMFYUI="false"
-ENABLE_4BIT="false"
-
-# 1. Decision: Should we skip ComfyUI?
-# If explictly requested via heavy service type
-if [[ "${SERVICE_TYPE:-auto}" == *"heartmula"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]]; then
-  log "Heavy standalone service requested (${SERVICE_TYPE}). Skipping ComfyUI startup."
-  SKIP_COMFYUI="true"
-# OR if in auto mode, HeartMuLa is present, and VRAM is tight (< 20GB)
-elif [[ "${SERVICE_TYPE:-auto}" == "auto" ]] && [ -f "/app/heartmula_api.py" ] && [ "$TOTAL_VRAM_MB" -lt 20000 ]; then
-  log "Auto-mode: HeartMuLa detected on < 20GB VRAM system. Skipping ComfyUI to reserve memory."
-  SKIP_COMFYUI="true"
+# Determine which services to run
+if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
+  # AUTO MODE: Strict Priority Selection
+  if [ -f "/app/heartmula_api.py" ]; then
+      log "Auto-mode: Detected HeartMuLa image. Selecting HeartMuLa service."
+      START_HEARTMULA="true"
+  elif [ -f "/app/diffrhythm_api.py" ]; then
+      log "Auto-mode: Detected DiffRhythm image. Selecting DiffRhythm service."
+      START_DIFFRHYTHM="true"
+  elif [ -d "/opt/YUME" ]; then
+      log "Auto-mode: Detected YUME installation. Selecting YUME service."
+      START_YUME="true"
+  else
+      log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
+  fi
+else
+  # MANUAL MODE: Check for keywords
+  if [[ "$SERVICE_TYPE" == *"yume"* ]]; then START_YUME="true"; fi
+  if [[ "$SERVICE_TYPE" == *"heartmula"* ]]; then START_HEARTMULA="true"; fi
+  if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
 fi
 
-# 2. Decision: Should we enable 4-bit quantization for HeartMuLa?
-# If explicitly requested via service type (e.g. *8gb*)
-if [[ "${SERVICE_TYPE:-auto}" == *"8gb"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"4bit"* ]]; then
-  ENABLE_4BIT="true"
-# OR if in auto mode and VRAM is < 16GB
-elif [[ "${SERVICE_TYPE:-auto}" == "auto" ]] && [ "$TOTAL_VRAM_MB" -lt 16000 ]; then
-  log "Auto-mode: VRAM < 16GB detected. Enforcing 4-bit quantization for HeartMuLa."
-  ENABLE_4BIT="true"
+# Resource constraints and VRAM management
+if [ "$START_HEARTMULA" = "true" ]; then
+  # HeartMuLa VRAM checks
+  if [ "$TOTAL_VRAM_MB" -lt 20000 ]; then
+      log "VRAM < 20GB. Disabling ComfyUI to reserve memory for HeartMuLa."
+      START_COMFYUI="false"
+  fi
+  if [ "$TOTAL_VRAM_MB" -lt 16000 ]; then
+      log "VRAM < 16GB. Enabling 4-bit quantization for HeartMuLa."
+      ENABLE_4BIT="true"
+  fi
+  # If manually requested 8GB/4bit
+  if [[ "${SERVICE_TYPE:-auto}" == *"8gb"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"4bit"* ]]; then
+      ENABLE_4BIT="true"
+  fi
+fi
+
+if [ "$START_YUME" = "true" ]; then
+    log "YUME active. Disabling ComfyUI to reserve memory."
+    START_COMFYUI="false"
 fi
 
 # Start ComfyUI
-if [ -d "/opt/ComfyUI" ] && [ "$SKIP_COMFYUI" != "true" ]; then
+if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   # Determine ComfyUI launch flags based on SERVICE_TYPE
   COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
   
@@ -377,8 +410,8 @@ else
   log "Info: /opt/ComfyUI not found."
 fi
 
-# Start YUME REST API (only if service type is yume or auto, needs longer timeout)
-if [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
+# Start YUME REST API
+if [ "$START_YUME" = "true" ]; then
   if [ -f "/opt/dgn-client/yume_api.py" ]; then
     # Ensure port 8000 is free
     if netstat -tln 2>/dev/null | grep -q ":8000 " || ss -tln 2>/dev/null | grep -q ":8000 "; then
@@ -433,14 +466,14 @@ if [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]] || [[ "${SERVICE_TYPE:-auto}" == "a
 fi
 
 # Start DiffRhythm REST API
-if [ -f "/app/diffrhythm_api.py" ] && ([[ "${SERVICE_TYPE:-auto}" == *"diffrhythm"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]); then
+if [ "$START_DIFFRHYTHM" = "true" ] && [ -f "/app/diffrhythm_api.py" ]; then
   log "Found DiffRhythm API script. Starting..."
   (cd /app && "$PYTHON_EXE" diffrhythm_api.py > /tmp/diffrhythm_api.log 2>&1) &
   wait_for_url "DiffRhythm API" "http://127.0.0.1:8000/health" 120 "/tmp/diffrhythm_api.log"
 fi
 
 # Start HeartMuLa REST API
-if [ -f "/app/heartmula_api.py" ] && ([[ "${SERVICE_TYPE:-auto}" == *"heartmula"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]); then
+if [ "$START_HEARTMULA" = "true" ] && [ -f "/app/heartmula_api.py" ]; then
   log "Found HeartMuLa API script. Starting..."
 
   # DEV MODE: Update API script from downloaded repo if available
@@ -532,6 +565,11 @@ export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 RESTART_CONFIG_EOF
 
 chmod +x /opt/dgn-client/.restart-config
+
+# Save credentials for future reboot persistence
+if [ -n "$DGN_API_KEY" ]; then
+    echo "$DGN_API_KEY" > /etc/dgn-api-key
+fi
 
 log "Starting DGN client..."
 cd /opt/dgn-client
