@@ -287,6 +287,10 @@ elif [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
   mv /opt/dgn-client/comfyui-storage/yume_api.py /opt/dgn-client/yume_api.py
 fi
 
+# Force download of yume_api.py to ensure latest version (avoids docker rebuild)
+log "Forcing direct download of yume_api.py from GitHub..."
+curl -sL "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/yume_api.py" -o /opt/dgn-client/yume_api.py
+
 # Verify YUME API script was downloaded
 if [ ! -f "/opt/dgn-client/yume_api.py" ]; then
   log "ERROR: yume_api.py not found after bootstrap!"

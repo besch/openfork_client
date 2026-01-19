@@ -303,9 +303,37 @@ def generate_video_sync(
                     else:
                         timestep = torch.tensor([t], dtype=torch.float32, device=device)
                     
-                    # Model forward passes
-                    noise_pred_cond = wan.model(latent_input, t=timestep, **arg_c)[0]
-                    noise_pred_uncond = wan.model(latent_input, t=timestep, **arg_null)[0]
+                    # Enhanced Logging for Debugging
+                    if step_idx == 0 or (step_idx + 1) % 5 == 0:
+                         logger.info(f"Step {step_idx}: timestep={timestep.item() if timestep.numel()==1 else timestep}")
+                         logger.info(f"  latent_input[0] shape: {latent_input[0].shape}")
+                         # Log arg_c shapes if possible
+                         if "context" in arg_c and isinstance(arg_c["context"], list):
+                             ctx_shapes = [c.shape for c in arg_c["context"] if hasattr(c, "shape")]
+                             logger.info(f"  context shapes: {ctx_shapes}")
+
+                    try:
+                        # Model forward passes
+                        # flag=False is usually required for inference (returns noise instead of loss)
+                        term1 = wan.model(latent_input, t=timestep, flag=False, **arg_c)
+                        if isinstance(term1, (tuple, list)):
+                            noise_pred_cond = term1[0]
+                        else:
+                            # If it's a tensor, just use it
+                            noise_pred_cond = term1
+                            
+                        term2 = wan.model(latent_input, t=timestep, flag=False, **arg_null)
+                        if isinstance(term2, (tuple, list)):
+                            noise_pred_uncond = term2[0]
+                        else:
+                            noise_pred_uncond = term2
+
+                    except RuntimeError as e:
+                        logger.error(f"Error in wan.model at step {step_idx}: {e}")
+                        logger.error(f"  timestep shape: {timestep.shape}")
+                        logger.error(f"  latent_input[0] shape: {latent_input[0].shape}")
+                        logger.error(f"  arg_c keys: {arg_c.keys()}")
+                        raise e
                     
                     # CFG
                     noise_pred = noise_pred_uncond + cfg * (noise_pred_cond - noise_pred_uncond)
@@ -324,12 +352,19 @@ def generate_video_sync(
                         noise_for_scheduler = noise_for_scheduler.unsqueeze(0)
                     
                     # Call scheduler
-                    latent_next = scheduler.step(
-                        model_output=noise_for_scheduler,
-                        timestep=t,
-                        sample=sample_for_scheduler,
-                        return_dict=False
-                    )[0]
+                    try:
+                        step_output = scheduler.step(
+                            model_output=noise_for_scheduler,
+                            timestep=t,
+                            sample=sample_for_scheduler,
+                            return_dict=False
+                        )
+                        latent_next = step_output[0]
+                    except Exception as e:
+                        logger.error(f"Error in scheduler.step at step {step_idx}: {e}")
+                        logger.error(f"  noise_for_scheduler shape: {noise_for_scheduler.shape}")
+                        logger.error(f"  sample_for_scheduler shape: {sample_for_scheduler.shape}")
+                        raise e
                     
                     # Remove batch dimension if we added it
                     if latent.dim() == 4 and latent_next.dim() == 5:
@@ -344,6 +379,10 @@ def generate_video_sync(
                     progress = 15 + int((step_idx + 1) / len(timesteps) * 70)
                     jobs[job_id]["progress"] = progress
                     
+        except Exception as e:
+            logger.error(f"Diffusion loop failed: {e}", exc_info=True)
+            raise e  # Re-raise to be caught by outer try-except
+            
         finally:
             # Move model back to CPU to free VRAM
             wan.model.cpu()
