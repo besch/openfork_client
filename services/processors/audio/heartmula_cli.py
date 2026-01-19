@@ -136,7 +136,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         # Default params if not provided in inputs
         return lyrics, style_prompt, params
 
-    def _wait_for_api(self, timeout: int = 60) -> bool:
+    def _wait_for_api(self, timeout: int = 300) -> bool:
         """Wait for the HeartMuLa API to become available."""
         start_time = time.time()
         while time.time() - start_time < timeout:
