@@ -297,11 +297,33 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import site; print(site.getsitepackages()[0] + '/nvidia/nvjitlink/lib:' + site.getsitepackages()[0] + '/nvidia/cusparse/lib:' + site.getsitepackages()[0] + '/nvidia/cublas/lib:' + site.getsitepackages()[0] + '/nvidia/cuda_runtime/lib')"):$LD_LIBRARY_PATH
 log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 
-# Determine if we should skip ComfyUI to save VRAM for other heavy services
+# Intelligent Resource Management
+# Detect VRAM to make smart decisions for 'auto' mode
+TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
+log "Detected Total VRAM: ${TOTAL_VRAM_MB} MB"
+
 SKIP_COMFYUI="false"
+ENABLE_4BIT="false"
+
+# 1. Decision: Should we skip ComfyUI?
+# If explictly requested via heavy service type
 if [[ "${SERVICE_TYPE:-auto}" == *"heartmula"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]]; then
-  log "Heavy standalone service detected (${SERVICE_TYPE}). Skipping ComfyUI startup to prevent OOM."
+  log "Heavy standalone service requested (${SERVICE_TYPE}). Skipping ComfyUI startup."
   SKIP_COMFYUI="true"
+# OR if in auto mode, HeartMuLa is present, and VRAM is tight (< 20GB)
+elif [[ "${SERVICE_TYPE:-auto}" == "auto" ]] && [ -f "/app/heartmula_api.py" ] && [ "$TOTAL_VRAM_MB" -lt 20000 ]; then
+  log "Auto-mode: HeartMuLa detected on < 20GB VRAM system. Skipping ComfyUI to reserve memory."
+  SKIP_COMFYUI="true"
+fi
+
+# 2. Decision: Should we enable 4-bit quantization for HeartMuLa?
+# If explicitly requested via service type (e.g. *8gb*)
+if [[ "${SERVICE_TYPE:-auto}" == *"8gb"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"4bit"* ]]; then
+  ENABLE_4BIT="true"
+# OR if in auto mode and VRAM is < 16GB
+elif [[ "${SERVICE_TYPE:-auto}" == "auto" ]] && [ "$TOTAL_VRAM_MB" -lt 16000 ]; then
+  log "Auto-mode: VRAM < 16GB detected. Enforcing 4-bit quantization for HeartMuLa."
+  ENABLE_4BIT="true"
 fi
 
 # Start ComfyUI
@@ -449,10 +471,10 @@ if [ -f "/app/heartmula_api.py" ] && ([[ "${SERVICE_TYPE:-auto}" == *"heartmula"
   fi
 
   
-  # Check if 4-bit quantization is requested via service type
-  if [[ "${SERVICE_TYPE:-auto}" == *"8gb"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"4bit"* ]]; then
+  # Check if 4-bit quantization is requested or auto-enabled
+  if [ "$ENABLE_4BIT" = "true" ]; then
       export HEARTMULA_QUANTIZATION="4bit"
-      log "Enabling 4-bit quantization for HeartMuLa"
+      log "Enabling 4-bit quantization for HeartMuLa (Auto or Requested)"
   fi
   
   (cd /app && "$PYTHON_EXE" heartmula_api.py > /tmp/heartmula_api.log 2>&1) &
