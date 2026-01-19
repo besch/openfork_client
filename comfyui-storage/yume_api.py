@@ -268,7 +268,8 @@ def generate_video_sync(
                     sampling_steps=steps,
                     guide_scale=cfg,
                     shift=8.0,  # Flow matching shift parameter
-                    seed=seed
+                    seed=seed,
+                    offload_model=True
                 )
 
         # Unpack return values
@@ -326,6 +327,10 @@ def generate_video_sync(
             if isinstance(latents, list) and len(latents) > 0:
                  logger.info(f"Initial latents[0] shape: {latents[0].shape}")
             
+            # Offload VAE to CPU to free up memory for DiT
+            logger.info("Offloading VAE to CPU...")
+            wan.vae.model.cpu()
+            
             # Move model to device for generation
             logger.info("Moving Diffusion Transformation model to GPU...")
             wan.model.to(device)
@@ -372,6 +377,9 @@ def generate_video_sync(
     
             # VAE Decoding
             logger.info("Decoding latents with VAE...")
+            # Move VAE back to GPU
+            wan.vae.model.to(device)
+            
             x0 = latents
             
             with torch.no_grad():
