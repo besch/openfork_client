@@ -413,6 +413,25 @@ fi
 # Start HeartMuLa REST API
 if [ -f "/app/heartmula_api.py" ]; then
   log "Found HeartMuLa API script. Starting..."
+
+  # Check if heartlib is installed, if not install it
+  if ! "$PYTHON_EXE" -c "import heartlib" 2>/dev/null; then
+      log "HeartLib not found. Installing..."
+      if [ ! -d "/app/heartlib_repo" ]; then
+          log "Cloning HeartLib..."
+          git clone https://github.com/HeartMuLa/heartlib.git /app/heartlib_repo || true
+      fi
+      
+      if [ -d "/app/heartlib_repo" ]; then
+          log "Installing HeartLib from /app/heartlib_repo..."
+          (cd /app/heartlib_repo && "$PYTHON_EXE" -m pip install -e .) || log "WARNING: HeartLib install failed"
+      else
+          log "ERROR: Could not clone HeartLib"
+      fi
+  else
+      log "HeartLib is already installed."
+  fi
+
   
   # Check if 4-bit quantization is requested via service type
   if [[ "${SERVICE_TYPE:-auto}" == *"8gb"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"4bit"* ]]; then
