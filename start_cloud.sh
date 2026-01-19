@@ -321,6 +321,7 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   if [ -f "/app/heartmula_api.py" ]; then
       log "Auto-mode: Detected HeartMuLa image. Selecting HeartMuLa service."
       START_HEARTMULA="true"
+      SERVICE_TYPE="heartmula-16gb"
   elif [ -f "/app/diffrhythm_api.py" ]; then
       log "Auto-mode: Detected DiffRhythm image. Selecting DiffRhythm service."
       START_DIFFRHYTHM="true"
