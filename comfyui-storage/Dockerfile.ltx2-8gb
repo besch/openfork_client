@@ -206,8 +206,76 @@ RUN echo "Downloading distilled LoRA..." && \
 
 # Download Camera Control LoRAs
 RUN echo "Downloading camera control LoRAs..." && \
-    for lora in \
-        "Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In:ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
-        "Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out:ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
-        "Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left:ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
-        "Lightricks/LTX-2-19b
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In \
+    --repo-type model \
+    --local-dir /tmp/lora1 \
+    --include "ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora1/ltx-2-19b-lora-camera-control-dolly-in.safetensors models/loras/ && \
+    rm -rf /tmp/lora1 && \
+    echo "✓ Dolly-In LoRA downloaded"
+
+RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out \
+    --repo-type model \
+    --local-dir /tmp/lora2 \
+    --include "ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora2/ltx-2-19b-lora-camera-control-dolly-out.safetensors models/loras/ && \
+    rm -rf /tmp/lora2 && \
+    echo "✓ Dolly-Out LoRA downloaded"
+
+RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left \
+    --repo-type model \
+    --local-dir /tmp/lora3 \
+    --include "ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora3/ltx-2-19b-lora-camera-control-dolly-left.safetensors models/loras/ && \
+    rm -rf /tmp/lora3 && \
+    echo "✓ Dolly-Left LoRA downloaded"
+
+RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right \
+    --repo-type model \
+    --local-dir /tmp/lora4 \
+    --include "ltx-2-19b-lora-camera-control-dolly-right.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora4/ltx-2-19b-lora-camera-control-dolly-right.safetensors models/loras/ && \
+    rm -rf /tmp/lora4 && \
+    echo "✓ Dolly-Right LoRA downloaded"
+
+RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Pan-Left \
+    --repo-type model \
+    --local-dir /tmp/lora5 \
+    --include "ltx-2-19b-lora-camera-control-pan-left.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora5/ltx-2-19b-lora-camera-control-pan-left.safetensors models/loras/ && \
+    rm -rf /tmp/lora5 && \
+    echo "✓ Pan-Left LoRA downloaded"
+
+RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Pan-Right \
+    --repo-type model \
+    --local-dir /tmp/lora6 \
+    --include "ltx-2-19b-lora-camera-control-pan-right.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/lora6/ltx-2-19b-lora-camera-control-pan-right.safetensors models/loras/ && \
+    rm -rf /tmp/lora6 && \
+    echo "✓ Pan-Right LoRA downloaded"
+
+# Verify all downloads
+RUN echo "=== Model Download Summary ===" && \
+    echo "UNET Models:" && ls -lh models/unet/ && \
+    echo "VAE Models:" && ls -lh models/vae/ && \
+    echo "CLIP Models:" && ls -lh models/clip/ && \
+    echo "LoRA Models:" && ls -lh models/loras/ && \
+    echo "Upscaler Models:" && ls -lh models/latent_upscale_models/ && \
+    echo "=== Total disk usage ===" && \
+    du -sh models/
+
+# Expose port
+EXPOSE 8188
+
+# Set environment variables for memory optimization
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ENV CUDA_MODULE_LOADING=LAZY
+
+# Entry point
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]

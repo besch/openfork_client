@@ -1,54 +1,163 @@
 # syntax=docker/dockerfile:1.4
-# HeartMuLa Docker Image
+# HeartMuLa Docker Image - Production Ready
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV CUDA_HOME=/usr/local/cuda
-ENV PATH=$CUDA_HOME/bin:$PATH
-ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-ENV PIP_NO_CACHE_DIR=1
-ENV HF_HOME=/app/pretrained
-ENV TRANSFORMERS_CACHE=/app/pretrained
+# Metadata
+LABEL maintainer="your-email@example.com"
+LABEL description="HeartMuLa Music Generation API Server"
+LABEL version="1.0.0"
 
-# System dependencies
+# Environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    PATH=$CUDA_HOME/bin:$PATH \
+    LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/pretrained \
+    TRANSFORMERS_CACHE=/app/pretrained \
+    HF_HUB_ENABLE_HF_TRANSFER=0 \
+    PYTHONUNBUFFERED=1 \
+    HEARTMULA_QUANTIZATION=none
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
+    build-essential \
+    curl \
+    git \
+    wget \
+    ffmpeg \
+    libsndfile1 \
+    ca-certificates \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-venv python3.10-distutils \
-    curl git wget ffmpeg \
+    python3.10 \
+    python3.10-dev \
+    python3.10-venv \
+    python3.10-distutils \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python3 \
+    && python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 WORKDIR /app
 
-# Install PyTorch
-RUN python -m pip install --no-cache-dir --upgrade pip \
+# Install PyTorch with CUDA support
+RUN echo "Installing PyTorch..." \
     && python -m pip install --no-cache-dir \
-        torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124 \
+        torch==2.4.0 \
+        torchaudio==2.4.0 \
+        --index-url https://download.pytorch.org/whl/cu124
+
+# Install core dependencies
+RUN echo "Installing core dependencies..." \
     && python -m pip install --no-cache-dir \
-        fastapi uvicorn[standard] python-multipart requests huggingface_hub[cli] transformers scipy bitsandbytes
+        fastapi \
+        uvicorn[standard] \
+        python-multipart \
+        requests \
+        scipy \
+        numpy
+
+# Install HuggingFace ecosystem
+RUN echo "Installing HuggingFace tools..." \
+    && python -m pip install --no-cache-dir \
+        huggingface_hub[cli] \
+        transformers \
+        accelerate \
+        tokenizers
+
+# Install optional dependencies (allow failure)
+RUN echo "Installing optional dependencies..." \
+    && python -m pip install --no-cache-dir bitsandbytes || \
+        echo "⚠️  bitsandbytes installation failed (quantization disabled)" \
+    && python -m pip install --no-cache-dir flash-attn --no-build-isolation || \
+        echo "⚠️  flash-attn installation failed (performance optimizations disabled)"
 
 # Clone and install HeartLib
-RUN git clone https://github.com/HeartMuLa/heartlib.git /app/heartlib_repo \
+RUN echo "Cloning HeartLib repository..." \
+    && git clone https://github.com/HeartMuLa/heartlib.git /app/heartlib_repo \
     && cd /app/heartlib_repo \
-    && python -m pip install --no-cache-dir -e .
+    && echo "Installing HeartLib..." \
+    && python -m pip install --no-cache-dir -e . \
+    && echo "✓ HeartLib installed successfully" \
+    && cd /app
 
-# Create directories
-RUN mkdir -p /app/input /app/output /app/ckpt
+# Create necessary directories
+RUN mkdir -p /app/input /app/output /app/ckpt /app/pretrained
 
-# Download HeartMuLa models
-# Using huggingface-cli download for better reliability
-RUN pip install -U "huggingface_hub[cli]" \
-    && huggingface-cli download HeartMuLa/HeartMuLaGen --local-dir /app/ckpt \
-    && huggingface-cli download HeartMuLa/HeartMuLa-oss-3B --local-dir /app/ckpt/HeartMuLa-oss-3B \
-    && huggingface-cli download HeartMuLa/HeartCodec-oss --local-dir /app/ckpt/HeartCodec-oss
+# Download HeartMuLa models with retry logic
+# HeartMuLaGen contains gen_config.json and tokenizer.json
+RUN echo "=== Downloading HeartMuLa Models ===" \
+    && echo "This may take 30-60 minutes depending on connection speed..." \
+    && echo "" \
+    && echo "[1/3] Downloading HeartMuLaGen (config files)..." \
+    && for i in 1 2 3; do \
+        huggingface-cli download HeartMuLa/HeartMuLaGen \
+            --local-dir /app/ckpt \
+            --resume-download \
+            && echo "✓ HeartMuLaGen downloaded" && break || \
+        { echo "Retry $i/3 failed, waiting 10s..."; sleep 10; }; \
+    done \
+    && echo "" \
+    && echo "[2/3] Downloading HeartMuLa-oss-3B (3B model weights)..." \
+    && for i in 1 2 3; do \
+        huggingface-cli download HeartMuLa/HeartMuLa-oss-3B \
+            --local-dir /app/ckpt/HeartMuLa-oss-3B \
+            --resume-download \
+            && echo "✓ HeartMuLa-oss-3B downloaded" && break || \
+        { echo "Retry $i/3 failed, waiting 10s..."; sleep 10; }; \
+    done \
+    && echo "" \
+    && echo "[3/3] Downloading HeartCodec-oss (codec model)..." \
+    && for i in 1 2 3; do \
+        huggingface-cli download HeartMuLa/HeartCodec-oss \
+            --local-dir /app/ckpt/HeartCodec-oss \
+            --resume-download \
+            && echo "✓ HeartCodec-oss downloaded" && break || \
+        { echo "Retry $i/3 failed, waiting 10s..."; sleep 10; }; \
+    done \
+    && echo "" \
+    && echo "=== Download Complete ==="
+
+# Verify checkpoint structure and show sizes
+RUN echo "" \
+    && echo "=== Verifying Model Files ===" \
+    && echo "" \
+    && echo "Root checkpoint directory:" \
+    && ls -lh /app/ckpt/ | grep -v "^total" || true \
+    && echo "" \
+    && echo "HeartMuLa-oss-3B contents:" \
+    && ls -lh /app/ckpt/HeartMuLa-oss-3B/ | head -n 10 || true \
+    && echo "" \
+    && echo "HeartCodec-oss contents:" \
+    && ls -lh /app/ckpt/HeartCodec-oss/ | head -n 10 || true \
+    && echo "" \
+    && du -sh /app/ckpt/* 2>/dev/null || true \
+    && echo "" \
+    && echo "=== Verification Complete ==="
 
 # Copy the API wrapper script
 COPY heartmula_api.py /app/heartmula_api.py
 
+# Verify Python environment
+RUN echo "" \
+    && echo "=== Python Environment ===" \
+    && python --version \
+    && python -c "import torch; print(f'PyTorch: {torch.__version__}')" \
+    && python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')" \
+    && python -c "import heartlib; print(f'HeartLib: OK')" \
+    && echo "=== Environment OK ==="
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Expose API port
 EXPOSE 8000
+
+# Run the API server
 CMD ["python", "heartmula_api.py"]
