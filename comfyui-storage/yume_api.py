@@ -120,8 +120,7 @@ def load_yume_model():
         # Initialize the model
         # Based on YUME's structure, we pass the checkpoint directory
         MODELS.wan_model = Yume(
-            checkpoint_dir=str(MODEL_DIR),
-            device_id=DEVICE_ID
+            checkpoint_dir=str(MODEL_DIR)
         )
         
         # Store references to sub-models
