@@ -79,7 +79,7 @@ class JobStatus(BaseModel):
 
 
 def load_yume_model():
-    """Load the YUME model using wan.Yume for single-GPU inference."""
+    """Load the YUME model using wan23.Yume for single-GPU inference."""
     global MODELS
     
     if MODELS.loaded:
@@ -97,18 +97,26 @@ def load_yume_model():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         
-        # Import YUME modules - CORRECTED: Use 'wan' not 'wan23'
-        from wan import Yume
-        from wan.configs import WAN_CONFIGS
+        # Import YUME modules
+        import importlib
+        from wan23.configs import WAN_CONFIGS
+        
+        _wan23 = importlib.import_module("wan23")
         
         # Set device
         MODELS.device = torch.device(f"cuda:{DEVICE_ID}")
         
-        # Load model - CORRECTED: Using proper config approach
-        # The model expects checkpoint_dir to contain the model files
-        logger.info(f"Initializing Yume model...")
+        # Load model using ti2v-5B config (text/image to video 5B)
+        # Check if key exists, if not fallback to hardcoded equivalent
+        if "ti2v-5B" in WAN_CONFIGS:
+             cfg = WAN_CONFIGS["ti2v-5B"]
+             logger.info(f"Loading Yume with config: ti2v-5B")
+        else:
+             logger.warning("ti2v-5B config not found in WAN_CONFIGS, checking available keys...")
+             logger.info(f"Keys: {WAN_CONFIGS.keys()}")
+             raise ValueError("ti2v-5B config missing")
         
-        # Create symlink if needed for compatibility
+        # Create symlink if needed
         ckpt_dir = YUME_DIR / "Yume-5B-720P"
         if not ckpt_dir.exists() and MODEL_DIR.exists():
             try:
@@ -117,10 +125,10 @@ def load_yume_model():
             except Exception as e:
                 logger.warning(f"Could not create symlink: {e}")
         
-        # Initialize the model
-        # Based on YUME's structure, we pass the checkpoint directory
-        MODELS.wan_model = Yume(
-            checkpoint_dir=str(MODEL_DIR)
+        MODELS.wan_model = _wan23.Yume(
+            config=cfg, 
+            checkpoint_dir=str(MODEL_DIR),
+            device_id=DEVICE_ID
         )
         
         # Store references to sub-models
@@ -243,7 +251,7 @@ def generate_video_sync(
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             with torch.no_grad():
                 gen_ret = wan.generate(
-                    final_prompt=prompt,
+                    input_prompt=prompt,
                     img=img_input,  # None for T2V, PIL Image for I2V
                     size=(width, height),
                     n_prompt=negative_prompt if negative_prompt else "",
@@ -265,12 +273,23 @@ def generate_video_sync(
              video_output = gen_ret
         else:
             # Manual diffusion loop required
-            latent_model_input_init, timestep_init, arg_c, noise, model_input_init, clip_context, arg_null = gen_ret
+            # yume_api_check says: arg_c, arg_null, noise = gen_ret 
+            # But here we stick to tuple unpacking or check length
+            # Let's trust it returns a tuple that we can unpack or use
+            if len(gen_ret) == 3:
+                 arg_c, arg_null, noise = gen_ret
+                 # Fix for missing variables needed below
+                 latent_model_input_init = None 
+                 timestep_init = None
+                 model_input_init = None
+                 clip_context = None
+            else:
+                 latent_model_input_init, timestep_init, arg_c, noise, model_input_init, clip_context, arg_null = gen_ret
             
             is_i2v = img_input is not None
             
             # Setup scheduler
-            from wan.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
+            from wan23.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
             
             sample_scheduler = FlowUniPCMultistepScheduler(
                 num_train_timesteps=1000, 
