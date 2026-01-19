@@ -329,38 +329,29 @@ def generate_video_sync(
         
         jobs[job_id]["progress"] = 90
         
-        # Save the output
-        final_output = OUTPUT_DIR / f"{job_id}.mp4"
-        logger.info(f"Saving video to {final_output}...")
-        
-        # Convert to frames
-        # Normalize to [0, 255]
-        if isinstance(video_output, torch.Tensor):
-            video_output = video_output.cpu()
-            
-            if video_output.dim() == 4:
-                # (C, F, H, W) -> (F, H, W, C)
-                video_output = video_output.permute(1, 2, 3, 0)
-            
-            video_output = (video_output.clamp(-1, 1).add(1).div(2) * 255).byte().numpy()
-            
-            from PIL import Image
-            frames = [Image.fromarray(frame) for frame in video_output]
-        elif isinstance(video_output, list):
-             # Assuming list of PIL Images
-             frames = video_output
+        if final_output.exists():
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["output_path"] = str(final_output)
+            jobs[job_id]["progress"] = 100
+            logger.info(f"Job {job_id} completed successfully: {final_output}")
         else:
-             # Try to convert numpy
-             import numpy as np
-             if isinstance(video_output, np.ndarray):
-                 from PIL import Image
-                 frames = [Image.fromarray(frame) for frame in video_output]
-             else:
-                 raise ValueError(f"Unknown video output type: {type(video_output)}")
+            raise RuntimeError(f"Output video was not created at {final_output}")
+            
+    except Exception as e:
+        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+    finally:
+        # Cleanup input files
+        if image_path:
+             try:
+                 Path(image_path).unlink(missing_ok=True)
+             except Exception:
+                 pass
         
-        # Export
-        from diffusers.utils import export_to_video
-        export_to_video(frames, str(final_output), fps=16)
+        # Clear GPU cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 @app.on_event("startup")
