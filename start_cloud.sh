@@ -496,6 +496,7 @@ RESTART_CONFIG_EOF
 chmod +x /opt/dgn-client/.restart-config
 
 log "Starting DGN client..."
+cd /opt/dgn-client
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 
 # Test that imports work before running
