@@ -375,14 +375,21 @@ def generate_video_sync(
                         
                         noise_pred = noise_pred_uncond + cfg * (noise_pred_cond - noise_pred_uncond)
                         
-                        # Ensure noise_pred is [C, F, H, W] for scheduler step which expects [B, C, F, H, W]
+                        # Ensure noise_pred is [B, C, F, H, W] for scheduler
+                        # Wan model output is likely [C, F, H, W] or [1, C, F, H, W]
                         if noise_pred.dim() == 4:
-                            noise_pred = noise_pred.unsqueeze(0)
+                             noise_pred = noise_pred.unsqueeze(0)
                         
-                        # Ensure latents[0] is [C, F, H, W]
+                        # Ensure latents[0] is [B, C, F, H, W] for scheduler
                         current_latent = latents[0]
                         if current_latent.dim() == 4:
                             current_latent = current_latent.unsqueeze(0)
+
+                        # Debug shapes before step
+                        # logger.info(f"Step {current_step}: noise_pred={noise_pred.shape}, latent={current_latent.shape}, t={t}")
+                        
+                        if current_latent.dim() == 0:
+                             raise ValueError(f"Latent became scalar at step {current_step}. This is unexpected.")
 
                         temp_x0 = sample_scheduler.step(
                             noise_pred, 
