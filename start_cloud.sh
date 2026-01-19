@@ -440,7 +440,20 @@ if [ -f "/app/heartmula_api.py" ]; then
   fi
   
   (cd /app && "$PYTHON_EXE" heartmula_api.py > /tmp/heartmula_api.log 2>&1) &
-  wait_for_url "HeartMuLa API" "http://127.0.0.1:8000/health" 900 "/tmp/heartmula_api.log"
+  
+  # Wait for API with diagnostic fallback
+  if ! wait_for_url "HeartMuLa API" "http://127.0.0.1:8000/health" 900 "/tmp/heartmula_api.log"; then
+      log "❌ HeartMuLa failed to start within timeout."
+      if [ -x "/app/diagnose_heartmula.sh" ]; then
+          log "Running diagnostic script..."
+          /app/diagnose_heartmula.sh | tee -a "$LOG_FILE"
+      elif [ -f "/app/diagnose_heartmula.sh" ]; then
+          bash /app/diagnose_heartmula.sh | tee -a "$LOG_FILE"
+      else
+          log "Diagnostic script not found at /app/diagnose_heartmula.sh"
+      fi
+      exit 1
+  fi
 fi
 
 # Start TurboDiffusion REST API
