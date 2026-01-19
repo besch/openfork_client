@@ -34,7 +34,7 @@ except ImportError:
 
 # Import HeartMuLa pipeline
 try:
-    from heartlib.inference import HeartMuLaGenPipeline
+    from heartlib import HeartMuLaGenPipeline
 except ImportError as e:
     logger.error(f"Failed to import HeartMuLa pipeline: {e}")
     logger.error("Make sure heartlib is installed: pip install -e /app/heartlib_repo")

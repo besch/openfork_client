@@ -375,8 +375,20 @@ def generate_video_sync(
                         
                         noise_pred = noise_pred_uncond + cfg * (noise_pred_cond - noise_pred_uncond)
                         
+                        # Ensure noise_pred is [C, F, H, W] for scheduler step which expects [B, C, F, H, W]
+                        if noise_pred.dim() == 4:
+                            noise_pred = noise_pred.unsqueeze(0)
+                        
+                        # Ensure latents[0] is [C, F, H, W]
+                        current_latent = latents[0]
+                        if current_latent.dim() == 4:
+                            current_latent = current_latent.unsqueeze(0)
+
                         temp_x0 = sample_scheduler.step(
-                            noise_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False
+                            noise_pred, 
+                            t, 
+                            current_latent, 
+                            return_dict=False
                         )[0]
                         latents = [temp_x0.squeeze(0)]
                         
