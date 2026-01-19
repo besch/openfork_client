@@ -136,41 +136,62 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         # Default params if not provided in inputs
         return lyrics, style_prompt, params
 
-    def _wait_for_api(self, timeout: int = 900) -> bool:
-        """Wait for the HeartMuLa API to become available."""
+    def _wait_for_api(self, timeout: int = 1200) -> bool:
+        """
+        Wait for the HeartMuLa API to become available.
+        
+        CRITICAL FIX: Extended timeout from 300s to 1200s (20 minutes).
+        HeartMuLa model loading typically takes 10-15 minutes on first load,
+        especially with large 3B/7B models and quantization.
+        """
         start_time = time.monotonic()
+        last_status_log = 0
+        
+        logging.info(f"Waiting for HeartMuLa API (timeout: {timeout}s)...")
+        
         while time.monotonic() - start_time < timeout:
             if self.shutdown_event.is_set():
                 logging.info("Shutdown requested while waiting for HeartMuLa API")
                 return False
+            
+            elapsed = int(time.monotonic() - start_time)
+            
             try:
                 response = requests.get(f"{self.api_base_url}/health", timeout=5)
                 if response.status_code == 200:
                     data = response.json()
                     status = data.get("status")
+                    
                     if status == "healthy":
-                        logging.info("HeartMuLa API is ready (model loaded)")
+                        logging.info(f"✓ HeartMuLa API is ready (model loaded after {elapsed}s)")
                         return True
                     elif status == "error":
                         error_detail = data.get("load_error", "Unknown model load error")
                         logging.error(f"HeartMuLa API reported a model load error: {error_detail}")
                         return False
                     elif status == "model_not_loaded":
-                        elapsed = int(time.monotonic() - start_time)
-                        logging.info(f"HeartMuLa API is up, but model is still loading... ({elapsed}/{timeout}s)")
+                        # Log loading status every 30 seconds to avoid spam
+                        if elapsed - last_status_log >= 30:
+                            logging.info(f"HeartMuLa model is still loading... ({elapsed}/{timeout}s)")
+                            last_status_log = elapsed
                     else:
                         logging.warning(f"HeartMuLa API status: {status}")
                 elif response.status_code == 503:
-                     # Model loading
-                     logging.info("HeartMuLa API is loading model (503)...")
+                     # Model loading - log every 30 seconds
+                     if elapsed - last_status_log >= 30:
+                         logging.info(f"HeartMuLa API is loading model (503)... ({elapsed}/{timeout}s)")
+                         last_status_log = elapsed
             except requests.exceptions.RequestException as e:
-                logging.debug(f"HeartMuLa API not reachable yet: {e}")
-                pass
+                # Only log connection errors every 60 seconds
+                if elapsed - last_status_log >= 60:
+                    logging.debug(f"HeartMuLa API not reachable yet: {e}")
+                    last_status_log = elapsed
             
             time.sleep(5)
 
         elapsed = int(time.monotonic() - start_time)
         logging.error(f"HeartMuLa API did not become available within {timeout}s (elapsed: {elapsed}s)")
+        logging.error("Check /tmp/heartmula_api.log for details")
         return False
 
     def _submit_generation(self, lyrics: str, style_prompt: str, params: Dict[str, Any]) -> Optional[str]:
@@ -188,6 +209,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
                 "max_audio_length_ms": int(params.get("duration", 95) * 1000) if "duration" in params else 95000
             }
 
+            logging.info(f"Submitting generation request: {json.dumps(payload, indent=2)}")
             response = requests.post(f"{self.api_base_url}/generate", json=payload, timeout=30)
 
             if response.status_code == 200:

@@ -31,7 +31,7 @@ import gc
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="YUME API", version="2.0.0")
+app = FastAPI(title="YUME API", version="2.0.1")
 
 # Job storage
 jobs = {}
@@ -388,8 +388,12 @@ def generate_video_sync(
                         # Debug shapes before step
                         logger.info(f"Step {current_step}: noise_pred={noise_pred.shape}, latent={current_latent.shape}, t={t}")
                         
+                        # CRITICAL FIX: Check for scalar tensor BEFORE calling scheduler.step
                         if current_latent.dim() == 0:
-                             raise ValueError(f"Latent became scalar at step {current_step}. This is unexpected.")
+                             raise ValueError(f"Latent became scalar at step {current_step}. This indicates a problem in the diffusion loop.")
+                        
+                        if noise_pred.dim() == 0:
+                             raise ValueError(f"Noise prediction became scalar at step {current_step}. This indicates a problem in the model forward pass.")
 
                         temp_x0 = sample_scheduler.step(
                             noise_pred, 
@@ -398,11 +402,24 @@ def generate_video_sync(
                             return_dict=False
                         )[0]
                         
-                        # Safer squeeze: only squeeze dim 0 if it exists and is 1
-                        if temp_x0.dim() == 5:
-                             latents = [temp_x0.squeeze(0)]
+                        # CRITICAL FIX: Safer tensor dimension handling
+                        # Only squeeze if we actually have a batch dimension to squeeze
+                        if temp_x0.dim() >= 5 and temp_x0.shape[0] == 1:
+                            # Safely squeeze batch dimension
+                            latents = [temp_x0.squeeze(0)]
+                        elif temp_x0.dim() == 4:
+                            # Already in correct shape [C, F, H, W]
+                            latents = [temp_x0]
+                        elif temp_x0.dim() == 0:
+                            # This should never happen, but catch it
+                            raise ValueError(f"Scheduler returned scalar tensor at step {current_step}")
                         else:
-                             latents = [temp_x0]
+                            # Keep as is for other dimensions
+                            latents = [temp_x0]
+                        
+                        # Verify latent shape after update
+                        if latents[0].dim() < 4:
+                            raise ValueError(f"Latent dimension collapsed to {latents[0].dim()} at step {current_step}")
                         
                         current_step += 1
                         progress = 10 + int((current_step / steps) * 80)
