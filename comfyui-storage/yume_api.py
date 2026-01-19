@@ -294,6 +294,12 @@ def generate_video_sync(
             else:
                  latent_model_input_init, timestep_init, arg_c, noise, model_input_init, clip_context, arg_null = gen_ret
             
+            # Debugging logs
+            logger.info(f"arg_c type: {type(arg_c)}")
+            logger.info(f"noise type: {type(noise)}")
+            if isinstance(noise, torch.Tensor):
+                logger.info(f"noise shape: {noise.shape}")
+            
             is_i2v = img_input is not None
             
             # Setup scheduler
@@ -310,18 +316,27 @@ def generate_video_sync(
             # Main diffusion loop
             logger.info(f"Starting diffusion loop for {steps} steps...")
             
-            # Prepare latent model input
-            latents = noise
+            # Prepare latent model input - ensure it's a list as expected by WanModel
+            if isinstance(noise, torch.Tensor):
+                latents = [noise]
+            else:
+                latents = noise
+            
+            # Debug log latents (list of tensors)
+            if isinstance(latents, list) and len(latents) > 0:
+                 logger.info(f"Initial latents[0] shape: {latents[0].shape}")
             
             current_step = 0
             
             with torch.no_grad():
                 for _, t in enumerate(timesteps):
+                    # latent_model_input should be the list 'latents'
                     latent_model_input = latents
                     timestep = [t]
                     timestep = torch.stack(timestep).to(device)
                     
                     # Model forward pass
+                    # WanModel expects 'latent_model_input' (list of tensors)
                     noise_pred_cond = wan.model(
                         latent_model_input, t=timestep, **arg_c)[0]
                     noise_pred_uncond = wan.model(
