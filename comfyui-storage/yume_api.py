@@ -326,38 +326,49 @@ def generate_video_sync(
             if isinstance(latents, list) and len(latents) > 0:
                  logger.info(f"Initial latents[0] shape: {latents[0].shape}")
             
+            # Move model to device for generation
+            logger.info("Moving Diffusion Transformation model to GPU...")
+            wan.model.to(device)
+            torch.cuda.empty_cache()
+            
             current_step = 0
             
-            with torch.no_grad():
-                for _, t in enumerate(timesteps):
-                    # latent_model_input should be the list 'latents'
-                    latent_model_input = latents
-                    timestep = [t]
-                    timestep = torch.stack(timestep).to(device)
-                    
-                    # Model forward pass
-                    # WanModel expects 'latent_model_input' (list of tensors)
-                    noise_pred_cond = wan.model(
-                        latent_model_input, t=timestep, **arg_c)[0]
-                    noise_pred_uncond = wan.model(
-                        latent_model_input, t=timestep, **arg_null)[0]
-                    
-                    noise_pred = noise_pred_uncond + cfg * (
-                        noise_pred_cond - noise_pred_uncond)
-                    
-                    # Scheduler step
-                    temp_x0 = sample_scheduler.step(
-                        noise_pred.unsqueeze(0),
-                        t,
-                        latents[0].unsqueeze(0),
-                        return_dict=False
-                    )[0]
-                    latents = [temp_x0.squeeze(0)]
-                    
-                    # Update progress
-                    current_step += 1
-                    progress = 10 + int((current_step / steps) * 80)
-                    jobs[job_id]["progress"] = progress
+            try:
+                with torch.no_grad():
+                    for _, t in enumerate(timesteps):
+                        # latent_model_input should be the list 'latents'
+                        latent_model_input = latents
+                        timestep = [t]
+                        timestep = torch.stack(timestep).to(device)
+                        
+                        # Model forward pass
+                        # WanModel expects 'latent_model_input' (list of tensors)
+                        noise_pred_cond = wan.model(
+                            latent_model_input, t=timestep, **arg_c)[0]
+                        noise_pred_uncond = wan.model(
+                            latent_model_input, t=timestep, **arg_null)[0]
+                        
+                        noise_pred = noise_pred_uncond + cfg * (
+                            noise_pred_cond - noise_pred_uncond)
+                        
+                        # Scheduler step
+                        temp_x0 = sample_scheduler.step(
+                            noise_pred.unsqueeze(0),
+                            t,
+                            latents[0].unsqueeze(0),
+                            return_dict=False
+                        )[0]
+                        latents = [temp_x0.squeeze(0)]
+                        
+                        # Update progress
+                        current_step += 1
+                        progress = 10 + int((current_step / steps) * 80)
+                        jobs[job_id]["progress"] = progress
+            finally:
+                # Offload model to CPU to save memory for VAE / cleanup
+                logger.info("Offloading Diffusion Transformer model to CPU...")
+                wan.model.cpu()
+                torch.cuda.empty_cache()
     
             # VAE Decoding
             logger.info("Decoding latents with VAE...")
