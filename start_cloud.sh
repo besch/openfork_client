@@ -291,6 +291,10 @@ fi
 log "Forcing direct download of yume_api.py from GitHub..."
 curl -sL "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/yume_api.py" -o /opt/dgn-client/yume_api.py
 
+# Force download of heartmula_api.py to ensure latest version
+log "Forcing direct download of heartmula_api.py from GitHub..."
+curl -sL "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/heartmula_api.py" -o /app/heartmula_api.py
+
 # Verify YUME API script was downloaded
 if [ ! -f "/opt/dgn-client/yume_api.py" ]; then
   log "ERROR: yume_api.py not found after bootstrap!"
@@ -513,6 +517,9 @@ if [ "$START_HEARTMULA" = "true" ] && [ -f "/app/heartmula_api.py" ]; then
   if [ "$ENABLE_4BIT" = "true" ]; then
       export HEARTMULA_QUANTIZATION="4bit"
       log "Enabling 4-bit quantization for HeartMuLa (Auto or Requested)"
+  elif [[ "$SERVICE_TYPE" == *"heartmula-16gb"* ]]; then
+      export HEARTMULA_QUANTIZATION="8bit"
+      log "Enabling 8-bit quantization for HeartMuLa 16GB service"
   fi
   
   (cd /app && "$PYTHON_EXE" heartmula_api.py > /tmp/heartmula_api.log 2>&1) &

@@ -320,8 +320,14 @@ async def startup_event():
                 bnb_4bit_compute_dtype=torch.bfloat16
             )
             logger.info("✓ Quantization config created (will use ~6GB VRAM)")
-        elif quantization_type == "4bit":
-            logger.warning("⚠️  4-bit quantization requested but bitsandbytes not available")
+        elif quantization_type == "8bit" and BITSANDBYTES_AVAILABLE:
+            logger.info("Enabling 8-bit quantization (int8)...")
+            bnb_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+            )
+            logger.info("✓ Quantization config created (will use ~8-10GB VRAM)")
+        elif quantization_type in ["4bit", "8bit"]:
+            logger.warning(f"⚠️  {quantization_type} quantization requested but bitsandbytes not available")
             logger.warning("   Model will load in full precision (requires 16GB+ VRAM)")
         else:
             logger.info("Loading model in full precision (requires 16GB+ VRAM)")
