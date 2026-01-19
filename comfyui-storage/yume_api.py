@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-YUME REST API Server for OpenFork DGN Client (Direct Model Loading)
+YUME API - Version 2.0.3
+MINIMAL VERSION: Simplified to use ONLY the high-level wan.generate() API
 
-Provides a simple HTTP API for video generation from text or images.
-Uses wan.Yume directly for memory-efficient single-GPU inference.
-
-Reference: https://github.com/stdstu12/YUME
-Model: https://huggingface.co/stdstu123/Yume-5B-720P
+This version removes the manual diffusion loop entirely and relies on
+wan.generate() to handle everything internally. This should be the
+correct approach based on the YUME library design.
 """
 
 import os
@@ -31,7 +30,7 @@ import gc
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="YUME API", version="2.0.1")
+app = FastAPI(title="YUME API", version="2.0.3")
 
 # Job storage
 jobs = {}
@@ -47,7 +46,7 @@ OUTPUT_DIR = Path("/opt/output")
 INPUT_DIR = Path("/opt/input")
 DEVICE_ID = 0
 
-# Global model storage (loaded once at startup)
+# Global model storage
 class Models:
     device = None
     wan_model = None
@@ -74,7 +73,7 @@ class GenerateRequest(BaseModel):
 class JobStatus(BaseModel):
     """Job status response."""
     job_id: str
-    status: str  # pending, queued, processing, completed, failed
+    status: str
     output_path: Optional[str] = None
     error: Optional[str] = None
     progress: Optional[int] = None
@@ -82,7 +81,7 @@ class JobStatus(BaseModel):
 
 
 def load_yume_model():
-    """Load the YUME model using wan23.Yume for single-GPU inference."""
+    """Load the YUME model."""
     global MODELS
     
     if MODELS.loaded:
@@ -92,34 +91,27 @@ def load_yume_model():
     try:
         logger.info(f"Loading YUME model from {MODEL_DIR}...")
         
-        # Add YUME to path
         if str(YUME_DIR) not in sys.path:
             sys.path.insert(0, str(YUME_DIR))
         
-        # Enable TF32 for better performance
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         
-        # Import YUME modules
         import importlib
         from wan23.configs import WAN_CONFIGS
         
         _wan23 = importlib.import_module("wan23")
         
-        # Set device
         MODELS.device = torch.device(f"cuda:{DEVICE_ID}")
         
-        # Load model using ti2v-5B config (text/image to video 5B)
-        # Check if key exists, if not fallback to hardcoded equivalent
         if "ti2v-5B" in WAN_CONFIGS:
              cfg = WAN_CONFIGS["ti2v-5B"]
              logger.info(f"Loading Yume with config: ti2v-5B")
         else:
-             logger.warning("ti2v-5B config not found in WAN_CONFIGS, checking available keys...")
-             logger.info(f"Keys: {WAN_CONFIGS.keys()}")
+             logger.warning("ti2v-5B config not found in WAN_CONFIGS")
+             logger.info(f"Available configs: {list(WAN_CONFIGS.keys())}")
              raise ValueError("ti2v-5B config missing")
         
-        # Create symlink if needed
         ckpt_dir = YUME_DIR / "Yume-5B-720P"
         if not ckpt_dir.exists() and MODEL_DIR.exists():
             try:
@@ -128,24 +120,15 @@ def load_yume_model():
             except Exception as e:
                 logger.warning(f"Could not create symlink: {e}")
         
-        logger.info(f"Instantiating _wan23.Yume with config={cfg}, checkpoint_dir={MODEL_DIR}, device_id={DEVICE_ID}")
-        try:
-            MODELS.wan_model = _wan23.Yume(
-                config=cfg, 
-                checkpoint_dir=str(MODEL_DIR),
-                device_id=DEVICE_ID
-            )
-            logger.info("_wan23.Yume instantiated successfully.")
-        except Exception as e:
-            logger.error(f"Error instantiating _wan23.Yume: {e}", exc_info=True)
-            raise
-
-        logger.info("Accessing VAE...")
-        # Store references with correct attribute names for wan23
+        logger.info(f"Instantiating wan23.Yume...")
+        MODELS.wan_model = _wan23.Yume(
+            config=cfg, 
+            checkpoint_dir=str(MODEL_DIR),
+            device_id=DEVICE_ID
+        )
+        
         MODELS.vae = MODELS.wan_model.vae
-        logger.info("Accessing Transformer...")
-        MODELS.transformer = MODELS.wan_model.model  # .model not .dit in wan23
-        logger.info("Accessing Text Encoder...")
+        MODELS.transformer = MODELS.wan_model.model
         MODELS.text_encoder = MODELS.wan_model.text_encoder
         
         MODELS.loaded = True
@@ -158,26 +141,22 @@ def load_yume_model():
 
 
 async def worker_loop():
-    """Background worker that processes jobs from the queue one at a time."""
+    """Background worker."""
     logger.info("Worker loop started")
     while True:
         job_id = await job_queue.get()
         try:
             logger.info(f"Worker picked up job {job_id}")
             async with processing_lock:
-                # Check if job was cancelled while in queue
                 if job_id not in jobs:
-                    logger.info(f"Job {job_id} was removed/cancelled before processing")
+                    logger.info(f"Job {job_id} was removed before processing")
                     continue
                 
-                # Update status
                 jobs[job_id]["status"] = "processing"
                 
-                # Extract parameters
                 job_data = jobs[job_id]
                 params = job_data["params"]
                 
-                # Execute generation
                 await asyncio.to_thread(
                     generate_video_sync,
                     job_id,
@@ -193,7 +172,7 @@ async def worker_loop():
                 )
                 
         except Exception as e:
-            logger.error(f"Worker loop error processing job {job_id}: {e}")
+            logger.error(f"Worker error processing job {job_id}: {e}", exc_info=True)
             if job_id in jobs:
                 jobs[job_id]["status"] = "failed"
                 jobs[job_id]["error"] = str(e)
@@ -214,10 +193,8 @@ def generate_video_sync(
     image_path: Optional[str] = None
 ):
     """
-    Synchronous video generation using wan.Yume.
-    
-    This uses the high-level generate() API from YUME which handles
-    the entire pipeline internally.
+    Synchronous video generation using wan.generate().
+    SIMPLIFIED VERSION: Let wan.generate() handle everything.
     """
     try:
         if not MODELS.loaded:
@@ -225,16 +202,14 @@ def generate_video_sync(
             
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"Generating video for job {job_id}...")
+        logger.info(f"=== JOB {job_id} START ===")
         logger.info(f"Prompt: {prompt[:100]}...")
-        logger.info(f"Frames: {num_frames}, Resolution: {width}x{height}, Steps: {steps}")
+        logger.info(f"Params: {num_frames} frames, {width}x{height}, {steps} steps, cfg={cfg}")
         
-        # Use random seed if 0
         if seed == 0:
             seed = random.randint(1, 2**32 - 1)
             logger.info(f"Using random seed: {seed}")
         
-        # Set seed for reproducibility
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
@@ -242,245 +217,141 @@ def generate_video_sync(
         wan = MODELS.wan_model
         device = MODELS.device
         
-        # Prepare input image for I2V mode
+        # Load input image for I2V
         img_input = None
         if image_path and os.path.exists(image_path):
             from PIL import Image
             img_input = Image.open(image_path).convert("RGB")
             logger.info(f"Loaded input image: {image_path}")
         
-        # Update progress
         jobs[job_id]["progress"] = 10
         
-        # Calculate max_area based on resolution
         max_area = width * height
         
-        logger.info(f"Starting YUME generation with seed {seed}...")
+        logger.info("Calling wan.generate()...")
+        logger.info(f"  offload_model=False (keep models on GPU)")
         
-        # AGGRESSIVE MEMORY MANAGEMENT
-        # Ensure everything is on CPU to start
-        logger.info("Ensuring models are on CPU before generation...")
-        if hasattr(wan.vae, 'model'):
-            wan.vae.model.cpu()
-        elif isinstance(wan.vae, torch.nn.Module):
-            wan.vae.cpu()
-            
-        if hasattr(wan, 'model'):
-            wan.model.cpu()
-            
-        if hasattr(wan, 'text_encoder') and hasattr(wan.text_encoder, 'model'):
-            wan.text_encoder.model.cpu()
-            
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-        # Use the high-level generate() method
-        # This returns a tuple of (arg_c, arg_null, noise, mask2, img_lat) OR latents tensor
+        # KEY CHANGE: Set offload_model=False to prevent dimension issues
+        # The offload logic may be causing tensor dimension problems
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             with torch.no_grad():
-                gen_ret = wan.generate(
-                    input_prompt=prompt,
-                    img=img_input,  # None for T2V, PIL Image for I2V
-                    size=(width, height),
-                    n_prompt=negative_prompt if negative_prompt else "",
-                    frame_num=num_frames,
-                    max_area=max_area,
-                    sampling_steps=steps,
-                    guide_scale=cfg,
-                    shift=8.0,  # Flow matching shift parameter
-                    seed=seed,
-                    offload_model=True 
-                )
+                try:
+                    gen_ret = wan.generate(
+                        input_prompt=prompt,
+                        img=img_input,
+                        size=(width, height),
+                        n_prompt=negative_prompt if negative_prompt else "",
+                        frame_num=num_frames,
+                        max_area=max_area,
+                        sampling_steps=steps,
+                        guide_scale=cfg,
+                        shift=8.0,
+                        seed=seed,
+                        offload_model=False  # CRITICAL: Keep on GPU
+                    )
+                    logger.info(f"wan.generate() completed. Return type: {type(gen_ret)}")
+                    
+                    # Debug the return value
+                    if isinstance(gen_ret, tuple):
+                        logger.info(f"  Tuple length: {len(gen_ret)}")
+                        for i, item in enumerate(gen_ret):
+                            if isinstance(item, torch.Tensor):
+                                logger.info(f"  gen_ret[{i}]: Tensor shape={item.shape}")
+                            else:
+                                logger.info(f"  gen_ret[{i}]: {type(item)}")
+                    elif isinstance(gen_ret, torch.Tensor):
+                        logger.info(f"  Tensor shape: {gen_ret.shape}")
+                    elif isinstance(gen_ret, list):
+                        logger.info(f"  List length: {len(gen_ret)}")
+                        for i, item in enumerate(gen_ret):
+                            if isinstance(item, torch.Tensor):
+                                logger.info(f"  gen_ret[{i}]: Tensor shape={item.shape}")
+                    
+                except Exception as e:
+                    logger.error(f"wan.generate() failed: {e}", exc_info=True)
+                    raise
         
-        # After generation, ensure DiT is offloaded (it might stay on if offload_model logic in lib is partial)
-        logger.info("Generation step done. Offloading DiT...")
-        if hasattr(wan, 'model'):
-            wan.model.cpu()
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        # Unpack return values
+        jobs[job_id]["progress"] = 85
+        
+        # Now we need to decode the output
+        # The exact format depends on what wan.generate() returns
+        logger.info("Processing generation output...")
+        
         video_output = None
         
-        # Check if we got latents (Tensor or list of Tensors) or Tuple (for manual loop)
-        is_tuple_return = isinstance(gen_ret, tuple)
+        # Handle different return types
+        if isinstance(gen_ret, torch.Tensor):
+            # Direct tensor - assume it's latents
+            logger.info("Got direct tensor, decoding with VAE...")
+            latents = gen_ret
+            
+            if latents.dim() == 4:
+                # Add batch dimension if needed
+                latents = latents.unsqueeze(0)
+            
+            logger.info(f"Latent shape: {latents.shape}")
+            
+            with torch.no_grad():
+                videos = wan.vae.decode([latents])
+            video_output = videos[0]
+            logger.info(f"Decoded video shape: {video_output.shape}")
+            
+        elif isinstance(gen_ret, list):
+            # List of tensors
+            logger.info("Got list, processing first element...")
+            if len(gen_ret) > 0 and isinstance(gen_ret[0], torch.Tensor):
+                latents = gen_ret[0]
+                logger.info(f"Latent shape: {latents.shape}")
+                
+                with torch.no_grad():
+                    videos = wan.vae.decode([latents])
+                video_output = videos[0]
+                logger.info(f"Decoded video shape: {video_output.shape}")
+            else:
+                raise ValueError(f"Unexpected list content: {type(gen_ret[0])}")
+                
+        elif isinstance(gen_ret, tuple):
+            # This shouldn't happen with offload_model=False, but handle it
+            logger.warning("Got tuple return - this indicates wan.generate() didn't complete")
+            logger.warning("This usually means offload_model=True caused issues")
+            raise RuntimeError("wan.generate() returned incomplete result (tuple). Try reducing resolution or frame count.")
         
-        if not is_tuple_return:
-             logger.info("wan.generate returned direct output (latents).")
-             latents = gen_ret
-             # If it's a list of tensors (from our previous reading of remote code), assume index 0
-             if isinstance(latents, list):
-                 latents = latents[0]
-                 
-             # Now we need to decode these latents
-             logger.info("Moving VAE to GPU for decoding...")
-             if hasattr(wan.vae, 'model'):
-                wan.vae.model.to(device)
-             elif isinstance(wan.vae, torch.nn.Module):
-                wan.vae.to(device)
-             
-             try:
-                 logger.info(f"Decoding latents of shape {latents.shape}...")
-                 with torch.no_grad():
-                     videos = wan.vae.decode([latents])
-                 video_output = videos[0]
-             finally:
-                 logger.info("Offloading VAE to CPU...")
-                 if hasattr(wan.vae, 'model'):
-                    wan.vae.model.cpu()
-                 elif isinstance(wan.vae, torch.nn.Module):
-                    wan.vae.cpu()
-                 torch.cuda.empty_cache()
-
         else:
-            # Manual diffusion loop required (Fallback path)
-            logger.info("wan.generate returned tuple, starting manual diffusion loop...")
-            
-            if len(gen_ret) == 3:
-                 arg_c, arg_null, noise = gen_ret
-            else:
-                 latent_model_input_init, timestep_init, arg_c, noise, model_input_init, clip_context, arg_null = gen_ret
-            
-            # Setup scheduler
-            from wan23.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
-            
-            sample_scheduler = FlowUniPCMultistepScheduler(
-                num_train_timesteps=1000, 
-                shift=1,
-                use_dynamic_shifting=False
-            )
-            sample_scheduler.set_timesteps(steps, device=device, shift=8.0)
-            timesteps = sample_scheduler.timesteps
-    
-            # Prepare latent model input
-            if isinstance(noise, torch.Tensor):
-                latents = [noise]
-            else:
-                latents = noise
-            
-            # Move DiT to GPU
-            logger.info("Moving DiT to GPU...")
-            wan.model.to(device)
-            
-            current_step = 0
-            try:
-                with torch.no_grad():
-                    for _, t in enumerate(timesteps):
-                        latent_model_input = latents
-                        timestep = [t]
-                        timestep = torch.stack(timestep).to(device)
-                        
-                        noise_pred_cond = wan.model(latent_model_input, t=timestep, **arg_c)[0]
-                        noise_pred_uncond = wan.model(latent_model_input, t=timestep, **arg_null)[0]
-                        
-                        noise_pred = noise_pred_uncond + cfg * (noise_pred_cond - noise_pred_uncond)
-                        
-                        # Ensure noise_pred is [B, C, F, H, W] for scheduler
-                        # Wan model output is likely [C, F, H, W] or [1, C, F, H, W]
-                        if noise_pred.dim() == 4:
-                             noise_pred = noise_pred.unsqueeze(0)
-                        
-                        # Ensure latents[0] is [B, C, F, H, W] for scheduler
-                        current_latent = latents[0]
-                        if current_latent.dim() == 4:
-                            current_latent = current_latent.unsqueeze(0)
-
-                        # Debug shapes before step
-                        logger.info(f"Step {current_step}: noise_pred={noise_pred.shape}, latent={current_latent.shape}, t={t}")
-                        
-                        # CRITICAL FIX: Check for scalar tensor BEFORE calling scheduler.step
-                        if current_latent.dim() == 0:
-                             raise ValueError(f"Latent became scalar at step {current_step}. This indicates a problem in the diffusion loop.")
-                        
-                        if noise_pred.dim() == 0:
-                             raise ValueError(f"Noise prediction became scalar at step {current_step}. This indicates a problem in the model forward pass.")
-
-                        temp_x0 = sample_scheduler.step(
-                            noise_pred, 
-                            t, 
-                            current_latent, 
-                            return_dict=False
-                        )[0]
-                        
-                        # CRITICAL FIX: Safer tensor dimension handling
-                        # Only squeeze if we actually have a batch dimension to squeeze
-                        if temp_x0.dim() >= 5 and temp_x0.shape[0] == 1:
-                            # Safely squeeze batch dimension
-                            latents = [temp_x0.squeeze(0)]
-                        elif temp_x0.dim() == 4:
-                            # Already in correct shape [C, F, H, W]
-                            latents = [temp_x0]
-                        elif temp_x0.dim() == 0:
-                            # This should never happen, but catch it
-                            raise ValueError(f"Scheduler returned scalar tensor at step {current_step}")
-                        else:
-                            # Keep as is for other dimensions
-                            latents = [temp_x0]
-                        
-                        # Verify latent shape after update
-                        if latents[0].dim() < 4:
-                            raise ValueError(f"Latent dimension collapsed to {latents[0].dim()} at step {current_step}")
-                        
-                        current_step += 1
-                        progress = 10 + int((current_step / steps) * 80)
-                        jobs[job_id]["progress"] = progress
-            finally:
-                wan.model.cpu()
-                torch.cuda.empty_cache()
-    
-            # VAE Decoding
-            logger.info("Moving VAE to GPU for decoding...")
-            if hasattr(wan.vae, 'model'):
-                wan.vae.model.to(device)
-            elif isinstance(wan.vae, torch.nn.Module):
-                wan.vae.to(device)
-            
-            try:
-                logger.info("Decoding latents...")
-                x0 = latents
-                with torch.no_grad():
-                    videos = wan.vae.decode(x0)
-                video_output = videos[0] # (C, F, H, W)
-            finally:
-                if hasattr(wan.vae, 'model'):
-                    wan.vae.model.cpu()
-                elif isinstance(wan.vae, torch.nn.Module):
-                    wan.vae.cpu()
-                torch.cuda.empty_cache()
+            raise ValueError(f"Unexpected return type from wan.generate(): {type(gen_ret)}")
         
         jobs[job_id]["progress"] = 90
-        
         
         # Save the output
         final_output = OUTPUT_DIR / f"{job_id}.mp4"
         logger.info(f"Saving video to {final_output}...")
         
-        # Convert to frames
-        # Normalize to [0, 255]
         if isinstance(video_output, torch.Tensor):
             video_output = video_output.cpu()
+            
+            logger.info(f"Video tensor shape: {video_output.shape}, dims: {video_output.dim()}")
             
             if video_output.dim() == 4:
                 # (C, F, H, W) -> (F, H, W, C)
                 video_output = video_output.permute(1, 2, 3, 0)
+            elif video_output.dim() == 5:
+                # (B, C, F, H, W) -> (F, H, W, C)
+                video_output = video_output[0].permute(1, 2, 3, 0)
             
             video_output = (video_output.clamp(-1, 1).add(1).div(2) * 255).byte().numpy()
             
             from PIL import Image
             frames = [Image.fromarray(frame) for frame in video_output]
         elif isinstance(video_output, list):
-             # Assuming list of PIL Images
-             frames = video_output
+            frames = video_output
         else:
-             # Try to convert numpy
-             import numpy as np
-             if isinstance(video_output, np.ndarray):
-                 from PIL import Image
-                 frames = [Image.fromarray(frame) for frame in video_output]
-             else:
-                 raise ValueError(f"Unknown video output type: {type(video_output)}")
+            import numpy as np
+            if isinstance(video_output, np.ndarray):
+                from PIL import Image
+                frames = [Image.fromarray(frame) for frame in video_output]
+            else:
+                raise ValueError(f"Unknown video output type: {type(video_output)}")
         
-        # Export
+        logger.info(f"Exporting {len(frames)} frames to video...")
         from diffusers.utils import export_to_video
         export_to_video(frames, str(final_output), fps=16)
         
@@ -488,37 +359,35 @@ def generate_video_sync(
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["output_path"] = str(final_output)
             jobs[job_id]["progress"] = 100
-            logger.info(f"Job {job_id} completed successfully: {final_output}")
+            logger.info(f"=== JOB {job_id} COMPLETED ===")
         else:
-            raise RuntimeError(f"Output video was not created at {final_output}")
+            raise RuntimeError(f"Output video was not created")
             
     except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
+        logger.error(f"=== JOB {job_id} FAILED ===", exc_info=True)
+        logger.error(f"Error: {e}")
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
     finally:
-        # Cleanup input files
         if image_path:
              try:
                  Path(image_path).unlink(missing_ok=True)
              except Exception:
                  pass
         
-        # Clear GPU cache
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Log startup info and load YUME model."""
+    """Startup."""
     logger.info("YUME API starting...")
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
         logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
         logger.info(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
-    # Check YUME installation
     if YUME_DIR.exists():
         logger.info(f"YUME directory found: {YUME_DIR}")
     else:
@@ -529,27 +398,23 @@ async def startup_event():
     else:
         logger.warning(f"Model directory not found: {MODEL_DIR}")
 
-    # Load the model in background to not block startup
-    logger.info("Scheduling background model load...")
     asyncio.create_task(background_load_model())
-
-    # Start the background worker loop
     asyncio.create_task(worker_loop())
 
 
 async def background_load_model():
-    """Run blocking model load in thread pool."""
+    """Load model in background."""
     logger.info("Starting background model load...")
     success = await asyncio.to_thread(load_yume_model)
     if not success:
-        logger.error("Failed to load YUME model - API will return errors for generation requests")
+        logger.error("Failed to load YUME model")
     else:
         logger.info("Model load completed successfully")
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint. Returns 503 if model is not loaded."""
+    """Health check."""
     is_loaded = MODELS.loaded
     
     if not is_loaded:
@@ -576,10 +441,7 @@ async def health_check():
 
 @app.post("/generate", response_model=JobStatus)
 async def generate_text_to_video(request: GenerateRequest, background_tasks: BackgroundTasks):
-    """
-    Queue text-to-video generation job.
-    Returns job_id immediately. Job tracks in "pending"/"queued" state until picked up.
-    """
+    """Queue T2V job."""
     if not MODELS.loaded:
         raise HTTPException(status_code=503, detail="YUME model not loaded")
     
@@ -603,7 +465,6 @@ async def generate_text_to_video(request: GenerateRequest, background_tasks: Bac
         }
     }
     
-    # Add to asyncio queue
     await job_queue.put(job_id)
     
     return JobStatus(job_id=job_id, status="queued", queue_position=job_queue.qsize())
@@ -620,16 +481,12 @@ async def generate_image_to_video(
     cfg: float = Form(7.0),
     seed: int = Form(0),
 ):
-    """
-    Queue image-to-video generation job.
-    Returns job_id immediately. Job tracks in "pending"/"queued" state until picked up.
-    """
+    """Queue I2V job."""
     if not MODELS.loaded:
         raise HTTPException(status_code=503, detail="YUME model not loaded")
     
     job_id = str(uuid.uuid4())
     
-    # Save uploaded image immediately so we have it for the worker
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     image_path = INPUT_DIR / f"{job_id}_input.jpg"
     
@@ -637,20 +494,16 @@ async def generate_image_to_video(
         content = await image.read()
         f.write(content)
     
-    # Get image dimensions to clamp/validate
     from PIL import Image
     try:
         img = Image.open(image_path)
         width, height = img.size
-        # Clamp to valid YUME dimensions
         width = min(max(width, 512), 1920)
         height = min(max(height, 288), 1080)
-        # Make divisible by 64
         width = (width // 64) * 64
         height = (height // 64) * 64
     except Exception as e:
         logger.error(f"Error processing image {job_id}: {e}")
-        # Use defaults if image fails
         width, height = 1280, 720
     
     jobs[job_id] = {
@@ -671,7 +524,6 @@ async def generate_image_to_video(
         }
     }
     
-    # Add to asyncio queue
     await job_queue.put(job_id)
     
     return JobStatus(job_id=job_id, status="queued", queue_position=job_queue.qsize())
@@ -679,7 +531,7 @@ async def generate_image_to_video(
 
 @app.get("/status/{job_id}", response_model=JobStatus)
 async def get_status(job_id: str):
-    """Get the status of a generation job."""
+    """Get job status."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -697,7 +549,7 @@ async def get_status(job_id: str):
 
 @app.get("/download/{job_id}")
 async def download(job_id: str):
-    """Download the generated video file."""
+    """Download video."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
@@ -718,17 +570,15 @@ async def download(job_id: str):
 
 @app.delete("/job/{job_id}")
 async def delete_job(job_id: str):
-    """Delete a job and its output file."""
+    """Delete job."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = jobs.pop(job_id)
     
-    # Delete output file if it exists
     if job.get("output_path"):
         Path(job["output_path"]).unlink(missing_ok=True)
     
-    # Delete any input file
     input_path = INPUT_DIR / f"{job_id}_input.jpg"
     input_path.unlink(missing_ok=True)
     
