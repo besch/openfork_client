@@ -62,6 +62,7 @@ from services.processors import (
     YumeTextToVideoCLIJobProcessor,
     YumeImageToVideoCLIJobProcessor,
     YumeCLIJobProcessor,
+    HeartMuLaCLIJobProcessor,
 )
 
 __all__ = [
@@ -104,6 +105,7 @@ __all__ = [
     "YumeTextToVideoCLIJobProcessor",
     "YumeImageToVideoCLIJobProcessor",
     "YumeCLIJobProcessor",
+    "HeartMuLaCLIJobProcessor",
 ]
 
 

@@ -30,6 +30,7 @@ from .audio.stable_audio import StableAudioJobProcessor
 from .audio.foley import FoleyJobProcessor
 from .audio.vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
 from .audio.diffrhythm_cli import DiffRhythmCLIJobProcessor
+from .audio.heartmula_cli import HeartMuLaCLIJobProcessor
 from .audio.chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProcessor
 
 # Image processors
@@ -80,6 +81,7 @@ __all__ = [
     "YumeTextToVideoCLIJobProcessor",
     "YumeImageToVideoCLIJobProcessor",
     "YumeCLIJobProcessor",
+    "HeartMuLaCLIJobProcessor",
 ]
 
 
