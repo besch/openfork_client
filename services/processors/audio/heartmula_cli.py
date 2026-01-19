@@ -143,6 +143,8 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         CRITICAL FIX: Extended timeout from 300s to 1200s (20 minutes).
         HeartMuLa model loading typically takes 10-15 minutes on first load,
         especially with large 3B/7B models and quantization.
+        
+        Additionally checks for CUDA OOM errors to fail fast.
         """
         start_time = time.monotonic()
         last_status_log = 0
@@ -161,6 +163,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
                 if response.status_code == 200:
                     data = response.json()
                     status = data.get("status")
+                    loading_progress = data.get("loading_progress", {})
                     
                     if status == "healthy":
                         logging.info(f"✓ HeartMuLa API is ready (model loaded after {elapsed}s)")
@@ -168,26 +171,39 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
                     elif status == "error":
                         error_detail = data.get("load_error", "Unknown model load error")
                         logging.error(f"HeartMuLa API reported a model load error: {error_detail}")
+                        
+                        # Check if it's a CUDA OOM error
+                        if "CUDA out of memory" in error_detail or "out of memory" in error_detail.lower():
+                            logging.error("CUDA OOM detected - GPU has insufficient memory")
+                            logging.error("Solutions:")
+                            logging.error("  1. Enable 4-bit quantization: HEARTMULA_QUANTIZATION=4bit")
+                            logging.error("  2. Stop other GPU services (ComfyUI, YUME, etc)")
+                            logging.error("  3. Use a GPU with more VRAM (16GB+ recommended)")
+                        
                         return False
-                    elif status == "model_not_loaded":
-                        # Log loading status every 30 seconds to avoid spam
+                    elif status in ["model_loading", "initializing"]:
+                        # Log loading progress every 30 seconds
                         if elapsed - last_status_log >= 30:
-                            logging.info(f"HeartMuLa model is still loading... ({elapsed}/{timeout}s)")
+                            stage = loading_progress.get("stage", "unknown")
+                            progress = loading_progress.get("progress", 0)
+                            message = loading_progress.get("message", "Loading...")
+                            logging.info(f"HeartMuLa loading: [{progress}%] {stage} - {message} ({elapsed}/{timeout}s)")
                             last_status_log = elapsed
                     else:
-                        logging.warning(f"HeartMuLa API status: {status}")
+                        if elapsed - last_status_log >= 30:
+                            logging.info(f"HeartMuLa API status: {status} ({elapsed}/{timeout}s)")
+                            last_status_log = elapsed
+                            
                 elif response.status_code == 503:
-                     # Model loading - log every 30 seconds
-                     if elapsed - last_status_log >= 30:
-                         logging.info(f"HeartMuLa API is loading model (503)... ({elapsed}/{timeout}s)")
-                         last_status_log = elapsed
-                else:
-                    # Some other code, maybe 503 while loading
-                    pass
+                    # Model loading - log every 30 seconds
+                    if elapsed - last_status_log >= 30:
+                        logging.info(f"HeartMuLa API is loading model (503)... ({elapsed}/{timeout}s)")
+                        last_status_log = elapsed
+                        
             except requests.exceptions.RequestException as e:
                 # Only log connection errors every 60 seconds
                 if elapsed - last_status_log >= 60:
-                    logging.debug(f"HeartMuLa API not reachable yet: {e}")
+                    logging.debug(f"HeartMuLa API not reachable yet: {e} ({elapsed}/{timeout}s)")
                     last_status_log = elapsed
             
             time.sleep(5)
@@ -195,6 +211,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         elapsed = int(time.monotonic() - start_time)
         logging.error(f"HeartMuLa API did not become available within {timeout}s (elapsed: {elapsed}s)")
         logging.error("Check /tmp/heartmula_api.log for details")
+        logging.error("Run diagnostic: /app/diagnose_heartmula.sh")
         return False
 
     def _submit_generation(self, lyrics: str, style_prompt: str, params: Dict[str, Any]) -> Optional[str]:

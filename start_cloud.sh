@@ -297,8 +297,15 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import site; print(site.getsitepackages()[0] + '/nvidia/nvjitlink/lib:' + site.getsitepackages()[0] + '/nvidia/cusparse/lib:' + site.getsitepackages()[0] + '/nvidia/cublas/lib:' + site.getsitepackages()[0] + '/nvidia/cuda_runtime/lib')"):$LD_LIBRARY_PATH
 log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 
+# Determine if we should skip ComfyUI to save VRAM for other heavy services
+SKIP_COMFYUI="false"
+if [[ "${SERVICE_TYPE:-auto}" == *"heartmula"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]]; then
+  log "Heavy standalone service detected (${SERVICE_TYPE}). Skipping ComfyUI startup to prevent OOM."
+  SKIP_COMFYUI="true"
+fi
+
 # Start ComfyUI
-if [ -d "/opt/ComfyUI" ]; then
+if [ -d "/opt/ComfyUI" ] && [ "$SKIP_COMFYUI" != "true" ]; then
   # Determine ComfyUI launch flags based on SERVICE_TYPE
   COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
   
@@ -404,14 +411,14 @@ if [[ "${SERVICE_TYPE:-auto}" == *"yume"* ]] || [[ "${SERVICE_TYPE:-auto}" == "a
 fi
 
 # Start DiffRhythm REST API
-if [ -f "/app/diffrhythm_api.py" ]; then
+if [ -f "/app/diffrhythm_api.py" ] && ([[ "${SERVICE_TYPE:-auto}" == *"diffrhythm"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]); then
   log "Found DiffRhythm API script. Starting..."
   (cd /app && "$PYTHON_EXE" diffrhythm_api.py > /tmp/diffrhythm_api.log 2>&1) &
   wait_for_url "DiffRhythm API" "http://127.0.0.1:8000/health" 120 "/tmp/diffrhythm_api.log"
 fi
 
 # Start HeartMuLa REST API
-if [ -f "/app/heartmula_api.py" ]; then
+if [ -f "/app/heartmula_api.py" ] && ([[ "${SERVICE_TYPE:-auto}" == *"heartmula"* ]] || [[ "${SERVICE_TYPE:-auto}" == "auto" ]]); then
   log "Found HeartMuLa API script. Starting..."
 
   # Check if heartlib is installed, if not install it

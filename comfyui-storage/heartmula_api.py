@@ -233,7 +233,37 @@ async def startup_event():
     logger.info("=" * 80)
     
     try:
-        # Stage 0: System info
+        # Stage 0: Clear GPU memory before starting
+        update_loading_progress("memory_cleanup", 2, "Clearing GPU memory")
+        if torch.cuda.is_available():
+            logger.info("Clearing GPU cache before model loading...")
+            torch.cuda.empty_cache()
+            gc.collect()
+            
+            # Log initial GPU state
+            initial_allocated = torch.cuda.memory_allocated() / 1024**3
+            initial_reserved = torch.cuda.memory_reserved() / 1024**3
+            total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            
+            logger.info(f"GPU Memory Before Loading:")
+            logger.info(f"  Allocated: {initial_allocated:.2f}GB")
+            logger.info(f"  Reserved: {initial_reserved:.2f}GB")
+            logger.info(f"  Total: {total_memory:.2f}GB")
+            logger.info(f"  Free: {total_memory - initial_allocated:.2f}GB")
+            
+            # Critical check: if >90% memory already used, fail early
+            if initial_allocated > total_memory * 0.9:
+                error_msg = (
+                    f"GPU memory already {initial_allocated:.2f}GB / {total_memory:.2f}GB used. "
+                    f"Cannot load HeartMuLa model. Other services are consuming GPU memory. "
+                    f"Stop ComfyUI, YUME, or other GPU services first."
+                )
+                logger.error(error_msg)
+                update_loading_progress("failed", 0, error_msg)
+                load_error = error_msg
+                return
+        
+        # Stage 1: System info
         update_loading_progress("system_check", 5, "Checking system configuration")
         logger.info(f"PyTorch version: {torch.__version__}")
         logger.info(f"CUDA available: {torch.cuda.is_available()}")
@@ -243,8 +273,14 @@ async def startup_event():
             logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
             memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
             logger.info(f"GPU memory: {memory_gb:.1f} GB")
+            
+            # Warn if GPU has less than 12GB
+            if memory_gb < 12:
+                logger.warning(f"⚠️  GPU has only {memory_gb:.1f}GB VRAM")
+                logger.warning("   HeartMuLa 3B model requires 12-16GB VRAM")
+                logger.warning("   Consider enabling 4-bit quantization: HEARTMULA_QUANTIZATION=4bit")
         
-        # Stage 1: Verify model files
+        # Stage 2: Verify model files
         update_loading_progress("file_check", 10, "Verifying model files")
         model_path = str(MODEL_DIR)
         
@@ -270,7 +306,7 @@ async def startup_event():
         
         logger.info(f"✓ All model files present")
         
-        # Stage 2: Configure quantization
+        # Stage 3: Configure quantization
         update_loading_progress("config", 20, "Configuring model parameters")
         quantization_type = os.environ.get("HEARTMULA_QUANTIZATION", "none").lower()
         bnb_config = None
@@ -283,11 +319,14 @@ async def startup_event():
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_compute_dtype=torch.bfloat16
             )
-            logger.info("✓ Quantization config created")
+            logger.info("✓ Quantization config created (will use ~6GB VRAM)")
         elif quantization_type == "4bit":
             logger.warning("⚠️  4-bit quantization requested but bitsandbytes not available")
+            logger.warning("   Model will load in full precision (requires 16GB+ VRAM)")
+        else:
+            logger.info("Loading model in full precision (requires 16GB+ VRAM)")
         
-        # Stage 3: Prepare device and dtype
+        # Stage 4: Prepare device and dtype
         update_loading_progress("device_setup", 25, "Configuring device and dtype")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
@@ -295,7 +334,7 @@ async def startup_event():
         logger.info(f"Device: {device}, dtype: {dtype}")
         log_memory_usage()
         
-        # Stage 4: Load pipeline (this is the long part)
+        # Stage 5: Load pipeline (this is the long part)
         update_loading_progress("loading_pipeline", 30, "Loading HeartMuLa pipeline (this may take 10-15 minutes)...")
         
         logger.info("=" * 80)
@@ -312,7 +351,7 @@ async def startup_event():
         
         update_loading_progress("pipeline_loaded", 80, "Pipeline loaded, initializing...")
         
-        # Stage 5: Warmup (optional but helpful)
+        # Stage 6: Warmup (optional but helpful)
         update_loading_progress("warmup", 90, "Running warmup generation")
         try:
             logger.info("Running warmup generation to compile kernels...")
@@ -337,7 +376,7 @@ async def startup_event():
         except Exception as e:
             logger.warning(f"Warmup failed (non-critical): {e}")
         
-        # Stage 6: Complete
+        # Stage 7: Complete
         update_loading_progress("ready", 100, "Model ready")
         
         # Force garbage collection
@@ -362,6 +401,22 @@ async def startup_event():
         logger.error(f"Error: {e}")
         traceback.print_exc()
         logger.error("=" * 80)
+        
+        # Provide specific guidance for common errors
+        if "CUDA out of memory" in str(e) or "out of memory" in str(e).lower():
+            logger.error("CUDA OUT OF MEMORY ERROR DETECTED")
+            logger.error("=" * 80)
+            logger.error("SOLUTIONS:")
+            logger.error("  1. Enable 4-bit quantization:")
+            logger.error("     export HEARTMULA_QUANTIZATION=4bit")
+            logger.error("  2. Stop other GPU services:")
+            logger.error("     pkill -f comfyui")
+            logger.error("     pkill -f yume_api")
+            logger.error("  3. Use a GPU with more VRAM:")
+            logger.error("     - Minimum: 12GB (with 4-bit quantization)")
+            logger.error("     - Recommended: 16GB+ (full precision)")
+            logger.error("=" * 80)
+        
         logger.error("Server will start but generation will fail")
         logger.error("=" * 80)
 
