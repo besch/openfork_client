@@ -136,11 +136,12 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         # Default params if not provided in inputs
         return lyrics, style_prompt, params
 
-    def _wait_for_api(self, timeout: int = 300) -> bool:
+    def _wait_for_api(self, timeout: int = 900) -> bool:
         """Wait for the HeartMuLa API to become available."""
-        start_time = time.time()
-        while time.time() - start_time < timeout:
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < timeout:
             if self.shutdown_event.is_set():
+                logging.info("Shutdown requested while waiting for HeartMuLa API")
                 return False
             try:
                 response = requests.get(f"{self.api_base_url}/health", timeout=5)
@@ -150,18 +151,26 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
                     if status == "healthy":
                         logging.info("HeartMuLa API is ready (model loaded)")
                         return True
+                    elif status == "error":
+                        error_detail = data.get("load_error", "Unknown model load error")
+                        logging.error(f"HeartMuLa API reported a model load error: {error_detail}")
+                        return False
                     elif status == "model_not_loaded":
-                        logging.info("HeartMuLa API is up, but model is still loading...")
+                        elapsed = int(time.monotonic() - start_time)
+                        logging.info(f"HeartMuLa API is up, but model is still loading... ({elapsed}/{timeout}s)")
                     else:
                         logging.warning(f"HeartMuLa API status: {status}")
                 elif response.status_code == 503:
                      # Model loading
                      logging.info("HeartMuLa API is loading model (503)...")
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as e:
+                logging.debug(f"HeartMuLa API not reachable yet: {e}")
                 pass
-            time.sleep(5)  # Increased sleep to reduce spam
+            
+            time.sleep(5)
 
-        logging.error(f"HeartMuLa API did not become available within {timeout}s")
+        elapsed = int(time.monotonic() - start_time)
+        logging.error(f"HeartMuLa API did not become available within {timeout}s (elapsed: {elapsed}s)")
         return False
 
     def _submit_generation(self, lyrics: str, style_prompt: str, params: Dict[str, Any]) -> Optional[str]:

@@ -58,6 +58,7 @@ MODEL_DIR = WORK_DIR / "ckpt"
 
 # Global pipeline variable
 pipe = None
+load_error = None
 
 class GenerateRequest(BaseModel):
     """Request model for music generation."""
@@ -252,6 +253,8 @@ async def startup_event():
         logger.info("=" * 60)
         
     except Exception as e:
+        global load_error
+        load_error = str(e)
         logger.error("=" * 60)
         logger.error("✗ FAILED TO LOAD MODEL")
         logger.error("=" * 60)
@@ -282,8 +285,13 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
+    status = "healthy"
+    if pipe is None:
+        status = "error" if load_error else "model_not_loaded"
+        
     return {
-        "status": "healthy" if pipe is not None else "model_not_loaded",
+        "status": status,
+        "load_error": load_error,
         "cuda_available": torch.cuda.is_available(),
         "active_jobs": len([j for j in jobs.values() if j["status"] in ["pending", "processing"]]),
         "total_jobs": len(jobs)

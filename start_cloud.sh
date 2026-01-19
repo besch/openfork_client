@@ -440,7 +440,7 @@ if [ -f "/app/heartmula_api.py" ]; then
   fi
   
   (cd /app && "$PYTHON_EXE" heartmula_api.py > /tmp/heartmula_api.log 2>&1) &
-  wait_for_url "HeartMuLa API" "http://127.0.0.1:8000/health" 300 "/tmp/heartmula_api.log"
+  wait_for_url "HeartMuLa API" "http://127.0.0.1:8000/health" 900 "/tmp/heartmula_api.log"
 fi
 
 # Start TurboDiffusion REST API
