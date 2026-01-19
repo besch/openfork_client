@@ -62,13 +62,27 @@ RUN echo "Installing core dependencies..." \
         scipy \
         numpy
 
-# Install HuggingFace ecosystem
-RUN echo "Installing HuggingFace tools..." \
-    && python -m pip install --no-cache-dir \
-        huggingface_hub[cli] \
-        transformers \
-        accelerate \
-        tokenizers
+# Install Rust (needed for building tokenizers from source)
+RUN echo "Installing Rust compiler..." \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+    && export PATH="/root/.cargo/bin:$PATH" \
+    && echo "✓ Rust installed: $(rustc --version)"
+
+# Add Rust to PATH for subsequent RUN commands
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Install HuggingFace ecosystem (split for better error isolation)
+RUN echo "Installing HuggingFace CLI..." \
+    && python -m pip install --no-cache-dir huggingface_hub[cli] \
+    && echo "✓ huggingface_hub installed"
+
+RUN echo "Installing tokenizers (this may take 5-10 minutes to compile)..." \
+    && python -m pip install --no-cache-dir tokenizers \
+    && echo "✓ tokenizers installed"
+
+RUN echo "Installing transformers and accelerate..." \
+    && python -m pip install --no-cache-dir transformers accelerate \
+    && echo "✓ transformers and accelerate installed"
 
 # Install optional dependencies (allow failure)
 RUN echo "Installing optional dependencies..." \
