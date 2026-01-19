@@ -257,8 +257,25 @@ def generate_video_sync(
         
         logger.info(f"Starting YUME generation with seed {seed}...")
         
-        # Use the high-level generate() method to get initialization tensors
-        # This returns a tuple of (arg_c, arg_null, noise, mask2, img_lat)
+        # AGGRESSIVE MEMORY MANAGEMENT
+        # Ensure everything is on CPU to start
+        logger.info("Ensuring models are on CPU before generation...")
+        if hasattr(wan.vae, 'model'):
+            wan.vae.model.cpu()
+        elif isinstance(wan.vae, torch.nn.Module):
+            wan.vae.cpu()
+            
+        if hasattr(wan, 'model'):
+            wan.model.cpu()
+            
+        if hasattr(wan, 'text_encoder') and hasattr(wan.text_encoder, 'model'):
+            wan.text_encoder.model.cpu()
+            
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        # Use the high-level generate() method
+        # This returns a tuple of (arg_c, arg_null, noise, mask2, img_lat) OR latents tensor
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             with torch.no_grad():
                 gen_ret = wan.generate(
@@ -272,39 +289,57 @@ def generate_video_sync(
                     guide_scale=cfg,
                     shift=8.0,  # Flow matching shift parameter
                     seed=seed,
-                    offload_model=True
+                    offload_model=True 
                 )
+        
+        # After generation, ensure DiT is offloaded (it might stay on if offload_model logic in lib is partial)
+        logger.info("Generation step done. Offloading DiT...")
+        if hasattr(wan, 'model'):
+            wan.model.cpu()
+        gc.collect()
+        torch.cuda.empty_cache()
 
         # Unpack return values
-        # The generate method returns 7 values:
-        # latent_model_input, timestep, arg_c, noise, model_input, clip_context, arg_null
+        video_output = None
         
-        # Robust check: If wan.generate returns video frames (list or tensor), return them directly
-        if not isinstance(gen_ret, tuple):
-             logger.info("wan.generate returned direct video output, skipping manual loop.")
-             video_output = gen_ret
+        # Check if we got latents (Tensor or list of Tensors) or Tuple (for manual loop)
+        is_tuple_return = isinstance(gen_ret, tuple)
+        
+        if not is_tuple_return:
+             logger.info("wan.generate returned direct output (latents).")
+             latents = gen_ret
+             # If it's a list of tensors (from our previous reading of remote code), assume index 0
+             if isinstance(latents, list):
+                 latents = latents[0]
+                 
+             # Now we need to decode these latents
+             logger.info("Moving VAE to GPU for decoding...")
+             if hasattr(wan.vae, 'model'):
+                wan.vae.model.to(device)
+             elif isinstance(wan.vae, torch.nn.Module):
+                wan.vae.to(device)
+             
+             try:
+                 logger.info(f"Decoding latents of shape {latents.shape}...")
+                 with torch.no_grad():
+                     videos = wan.vae.decode([latents])
+                 video_output = videos[0]
+             finally:
+                 logger.info("Offloading VAE to CPU...")
+                 if hasattr(wan.vae, 'model'):
+                    wan.vae.model.cpu()
+                 elif isinstance(wan.vae, torch.nn.Module):
+                    wan.vae.cpu()
+                 torch.cuda.empty_cache()
+
         else:
-            # Manual diffusion loop required
-            # yume_api_check says: arg_c, arg_null, noise = gen_ret 
-            # But here we stick to tuple unpacking or check length
-            # Let's trust it returns a tuple that we can unpack or use
+            # Manual diffusion loop required (Fallback path)
+            logger.info("wan.generate returned tuple, starting manual diffusion loop...")
+            
             if len(gen_ret) == 3:
                  arg_c, arg_null, noise = gen_ret
-                 # Fix for missing variables needed below
-                 latent_model_input_init = None 
-                 timestep_init = None
-                 model_input_init = None
-                 clip_context = None
             else:
                  latent_model_input_init, timestep_init, arg_c, noise, model_input_init, clip_context, arg_null = gen_ret
-            
-            # Debugging logs
-            logger.info(f"arg_c type: {type(arg_c)}")
-            logger.info(f"noise type: {type(noise)}")
-            if isinstance(noise, torch.Tensor):
-                logger.info(f"noise shape: {noise.shape}")
-            
-            is_i2v = img_input is not None
             
             # Setup scheduler
             from wan23.utils.fm_solvers_unipc import FlowUniPCMultistepScheduler
@@ -317,85 +352,60 @@ def generate_video_sync(
             sample_scheduler.set_timesteps(steps, device=device, shift=8.0)
             timesteps = sample_scheduler.timesteps
     
-            # Main diffusion loop
-            logger.info(f"Starting diffusion loop for {steps} steps...")
-            
-            # Prepare latent model input - ensure it's a list as expected by WanModel
+            # Prepare latent model input
             if isinstance(noise, torch.Tensor):
                 latents = [noise]
             else:
                 latents = noise
             
-            # Debug log latents (list of tensors)
-            if isinstance(latents, list) and len(latents) > 0:
-                 logger.info(f"Initial latents[0] shape: {latents[0].shape}")
-            
-            # Offload VAE to CPU to free up memory for DiT
-            logger.info("Offloading VAE to CPU...")
-            wan.vae.model.cpu()
-            
-            # Force cleanup
-            gc.collect()
-            torch.cuda.empty_cache()
-            
-            # Move model to device for generation
-            logger.info("Moving Diffusion Transformation model to GPU...")
+            # Move DiT to GPU
+            logger.info("Moving DiT to GPU...")
             wan.model.to(device)
             
-            # Initial cleanup after loading
-            gc.collect()
-            torch.cuda.empty_cache()
-            
             current_step = 0
-            
             try:
                 with torch.no_grad():
                     for _, t in enumerate(timesteps):
-                        # latent_model_input should be the list 'latents'
                         latent_model_input = latents
                         timestep = [t]
                         timestep = torch.stack(timestep).to(device)
                         
-                        # Model forward pass
-                        # WanModel expects 'latent_model_input' (list of tensors)
-                        noise_pred_cond = wan.model(
-                            latent_model_input, t=timestep, **arg_c)[0]
-                        noise_pred_uncond = wan.model(
-                            latent_model_input, t=timestep, **arg_null)[0]
+                        noise_pred_cond = wan.model(latent_model_input, t=timestep, **arg_c)[0]
+                        noise_pred_uncond = wan.model(latent_model_input, t=timestep, **arg_null)[0]
                         
-                        noise_pred = noise_pred_uncond + cfg * (
-                            noise_pred_cond - noise_pred_uncond)
+                        noise_pred = noise_pred_uncond + cfg * (noise_pred_cond - noise_pred_uncond)
                         
-                        # Scheduler step
                         temp_x0 = sample_scheduler.step(
-                            noise_pred.unsqueeze(0),
-                            t,
-                            latents[0].unsqueeze(0),
-                            return_dict=False
+                            noise_pred.unsqueeze(0), t, latents[0].unsqueeze(0), return_dict=False
                         )[0]
                         latents = [temp_x0.squeeze(0)]
                         
-                        # Update progress
                         current_step += 1
                         progress = 10 + int((current_step / steps) * 80)
                         jobs[job_id]["progress"] = progress
             finally:
-                # Offload model to CPU to save memory for VAE / cleanup
-                logger.info("Offloading Diffusion Transformer model to CPU...")
                 wan.model.cpu()
                 torch.cuda.empty_cache()
     
             # VAE Decoding
-            logger.info("Decoding latents with VAE...")
-            # Move VAE back to GPU
-            wan.vae.model.to(device)
+            logger.info("Moving VAE to GPU for decoding...")
+            if hasattr(wan.vae, 'model'):
+                wan.vae.model.to(device)
+            elif isinstance(wan.vae, torch.nn.Module):
+                wan.vae.to(device)
             
-            x0 = latents
-            
-            with torch.no_grad():
-                videos = wan.vae.decode(x0)
-                
-            video_output = videos[0] # (C, F, H, W)
+            try:
+                logger.info("Decoding latents...")
+                x0 = latents
+                with torch.no_grad():
+                    videos = wan.vae.decode(x0)
+                video_output = videos[0] # (C, F, H, W)
+            finally:
+                if hasattr(wan.vae, 'model'):
+                    wan.vae.model.cpu()
+                elif isinstance(wan.vae, torch.nn.Module):
+                    wan.vae.cpu()
+                torch.cuda.empty_cache()
         
         jobs[job_id]["progress"] = 90
         
