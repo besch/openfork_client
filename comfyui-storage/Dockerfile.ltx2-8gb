@@ -204,60 +204,67 @@ RUN echo "Downloading distilled LoRA..." && \
     rm -rf /tmp/lightricks_models && \
     echo "✓ Distilled LoRA downloaded"
 
-# Download Camera Control LoRAs
-RUN echo "Downloading camera control LoRAs..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In \
+# Download Camera Control LoRAs from single Lightricks/LTX-2 repository
+# All camera control LoRAs are in the main LTX-2 repo, not separate repos
+
+RUN echo "Downloading Dolly-In camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
-    --local-dir /tmp/lora1 \
+    --local-dir /tmp/loras \
     --include "ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/lora1/ltx-2-19b-lora-camera-control-dolly-in.safetensors models/loras/ && \
-    rm -rf /tmp/lora1 && \
+    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-in.safetensors models/loras/ && \
+    rm -rf /tmp/loras && \
     echo "✓ Dolly-In LoRA downloaded"
 
-RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out \
+RUN echo "Downloading Dolly-Out camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
-    --local-dir /tmp/lora2 \
+    --local-dir /tmp/loras \
     --include "ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/lora2/ltx-2-19b-lora-camera-control-dolly-out.safetensors models/loras/ && \
-    rm -rf /tmp/lora2 && \
+    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-out.safetensors models/loras/ && \
+    rm -rf /tmp/loras && \
     echo "✓ Dolly-Out LoRA downloaded"
 
-RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left \
+RUN echo "Downloading Dolly-Left camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
-    --local-dir /tmp/lora3 \
+    --local-dir /tmp/loras \
     --include "ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/lora3/ltx-2-19b-lora-camera-control-dolly-left.safetensors models/loras/ && \
-    rm -rf /tmp/lora3 && \
+    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-left.safetensors models/loras/ && \
+    rm -rf /tmp/loras && \
     echo "✓ Dolly-Left LoRA downloaded"
 
-RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right \
+RUN echo "Downloading Dolly-Right camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
-    --local-dir /tmp/lora4 \
+    --local-dir /tmp/loras \
     --include "ltx-2-19b-lora-camera-control-dolly-right.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/lora4/ltx-2-19b-lora-camera-control-dolly-right.safetensors models/loras/ && \
-    rm -rf /tmp/lora4 && \
+    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-right.safetensors models/loras/ && \
+    rm -rf /tmp/loras && \
     echo "✓ Dolly-Right LoRA downloaded"
 
-RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Pan-Left \
+RUN echo "Downloading Pan-Left camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
-    --local-dir /tmp/lora5 \
+    --local-dir /tmp/loras \
     --include "ltx-2-19b-lora-camera-control-pan-left.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/lora5/ltx-2-19b-lora-camera-control-pan-left.safetensors models/loras/ && \
-    rm -rf /tmp/lora5 && \
+    mv /tmp/loras/ltx-2-19b-lora-camera-control-pan-left.safetensors models/loras/ && \
+    rm -rf /tmp/loras && \
     echo "✓ Pan-Left LoRA downloaded"
 
-RUN huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Pan-Right \
+RUN echo "Downloading Pan-Right camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
-    --local-dir /tmp/lora6 \
+    --local-dir /tmp/loras \
     --include "ltx-2-19b-lora-camera-control-pan-right.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/lora6/ltx-2-19b-lora-camera-control-pan-right.safetensors models/loras/ && \
-    rm -rf /tmp/lora6 && \
+    mv /tmp/loras/ltx-2-19b-lora-camera-control-pan-right.safetensors models/loras/ && \
+    rm -rf /tmp/loras && \
     echo "✓ Pan-Right LoRA downloaded"
 
 # Verify all downloads
