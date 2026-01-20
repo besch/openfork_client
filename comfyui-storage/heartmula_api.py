@@ -178,6 +178,12 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             "tags": request.style_prompt,
         }
         
+        # Aggressive memory cleanup before generation
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        
         # Log memory before generation
         log_memory_usage()
         
@@ -391,29 +397,49 @@ async def startup_event():
         update_loading_progress("pipeline_loaded", 80, "Pipeline loaded, initializing...")
         
         # Stage 6: Warmup (optional but helpful)
-        update_loading_progress("warmup", 90, "Running warmup generation")
-        try:
-            logger.info("Running warmup generation to compile kernels...")
-            log_memory_usage()
-            
-            # Quick 5-second warmup
-            warmup_output = OUTPUT_DIR / "warmup.wav"
-            pipe(
-                {"lyrics": "test warmup", "tags": "test"},
-                max_audio_length_ms=5000,
-                save_path=str(warmup_output),
-                topk=50,
-                temperature=1.0,
-                cfg_scale=1.5,
-            )
-            
-            if warmup_output.exists():
-                warmup_output.unlink()
-            
-            logger.info("✓ Warmup completed successfully")
-            log_memory_usage()
-        except Exception as e:
-            logger.warning(f"Warmup failed (non-critical): {e}")
+        # IMPORTANT: On 16GB VRAM, skip warmup to preserve memory for actual generation
+        total_vram_gb = 0
+        if torch.cuda.is_available():
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        
+        skip_warmup = total_vram_gb < 20  # Skip warmup on <20GB VRAM to preserve memory
+        
+        if skip_warmup:
+            update_loading_progress("warmup", 95, "Skipping warmup (low VRAM mode)")
+            logger.info(f"Skipping warmup generation on {total_vram_gb:.1f}GB VRAM to preserve memory")
+            # Just force garbage collection instead
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        else:
+            update_loading_progress("warmup", 90, "Running warmup generation")
+            try:
+                logger.info("Running warmup generation to compile kernels...")
+                log_memory_usage()
+                
+                # Quick 2-second warmup (reduced from 5s to minimize memory fragmentation)
+                warmup_output = OUTPUT_DIR / "warmup.wav"
+                pipe(
+                    {"lyrics": "", "tags": "test"},
+                    max_audio_length_ms=2000,
+                    save_path=str(warmup_output),
+                    topk=50,
+                    temperature=1.0,
+                    cfg_scale=1.5,
+                )
+                
+                if warmup_output.exists():
+                    warmup_output.unlink()
+                
+                # Cleanup after warmup
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                logger.info("✓ Warmup completed successfully")
+                log_memory_usage()
+            except Exception as e:
+                logger.warning(f"Warmup failed (non-critical): {e}")
         
         # Stage 7: Complete
         update_loading_progress("ready", 100, "Model ready")

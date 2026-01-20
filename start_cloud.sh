@@ -464,13 +464,18 @@ if [ "$START_HEARTMULA" = "true" ] && [ -f "/app/heartmula_api.py" ]; then
   fi
 
   
+  # CUDA memory allocation optimization - reduces fragmentation for tight VRAM scenarios
+  export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,garbage_collection_threshold:0.9"
+  log "Setting PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF"
+  
   # Check if 4-bit quantization is requested or auto-enabled
+  # NOTE: 16GB VRAM REQUIRES 4-bit quantization! 8-bit uses ~15.64GB leaving no room for inference.
   if [ "$ENABLE_4BIT" = "true" ]; then
       export HEARTMULA_QUANTIZATION="4bit"
       log "Enabling 4-bit quantization for HeartMuLa (Auto or Requested)"
   elif [[ "$SERVICE_TYPE" == *"heartmula-16gb"* ]]; then
-      export HEARTMULA_QUANTIZATION="8bit"
-      log "Enabling 8-bit quantization for HeartMuLa 16GB service"
+      export HEARTMULA_QUANTIZATION="4bit"
+      log "Enabling 4-bit quantization for HeartMuLa 16GB service (required for 16GB VRAM)"
   fi
   
   (cd /app && "$PYTHON_EXE" heartmula_api.py > /tmp/heartmula_api.log 2>&1) &
