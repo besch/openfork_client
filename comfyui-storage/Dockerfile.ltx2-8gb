@@ -1,4 +1,4 @@
-# LTX-2 19B Docker Image (8GB VRAM Optimized) - FULLY CORRECTED v2
+# LTX-2 19B Docker Image (8GB VRAM Optimized) - FULLY CORRECTED v3
 # Based on verified Kijai/LTXV2_comfy and GitMylo repositories
 # Uses FP8 quantized models with DualCLIPLoader approach
 # Tested configuration for RTX 4060/3060 8GB cards
@@ -204,68 +204,64 @@ RUN echo "Downloading distilled LoRA..." && \
     rm -rf /tmp/lightricks_models && \
     echo "✓ Distilled LoRA downloaded"
 
-# Download Camera Control LoRAs from single Lightricks/LTX-2 repository
-# All camera control LoRAs are in the main LTX-2 repo, not separate repos
+# Download Camera Control LoRAs from separate repositories
+# Each camera control LoRA is in its own HuggingFace repository
 
 RUN echo "Downloading Dolly-In camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/loras \
-    --include "ltx-2-19b-lora-camera-control-dolly-in.safetensors" \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In \
+    ltx-2-19b-lora-camera-control-dolly-in.safetensors \
+    --local-dir models/loras \
+    --local-dir-use-symlinks False \
     --token ${HF_TOKEN} && \
-    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-in.safetensors models/loras/ && \
-    rm -rf /tmp/loras && \
     echo "✓ Dolly-In LoRA downloaded"
 
 RUN echo "Downloading Dolly-Out camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/loras \
-    --include "ltx-2-19b-lora-camera-control-dolly-out.safetensors" \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out \
+    ltx-2-19b-lora-camera-control-dolly-out.safetensors \
+    --local-dir models/loras \
+    --local-dir-use-symlinks False \
     --token ${HF_TOKEN} && \
-    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-out.safetensors models/loras/ && \
-    rm -rf /tmp/loras && \
     echo "✓ Dolly-Out LoRA downloaded"
 
 RUN echo "Downloading Dolly-Left camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/loras \
-    --include "ltx-2-19b-lora-camera-control-dolly-left.safetensors" \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left \
+    ltx-2-19b-lora-camera-control-dolly-left.safetensors \
+    --local-dir models/loras \
+    --local-dir-use-symlinks False \
     --token ${HF_TOKEN} && \
-    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-left.safetensors models/loras/ && \
-    rm -rf /tmp/loras && \
     echo "✓ Dolly-Left LoRA downloaded"
 
 RUN echo "Downloading Dolly-Right camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/loras \
-    --include "ltx-2-19b-lora-camera-control-dolly-right.safetensors" \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right \
+    ltx-2-19b-lora-camera-control-dolly-right.safetensors \
+    --local-dir models/loras \
+    --local-dir-use-symlinks False \
     --token ${HF_TOKEN} && \
-    mv /tmp/loras/ltx-2-19b-lora-camera-control-dolly-right.safetensors models/loras/ && \
-    rm -rf /tmp/loras && \
     echo "✓ Dolly-Right LoRA downloaded"
 
-RUN echo "Downloading Pan-Left camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/loras \
-    --include "ltx-2-19b-lora-camera-control-pan-left.safetensors" \
+RUN echo "Downloading Jib-Up camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Up \
+    ltx-2-19b-lora-camera-control-jib-up.safetensors \
+    --local-dir models/loras \
+    --local-dir-use-symlinks False \
     --token ${HF_TOKEN} && \
-    mv /tmp/loras/ltx-2-19b-lora-camera-control-pan-left.safetensors models/loras/ && \
-    rm -rf /tmp/loras && \
-    echo "✓ Pan-Left LoRA downloaded"
+    echo "✓ Jib-Up LoRA downloaded"
 
-RUN echo "Downloading Pan-Right camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/loras \
-    --include "ltx-2-19b-lora-camera-control-pan-right.safetensors" \
+RUN echo "Downloading Jib-Down camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Down \
+    ltx-2-19b-lora-camera-control-jib-down.safetensors \
+    --local-dir models/loras \
+    --local-dir-use-symlinks False \
     --token ${HF_TOKEN} && \
-    mv /tmp/loras/ltx-2-19b-lora-camera-control-pan-right.safetensors models/loras/ && \
-    rm -rf /tmp/loras && \
-    echo "✓ Pan-Right LoRA downloaded"
+    echo "✓ Jib-Down LoRA downloaded"
+
+RUN echo "Downloading Static camera control LoRA..." && \
+    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Static \
+    ltx-2-19b-lora-camera-control-static.safetensors \
+    --local-dir models/loras \
+    --local-dir-use-symlinks False \
+    --token ${HF_TOKEN} && \
+    echo "✓ Static LoRA downloaded"
 
 # Verify all downloads
 RUN echo "=== Model Download Summary ===" && \
