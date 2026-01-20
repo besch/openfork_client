@@ -197,10 +197,14 @@ install_pip() {
       log "pip installed via ensurepip"
     else
       log "ensurepip failed, downloading get-pip.py..."
-      curl -sL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-      "$py_exe" /tmp/get-pip.py --quiet --break-system-packages 2>/dev/null || \
-      "$py_exe" /tmp/get-pip.py --quiet
-      log "pip installed via get-pip.py"
+      if curl --max-time 30 -L https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py; then
+        "$py_exe" /tmp/get-pip.py --quiet --break-system-packages 2>/dev/null || \
+        "$py_exe" /tmp/get-pip.py --quiet
+        log "pip installed via get-pip.py"
+      else
+        log "ERROR: Failed to download get-pip.py"
+        return 1
+      fi
     fi
   fi
   
@@ -274,8 +278,13 @@ mkdir -p /opt/dgn-client /data/.cache /data/input
 cd /opt/dgn-client
 log "Downloading DGN client files..."
 export INSTALL_DEPS=true
-curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh
-bash bootstrap.sh
+if curl --max-time 60 --progress-bar -L https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh; then
+  log "✓ bootstrap.sh downloaded successfully"
+  bash bootstrap.sh
+else
+  log "ERROR: Failed to download bootstrap.sh. Cannot continue."
+  exit 1
+fi
 
 # Fix: If yume_api.py is in subdirectory (repo structure), move it to root
 # We check likely locations from the repo structure
@@ -289,11 +298,19 @@ fi
 
 # Force download of yume_api.py to ensure latest version (avoids docker rebuild)
 log "Forcing direct download of yume_api.py from GitHub..."
-curl -sL "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/yume_api.py" -o /opt/dgn-client/yume_api.py
+if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/yume_api.py" -o /opt/dgn-client/yume_api.py; then
+  log "✓ yume_api.py downloaded successfully"
+else
+  log "WARNING: Failed to download yume_api.py (timeout or network error). Using existing version if available."
+fi
 
 # Force download of heartmula_api.py to ensure latest version
 log "Forcing direct download of heartmula_api.py from GitHub..."
-curl -sL "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/heartmula_api.py" -o /app/heartmula_api.py
+if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/heartmula_api.py" -o /app/heartmula_api.py; then
+  log "✓ heartmula_api.py downloaded successfully"
+else
+  log "WARNING: Failed to download heartmula_api.py (timeout or network error). Using existing version if available."
+fi
 
 # Verify YUME API script was downloaded
 if [ ! -f "/opt/dgn-client/yume_api.py" ]; then
