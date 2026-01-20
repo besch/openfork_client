@@ -286,9 +286,6 @@ else
   exit 1
 fi
 
-  log "WARNING: Failed to download yume_api.py (timeout or network error). Using existing version if available."
-fi
-
 # Force download of heartmula_api.py to ensure latest version (only for HeartMuLa containers)
 if [ -d "/app" ]; then
   log "Forcing direct download of heartmula_api.py from GitHub..."
