@@ -4,9 +4,6 @@ comfyui-storage/diffrhythm_api.py
 comfyui-storage/heartmula_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/turbodiffusion_api_server.py
-comfyui-storage/yume_api.py
-comfyui-storage/yume_api_check.py
-comfyui-storage/yume_wrapper.py
 config.py
 dgn_client.py
 exceptions.py
@@ -55,8 +52,6 @@ services/processors/video/turbodiffusion.py
 services/processors/video/upscaler.py
 services/processors/video/wan22_image.py
 services/processors/video/wan22_text.py
-services/processors/video/yume.py
-services/processors/video/yume_cli.py
 start_cloud.sh
 utils/comfyui_workflow_utils.py
 utils/log_tailer.py
@@ -105,8 +100,6 @@ workflows/wan22-image-to-video.api.json
 workflows/wan22-text-to-video-16gb.api.json
 workflows/wan22-text-to-video-24gb.api.json
 workflows/wan22-text-to-video.api.json
-workflows/yume-image-to-video.api.json
-workflows/yume-text-to-video.api.json
 workflows/zimage-controlnet.api.json
 workflows/zimage-inpaint.api.json
 workflows/zimage-text-to-image.api.json
