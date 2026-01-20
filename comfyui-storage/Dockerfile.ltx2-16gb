@@ -158,6 +158,20 @@ assert size < 8.0, f'File unexpectedly large ({size:.2f}GB), may be corrupted'; 
 print(f'✓ LoRA download verified: {size:.2f}GB')" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
+# Download Camera Control LoRAs (Lightricks Official)
+RUN for model in Dolly-In Dolly-Out Dolly-Left Dolly-Right Jib-Up Jib-Down Static; do \
+        echo "Downloading Camera Control LoRA: $model..."; \
+        filename_lower=$(echo "$model" | tr '[:upper:]' '[:lower:]'); \
+        target_file="ltx-2-19b-lora-camera-control-${filename_lower}.safetensors"; \
+        # Try download, if fails (e.g. repo doesnt exist), just continue but warn \
+        (huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-$model \
+            "$target_file" \
+            --local-dir models/loras \
+            --local-dir-use-symlinks False \
+            --token "$HF_TOKEN" && \
+        echo "✓ Downloaded $model") || echo "⚠️ Failed to download $model (skipping)"; \
+    done
+
 # Download Gemma-3 12B FP8 text encoder (~6GB, optimized for 16GB/8GB VRAM)
 # Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
 RUN MAX_RETRIES=3; \

@@ -201,6 +201,20 @@ RUN MAX_RETRIES=3; \
     && python3 -c "import os; size=os.path.getsize('models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors')/(1024**3); print(f'Projections: {size:.2f}GB'); assert size > 0.05, 'File too small, corrupted'" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
+# Download Camera Control LoRAs (Lightricks Official)- 24GB
+RUN for model in Dolly-In Dolly-Out Dolly-Left Dolly-Right Jib-Up Jib-Down Static; do \
+        echo "Downloading Camera Control LoRA: $model..."; \
+        filename_lower=$(echo "$model" | tr '[:upper:]' '[:lower:]'); \
+        target_file="ltx-2-19b-lora-camera-control-${filename_lower}.safetensors"; \
+        # Try download, if fails (e.g. repo doesnt exist), just continue but warn \
+        (huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-$model \
+            "$target_file" \
+            --local-dir models/loras \
+            --local-dir-use-symlinks False \
+            --token "$HF_TOKEN" && \
+        echo "✓ Downloaded $model") || echo "⚠️ Failed to download $model (skipping)"; \
+    done
+
 # Copy vision processor configs for LTXVGemmaCLIPModelLoader (from gated repo, pre-downloaded)
 COPY gemma-configs/preprocessor_config.json models/clip/gemma-3-12b-it/
 COPY gemma-configs/processor_config.json models/clip/gemma-3-12b-it/

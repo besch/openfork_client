@@ -582,13 +582,25 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
 
 def get_camera_lora_filename(movement: str) -> Optional[str]:
     mapping = {
+        # Direct LTX-2 Mappings
         "dolly-in": "ltx-2-19b-lora-camera-control-dolly-in.safetensors",
         "dolly-out": "ltx-2-19b-lora-camera-control-dolly-out.safetensors",
         "dolly-left": "ltx-2-19b-lora-camera-control-dolly-left.safetensors",
         "dolly-right": "ltx-2-19b-lora-camera-control-dolly-right.safetensors",
         "jib-up": "ltx-2-19b-lora-camera-control-jib-up.safetensors",
         "jib-down": "ltx-2-19b-lora-camera-control-jib-down.safetensors",
-        "static": "ltx-2-19b-lora-camera-control-static.safetensors"
+        "static": "ltx-2-19b-lora-camera-control-static.safetensors",
+
+        # Generic Mappings (Approximate)
+        "zoom-in": "ltx-2-19b-lora-camera-control-dolly-in.safetensors",
+        "zoom-out": "ltx-2-19b-lora-camera-control-dolly-out.safetensors",
+        "pan-left": "ltx-2-19b-lora-camera-control-dolly-left.safetensors", 
+        "pan-right": "ltx-2-19b-lora-camera-control-dolly-right.safetensors",
+        "tilt-up": "ltx-2-19b-lora-camera-control-jib-up.safetensors",
+        "tilt-down": "ltx-2-19b-lora-camera-control-jib-down.safetensors",
+        "push-in": "ltx-2-19b-lora-camera-control-dolly-in.safetensors",
+        "pull-back": "ltx-2-19b-lora-camera-control-dolly-out.safetensors",
+        "tracking": "ltx-2-19b-lora-camera-control-dolly-right.safetensors", # Arbitrary choice, often tracking is lateral
     }
     return mapping.get(movement)
 
