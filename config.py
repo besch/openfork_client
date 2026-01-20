@@ -41,8 +41,9 @@ HEADLESS_MODE = any([
 ])
 
 # --- Supabase Configuration ---
-SUPABASE_URL = "https://vmuylzvwqravkmdmcpgv.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZtdXlsenZ3cXJhdmttZG1jcGd2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTIxNDM3MjAsImV4cCI6MjA2NzcxOTcyMH0.f2USQOkuKhPksSLSXhTlyl5zTstyCyYvzdiHV9HQUKw"
+# Production Supabase project
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://lhwcmiialdwsmtoikgqb.supabase.co")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxod2NtaWlhbGR3c210b2lrZ3FiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIxNzMxMzAsImV4cCI6MjA1Nzc0OTEzMH0.nZuZL4sD-4fsP5ZO2UpJKFcxsWM9kGfJjbhzKiIvnJA")
 
 # --- Orchestrator Configuration ---
 ORCHESTRATOR_URL_PROD = os.getenv("ORCHESTRATOR_URL_PROD", "https://www.openfork.video")
