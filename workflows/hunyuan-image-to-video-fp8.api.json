@@ -71,7 +71,6 @@
         "length": 49,
         "batch_size": 1,
         "positive": ["44", 0],
-        "negative": ["93", 0],
         "vae": ["10", 0],
         "start_image": ["1", 0],
         "clip_vision_output": ["79", 0],
