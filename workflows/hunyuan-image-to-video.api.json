@@ -74,7 +74,8 @@
         "negative": ["93", 0],
         "vae": ["10", 0],
         "start_image": ["1", 0],
-        "clip_vision_output": ["79", 0]
+        "clip_vision_output": ["79", 0],
+        "guidance_type": "linear"
       },
       "class_type": "HunyuanImageToVideo"
     },
