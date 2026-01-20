@@ -417,11 +417,14 @@ def inject_prompt_into_ltx2_video_workflow(
     Loads a ComfyUI API-formatted workflow, injects prompts for LTX-2.
     Also handles Camera Control LoRA injection if camera_movement is specified.
     
-    New workflow structure:
+    8GB VRAM Optimized Workflow Structure:
+    - Node 1: UNETLoader (FP8 transformer)
+    - Node 15: LoraLoader (distilled LoRA for fast generation)
+    - Node 2: DualCLIPLoader (FP8 Gemma + FP4 projections)
     - Node 3: Positive prompt (CLIPTextEncode)
+    - Node 6: LTXVBaseSampler (width, height, num_frames)
     - Node 9: BasicScheduler (steps)
     - Node 10: RandomNoise (seed)
-    - Node 11: LTXVBaseSampler (width, height, num_frames)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -446,6 +449,7 @@ def inject_prompt_into_ltx2_video_workflow(
         logging.info(f"Injected steps into LTX-2 BasicScheduler node 9: {steps}")
 
     # Inject dimensions into LTXVBaseSampler (find by class_type for workflow compatibility)
+    # Also update LTXVImageEncode if present (for I2V workflows)
     sampler_found = False
     for node_id, node in api_graph.items():
         if node.get("class_type") == "LTXVBaseSampler":
@@ -454,11 +458,16 @@ def inject_prompt_into_ltx2_video_workflow(
             node['inputs']['height'] = height
             logging.info(f"Injected dimensions into LTX-2 LTXVBaseSampler node {node_id}: {width}x{height}")
             sampler_found = True
-            break
+        elif node.get("class_type") == "LTXVImageEncode":
+            width, height = get_dimensions(aspect_ratio)
+            node['inputs']['width'] = width
+            node['inputs']['height'] = height
+            logging.info(f"Injected dimensions into LTX-2 LTXVImageEncode node {node_id}: {width}x{height}")
+    
     if not sampler_found:
         logging.warning("Could not find LTXVBaseSampler node in LTX-2 workflow for dimension injection")
 
-    # Inject Camera Control LoRA
+    # Inject Camera Control LoRA (only if not already using distilled LoRA workflow)
     if camera_movement and camera_movement != "none":
         lora_filename = get_camera_lora_filename(camera_movement)
         if lora_filename:
@@ -481,12 +490,16 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     Loads a ComfyUI API-formatted workflow, injects prompts and image for LTX-2 image-to-video.
     Also handles Camera Control LoRA injection.
     
-    New workflow structure:
+    8GB VRAM Optimized Workflow Structure:
+    - Node 1: UNETLoader (FP8 transformer)
+    - Node 15: LoraLoader (distilled LoRA for fast generation)
+    - Node 2: DualCLIPLoader (FP8 Gemma + FP4 projections)
     - Node 3: Positive prompt (CLIPTextEncode)
+    - Node 6: LTXVBaseSampler (width, height, num_frames)
     - Node 9: BasicScheduler (steps)
     - Node 10: RandomNoise (seed)
-    - Node 11: LTXVBaseSampler (width, height, num_frames)
-    - Node 15: LoadImage (start image)
+    - Node 16: LoadImage (start image)
+    - Node 17: LTXVImageEncode (encode start image)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -497,12 +510,16 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     else:
         logging.warning("Could not find prompt node 3 in LTX-2 i2v workflow")
 
-    # Inject start image into LoadImage node (Node 15)
-    if '15' in api_graph and api_graph['15'].get("class_type") == "LoadImage":
-        api_graph['15']['inputs']['image'] = start_image_filename
-        logging.info(f"Injected start image into LTX-2 i2v node 15: {start_image_filename}")
-    else:
-        logging.warning("Could not find LoadImage node 15 in LTX-2 i2v workflow")
+    # Inject start image into LoadImage node (Node 16 for new workflow, fallback to 15 for legacy)
+    image_injected = False
+    for node_id in ['16', '15']:
+        if node_id in api_graph and api_graph[node_id].get("class_type") == "LoadImage":
+            api_graph[node_id]['inputs']['image'] = start_image_filename
+            logging.info(f"Injected start image into LTX-2 i2v node {node_id}: {start_image_filename}")
+            image_injected = True
+            break
+    if not image_injected:
+        logging.warning("Could not find LoadImage node in LTX-2 i2v workflow")
 
     # Generate seed
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
@@ -517,7 +534,7 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
         api_graph['9']['inputs']['steps'] = steps
         logging.info(f"Injected steps into LTX-2 i2v BasicScheduler node 9: {steps}")
 
-    # Inject dimensions into LTXVBaseSampler (find by class_type for workflow compatibility)
+    # Inject dimensions into LTXVBaseSampler and LTXVImageEncode
     sampler_found = False
     for node_id, node in api_graph.items():
         if node.get("class_type") == "LTXVBaseSampler":
@@ -526,11 +543,16 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
             node['inputs']['height'] = height
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVBaseSampler node {node_id}: {width}x{height}")
             sampler_found = True
-            break
+        elif node.get("class_type") == "LTXVImageEncode":
+            width, height = get_dimensions(aspect_ratio)
+            node['inputs']['width'] = width
+            node['inputs']['height'] = height
+            logging.info(f"Injected dimensions into LTX-2 i2v LTXVImageEncode node {node_id}: {width}x{height}")
+    
     if not sampler_found:
         logging.warning("Could not find LTXVBaseSampler node in LTX-2 i2v workflow for dimension injection")
 
-    # Inject Camera Control LoRA
+    # Inject Camera Control LoRA (only if not already using distilled LoRA workflow)
     if camera_movement and camera_movement != "none":
         lora_filename = get_camera_lora_filename(camera_movement)
         if lora_filename:

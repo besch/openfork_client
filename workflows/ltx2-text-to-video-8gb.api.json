@@ -5,7 +5,21 @@
         "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
         "weight_dtype": "fp8_e4m3fn"
       },
-      "class_type": "UNETLoader"
+      "class_type": "UNETLoader",
+      "_meta": {
+        "title": "FP8 Transformer (8GB Optimized)"
+      }
+    },
+    "15": {
+      "inputs": {
+        "lora_name": "ltx-2-19b-distilled-lora-384.safetensors",
+        "strength_model": 1.0,
+        "model": ["1", 0]
+      },
+      "class_type": "LoraLoader",
+      "_meta": {
+        "title": "Distilled LoRA (Enables 6-8 steps)"
+      }
     },
     "2": {
       "inputs": {
@@ -13,7 +27,10 @@
         "clip_name2": "ltx-2-19b-dev-fp4_projections_only.safetensors",
         "type": "ltxv"
       },
-      "class_type": "DualCLIPLoader"
+      "class_type": "DualCLIPLoader",
+      "_meta": {
+        "title": "FP8 Gemma-3 + FP4 Projections"
+      }
     },
     "3": {
       "inputs": {
@@ -37,9 +54,21 @@
       },
       "class_type": "LTXVConditioning"
     },
+    "6": {
+      "inputs": {
+        "width": 480,
+        "height": 320,
+        "num_frames": 41,
+        "batch_size": 1
+      },
+      "class_type": "LTXVBaseSampler",
+      "_meta": {
+        "title": "8GB SAFE: 480x320, 41 frames (~1.7s @ 24fps)"
+      }
+    },
     "7": {
       "inputs": {
-        "model": ["1", 0],
+        "model": ["15", 0],
         "positive": ["5", 0],
         "negative": ["5", 1],
         "cfg": 3.0
@@ -54,14 +83,14 @@
     },
     "9": {
       "inputs": {
-        "model": ["1", 0],
+        "model": ["15", 0],
         "scheduler": "simple",
-        "steps": 15,
+        "steps": 6,
         "denoise": 1.0
       },
       "class_type": "BasicScheduler",
       "_meta": {
-        "title": "Scheduler (15 steps for 8GB VRAM)"
+        "title": "Scheduler (6 steps with distilled LoRA)"
       }
     },
     "10": {
@@ -84,7 +113,7 @@
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["5", 0]
+        "latent_image": ["6", 0]
       },
       "class_type": "SamplerCustom",
       "_meta": {
@@ -95,14 +124,14 @@
       "inputs": {
         "samples": ["12", 0],
         "vae": ["11", 0],
-        "tile_size": 256,
-        "overlap": 48,
-        "temporal_size": 24,
-        "temporal_overlap": 6
+        "tile_size": 192,
+        "overlap": 32,
+        "temporal_size": 16,
+        "temporal_overlap": 4
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "VAE Decode Tiled (8GB Optimized)"
+        "title": "VAE Decode Tiled (8GB Ultra-Conservative)"
       }
     },
     "14": {

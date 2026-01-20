@@ -280,5 +280,7 @@ EXPOSE 8188
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ENV CUDA_MODULE_LOADING=LAZY
 
-# Entry point
-CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
+# Entry point with 8GB VRAM optimization flags
+# --lowvram: Aggressive model offloading to CPU RAM
+# --reserve-vram 1: Reserve 1GB for system overhead
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--lowvram", "--reserve-vram", "1"]
