@@ -44,12 +44,19 @@ class VideoUpscalerJobProcessor(ComfyUIProcessor, VideoOutputHandler):
 
         try:
             container_input_path = f"/opt/ComfyUI/input/{video_filename}"
-            docker_manager.copy_file_to_container(
-                service_type=self.client.active_service_type,
-                source_on_host=video_path,
-                dest_in_container=container_input_path,
-                shutdown_event=self.shutdown_event,
-            )
+            if docker_manager:
+                docker_manager.copy_file_to_container(
+                    service_type=self.client.active_service_type,
+                    source_on_host=video_path,
+                    dest_in_container=container_input_path,
+                    shutdown_event=self.shutdown_event,
+                )
+            else:
+                # Headless Mode: Copy locally
+                import shutil
+                os.makedirs(os.path.dirname(container_input_path), exist_ok=True)
+                shutil.copy2(video_path, container_input_path)
+                logging.info(f"Copied video to {container_input_path} (Headless)")
             logging.info(f"Copied video to container: {container_input_path}")
         except Exception as e:
             self._fail_job(f"Failed to copy video to container for job {self.job_id}: {e}")

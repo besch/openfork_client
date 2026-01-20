@@ -116,6 +116,13 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
                     dest_in_container=container_input_path,
                     shutdown_event=self.shutdown_event,
                 )
+            else:
+                # Headless Mode: Copy locally
+                import shutil
+                container_input_path = f"/opt/ComfyUI/input/{image_filename}"
+                os.makedirs(os.path.dirname(container_input_path), exist_ok=True)
+                shutil.copy2(image_full_path, container_input_path)
+                logging.info(f"Copied {image_filename} to {container_input_path} (Headless)")
         except Exception as e:
             self._fail_job(f"Failed to copy image to container: {e}")
 
@@ -274,6 +281,18 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
                     dest_in_container=f"/opt/ComfyUI/input/{mask_filename}",
                     shutdown_event=self.shutdown_event,
                 )
+            else:
+                # Headless Mode: Copy locally
+                import shutil
+                # Copy source image
+                dest_src = f"/opt/ComfyUI/input/{source_filename}"
+                os.makedirs(os.path.dirname(dest_src), exist_ok=True)
+                shutil.copy2(os.path.join(self.client.input_dir, source_filename), dest_src)
+                
+                # Copy mask
+                dest_mask = f"/opt/ComfyUI/input/{mask_filename}"
+                shutil.copy2(os.path.join(self.client.input_dir, mask_filename), dest_mask)
+                logging.info(f"Copied images to ComfyUI input (Headless)")
         except Exception as e:
             self._fail_job(f"Failed to copy images to container: {e}")
 

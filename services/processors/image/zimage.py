@@ -127,12 +127,19 @@ class ZImageControlNetProcessor(ComfyUIProcessor, ImageOutputHandler):
         try:
             from services.docker_manager import docker_manager
             container_input_path = f"/opt/ComfyUI/input/{reference_image_filename}"
-            docker_manager.copy_file_to_container(
-                service_type=self.client.active_service_type,
-                source_on_host=reference_image_full_path,
-                dest_in_container=container_input_path,
-                shutdown_event=self.shutdown_event,
-            )
+            if docker_manager:
+                docker_manager.copy_file_to_container(
+                    service_type=self.client.active_service_type,
+                    source_on_host=reference_image_full_path,
+                    dest_in_container=container_input_path,
+                    shutdown_event=self.shutdown_event,
+                )
+            else:
+                # Headless Mode: Copy locally
+                import shutil
+                os.makedirs(os.path.dirname(container_input_path), exist_ok=True)
+                shutil.copy2(reference_image_full_path, container_input_path)
+                logging.info(f"Copied reference image to {container_input_path} (Headless)")
         except Exception as e:
             self._fail_job(f"Failed to copy reference image to container: {e}")
             return
@@ -239,20 +246,33 @@ class ZImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         source_image_full_path = os.path.join(self.client.input_dir, source_image_filename)
         try:
             from services.docker_manager import docker_manager
-            # Copy source image
-            docker_manager.copy_file_to_container(
-                service_type=self.client.active_service_type,
-                source_on_host=source_image_full_path,
-                dest_in_container=f"/opt/ComfyUI/input/{source_image_filename}",
-                shutdown_event=self.shutdown_event,
-            )
-            # Copy mask
-            docker_manager.copy_file_to_container(
-                service_type=self.client.active_service_type,
-                source_on_host=mask_path,
-                dest_in_container=f"/opt/ComfyUI/input/{mask_filename}",
-                shutdown_event=self.shutdown_event,
-            )
+            if docker_manager:
+                # Copy source image
+                docker_manager.copy_file_to_container(
+                    service_type=self.client.active_service_type,
+                    source_on_host=source_image_full_path,
+                    dest_in_container=f"/opt/ComfyUI/input/{source_image_filename}",
+                    shutdown_event=self.shutdown_event,
+                )
+                # Copy mask
+                docker_manager.copy_file_to_container(
+                    service_type=self.client.active_service_type,
+                    source_on_host=mask_path,
+                    dest_in_container=f"/opt/ComfyUI/input/{mask_filename}",
+                    shutdown_event=self.shutdown_event,
+                )
+            else:
+                # Headless Mode: Copy locally
+                import shutil
+                # Copy source image
+                dest_src = f"/opt/ComfyUI/input/{source_image_filename}"
+                os.makedirs(os.path.dirname(dest_src), exist_ok=True)
+                shutil.copy2(source_image_full_path, dest_src)
+                
+                # Copy mask
+                dest_mask = f"/opt/ComfyUI/input/{mask_filename}"
+                shutil.copy2(mask_path, dest_mask)
+                logging.info(f"Copied images to ComfyUI input (Headless)")
         except Exception as e:
             self._fail_job(f"Failed to copy images to container: {e}")
             return
