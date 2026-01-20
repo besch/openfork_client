@@ -256,7 +256,7 @@ async def startup_event():
                 error_msg = (
                     f"GPU memory already {initial_allocated:.2f}GB / {total_memory:.2f}GB used. "
                     f"Cannot load HeartMuLa model. Other services are consuming GPU memory. "
-                    f"Stop ComfyUI, YUME, or other GPU services first."
+                    f"Stop ComfyUI or other GPU services first."
                 )
                 logger.error(error_msg)
                 update_loading_progress("failed", 0, error_msg)
@@ -486,7 +486,6 @@ async def startup_event():
             logger.error("     export HEARTMULA_QUANTIZATION=4bit")
             logger.error("  2. Stop other GPU services:")
             logger.error("     pkill -f comfyui")
-            logger.error("     pkill -f yume_api")
             logger.error("  3. Use a GPU with more VRAM:")
             logger.error("     - Minimum: 12GB (with 4-bit quantization)")
             logger.error("     - Recommended: 16GB+ (full precision)")

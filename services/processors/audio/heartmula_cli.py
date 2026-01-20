@@ -177,7 +177,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
                             logging.error("CUDA OOM detected - GPU has insufficient memory")
                             logging.error("Solutions:")
                             logging.error("  1. Enable 4-bit quantization: HEARTMULA_QUANTIZATION=4bit")
-                            logging.error("  2. Stop other GPU services (ComfyUI, YUME, etc)")
+                            logging.error("  2. Stop other GPU services (ComfyUI, etc)")
                             logging.error("  3. Use a GPU with more VRAM (16GB+ recommended)")
                         
                         return False
