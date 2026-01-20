@@ -38,12 +38,12 @@ RUN python -m pip install --no-cache-dir \
         torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install remaining dependencies
+# Install remaining dependencies + xformers for memory-efficient attention
 RUN python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg \
         GitPython PyGithub matrix-client==0.4.0 transformers \
         huggingface-hub color-matcher matplotlib mss toml \
-        rich uv sentencepiece bitsandbytes \
+        rich uv sentencepiece bitsandbytes xformers \
     && rm -rf /tmp/* /var/tmp/*
 
 WORKDIR /opt/ComfyUI
@@ -199,6 +199,11 @@ RUN MAX_RETRIES=3; \
     && python3 -c "import os; size=os.path.getsize('models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors')/(1024**3); print(f'Projections: {size:.2f}GB'); assert size > 0.05, 'File too small, corrupted'" \
     && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
+# Copy vision processor configs for LTXVGemmaCLIPModelLoader (from gated repo, pre-downloaded)
+COPY gemma-configs/preprocessor_config.json models/clip/gemma-3-12b-it/
+COPY gemma-configs/processor_config.json models/clip/gemma-3-12b-it/
+COPY gemma-configs/generation_config.json models/clip/gemma-3-12b-it/
+
 # Verify all models (FIXED: Updated LoRA minimum size & Directory support)
 RUN echo '#!/usr/bin/env python3\n\
 import os\n\
@@ -236,12 +241,7 @@ for filepath, min_size_gb in files_to_verify.items():\n\
         print(f"✓ VALID: {filepath} ({size_gb:.2f}GB)")\n\
 \n\
 print("="*70)\n\
-\n\
-if not all_valid:\n\
-    print("ERROR: Some model files are missing or corrupted!")\n\
-    sys.exit(1)\n\
-\n\
-print("="*70)\n\
+print(f"Total model size: {sum(os.path.getsize(f) if os.path.isfile(f) else 0 for f in files_to_verify.keys() if os.path.exists(f))/(1024**3):.2f}GB")\n\
 \n\
 if not all_valid:\n\
     print("ERROR: Some model files are missing or corrupted!")\n\
@@ -262,12 +262,14 @@ WORKDIR /opt/ComfyUI
 
 # 16GB VRAM OPTIMIZED LAUNCH FLAGS:
 # --listen: Allow external connections
-# --highvram: Use high VRAM mode for better performance (16GB has headroom)
-# --use-pytorch-cross-attention: Better quality than split attention
+# --lowvram: CRITICAL - Total model size (~29.5GB) far exceeds 16GB VRAM!
+#            Models are offloaded to CPU when not in use
+# --use-split-cross-attention: Memory efficient attention for 16GB
+# --reserve-vram 1.0: Reserve 1GB for system overhead
 # 
 # Performance Expectations for 16GB VRAM:
 # - 720p 4-5s clips: ~2-3 minutes, STABLE ✓
 # - 1080p 4-5s clips: ~3-5 minutes, STABLE ✓
 # - 1440p 3-4s clips: ~4-6 minutes, possible with optimization
-# - Quality: 100% - full BF16 precision
-CMD ["python", "main.py", "--listen", "--highvram", "--use-pytorch-cross-attention"]
+# - Quality: 100% - full BF16 precision (models offload/load as needed)
+CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1.0", "--use-split-cross-attention"]

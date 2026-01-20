@@ -364,8 +364,9 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
       ;;
     *ltx2*-16gb*|*16gb*)
-      log "Applying 16GB VRAM optimizations for ComfyUI (split loading mode)"
-      COMFY_FLAGS="$COMFY_FLAGS --reserve-vram 2.0 --use-pytorch-cross-attention --cache-none"
+      log "Applying 16GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"
+      # IMPORTANT: Use --lowvram because total model size (~29.5GB) far exceeds 16GB VRAM
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none"
       ;;
     *ltx2*-24gb*|*24gb*)
       log "Applying 24GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"

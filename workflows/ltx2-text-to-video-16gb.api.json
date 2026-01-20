@@ -49,6 +49,18 @@
       },
       "class_type": "LTXVConditioning"
     },
+    "6": {
+      "inputs": {
+        "width": 768,
+        "height": 512,
+        "num_frames": 97,
+        "batch_size": 1
+      },
+      "class_type": "LTXVBaseSampler",
+      "_meta": {
+        "title": "16GB SAFE: 768x512, 97 frames (~4s @ 24fps)"
+      }
+    },
     "7": {
       "inputs": {
         "model": ["1", 0],
@@ -96,7 +108,7 @@
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["5", 0]
+        "latent_image": ["6", 0]
       },
       "class_type": "SamplerCustom",
       "_meta": {
