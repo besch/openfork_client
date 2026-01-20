@@ -399,7 +399,7 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying Hunyuan optimizations (16GB+)"
       # Hunyuan is very heavy (especially FP16 T2V).
       # Disable smart memory to force aggressive unloading.
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --disable-smart-memory --cache-none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none"
       ;;
     *)
       # Default to lowvram if service type is unknown but potentially heavy

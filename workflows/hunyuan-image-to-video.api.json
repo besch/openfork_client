@@ -5,7 +5,7 @@
         "clip_name1": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
         "clip_name2": "byt5_small_glyphxl_fp16.safetensors",
         "type": "hunyuan_video_15",
-        "device": "default"
+        "device": "cpu"
       },
       "class_type": "DualCLIPLoader"
     },
