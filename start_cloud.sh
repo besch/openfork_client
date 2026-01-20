@@ -286,19 +286,37 @@ else
   exit 1
 fi
 
-# Force download of heartmula_api.py to ensure latest version (only for HeartMuLa containers)
-if [ -d "/app" ]; then
-  log "Forcing direct download of heartmula_api.py from GitHub..."
-  if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/heartmula_api.py" -o /app/heartmula_api.py; then
-    log "✓ heartmula_api.py downloaded successfully"
-  else
-    log "WARNING: Failed to download heartmula_api.py (timeout or network error). Using existing version if available."
+  # Determine source directory for overrides (repo structure can vary)
+  DGN_SOURCE_DIR=""
+  if [ -d "/opt/dgn-client/client/comfyui-storage" ]; then
+      DGN_SOURCE_DIR="/opt/dgn-client/client/comfyui-storage"
+  elif [ -d "/opt/dgn-client/comfyui-storage" ]; then
+      DGN_SOURCE_DIR="/opt/dgn-client/comfyui-storage"
   fi
-else
-  log "Skipping heartmula_api.py download (/app directory not found - not a HeartMuLa container)"
-fi
 
-# Start ComfyUI
+  if [ -n "$DGN_SOURCE_DIR" ]; then
+      log "Found DGN source files at: $DGN_SOURCE_DIR"
+      log "Syncing dynamic API and CLI files from GitHub repo..."
+      
+      # 1. HeartMuLa API & Tools (runs in /app)
+      if [ -d "/app" ]; then
+          [ -f "$DGN_SOURCE_DIR/heartmula_api.py" ] && cp -v "$DGN_SOURCE_DIR/heartmula_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/diagnose_heartmula.sh" ] && cp -v "$DGN_SOURCE_DIR/diagnose_heartmula.sh" /app/ && chmod +x /app/diagnose_heartmula.sh
+          [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
+      fi
+      
+      # 2. TurboDiffusion (runs in /opt/TurboDiffusion)
+      if [ -d "/opt/TurboDiffusion" ] && [ -f "$DGN_SOURCE_DIR/turbodiffusion_api_server.py" ]; then
+          cp -v "$DGN_SOURCE_DIR/turbodiffusion_api_server.py" /opt/TurboDiffusion/api_server.py
+      fi
+
+      log "✓ Dynamic file sync complete"
+  else
+      log "WARNING: Could not find comfyui-storage in DGN client. Skipping file sync."
+  fi
+
+  # Start ComfyUI
 
 # CRITICAL FIX for PyTorch 2.4+ / CUDA 12 mismatch errors
 # We must prioritize the pip-installed nvidia libraries over system libraries
@@ -420,15 +438,6 @@ fi
 # Start HeartMuLa REST API
 if [ "$START_HEARTMULA" = "true" ] && [ -f "/app/heartmula_api.py" ]; then
   log "Found HeartMuLa API script. Starting..."
-
-  # DEV MODE: Update API script from downloaded repo if available
-  if [ -f "/opt/dgn-client/client/comfyui-storage/heartmula_api.py" ]; then
-      log "Updating heartmula_api.py from latest git checkout..."
-      cp /opt/dgn-client/client/comfyui-storage/heartmula_api.py /app/heartmula_api.py
-  elif [ -f "/opt/dgn-client/comfyui-storage/heartmula_api.py" ]; then
-      log "Updating heartmula_api.py from latest git checkout..."
-      cp /opt/dgn-client/comfyui-storage/heartmula_api.py /app/heartmula_api.py
-  fi
 
   # Check if heartlib is installed, if not install it
   if ! "$PYTHON_EXE" -c "import heartlib" 2>/dev/null; then
