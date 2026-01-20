@@ -83,7 +83,7 @@ class GenerateRequest(BaseModel):
     """Request model for music generation."""
     lyrics: str = Field(default="", description="Song lyrics with optional structure tags like [Verse], [Chorus]")
     style_prompt: str = Field(default="", description="Comma-separated style tags (e.g., 'piano,happy,romantic')")
-    seed: int = Field(default=42, description="Random seed for reproducibility")
+    seed: Optional[int] = Field(default=None, description="Random seed for reproducibility. If None, a random seed is used.")
     max_audio_length_ms: int = Field(default=95000, ge=10000, le=300000, description="Maximum audio length in milliseconds (10s-300s)")
     topk: int = Field(default=250, ge=1, le=1000, description="Top-k sampling parameter")
     temperature: float = Field(default=1.0, ge=0.1, le=2.0, description="Sampling temperature")
@@ -162,10 +162,15 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         if pipe is None:
             raise RuntimeError("HeartMuLa pipeline is not loaded.")
 
+        # Generate random seed if not provided
+        import random
+        actual_seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
+        logger.info(f"[{job_id}] Using seed: {actual_seed}")
+        
         # Set seed for reproducibility
-        torch.manual_seed(request.seed)
+        torch.manual_seed(actual_seed)
         if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(request.seed)
+            torch.cuda.manual_seed_all(actual_seed)
 
         # Prepare inputs
         inputs = {

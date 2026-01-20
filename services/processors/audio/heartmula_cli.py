@@ -9,6 +9,7 @@ import os
 import json
 import time
 import logging
+import random
 import requests
 from typing import Optional, Dict, Any
 
@@ -220,7 +221,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
             payload = {
                 "lyrics": lyrics, 
                 "style_prompt": style_prompt, 
-                "seed": params.get("seed", 42),
+                "seed": params.get("seed") if params.get("seed") is not None else random.randint(0, 2**32 - 1),
                 "model_version": params.get("model_version", "3B"),
                 "topk": params.get("topk", 250),
                 "temperature": params.get("temperature", 1.0),
