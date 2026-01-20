@@ -68,7 +68,7 @@
       "inputs": {
         "width": 848,
         "height": 480,
-        "num_frames": 97,
+        "length": 97,
         "batch_size": 1,
         "positive": ["44", 0],
         "vae": ["10", 0],
