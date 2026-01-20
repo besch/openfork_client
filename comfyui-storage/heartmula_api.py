@@ -271,14 +271,42 @@ async def startup_event():
         if torch.cuda.is_available():
             logger.info(f"CUDA version: {torch.version.cuda}")
             logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+            
+            # Get GPU compute capability
+            major, minor = torch.cuda.get_device_capability(0)
+            compute_capability = f"{major}.{minor}"
+            logger.info(f"GPU Compute Capability: {compute_capability}")
+            
             memory_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
             logger.info(f"GPU memory: {memory_gb:.1f} GB")
+            
+            # Validate compute capability
+            # PyTorch 2.4 with CUDA 12.4 requires compute capability >= 5.0
+            # Common issues:
+            # - Kepler GPUs (GTX 700 series): compute capability 3.x (NOT SUPPORTED)
+            # - Maxwell GPUs (GTX 900 series): compute capability 5.x (SUPPORTED)
+            # - Pascal and newer: compute capability >= 6.0 (FULLY SUPPORTED)
+            if major < 5:
+                error_msg = (
+                    f"GPU compute capability {compute_capability} is too old for PyTorch 2.4 + CUDA 12.4. "
+                    f"Minimum required: 5.0 (Maxwell/GTX 900 series or newer). "
+                    f"Your GPU ({torch.cuda.get_device_name(0)}) is not supported by this container. "
+                    f"Consider using an older PyTorch build or a newer GPU."
+                )
+                logger.error(error_msg)
+                update_loading_progress("failed", 0, error_msg)
+                load_error = error_msg
+                return
+            elif major == 5:
+                logger.warning(f"⚠️  GPU has compute capability {compute_capability} (Maxwell architecture)")
+                logger.warning("   Some optimizations may not be available. Pascal (6.0+) or newer recommended.")
             
             # Warn if GPU has less than 12GB
             if memory_gb < 12:
                 logger.warning(f"⚠️  GPU has only {memory_gb:.1f}GB VRAM")
                 logger.warning("   HeartMuLa 3B model requires 12-16GB VRAM")
                 logger.warning("   Consider enabling 4-bit quantization: HEARTMULA_QUANTIZATION=4bit")
+
         
         # Stage 2: Verify model files
         update_loading_progress("file_check", 10, "Verifying model files")
@@ -409,7 +437,48 @@ async def startup_event():
         logger.error("=" * 80)
         
         # Provide specific guidance for common errors
-        if "CUDA out of memory" in str(e) or "out of memory" in str(e).lower():
+        error_str = str(e).lower()
+        
+        # CUDA kernel compatibility error
+        if "no kernel image is available" in error_str or "cuda error" in error_str:
+            logger.error("CUDA KERNEL COMPATIBILITY ERROR DETECTED")
+            logger.error("=" * 80)
+            logger.error("This error typically means your GPU architecture is not supported")
+            logger.error("by the PyTorch binaries in this container.")
+            logger.error("")
+            logger.error("DIAGNOSTIC STEPS:")
+            logger.error("")
+            if torch.cuda.is_available():
+                try:
+                    major, minor = torch.cuda.get_device_capability(0)
+                    gpu_name = torch.cuda.get_device_name(0)
+                    logger.error(f"  GPU: {gpu_name}")
+                    logger.error(f"  Compute Capability: {major}.{minor}")
+                    logger.error(f"  PyTorch version: {torch.__version__}")
+                    logger.error(f"  CUDA version: {torch.version.cuda}")
+                    logger.error("")
+                    
+                    if major < 5:
+                        logger.error("  ❌ Your GPU is TOO OLD (compute capability < 5.0)")
+                        logger.error("     PyTorch 2.4 + CUDA 12.4 requires at least compute capability 5.0")
+                        logger.error("")
+                        logger.error("  SOLUTIONS:")
+                        logger.error("     1. Use a newer GPU (GTX 900 series or newer)")
+                        logger.error("     2. Use an older Docker image with PyTorch 1.x + CUDA 11.x")
+                    elif major >= 5:
+                        logger.error(f"  ⚠️  GPU compute capability {major}.{minor} should be supported")
+                        logger.error("      This might be a driver/library mismatch issue")
+                        logger.error("")
+                        logger.error("  SOLUTIONS:")
+                        logger.error("     1. Update NVIDIA driver to latest version")
+                        logger.error("     2. Verify CUDA toolkit version matches container (12.4)")
+                        logger.error("     3. Rebuild container with --no-cache")
+                except Exception as diag_e:
+                    logger.error(f"  Could not get GPU diagnostics: {diag_e}")
+            logger.error("=" * 80)
+        
+        # CUDA OOM error
+        elif "cuda out of memory" in error_str or "out of memory" in error_str:
             logger.error("CUDA OUT OF MEMORY ERROR DETECTED")
             logger.error("=" * 80)
             logger.error("SOLUTIONS:")
