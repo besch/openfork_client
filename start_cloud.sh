@@ -30,7 +30,7 @@ EXAMPLES:
   DGN_API_KEY=dgn_xxx ./start_cloud.sh
 
   # With specific service type
-  DGN_API_KEY=dgn_xxx SERVICE_TYPE=yume-video-16gb ./start_cloud.sh
+  DGN_API_KEY=dgn_xxx SERVICE_TYPE=ltx2-video-16gb ./start_cloud.sh
 
   # With log streaming
   DGN_API_KEY=dgn_xxx SAVE_LOGS=true ./start_cloud.sh
@@ -223,7 +223,7 @@ log "========================================"
 log "User: $(whoami)"
 log "Path: $PATH"
 log "Save Logs: $SAVE_LOGS"
-log "TIP: Large models (LTX-2, YUME) require a large swap file (128GB recommended) for stability when offloading."
+log "TIP: Large models like LTX-2 require a large swap file (128GB recommended) for stability when offloading."
 RESR=$(free -g | awk '/Swap/ {print $2}')
 log "Current Swap Space: ${RESR}GB"
 if [ "$RESR" -lt 64 ]; then
@@ -286,21 +286,6 @@ else
   exit 1
 fi
 
-# Fix: If yume_api.py is in subdirectory (repo structure), move it to root
-# We check likely locations from the repo structure
-if [ -f "/opt/dgn-client/client/comfyui-storage/yume_api.py" ]; then
-  log "Moving yume_api.py from client/comfyui-storage to root..."
-  mv /opt/dgn-client/client/comfyui-storage/yume_api.py /opt/dgn-client/yume_api.py
-elif [ -f "/opt/dgn-client/comfyui-storage/yume_api.py" ]; then
-  log "Moving yume_api.py from comfyui-storage to root..."
-  mv /opt/dgn-client/comfyui-storage/yume_api.py /opt/dgn-client/yume_api.py
-fi
-
-# Force download of yume_api.py to ensure latest version (avoids docker rebuild)
-log "Forcing direct download of yume_api.py from GitHub..."
-if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/yume_api.py" -o /opt/dgn-client/yume_api.py; then
-  log "✓ yume_api.py downloaded successfully"
-else
   log "WARNING: Failed to download yume_api.py (timeout or network error). Using existing version if available."
 fi
 
@@ -316,16 +301,7 @@ else
   log "Skipping heartmula_api.py download (/app directory not found - not a HeartMuLa container)"
 fi
 
-# Verify YUME API script was downloaded
-if [ ! -f "/opt/dgn-client/yume_api.py" ]; then
-  log "ERROR: yume_api.py not found after bootstrap!"
-  log "Expected location: /opt/dgn-client/yume_api.py"
-  log "Directory Listing of /opt/dgn-client:"
-  ls -R /opt/dgn-client
-  exit 1
-fi
-
-# --- Background Services ---
+# Start ComfyUI
 
 # CRITICAL FIX for PyTorch 2.4+ / CUDA 12 mismatch errors
 # We must prioritize the pip-installed nvidia libraries over system libraries
@@ -335,7 +311,6 @@ log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 # --- Service Selection & Resource Management ---
 
 # Defaults
-START_YUME="false"
 START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
 START_COMFYUI="true"
@@ -354,15 +329,12 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -f "/app/diffrhythm_api.py" ]; then
       log "Auto-mode: Detected DiffRhythm image. Selecting DiffRhythm service."
       START_DIFFRHYTHM="true"
-  elif [ -d "/opt/YUME" ]; then
-      log "Auto-mode: Detected YUME installation. Selecting YUME service."
-      START_YUME="true"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
 else
   # MANUAL MODE: Check for keywords
-  if [[ "$SERVICE_TYPE" == *"yume"* ]]; then START_YUME="true"; fi
+  # MANUAL MODE: Check for keywords
   if [[ "$SERVICE_TYPE" == *"heartmula"* ]]; then START_HEARTMULA="true"; fi
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
 fi
@@ -382,11 +354,6 @@ if [ "$START_HEARTMULA" = "true" ]; then
   if [[ "${SERVICE_TYPE:-auto}" == *"8gb"* ]] || [[ "${SERVICE_TYPE:-auto}" == *"4bit"* ]]; then
       ENABLE_4BIT="true"
   fi
-fi
-
-if [ "$START_YUME" = "true" ]; then
-    log "YUME active. Disabling ComfyUI to reserve memory."
-    START_COMFYUI="false"
 fi
 
 # Start ComfyUI
@@ -438,61 +405,6 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   fi
 else
   log "Info: /opt/ComfyUI not found."
-fi
-
-# Start YUME REST API
-if [ "$START_YUME" = "true" ]; then
-  if [ -f "/opt/dgn-client/yume_api.py" ]; then
-    # Ensure port 8000 is free
-    if netstat -tln 2>/dev/null | grep -q ":8000 " || ss -tln 2>/dev/null | grep -q ":8000 "; then
-      log "Port 8000 is occupied. Killing existing process to start YUME API..."
-      fuser -k 8000/tcp >/dev/null 2>&1 || true
-      sleep 3
-    fi
-
-    # Verify YUME installation
-    if [ -d "/opt/YUME" ]; then
-      log "Found YUME installation at /opt/YUME"
-      
-      # CRITICAL: Unset CUDA_VISIBLE_DEVICES so GPU is available for import
-      # (It was set to "" during Docker build to avoid CUDA init errors)
-      unset CUDA_VISIBLE_DEVICES
-      
-      # Test that wan module is importable (with GPU now available)
-      if "$PYTHON_EXE" -c "from wan import Yume; print('✓ wan module OK')" 2>/dev/null; then
-        log "✓ YUME wan module is importable"
-      else
-        log "ERROR: Cannot import wan module!"
-        log "Checking if this is due to YUME bug (CUDA init during import)..."
-        
-        # Show actual error
-        "$PYTHON_EXE" -c "from wan import Yume" 2>&1 | tail -10
-        
-        log "Attempting to re-patch and reinstall YUME..."
-        cd /opt/YUME
-        
-        # Re-apply the patch in case it was overwritten
-        sed -i 's/device=torch.cuda.current_device()/device="cpu"/g' wan/modules/t5.py 2>/dev/null || true
-        
-        "$PYTHON_EXE" -m pip install -e . || log "WARNING: YUME install failed"
-        
-        # Test again
-        if "$PYTHON_EXE" -c "from wan import Yume; print('✓ wan module OK after fix')" 2>/dev/null; then
-          log "✓ YUME fixed and working"
-        else
-          log "ERROR: YUME still cannot be imported. Check /tmp/yume_api.log for details."
-        fi
-      fi
-    else
-      log "WARNING: /opt/YUME directory not found. YUME API may fail."
-    fi
-
-    log "Starting YUME API (model loading may take several minutes)..."
-    (cd /opt/dgn-client && "$PYTHON_EXE" yume_api.py > /tmp/yume_api.log 2>&1) &
-    wait_for_url "YUME API" "http://127.0.0.1:8000/health" 600 "/tmp/yume_api.log"
-  else
-    log "WARNING: yume_api.py not found at /opt/dgn-client/yume_api.py"
-  fi
 fi
 
 # Start DiffRhythm REST API
@@ -582,7 +494,7 @@ fi
 if [ -d "/opt/ComfyUI" ]; then
   # Determine timeout based on service tier
   WAIT_TIME=120
-  if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"yume"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]]; then
     WAIT_TIME=600
     log "Large model detected ($SERVICE_TYPE). Extending ComfyUI readiness timeout to ${WAIT_TIME}s."
   fi

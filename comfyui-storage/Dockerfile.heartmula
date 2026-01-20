@@ -1,12 +1,16 @@
 # syntax=docker/dockerfile:1.4
-# HeartMuLa Docker Image - Production Ready
+# HeartMuLa Docker Image - Legacy GPU Compatibility (Compute 3.5+)
+# Uses PyTorch 2.0 + CUDA 11.8 for older GPU support (Kepler/Maxwell)
 
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 # Metadata
-LABEL maintainer="your-email@example.com"
-LABEL description="HeartMuLa Music Generation API Server"
-LABEL version="1.0.0"
+LABEL maintainer="openfork@example.com"
+LABEL description="HeartMuLa Music Generation API Server (Legacy GPU Support)"
+LABEL version="1.0.0-legacy"
+LABEL cuda_version="11.8"
+LABEL pytorch_version="2.0.1"
+LABEL min_compute_capability="3.5"
 
 # Environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -45,12 +49,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install PyTorch with CUDA support
-RUN echo "Installing PyTorch..." \
+# Install PyTorch with CUDA 11.8 support (supports older GPUs)
+RUN echo "Installing PyTorch 2.0.1 with CUDA 11.8 (supports compute 3.5+)..." \
     && python -m pip install --no-cache-dir \
-        torch==2.4.0 \
-        torchaudio==2.4.0 \
-        --index-url https://download.pytorch.org/whl/cu124
+        torch==2.0.1 \
+        torchaudio==2.0.2 \
+        --index-url https://download.pytorch.org/whl/cu118
 
 # Install core dependencies
 RUN echo "Installing core dependencies..." \
@@ -159,13 +163,21 @@ COPY heartmula_api.py /app/heartmula_api.py
 COPY diagnose_heartmula.sh /app/diagnose_heartmula.sh
 RUN chmod +x /app/diagnose_heartmula.sh
 
-# Verify Python environment
+# Verify Python environment and GPU compatibility
 RUN echo "" \
     && echo "=== Python Environment ===" \
     && python --version \
     && python -c "import torch; print(f'PyTorch: {torch.__version__}')" \
     && python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')" \
+    && python -c "import torch; print(f'CUDA Version: {torch.version.cuda}')" \
     && python -c "import heartlib; print(f'HeartLib: OK')" \
+    && echo "" \
+    && echo "=== GPU Compatibility ===" \
+    && echo "This image supports NVIDIA GPUs with compute capability 3.5+" \
+    && echo "  - Kepler (GTX 700): compute 3.5-3.7 ✓" \
+    && echo "  - Maxwell (GTX 900): compute 5.0-5.2 ✓" \
+    && echo "  - Pascal (GTX 10xx): compute 6.0-6.2 ✓" \
+    && echo "  - Newer architectures: ✓" \
     && echo "=== Environment OK ==="
 
 # Health check

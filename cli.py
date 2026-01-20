@@ -140,17 +140,11 @@ def setup_client(args):
             client.accept_policy = 'all'
             client.allowed_ids = []  # Clear any user-specific filtering
         
-        # In dedicated headless mode, the container is always ready with the image
-        # So we force report it as cached to ensure TIER 0 routing
+        # TIER 0 routing ensured by reporting cached image
         if args.service not in cached_images:
             cached_images.append(args.service)
             logging.info(f"Headless mode: auto-adding {args.service} to cached_images (container is pre-baked)")
 
-        # BACKWARD COMPATIBILITY: Allow yume-24gb providers to process yume-16gb jobs
-        # This is required because the production DB maps 'yume-text-to-video' -> 'yume-16gb'
-        if args.service == 'yume-24gb':
-            registration_services.append('yume-16gb')
-            logging.info("Headless mode: Added yume-16gb alias for backward compatibility")
     else:
         registration_services = list(client.compatible_services)
     

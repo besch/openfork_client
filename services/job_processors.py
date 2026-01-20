@@ -57,11 +57,6 @@ from services.processors import (
     LLMJobProcessor,
     SVIShotImageToVideoJobProcessor,
     SVIFilmImageToVideoJobProcessor,
-    YumeTextToVideoJobProcessor,
-    YumeImageToVideoJobProcessor,
-    YumeTextToVideoCLIJobProcessor,
-    YumeImageToVideoCLIJobProcessor,
-    YumeCLIJobProcessor,
     HeartMuLaCLIJobProcessor,
 )
 
@@ -100,11 +95,6 @@ __all__ = [
     "ChatterboxVoiceCloneJobProcessor",
     "SVIShotImageToVideoJobProcessor",
     "SVIFilmImageToVideoJobProcessor",
-    "YumeTextToVideoJobProcessor",
-    "YumeImageToVideoJobProcessor",
-    "YumeTextToVideoCLIJobProcessor",
-    "YumeImageToVideoCLIJobProcessor",
-    "YumeCLIJobProcessor",
     "HeartMuLaCLIJobProcessor",
 ]
 

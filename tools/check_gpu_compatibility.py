@@ -56,13 +56,6 @@ for i in range(gpu_count):
     
     # Requirements by container
     containers = {
-        "YUME (Dockerfile.yume-16gb)": {
-            "pytorch": "2.4.0",
-            "cuda": "12.4",
-            "min_compute": 5.0,
-            "recommended_compute": 6.0,
-            "min_vram_gb": 16
-        },
         "HeartMuLa (Dockerfile.heartmula)": {
             "pytorch": "2.4.0", 
             "cuda": "12.4",

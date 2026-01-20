@@ -6,8 +6,6 @@ from .upscaler import VideoUpscalerJobProcessor
 from .turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
 from .svi_shot import SVIShotImageToVideoJobProcessor
 from .svi_film import SVIFilmImageToVideoJobProcessor
-from .yume import YumeTextToVideoJobProcessor, YumeImageToVideoJobProcessor
-from .yume_cli import YumeTextToVideoCLIJobProcessor, YumeImageToVideoCLIJobProcessor, YumeCLIJobProcessor
 
 __all__ = [
     "WAN22TextToVideoJobProcessor",
@@ -18,9 +16,4 @@ __all__ = [
     "TurboDiffusionI2VJobProcessor",
     "SVIShotImageToVideoJobProcessor",
     "SVIFilmImageToVideoJobProcessor",
-    "YumeTextToVideoJobProcessor",
-    "YumeImageToVideoJobProcessor",
-    "YumeTextToVideoCLIJobProcessor",
-    "YumeImageToVideoCLIJobProcessor",
-    "YumeCLIJobProcessor",
 ]
