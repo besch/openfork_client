@@ -17,7 +17,7 @@
     },
     "12": {
       "inputs": {
-        "unet_name": "hunyuanvideo1.5_720p_i2v_fp16.safetensors",
+        "unet_name": "hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors",
         "weight_dtype": "fp8_e4m3fn"
       },
       "class_type": "UNETLoader"
@@ -68,14 +68,14 @@
       "inputs": {
         "width": 848,
         "height": 480,
-        "length": 121,
+        "length": 97,
         "batch_size": 1,
         "positive": ["44", 0],
         "negative": ["93", 0],
         "vae": ["10", 0],
         "start_image": ["1", 0],
         "clip_vision_output": ["79", 0],
-        "guidance_type": "linear"
+        "guidance_type": "v1 (concat)"
       },
       "class_type": "HunyuanImageToVideo"
     },
@@ -106,7 +106,7 @@
         "cfg": 6,
         "model": ["132", 0],
         "positive": ["78", 0],
-        "negative": ["78", 1]
+        "negative": ["93", 0]
       },
       "class_type": "CFGGuider"
     },
@@ -124,7 +124,7 @@
       "inputs": {
         "width": 848,
         "height": 480,
-        "length": 121,
+        "length": 97,
         "batch_size": 1
       },
       "class_type": "EmptyHunyuanLatentVideo"

@@ -75,7 +75,7 @@
         "vae": ["10", 0],
         "start_image": ["1", 0],
         "clip_vision_output": ["79", 0],
-        "guidance_type": "linear"
+        "guidance_type": "v1 (concat)"
       },
       "class_type": "HunyuanImageToVideo"
     },
@@ -106,7 +106,7 @@
         "cfg": 1,
         "model": ["132", 0],
         "positive": ["78", 0],
-        "negative": ["78", 1]
+        "negative": ["93", 0]
       },
       "class_type": "CFGGuider"
     },
