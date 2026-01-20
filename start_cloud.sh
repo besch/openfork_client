@@ -395,6 +395,12 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       # --lowvram enables model offloading to CPU when not in use
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.5 --use-pytorch-cross-attention"
       ;;
+    *hunyuan*)
+      log "Applying Hunyuan optimizations (16GB+)"
+      # Hunyuan is very heavy (especially FP16 T2V).
+      # Disable smart memory to force aggressive unloading.
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --disable-smart-memory --cache-none"
+      ;;
     *)
       # Default to lowvram if service type is unknown but potentially heavy
       if [[ "$SERVICE_TYPE" == *"video"* ]]; then
