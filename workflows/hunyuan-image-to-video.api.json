@@ -114,7 +114,7 @@
         "guider": ["131", 0],
         "sampler": ["130", 0],
         "sigmas": ["128", 0],
-        "latent_image": ["133", 0]
+        "latent_image": ["78", 1]
       },
       "class_type": "SamplerCustomAdvanced"
     },
