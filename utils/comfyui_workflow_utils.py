@@ -802,6 +802,13 @@ def inject_prompt_and_image_into_hunyuan_video_workflow(
         api_graph['78']['inputs']['height'] = height
         logging.info(f"Injected dimensions into HunyuanVideo i2v node 78: {width}x{height}")
 
+    # Inject dimensions into EmptyHunyuanLatentVideo (Node 133) - added for robust latent generation
+    if '133' in api_graph and api_graph['133'].get("class_type") == "EmptyHunyuanLatentVideo":
+        width, height = get_dimensions(aspect_ratio)
+        api_graph['133']['inputs']['width'] = width
+        api_graph['133']['inputs']['height'] = height
+        logging.info(f"Injected dimensions into HunyuanVideo i2v node 133: {width}x{height}")
+
     # Set seed for RandomNoise node (Node 129) - use provided or generate random
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
     if '129' in api_graph and api_graph['129'].get("class_type") == "RandomNoise":
