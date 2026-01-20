@@ -15,7 +15,7 @@ import os
 import logging
 import random
 
-from config import DEV_MODE
+from config import DEV_MODE, SUPABASE_URL
 from services.docker_manager import docker_manager
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
@@ -59,7 +59,7 @@ class SVIShotImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
 
             if input_storage_path:
                 bucket = self.job.get("bucket", "projects_public")
-                supabase_url = os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', ''))
+                supabase_url = os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))
                 if supabase_url:
                     source_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{input_storage_path}"
                     

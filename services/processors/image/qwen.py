@@ -10,6 +10,7 @@ import base64
 import uuid
 import copy
 import random
+from config import SUPABASE_URL
 
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import ImageOutputHandler
@@ -76,7 +77,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             input_storage_path = self.job.get("input_storage_path")
             if input_storage_path:
                 bucket = self.job.get("bucket", "projects_public")
-                source_url = f"{os.environ.get('SUPABASE_URL', '')}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
                 
                 logging.info(f"Downloading source image from: {source_url}")
                 downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
@@ -193,7 +194,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             input_storage_path = self.job.get("input_storage_path")
             if input_storage_path:
                 bucket = self.job.get("bucket", "projects_public")
-                source_url = f"{os.environ.get('SUPABASE_URL', '')}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
                 
                 logging.info(f"Downloading source image from: {source_url}")
                 downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)

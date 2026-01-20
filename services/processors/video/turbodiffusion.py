@@ -20,6 +20,7 @@ from services.processors.output_handlers import VideoOutputHandler
 from services.orchestrator_service import TokenExpiredError
 from utils.comfyui_workflow_utils import materialize_start_image
 from utils.media_utils import get_video_duration
+from config import SUPABASE_URL
 
 
 class TurboDiffusionBaseProcessor(BaseJobProcessor, VideoOutputHandler):
@@ -245,7 +246,7 @@ class TurboDiffusionI2VJobProcessor(TurboDiffusionBaseProcessor):
 
             if input_storage_path:
                 bucket = self.job.get("bucket", "projects_public")
-                supabase_url = os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', ''))
+                supabase_url = os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))
                 if supabase_url:
                     source_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{input_storage_path}"
                     logging.info(f"Downloading start image from: {source_url}")
