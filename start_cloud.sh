@@ -298,18 +298,22 @@ fi
 
 # Force download of yume_api.py to ensure latest version (avoids docker rebuild)
 log "Forcing direct download of yume_api.py from GitHub..."
-if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/yume_api.py" -o /opt/dgn-client/yume_api.py; then
+if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/yume_api.py" -o /opt/dgn-client/yume_api.py; then
   log "✓ yume_api.py downloaded successfully"
 else
   log "WARNING: Failed to download yume_api.py (timeout or network error). Using existing version if available."
 fi
 
-# Force download of heartmula_api.py to ensure latest version
-log "Forcing direct download of heartmula_api.py from GitHub..."
-if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/client/comfyui-storage/heartmula_api.py" -o /app/heartmula_api.py; then
-  log "✓ heartmula_api.py downloaded successfully"
+# Force download of heartmula_api.py to ensure latest version (only for HeartMuLa containers)
+if [ -d "/app" ]; then
+  log "Forcing direct download of heartmula_api.py from GitHub..."
+  if curl --max-time 60 --progress-bar -L "https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/heartmula_api.py" -o /app/heartmula_api.py; then
+    log "✓ heartmula_api.py downloaded successfully"
+  else
+    log "WARNING: Failed to download heartmula_api.py (timeout or network error). Using existing version if available."
+  fi
 else
-  log "WARNING: Failed to download heartmula_api.py (timeout or network error). Using existing version if available."
+  log "Skipping heartmula_api.py download (/app directory not found - not a HeartMuLa container)"
 fi
 
 # Verify YUME API script was downloaded
