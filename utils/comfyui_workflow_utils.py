@@ -52,6 +52,20 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
         # 1) Preferred path: base64 image (check both root and inputs)
         data_url = job.get('start_image_base64') or inputs.get('start_image_base64')
         if isinstance(data_url, str) and len(data_url) > 0:
+            # Detect MIME type from data URL if present
+            ext = '.png'  # Default
+            if data_url.startswith('data:'):
+                # Parse data:image/jpeg;base64,... format
+                header = data_url.split(',')[0]
+                if 'image/jpeg' in header or 'image/jpg' in header:
+                    ext = '.jpeg'
+                elif 'image/png' in header:
+                    ext = '.png'
+                elif 'image/webp' in header:
+                    ext = '.webp'
+                elif 'image/gif' in header:
+                    ext = '.gif'
+            
             # Extract base64 regardless of data URL or raw base64
             b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
             try:
@@ -59,13 +73,35 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
             except Exception:
                 # Fallback to non-strict decode if upstream added whitespace/newlines
                 binary = base64.b64decode(b64)
+            
+            # Detect format from binary header if not from data URL
+            if ext == '.png' and len(binary) >= 3:
+                if binary[:3] == b'\xff\xd8\xff':  # JPEG magic bytes
+                    ext = '.jpeg'
+                elif binary[:4] == b'RIFF' and len(binary) >= 12 and binary[8:12] == b'WEBP':
+                    ext = '.webp'
+            
             # Filename deterministic by job id unless explicit name provided
-            fname = job.get('start_image_name') or inputs.get('start_image_name') or f"start_{job.get('id', 'job')}.png"
+            fname = job.get('start_image_name') or inputs.get('start_image_name')
+            if not fname:
+                fname = f"start_{job.get('id', 'job')}{ext}"
+            
             out_path = os.path.join(input_dir, fname)
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "wb") as f:
                 f.write(binary)
-            logging.info(f"Start image (from base64) written to {out_path}")
+            
+            # Validate the image is actually readable
+            try:
+                from PIL import Image
+                with Image.open(out_path) as img:
+                    img.verify()
+                logging.info(f"Start image (from base64) written to {out_path} ({len(binary)} bytes, validated)")
+            except Exception as e:
+                logging.error(f"Base64 image failed validation: {e}. First 20 bytes: {binary[:20]}")
+                os.remove(out_path)
+                return None
+            
             return fname
 
         # 2) Fallback: use provided filename that should already exist in mounted input
@@ -75,7 +111,15 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
             if not os.path.exists(host_path):
                 logging.warning(f"Expected start image not found in mounted input: {host_path}")
             else:
-                logging.info(f"Using existing start image from input mount: {fname}")
+                # Validate the existing image
+                try:
+                    from PIL import Image
+                    with Image.open(host_path) as img:
+                        img.verify()
+                    logging.info(f"Using existing start image from input mount: {fname} (validated)")
+                except Exception as e:
+                    logging.error(f"Existing start image failed validation: {host_path}. Error: {e}")
+                    return None
             return fname
     except Exception as e:
         logging.error(f"Failed to materialize start image: {e}")

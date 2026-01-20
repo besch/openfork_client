@@ -330,15 +330,43 @@ class OrchestratorService:
             return None
 
     def download_asset_by_url(self, asset_url: str, download_dir: str) -> Union[str, None]:
-        """Download an asset from a given URL."""
+        """Download an asset from a given URL with validation."""
         try:
-            response = requests.get(asset_url, stream=True)
+            response = requests.get(asset_url, stream=True, timeout=120)
             response.raise_for_status()
             
+            # Get file extension from URL (strip query params)
             file_name = asset_url.split('/')[-1].split('?')[0]
-
+            
+            # Determine correct extension from Content-Type header
+            content_type = response.headers.get('Content-Type', '').lower()
+            
+            # Map content types to extensions
+            content_type_map = {
+                'image/jpeg': '.jpeg',
+                'image/jpg': '.jpeg',
+                'image/png': '.png',
+                'image/webp': '.webp',
+                'image/gif': '.gif',
+                'video/mp4': '.mp4',
+                'video/webm': '.webm',
+                'audio/mpeg': '.mp3',
+                'audio/wav': '.wav',
+                'audio/flac': '.flac',
+            }
+            
+            # If file has no extension or wrong extension, fix it based on Content-Type
             if '.' not in file_name:
-                file_name += '.mp4'
+                ext = content_type_map.get(content_type.split(';')[0], '.dat')
+                file_name += ext
+            elif content_type and content_type.split(';')[0] in content_type_map:
+                # Verify extension matches content type
+                expected_ext = content_type_map[content_type.split(';')[0]]
+                current_ext = '.' + file_name.rsplit('.', 1)[-1].lower()
+                if current_ext != expected_ext and current_ext not in ['.jpg', '.jpeg']:
+                    # Fix mismatched extension
+                    file_name = file_name.rsplit('.', 1)[0] + expected_ext
+                    logging.info(f"Corrected file extension based on Content-Type: {file_name}")
 
             file_path = os.path.join(download_dir, file_name)
 
@@ -346,10 +374,36 @@ class OrchestratorService:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
             
-            logging.info(f"Asset downloaded to {file_path}")
+            # Validate downloaded file
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                logging.error(f"Downloaded file is empty (0 bytes): {file_path}")
+                os.remove(file_path)
+                return None
+            
+            # For images, validate they can be opened by PIL
+            if content_type.startswith('image/'):
+                try:
+                    from PIL import Image
+                    with Image.open(file_path) as img:
+                        img.verify()  # Verify it's a valid image
+                    logging.info(f"Image validated successfully: {file_path} ({file_size} bytes)")
+                except Exception as e:
+                    logging.error(f"Downloaded file is not a valid image: {file_path}. Error: {e}")
+                    # Try to read the first few bytes to diagnose
+                    with open(file_path, 'rb') as f:
+                        header = f.read(20)
+                    logging.error(f"File header (first 20 bytes): {header}")
+                    os.remove(file_path)
+                    return None
+            
+            logging.info(f"Asset downloaded to {file_path} ({file_size} bytes)")
             return file_path
         except requests.exceptions.RequestException as e:
             logging.error(f"Error downloading asset from {asset_url}: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"Unexpected error downloading asset: {e}")
             return None
 
     def _get_signed_upload_url(self, job_id: str, file_name: str) -> Union[Dict, None]:
