@@ -96,18 +96,27 @@ class ZImageControlNetProcessor(ComfyUIProcessor, ImageOutputHandler):
         # Try base64 first (from job or inputs)
         reference_image_filename = materialize_start_image(self.job, self.client.input_dir)
         
-        # If no base64, try downloading from storage path
+        # If no base64, try downloading from signed URL or constructed URL
         if not reference_image_filename:
-            input_storage_path = self.job.get("input_storage_path")
-            if input_storage_path:
-                bucket = self.job.get("bucket", "projects_public")
-                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
-                
-                logging.info(f"Downloading reference image from: {source_url}")
-                downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+            # Check for signed URL first
+            start_image_url = inputs.get("start_image_url")
+            if start_image_url:
+                logging.info(f"Downloading reference image from signed URL: {start_image_url}")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.client.input_dir)
                 if downloaded_path:
                     reference_image_filename = os.path.basename(downloaded_path)
-                    logging.info(f"Downloaded reference image: {reference_image_filename}")
+
+            if not reference_image_filename:
+                input_storage_path = self.job.get("input_storage_path")
+                if input_storage_path:
+                    bucket = self.job.get("bucket", "projects_public")
+                    source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                    
+                    logging.info(f"Downloading reference image from: {source_url}")
+                    downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+                    if downloaded_path:
+                        reference_image_filename = os.path.basename(downloaded_path)
+                        logging.info(f"Downloaded reference image: {reference_image_filename}")
         
         if not reference_image_filename:
             self._fail_job("No reference image provided for ControlNet workflow.")
@@ -176,19 +185,28 @@ class ZImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         # Try base64 first (from job or inputs)
         source_image_filename = materialize_start_image(self.job, self.client.input_dir)
         
-        # If no base64, try downloading from storage path
+        # If no base64, try downloading from signed URL or constructed URL
         if not source_image_filename:
-            input_storage_path = self.job.get("input_storage_path")
-            if input_storage_path:
-                # Build the download URL
-                bucket = self.job.get("bucket", "projects_public")
-                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
-                
-                logging.info(f"Downloading source image from: {source_url}")
-                downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+            # Check for signed URL first
+            start_image_url = inputs.get("start_image_url")
+            if start_image_url:
+                logging.info(f"Downloading source image from signed URL: {start_image_url}")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.client.input_dir)
                 if downloaded_path:
                     source_image_filename = os.path.basename(downloaded_path)
-                    logging.info(f"Downloaded source image: {source_image_filename}")
+
+            if not source_image_filename:
+                input_storage_path = self.job.get("input_storage_path")
+                if input_storage_path:
+                    # Build the download URL
+                    bucket = self.job.get("bucket", "projects_public")
+                    source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                    
+                    logging.info(f"Downloading source image from: {source_url}")
+                    downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+                    if downloaded_path:
+                        source_image_filename = os.path.basename(downloaded_path)
+                        logging.info(f"Downloaded source image: {source_image_filename}")
         
         if not source_image_filename:
             self._fail_job("No source image provided for inpaint workflow.")

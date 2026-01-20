@@ -33,7 +33,18 @@ class LTX2ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         if not workflow_data:
             return
 
-        start_image_filename = materialize_start_image(self.job, self.input_dir)
+        inputs = self.job.get("inputs", {})
+        start_image_url = inputs.get("start_image_url")
+        start_image_filename = None
+
+        if start_image_url:
+            logging.info(f"Downloading start image from signed URL: {start_image_url}")
+            downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.input_dir)
+            if downloaded_path:
+                start_image_filename = os.path.basename(downloaded_path)
+
+        if not start_image_filename:
+            start_image_filename = materialize_start_image(self.job, self.input_dir)
         
         # If not materialized from base64, try downloading from storage path
         if not start_image_filename:

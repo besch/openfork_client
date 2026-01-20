@@ -72,18 +72,28 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         # Try base64 first
         source_image_filename = materialize_start_image(self.job, self.client.input_dir)
         
-        # If no base64, try downloading from storage path
+        # If no base64, try downloading from signed URL or constructed URL
         if not source_image_filename:
-            input_storage_path = self.job.get("input_storage_path")
-            if input_storage_path:
-                bucket = self.job.get("bucket", "projects_public")
-                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
-                
-                logging.info(f"Downloading source image from: {source_url}")
-                downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+            inputs = self.job.get("inputs", {})
+            start_image_url = inputs.get("start_image_url")
+            
+            if start_image_url:
+                logging.info(f"Downloading source image from signed URL: {start_image_url}")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.client.input_dir)
                 if downloaded_path:
                     source_image_filename = os.path.basename(downloaded_path)
-                    logging.info(f"Downloaded source image: {source_image_filename}")
+
+            if not source_image_filename:
+                input_storage_path = self.job.get("input_storage_path")
+                if input_storage_path:
+                    bucket = self.job.get("bucket", "projects_public")
+                    source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                    
+                    logging.info(f"Downloading source image from: {source_url}")
+                    downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+                    if downloaded_path:
+                        source_image_filename = os.path.basename(downloaded_path)
+                        logging.info(f"Downloaded source image: {source_image_filename}")
         
         if not source_image_filename:
             self._fail_job("No source image provided for Qwen edit workflow.")
@@ -191,16 +201,26 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         source_image_filename = materialize_start_image(self.job, self.client.input_dir)
         
         if not source_image_filename:
-            input_storage_path = self.job.get("input_storage_path")
-            if input_storage_path:
-                bucket = self.job.get("bucket", "projects_public")
-                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
-                
-                logging.info(f"Downloading source image from: {source_url}")
-                downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+            inputs = self.job.get("inputs", {})
+            start_image_url = inputs.get("start_image_url")
+            
+            if start_image_url:
+                logging.info(f"Downloading source image from signed URL: {start_image_url}")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.client.input_dir)
                 if downloaded_path:
                     source_image_filename = os.path.basename(downloaded_path)
-                    logging.info(f"Downloaded source image: {source_image_filename}")
+
+            if not source_image_filename:
+                input_storage_path = self.job.get("input_storage_path")
+                if input_storage_path:
+                    bucket = self.job.get("bucket", "projects_public")
+                    source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                    
+                    logging.info(f"Downloading source image from: {source_url}")
+                    downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.client.input_dir)
+                    if downloaded_path:
+                        source_image_filename = os.path.basename(downloaded_path)
+                        logging.info(f"Downloaded source image: {source_image_filename}")
         
         if not source_image_filename:
             self._fail_job("No source image provided for inpaint workflow.")
