@@ -306,23 +306,56 @@ def generate_video_sync(
                     # Enhanced Logging for Debugging
                     if step_idx == 0 or (step_idx + 1) % 5 == 0:
                          logger.info(f"Step {step_idx}: timestep={timestep.item() if timestep.numel()==1 else timestep}")
-                         logger.info(f"  latent_input[0] shape: {latent_input[0].shape}")
+                         logger.info(f"  latent_input[0] shape: {latent_input[0].shape}, dtype: {latent_input[0].dtype}")
                          # Log arg_c shapes if possible
                          if "context" in arg_c and isinstance(arg_c["context"], list):
                              ctx_shapes = [c.shape for c in arg_c["context"] if hasattr(c, "shape")]
+                             ctx_dtypes = [c.dtype for c in arg_c["context"] if hasattr(c, "dtype")]
                              logger.info(f"  context shapes: {ctx_shapes}")
+                             logger.info(f"  context dtypes: {ctx_dtypes}")
+
+                    # Fix dtype inconsistency: Ensure all context tensors match latent dtype
+                    # The error "mat1 and mat2 must have the same dtype" happens when
+                    # context tensors are float32 while model/latents are bfloat16
+                    target_dtype = latent_input[0].dtype
+                    
+                    # Convert arg_c tensors to target dtype
+                    arg_c_converted = {}
+                    for key, value in arg_c.items():
+                        if isinstance(value, torch.Tensor):
+                            arg_c_converted[key] = value.to(dtype=target_dtype, device=device)
+                        elif isinstance(value, list):
+                            arg_c_converted[key] = [
+                                v.to(dtype=target_dtype, device=device) if isinstance(v, torch.Tensor) else v
+                                for v in value
+                            ]
+                        else:
+                            arg_c_converted[key] = value
+                    
+                    # Convert arg_null tensors to target dtype
+                    arg_null_converted = {}
+                    for key, value in arg_null.items():
+                        if isinstance(value, torch.Tensor):
+                            arg_null_converted[key] = value.to(dtype=target_dtype, device=device)
+                        elif isinstance(value, list):
+                            arg_null_converted[key] = [
+                                v.to(dtype=target_dtype, device=device) if isinstance(v, torch.Tensor) else v
+                                for v in value
+                            ]
+                        else:
+                            arg_null_converted[key] = value
 
                     try:
-                        # Model forward passes
+                        # Model forward passes with dtype-consistent inputs
                         # flag=False is usually required for inference (returns noise instead of loss)
-                        term1 = wan.model(latent_input, t=timestep, flag=False, **arg_c)
+                        term1 = wan.model(latent_input, t=timestep, flag=False, **arg_c_converted)
                         if isinstance(term1, (tuple, list)):
                             noise_pred_cond = term1[0]
                         else:
                             # If it's a tensor, just use it
                             noise_pred_cond = term1
                             
-                        term2 = wan.model(latent_input, t=timestep, flag=False, **arg_null)
+                        term2 = wan.model(latent_input, t=timestep, flag=False, **arg_null_converted)
                         if isinstance(term2, (tuple, list)):
                             noise_pred_uncond = term2[0]
                         else:
@@ -330,9 +363,15 @@ def generate_video_sync(
 
                     except RuntimeError as e:
                         logger.error(f"Error in wan.model at step {step_idx}: {e}")
-                        logger.error(f"  timestep shape: {timestep.shape}")
-                        logger.error(f"  latent_input[0] shape: {latent_input[0].shape}")
-                        logger.error(f"  arg_c keys: {arg_c.keys()}")
+                        logger.error(f"  timestep shape: {timestep.shape}, dtype: {timestep.dtype}")
+                        logger.error(f"  latent_input[0] shape: {latent_input[0].shape}, dtype: {latent_input[0].dtype}")
+                        logger.error(f"  arg_c_converted keys: {arg_c_converted.keys()}")
+                        # Log dtypes of converted args
+                        for key, value in list(arg_c_converted.items())[:3]:  # First 3 items
+                            if isinstance(value, torch.Tensor):
+                                logger.error(f"  arg_c_converted[{key}] dtype: {value.dtype}")
+                            elif isinstance(value, list) and len(value) > 0 and isinstance(value[0], torch.Tensor):
+                                logger.error(f"  arg_c_converted[{key}][0] dtype: {value[0].dtype}")
                         raise e
                     
                     # CFG
