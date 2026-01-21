@@ -133,181 +133,53 @@ class DockerPullProgressLogger:
 
 def stream_pull_with_progress(docker_client, image_name: str, throttle_interval: float = 0.5):
     """
-    Pull a Docker image using the native Docker CLI via subprocess.
-    This bypasses docker-py API hangs on Windows.
+    Pull a Docker image using the Docker Python SDK with streaming progress.
+    
+    This uses the low-level API's stream=True parameter to get real-time
+    progress updates that work reliably on all platforms including Windows.
     """
     import logging
     import json
-    import time
-    import subprocess
-    import sys
-    import re
     
     logger = DockerPullProgressLogger(image_name, throttle_interval)
     logger.emit_start()
     
-    logging.info(f"Starting Docker pull via CLI for {image_name}")
+    logging.info(f"Starting Docker pull via SDK for {image_name}")
     
-    # Regex patterns to parse CLI output lines like:
-    # "8e3ba11ec2a2: Downloading [=>      ]  10.5MB/200MB" 
-    # "8e3ba11ec2a2: Downloading  1.234kB/5.678kB"
-    # "8e3ba11ec2a2: Downloading [==>                                                ]  123.4MB/1.234GB"
-    # The key is to capture the layer ID, current size, and total size
-    # 
-    # Pattern breakdown:
-    # - ([a-f0-9]+) - layer ID (hex string)
-    # - :\s+ - colon followed by whitespace
-    # - Downloading\s+ - "Downloading" keyword followed by whitespace
-    # - (?:\[.*?\]\s*)? - optional progress bar in brackets (non-capturing)
-    # - (\d+\.?\d*)\s*([KMGT]?B) - current size with unit
-    # - \s*/\s* - slash separator with optional whitespace
-    # - (\d+\.?\d*)\s*([KMGT]?B) - total size with unit
-    progress_pattern = re.compile(
-        r'([a-f0-9]+):\s+Downloading\s+(?:\[.*?\]\s*)?(\d+\.?\d*)\s*([KMGT]?B)\s*/\s*(\d+\.?\d*)\s*([KMGT]?B)',
-        re.IGNORECASE
-    )
-    
-    # Alternative pattern for when there's no progress bar brackets
-    # "8e3ba11ec2a2: Pulling fs layer" etc - these don't have size info
-    alt_progress_pattern = re.compile(
-        r'([a-f0-9]+):\s+Downloading\s+(\d+\.?\d*)\s*([KMGT]?B)\s*/\s*(\d+\.?\d*)\s*([KMGT]?B)',
-        re.IGNORECASE
-    )
-    
-    # Helper to parse sizes like "10MB", "5.5GB" to bytes
-    def parse_size(size_str):
-        units = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3, 'TB': 1024**4}
-        match = re.search(r'([\d.]+)([KMGT]?B)', size_str.upper())
-        if not match:
-            return 0
-        value = float(match.group(1))
-        unit = match.group(2)
-        return int(value * units.get(unit, 1))
-
     try:
-        import threading
-        import queue
+        # Parse image name into repository and tag
+        if ':' in image_name and '/' in image_name.split(':')[-1] is False:
+            # Has a tag like "repo/image:tag"
+            repository, tag = image_name.rsplit(':', 1)
+        elif '@' in image_name:
+            # Has a digest like "repo/image@sha256:..."
+            repository = image_name
+            tag = None
+        else:
+            # No tag, use 'latest'
+            repository = image_name
+            tag = 'latest' if ':' not in image_name else image_name.split(':')[-1]
+            if ':' in image_name:
+                repository = image_name.rsplit(':', 1)[0]
         
-        # Run docker pull command with --progress=plain for parseable text output
-        # Modern Docker uses a fancy terminal UI by default that we can't parse
-        cmd = ["docker", "pull", "--progress=plain", image_name]
-        logging.info(f"Running command: {' '.join(cmd)}")
+        logging.info(f"Pulling repository={repository}, tag={tag}")
         
-        # Use shell=True on Windows for proper output handling
-        import platform
-        use_shell = platform.system() == "Windows"
-        cmd_str = ' '.join(cmd) if use_shell else cmd
-        
-        process = subprocess.Popen(
-            cmd_str if use_shell else cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            bufsize=1,
-            shell=use_shell,
-        )
-        
-        logging.info(f"Subprocess started with PID {process.pid}")
-        
+        # Use the low-level API to stream progress
+        # This returns a generator of JSON objects
         lines_received = 0
-        output_queue = queue.Queue()
-        
-        def reader_thread():
-            """Thread to read stdout and put lines in queue."""
-            try:
-                for line in process.stdout:
-                    output_queue.put(line)
-            except Exception as e:
-                logging.error(f"Reader thread error: {e}")
-            finally:
-                output_queue.put(None)  # Signal end of output
-        
-        # Start reader thread
-        reader = threading.Thread(target=reader_thread, daemon=True)
-        reader.start()
-        
-        # Process lines from queue
-        while True:
-            try:
-                raw_line = output_queue.get(timeout=0.5)
-                if raw_line is None:
-                    break
-                    
-                # Handle carriage returns (Docker progress updates)
-                for part in raw_line.split('\r'):
-                    line = part.strip()
-                    if not line:
-                        continue
-                    
-                    # Log first few lines to diagnose if output is being captured
-                    lines_received += 1
-                    if lines_received <= 5:
-                        logging.info(f"Docker CLI line {lines_received}: {repr(line)[:100]}")
-                    
-                    # Log raw line for debugging - ENABLED to diagnose progress issues
-                    # Look for "Downloading" in the line to reduce noise (show first few only)
-                    if "Downloading" in line and len(logger.layers) < 3:
-                        logging.info(f"Docker progress line sample: {repr(line)[:100]}")
-                    
-                    # Check for "Already exists" or "Pull complete"
-                    if "Pull complete" in line or "Already exists" in line:
-                        parts = line.split(":")
-                        if len(parts) > 1:
-                            layer_id = parts[0].strip()
-                            event = {
-                                "status": "Pull complete" if "Pull complete" in line else "Already exists",
-                                "id": layer_id,
-                                "progressDetail": {}
-                            }
-                            logger.parse_progress_event(event)
-                            logger.emit_progress()
-                            
-                    # Check for Downloading progress
-                    match = progress_pattern.search(line)
-                    if not match:
-                        # Try alternative pattern without brackets
-                        match = alt_progress_pattern.search(line)
-                    
-                    if match:
-                        layer_id = match.group(1)
-                        # New pattern: group 2 = current number, group 3 = current unit
-                        # group 4 = total number, group 5 = total unit
-                        current_str = f"{match.group(2)}{match.group(3)}"
-                        total_str = f"{match.group(4)}{match.group(5)}"
-                        
-                        current_bytes = parse_size(current_str)
-                        total_bytes = parse_size(total_str)
-                        
-                        # Log when we successfully parse a progress update for the first time
-                        if len(logger.layers) == 1 and total_bytes > 0:
-                            logging.info(f"Docker download progress parsing started: layer={layer_id}, total={total_str}")
-                        
-                        event = {
-                            "status": "Downloading",
-                            "id": layer_id,
-                            "progressDetail": {
-                                "current": current_bytes,
-                                "total": total_bytes
-                            }
-                        }
-                        logger.parse_progress_event(event)
-                        logger.emit_progress()
-                    elif "Downloading" in line:
-                        # Regex didn't match a "Downloading" line - log for debugging
-                        logging.warning(f"Failed to parse Downloading line: {repr(line)}")
-            except queue.Empty:
-                # Check if process has ended
-                if process.poll() is not None:
-                    break
-                continue
-        return_code = process.poll()
-        
-        if return_code != 0:
-            err_msg = f"Docker CLI pull failed with code {return_code}"
-            logging.error(err_msg)
-            raise Exception(err_msg)
+        for chunk in docker_client.api.pull(repository, tag=tag, stream=True, decode=True):
+            lines_received += 1
             
-        logging.info("Docker CLI pull completed successfully")
+            # Log first few chunks for debugging
+            if lines_received <= 5:
+                logging.info(f"Docker SDK progress chunk {lines_received}: {str(chunk)[:100]}")
+            
+            # Parse the progress event
+            if isinstance(chunk, dict):
+                logger.parse_progress_event(chunk)
+                logger.emit_progress()
+            
+        logging.info(f"Docker SDK pull completed. Total chunks: {lines_received}")
         
         # Emit final 100% progress
         logger.emit_progress(force=True)
@@ -320,9 +192,6 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
         return image
             
     except Exception as e:
-        logging.error(f"Error during CLI docker pull: {e}", exc_info=True)
-        try:
-            process.kill()
-        except:
-            pass
+        logging.error(f"Error during Docker SDK pull: {e}", exc_info=True)
         raise
+
