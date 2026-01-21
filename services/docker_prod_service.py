@@ -14,8 +14,10 @@ class DockerProdManager:
             self.docker_image_map = {}
             self.services_config = {}
         except docker.errors.DockerException:
-            logging.error("Docker is not running. Please start Docker Desktop.")
-            raise
+            logging.warning("Docker daemon not found or not running. Container management will be unavailable.")
+            self.client = None
+            self.docker_image_map = {}
+            self.services_config = {}
 
     def set_docker_image_map(self, image_map: dict):
         if image_map:
@@ -44,6 +46,10 @@ class DockerProdManager:
         return f"dgn-client-comfyui-{service_type}"
 
     def pull_image(self, image_name: str):
+        if not self.client:
+            logging.error(f"Cannot pull image '{image_name}': Docker client not initialized.")
+            return
+
         try:
             logging.info(f"Checking for Docker image: {image_name}...")
             self.client.images.get(image_name)
@@ -91,6 +97,10 @@ class DockerProdManager:
                 raise
 
     def run_container(self, service_type: str, ports: dict = None, force_restart: bool = True):
+        if not self.client:
+            logging.error(f"Cannot run container for '{service_type}': Docker client not initialized.")
+            return
+
         image_name = self.get_image_name(service_type)
         container_name = self.get_container_name(service_type)
 
@@ -150,6 +160,10 @@ class DockerProdManager:
             raise
 
     def stop_container(self, service_type: str):
+        if not self.client:
+            logging.error(f"Cannot stop container for '{service_type}': Docker client not initialized.")
+            return
+
         container_name = self.get_container_name(service_type)
         logging.info(f"Attempting to stop and remove container '{container_name}'...")
         try:
@@ -174,6 +188,9 @@ class DockerProdManager:
 
     def stream_logs(self, service_type: str, shutdown_event: threading.Event):
         """Streams logs from the container to the application logger."""
+        if not self.client:
+            return
+
         container_name = self.get_container_name(service_type)
         logging.info(f"Starting log stream for container '{container_name}'")
         

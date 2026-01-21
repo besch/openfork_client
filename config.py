@@ -37,6 +37,7 @@ HEADLESS_MODE = any([
     os.environ.get("RUNPOD_POD_ID"),      # RunPod sets this automatically
     os.environ.get("VAST_CONTAINERLABEL"), # Vast.ai container environment (via env var)
     _is_vast_container(),                  # Vast.ai container (via file detection)
+    os.path.exists("/.dockerenv"),         # Generic Docker container detection
     os.environ.get("HEADLESS_MODE", "").lower() in ("1", "true", "yes"),  # Explicit flag
 ])
 
