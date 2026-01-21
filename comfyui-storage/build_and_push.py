@@ -16,15 +16,15 @@ from typing import List
 class ImageConfig:
     dockerfile: str
     tag: str
-    build: bool = True
-    push: bool = True
+    build: bool = False
+    push: bool = False
 
 
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
-    ImageConfig("Dockerfile.heartmula", "beschiak/openfork-heartmula:latest", build=True, push=True),
-    ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.heartmula", "beschiak/openfork-heartmula:latest", build=True, push=True),
     ImageConfig("Dockerfile.wan22-24gb", "beschiak/openfork-wan22-24gb:latest", push=True),
+    ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
     ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", push=True),
     ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest", push=True),
     # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest", build=True, push=True),
@@ -98,7 +98,7 @@ def push_image(tag: str) -> bool:
     return False
 
 
-def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False, global_push: bool = False) -> str:
+def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False, global_push: bool = False, global_build: bool = False) -> str:
     """
     Build and push a single image based on its configuration and global flags.
     Returns: "success", "build_failed", or "push_failed"
@@ -108,8 +108,9 @@ def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: boo
     print(f"# Config: build={config.build}, push={config.push}")
     print('#'*60)
     
-    # Build the image if configured
-    if config.build:
+    # Build the image if configured (per-image or global)
+    should_build = config.build or global_build
+    if should_build:
         if not build_image(config.dockerfile, config.tag, hf_token, rebuild):
             print(f"\n⚠️ FAILED to build {config.tag}. Ignoring build failure as requested.")
             return "build_failed"
@@ -182,8 +183,9 @@ def main():
     parser = argparse.ArgumentParser(description="Docker Build and Push Script with Retry Logic")
     parser.add_argument("--delay", type=str, help="Msg to start delay e.g. 'in 10 minutes', '10m', '300s'")
     parser.add_argument("--hf-token", type=str, help="Hugging Face token for gated models")
+    parser.add_argument("--build", action="store_true", help="Build images (overrides per-image config)")
     parser.add_argument("--rebuild", action="store_true", help="Force rebuild by using --no-cache")
-    parser.add_argument("--push", action="store_true", help="Push images after building (default: build only)")
+    parser.add_argument("--push", action="store_true", help="Push images (overrides per-image config)")
     
     args = parser.parse_args()
     
@@ -221,7 +223,7 @@ def main():
     push_failed = []
     
     for config in IMAGES:
-        result = build_and_push_image(config, args.hf_token, args.rebuild, args.push)
+        result = build_and_push_image(config, args.hf_token, args.rebuild, args.push, args.build)
         if result == "success":
             successful.append(config.tag)
         elif result == "build_failed":
