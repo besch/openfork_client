@@ -83,8 +83,7 @@ def push_image(tag: str) -> bool:
     """
     Push a Docker image with one retry after unsuccessful attempt (2 total).
     """
-    # Note: --max-concurrent-uploads 3 is added to help with stability on some environments
-    command = ["docker", "push", "--max-concurrent-uploads", "3", tag]
+    command = ["docker", "push", tag]
     
     for attempt in range(1, PUSH_ATTEMPTS + 1):
         print(f"\n🚀 Push attempt {attempt}/{PUSH_ATTEMPTS} for {tag}")
