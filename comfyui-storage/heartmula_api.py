@@ -178,11 +178,13 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             "tags": request.style_prompt,
         }
         
-        # Aggressive memory cleanup before generation
+        # AGGRESSIVE memory cleanup before generation (critical for 16GB VRAM)
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+            # Reset peak memory stats for monitoring
+            torch.cuda.reset_peak_memory_stats()
         
         # Log memory before generation
         log_memory_usage()
@@ -350,24 +352,35 @@ async def startup_event():
         quantization_type = os.environ.get("HEARTMULA_QUANTIZATION", "none").lower()
         bnb_config = None
         
-        if quantization_type == "4bit" and BITSANDBYTES_AVAILABLE:
-            logger.info("Enabling 4-bit quantization (nf4)...")
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16
-            )
-            logger.info("✓ Quantization config created (will use ~6GB VRAM)")
-        elif quantization_type == "8bit" and BITSANDBYTES_AVAILABLE:
-            logger.info("Enabling 8-bit quantization (int8)...")
-            bnb_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-            )
-            logger.info("✓ Quantization config created (will use ~8-10GB VRAM)")
-        elif quantization_type in ["4bit", "8bit"]:
-            logger.warning(f"⚠️  {quantization_type} quantization requested but bitsandbytes not available")
-            logger.warning("   Model will load in full precision (requires 16GB+ VRAM)")
+        # CRITICAL: Check bitsandbytes status explicitly for debugging
+        logger.info(f"BITSANDBYTES_AVAILABLE: {BITSANDBYTES_AVAILABLE}")
+        logger.info(f"HEARTMULA_QUANTIZATION env: {quantization_type}")
+        
+        if quantization_type == "4bit":
+            if BITSANDBYTES_AVAILABLE:
+                logger.info("Enabling 4-bit quantization (nf4)...")
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_compute_dtype=torch.bfloat16
+                )
+                logger.info("✓ Quantization config created (will use ~6GB VRAM)")
+            else:
+                logger.error("❌ CRITICAL: 4-bit quantization requested but bitsandbytes NOT available!")
+                logger.error("   This WILL cause OOM on 16GB VRAM!")
+                logger.error("   Install bitsandbytes: pip install bitsandbytes")
+                # Don't raise error, but warn strongly
+        elif quantization_type == "8bit":
+            if BITSANDBYTES_AVAILABLE:
+                logger.info("Enabling 8-bit quantization (int8)...")
+                bnb_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
+                logger.info("✓ Quantization config created (will use ~8-10GB VRAM)")
+            else:
+                logger.error("❌ CRITICAL: 8-bit quantization requested but bitsandbytes NOT available!")
+                logger.error("   This WILL cause OOM on 16GB VRAM!")
         else:
             logger.info("Loading model in full precision (requires 16GB+ VRAM)")
         
@@ -375,6 +388,12 @@ async def startup_event():
         update_loading_progress("device_setup", 25, "Configuring device and dtype")
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        
+        # Calculate total VRAM early (needed for lazy_load decision and warmup)
+        total_vram_gb = 0
+        if torch.cuda.is_available():
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            logger.info(f"Total GPU VRAM: {total_vram_gb:.1f}GB")
         
         logger.info(f"Device: {device}, dtype: {dtype}")
         log_memory_usage()
@@ -386,21 +405,70 @@ async def startup_event():
         logger.info("LOADING PIPELINE - This will take 10-15 minutes")
         logger.info("=" * 80)
         
-        pipe = HeartMuLaGenPipeline.from_pretrained(
-            model_path,
-            device=device,
-            dtype=dtype,
-            version="3B",
-            bnb_config=bnb_config
-        )
+        # CRITICAL FIX: Enable lazy_load for VRAM < 20GB
+        # lazy_load=True loads modules on demand and unloads after use, saving GPU memory
+        # This is the official HeartMuLa recommendation for single GPU setups with limited VRAM
+        use_lazy_load = total_vram_gb < 20 if torch.cuda.is_available() else False
+        if use_lazy_load:
+            logger.info(f"Enabling lazy_load for {total_vram_gb:.1f}GB VRAM (modules load/unload on demand)")
+        
+        # Build pipeline kwargs
+        # CRITICAL: For 16GB VRAM, use device/dtype dictionaries to offload codec to CPU
+        # HeartCodec uses FP32 for audio quality and takes ~0.5GB VRAM
+        # On tight memory, offloading it to CPU frees critical inference memory
+        use_codec_cpu_offload = total_vram_gb < 18 if torch.cuda.is_available() else False
+        
+        if use_codec_cpu_offload:
+            logger.info(f"Enabling codec CPU offload for {total_vram_gb:.1f}GB VRAM")
+            logger.info("  HeartMuLa: GPU (bfloat16)")
+            logger.info("  HeartCodec: CPU (float32) - saves ~0.5GB VRAM during inference")
+            pipeline_kwargs = {
+                "device": {
+                    "mula": torch.device("cuda"),
+                    "codec": torch.device("cpu"),  # Offload codec to CPU
+                },
+                "dtype": {
+                    "mula": dtype,  # bfloat16 on GPU
+                    "codec": torch.float32,  # FP32 for quality on CPU
+                },
+                "version": "3B",
+            }
+        else:
+            pipeline_kwargs = {
+                "device": device,
+                "dtype": dtype,
+                "version": "3B",
+            }
+        
+        # Add bnb_config if we have quantization
+        if bnb_config is not None:
+            pipeline_kwargs["bnb_config"] = bnb_config
+            logger.info("✓ Quantization will be applied during model loading")
+        
+        # Add lazy_load for memory-constrained environments
+        # NOTE: lazy_load may not be a supported parameter in all heartlib versions
+        # We'll try to pass it and fall back if it fails
+        try:
+            pipe = HeartMuLaGenPipeline.from_pretrained(
+                model_path,
+                lazy_load=use_lazy_load,
+                **pipeline_kwargs
+            )
+        except TypeError as e:
+            if "lazy_load" in str(e):
+                logger.warning("lazy_load not supported in this heartlib version, loading without it")
+                pipe = HeartMuLaGenPipeline.from_pretrained(
+                    model_path,
+                    **pipeline_kwargs
+                )
+            else:
+                raise
         
         update_loading_progress("pipeline_loaded", 80, "Pipeline loaded, initializing...")
         
         # Stage 6: Warmup (optional but helpful)
         # IMPORTANT: On 16GB VRAM, skip warmup to preserve memory for actual generation
-        total_vram_gb = 0
-        if torch.cuda.is_available():
-            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        # (total_vram_gb was already calculated earlier in Stage 4)
         
         skip_warmup = total_vram_gb < 20  # Skip warmup on <20GB VRAM to preserve memory
         

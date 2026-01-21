@@ -89,12 +89,17 @@ RUN echo "Installing transformers and accelerate..." \
     && python -m pip install --no-cache-dir transformers accelerate \
     && echo "✓ transformers and accelerate installed"
 
-# Install optional dependencies (allow failure)
-RUN echo "Installing optional dependencies..." \
-    && python -m pip install --no-cache-dir bitsandbytes || \
-        echo "⚠️  bitsandbytes installation failed (quantization disabled)" \
-    && python -m pip install --no-cache-dir flash-attn --no-build-isolation || \
-        echo "⚠️  flash-attn installation failed (performance optimizations disabled)"
+# Install optional dependencies (CRITICAL: bitsandbytes required for 16GB VRAM!)
+# bitsandbytes 0.42+ has better CUDA 11.8 support
+RUN echo "Installing bitsandbytes for 4-bit quantization..." \
+    && python -m pip install --no-cache-dir "bitsandbytes>=0.42.0" \
+    && python -c "import bitsandbytes; print(f'✓ bitsandbytes {bitsandbytes.__version__} installed successfully')" \
+    || (echo "⚠️  bitsandbytes installation failed - 16GB VRAM will OOM without it!" && exit 1)
+
+# Install flash-attn (optional performance optimization)
+RUN echo "Installing flash-attn (optional)..." \
+    && python -m pip install --no-cache-dir flash-attn --no-build-isolation \
+    || echo "⚠️  flash-attn installation failed (performance optimizations disabled)"
 
 # Clone and install HeartLib
 RUN echo "Cloning HeartLib repository..." \

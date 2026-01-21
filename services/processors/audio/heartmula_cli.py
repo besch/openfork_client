@@ -27,10 +27,24 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
     API_PORT = 8000
     POLL_INTERVAL = 5
     MAX_WAIT_TIME = 900  # 15 minutes
+    
+    # Default audio duration limits per VRAM tier (in seconds)
+    # These can be overridden by max_audio_duration_seconds in workflow config
+    DEFAULT_MAX_DURATION_16GB = 60   # 60s max for 16GB (memory constrained)
+    DEFAULT_MAX_DURATION_24GB = 180  # 3 min max for 24GB
+    DEFAULT_MAX_DURATION = 95        # ~1.5 min default
 
     def __init__(self, client, job, shutdown_event):
         super().__init__(client, job, shutdown_event)
         self.api_base_url = f"http://localhost:{self.API_PORT}"
+        
+        # Get max audio duration from workflow config if specified
+        workflow_config = client.config.get(self.workflow_type, {})
+        self.max_audio_duration_seconds = workflow_config.get(
+            "max_audio_duration_seconds", 
+            self.DEFAULT_MAX_DURATION
+        )
+        logging.info(f"HeartMuLa max audio duration: {self.max_audio_duration_seconds}s")
 
     def process(self):
         """Main processing method."""
@@ -218,6 +232,17 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
     def _submit_generation(self, lyrics: str, style_prompt: str, params: Dict[str, Any]) -> Optional[str]:
         """Submit a generation request to the HeartMuLa API."""
         try:
+            # Calculate requested duration with VRAM-aware limits
+            requested_duration = params.get("duration", self.DEFAULT_MAX_DURATION)
+            
+            # Enforce workflow-configured max duration to prevent OOM
+            actual_duration = min(requested_duration, self.max_audio_duration_seconds)
+            if actual_duration < requested_duration:
+                logging.warning(
+                    f"Requested duration {requested_duration}s exceeds max {self.max_audio_duration_seconds}s "
+                    f"for this VRAM tier. Capping to {actual_duration}s to prevent OOM."
+                )
+            
             payload = {
                 "lyrics": lyrics, 
                 "style_prompt": style_prompt, 
@@ -226,8 +251,8 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
                 "topk": params.get("topk", 250),
                 "temperature": params.get("temperature", 1.0),
                 "cfg_scale": params.get("cfg_scale", 3.0),
-                # Map duration to max_audio_length_ms
-                "max_audio_length_ms": int(params.get("duration", 95) * 1000) if "duration" in params else 95000
+                # Convert duration to milliseconds with enforced limit
+                "max_audio_length_ms": int(actual_duration * 1000)
             }
 
             logging.info(f"Submitting generation request: {json.dumps(payload, indent=2)}")
