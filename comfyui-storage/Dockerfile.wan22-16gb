@@ -2,6 +2,10 @@
 
 FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
+# Build arguments for HuggingFace authentication
+ARG HF_TOKEN=""
+ENV HF_TOKEN=${HF_TOKEN}
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
@@ -49,23 +53,54 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
 # Create model directories
 RUN mkdir -p models/unet models/vae models/text_encoders models/loras
 
-# Download Q6_K models (combined)
-RUN wget -q -O models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
-        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors" \
-    && wget -q -O models/vae/wan_2.1_vae.safetensors \
-        "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors" \
-    && wget -q -O models/unet/Wan2.2-T2V-A14B-HighNoise-Q6_K.gguf \
-        "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q6_K.gguf" \
-    && wget -q -O models/unet/Wan2.2-T2V-A14B-LowNoise-Q6_K.gguf \
-        "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q6_K.gguf" \
-    && wget -q -O models/unet/Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf \
-        "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/HighNoise/Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf" \
-    && wget -q -O models/unet/Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf \
-        "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/resolve/main/LowNoise/Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf" \
-    && wget -q -O models/loras/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors \
-        "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors" \
-    && wget -q -O models/loras/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors \
-        "https://huggingface.co/Kijai/WanVideo_comfy/resolve/main/Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors"
+# Download models using huggingface-cli (better retry, resume, parallel support)
+# Shared models: Text Encoder + VAE
+RUN huggingface-cli download Comfy-Org/Wan_2.1_ComfyUI_repackaged \
+        split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors models/text_encoders/ \
+    && rm -rf split_files
+
+RUN huggingface-cli download Comfy-Org/Wan_2.1_ComfyUI_repackaged \
+        split_files/vae/wan_2.1_vae.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/vae/wan_2.1_vae.safetensors models/vae/ \
+    && rm -rf split_files
+
+# T2V Q6_K High/Low Noise
+RUN huggingface-cli download QuantStack/Wan2.2-T2V-A14B-GGUF \
+        HighNoise/Wan2.2-T2V-A14B-HighNoise-Q6_K.gguf \
+        --local-dir models/unet --local-dir-use-symlinks False \
+        --token ${HF_TOKEN}
+
+RUN huggingface-cli download QuantStack/Wan2.2-T2V-A14B-GGUF \
+        LowNoise/Wan2.2-T2V-A14B-LowNoise-Q6_K.gguf \
+        --local-dir models/unet --local-dir-use-symlinks False \
+        --token ${HF_TOKEN}
+
+# I2V Q6_K High/Low Noise
+RUN huggingface-cli download QuantStack/Wan2.2-I2V-A14B-GGUF \
+        HighNoise/Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf \
+        --local-dir models/unet --local-dir-use-symlinks False \
+        --token ${HF_TOKEN}
+
+RUN huggingface-cli download QuantStack/Wan2.2-I2V-A14B-GGUF \
+        LowNoise/Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf \
+        --local-dir models/unet --local-dir-use-symlinks False \
+        --token ${HF_TOKEN}
+
+# LoRAs
+RUN huggingface-cli download Kijai/WanVideo_comfy \
+        Lightx2v/lightx2v_T2V_14B_cfg_step_distill_v2_lora_rank32_bf16.safetensors \
+        --local-dir models/loras --local-dir-use-symlinks False \
+        --token ${HF_TOKEN}
+
+RUN huggingface-cli download Kijai/WanVideo_comfy \
+        Lightx2v/lightx2v_I2V_14B_480p_cfg_step_distill_rank32_bf16.safetensors \
+        --local-dir models/loras --local-dir-use-symlinks False \
+        --token ${HF_TOKEN}
 
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen"]
