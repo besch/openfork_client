@@ -2,6 +2,10 @@
 
 FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
+# Build arguments for HuggingFace authentication
+ARG HF_TOKEN=""
+ENV HF_TOKEN=${HF_TOKEN}
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
@@ -46,21 +50,59 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
 # Create model directories
 RUN mkdir -p models/text_encoders models/diffusion_models models/vae models/clip_vision
 
-# Download models (combined)
-RUN wget -q -O models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
-        "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-    && wget -q -O models/text_encoders/byt5_small_glyphxl_fp16.safetensors \
-        "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/byt5_small_glyphxl_fp16.safetensors" \
-    && wget -q -O models/vae/hunyuanvideo15_vae_fp16.safetensors \
-        "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/vae/hunyuanvideo15_vae_fp16.safetensors" \
-    && wget -q -O models/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors \
-        "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors" \
-    && wget -q -O models/diffusion_models/hunyuanvideo1.5_480p_i2v_cfg_distilled_fp8_scaled.safetensors \
-        "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/diffusion_models/hunyuanvideo1.5_480p_i2v_cfg_distilled_fp8_scaled.safetensors" \
-    && wget -q -O models/diffusion_models/hunyuanvideo1.5_720p_t2v_cfg_distilled_fp8_scaled.safetensors \
-        "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/diffusion_models/hunyuanvideo1.5_720p_t2v_cfg_distilled_fp8_scaled.safetensors" \
-    && wget -q -O models/clip_vision/sigclip_vision_patch14_384.safetensors \
-        "https://huggingface.co/Comfy-Org/sigclip_vision_384/resolve/main/sigclip_vision_patch14_384.safetensors"
+# Download models using huggingface-cli (better retry, resume, parallel support)
+# Text Encoders (~9GB + 0.4GB)
+RUN huggingface-cli download Comfy-Org/HunyuanVideo_1.5_repackaged \
+        split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors models/text_encoders/ \
+    && rm -rf split_files
+
+RUN huggingface-cli download Comfy-Org/HunyuanVideo_1.5_repackaged \
+        split_files/text_encoders/byt5_small_glyphxl_fp16.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/text_encoders/byt5_small_glyphxl_fp16.safetensors models/text_encoders/ \
+    && rm -rf split_files
+
+# VAE (~2.5GB)
+RUN huggingface-cli download Comfy-Org/HunyuanVideo_1.5_repackaged \
+        split_files/vae/hunyuanvideo15_vae_fp16.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/vae/hunyuanvideo15_vae_fp16.safetensors models/vae/ \
+    && rm -rf split_files
+
+# Diffusion Models - 720p I2V (~8GB)
+RUN huggingface-cli download Comfy-Org/HunyuanVideo_1.5_repackaged \
+        split_files/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/diffusion_models/hunyuanvideo1.5_720p_i2v_cfg_distilled_fp8_scaled.safetensors models/diffusion_models/ \
+    && rm -rf split_files
+
+# Diffusion Models - 480p I2V (~8GB)
+RUN huggingface-cli download Comfy-Org/HunyuanVideo_1.5_repackaged \
+        split_files/diffusion_models/hunyuanvideo1.5_480p_i2v_cfg_distilled_fp8_scaled.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/diffusion_models/hunyuanvideo1.5_480p_i2v_cfg_distilled_fp8_scaled.safetensors models/diffusion_models/ \
+    && rm -rf split_files
+
+# Diffusion Models - 480p T2V (~8GB) - NOTE: 720p T2V FP8 doesn't exist, using 480p
+RUN huggingface-cli download Comfy-Org/HunyuanVideo_1.5_repackaged \
+        split_files/diffusion_models/hunyuanvideo1.5_480p_t2v_cfg_distilled_fp8_scaled.safetensors \
+        --local-dir . --local-dir-use-symlinks False \
+        --token ${HF_TOKEN} \
+    && mv split_files/diffusion_models/hunyuanvideo1.5_480p_t2v_cfg_distilled_fp8_scaled.safetensors models/diffusion_models/ \
+    && rm -rf split_files
+
+# CLIP Vision (~0.8GB)
+RUN huggingface-cli download Comfy-Org/sigclip_vision_384 \
+        sigclip_vision_patch14_384.safetensors \
+        --local-dir models/clip_vision --local-dir-use-symlinks False \
+        --token ${HF_TOKEN}
 
 WORKDIR /opt/ComfyUI
 CMD ["python", "main.py", "--listen", "--lowvram"]

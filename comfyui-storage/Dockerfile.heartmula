@@ -50,11 +50,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install PyTorch with CUDA 11.8 support (supports older GPUs)
+# Use --extra-index-url to allow PyPI for dependencies (sympy, etc.)
 RUN echo "Installing PyTorch 2.0.1 with CUDA 11.8 (supports compute 3.5+)..." \
     && python -m pip install --no-cache-dir \
         torch==2.0.1 \
         torchaudio==2.0.2 \
-        --index-url https://download.pytorch.org/whl/cu118
+        --extra-index-url https://download.pytorch.org/whl/cu118
 
 # Install core dependencies
 RUN echo "Installing core dependencies..." \
