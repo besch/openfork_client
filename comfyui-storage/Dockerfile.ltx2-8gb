@@ -3,7 +3,7 @@
 # Uses FP8 quantized models with DualCLIPLoader approach
 # Tested configuration for RTX 4060/3060 8GB cards
 
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 # Build arguments for HuggingFace authentication
 ARG HF_TOKEN=""
@@ -39,12 +39,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Upgrade pip
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install PyTorch 2.5.1 with CUDA 12.1
+# Install PyTorch with CUDA 12.8
 RUN python -m pip install --no-cache-dir \
-    torch==2.5.1 \
-    torchvision==0.20.1 \
-    torchaudio==2.5.1 \
-    --index-url https://download.pytorch.org/whl/cu121
+    torch==2.7.1+cu128 \
+    torchvision \
+    torchaudio \
+    --extra-index-url https://download.pytorch.org/whl/cu128
 
 # Install core dependencies
 RUN python -m pip install --no-cache-dir \

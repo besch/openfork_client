@@ -3,7 +3,7 @@
 # Optimized for RTX 4090, RTX 3090, A5000, A6000
 # Supports native 4K at 24-30fps, 4-10s clips
 
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
@@ -37,9 +37,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python packages
 RUN python -m pip install --no-cache-dir --upgrade pip
 
-# Install PyTorch first
+# Install PyTorch first (CUDA 12.8)
 RUN python -m pip install --no-cache-dir \
-        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
     && rm -rf /tmp/* /var/tmp/*
 
 # Install remaining dependencies + xformers for flash attention

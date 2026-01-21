@@ -24,9 +24,9 @@ class ImageConfig:
 IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.heartmula", "beschiak/openfork-heartmula:latest", build=True, push=True),
     ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.wan22-24gb", "beschiak/openfork-wan22-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-24gb", "beschiak/openfork-wan22-24gb:latest", push=True),
+    ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", push=True),
+    ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest", push=True),
     # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest", build=True, push=True),
 ]
 
