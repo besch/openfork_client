@@ -148,11 +148,31 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
     
     logging.info(f"Starting Docker pull via CLI for {image_name}")
     
-    # Regex to parse CLI output lines like:
-    # "8e3ba11ec2a2: Downloading [=>      ]  10.5MB/200MB" or just "Downloading 10.5MB/200MB"
-    # capturing id, current, total
-    # This regex looks for patterns like: "123abcde: Downloading 12.3MB/45.6MB"
-    progress_pattern = re.compile(r'([a-f0-9]+):\s+Downloading\s+.*?((?:\d+\.?\d*)(?:[KMGT]?B))\s*/\s*((?:\d+\.?\d*)(?:[KMGT]?B))', re.IGNORECASE)
+    # Regex patterns to parse CLI output lines like:
+    # "8e3ba11ec2a2: Downloading [=>      ]  10.5MB/200MB" 
+    # "8e3ba11ec2a2: Downloading  1.234kB/5.678kB"
+    # "8e3ba11ec2a2: Downloading [==>                                                ]  123.4MB/1.234GB"
+    # The key is to capture the layer ID, current size, and total size
+    # 
+    # Pattern breakdown:
+    # - ([a-f0-9]+) - layer ID (hex string)
+    # - :\s+ - colon followed by whitespace
+    # - Downloading\s+ - "Downloading" keyword followed by whitespace
+    # - (?:\[.*?\]\s*)? - optional progress bar in brackets (non-capturing)
+    # - (\d+\.?\d*)\s*([KMGT]?B) - current size with unit
+    # - \s*/\s* - slash separator with optional whitespace
+    # - (\d+\.?\d*)\s*([KMGT]?B) - total size with unit
+    progress_pattern = re.compile(
+        r'([a-f0-9]+):\s+Downloading\s+(?:\[.*?\]\s*)?(\d+\.?\d*)\s*([KMGT]?B)\s*/\s*(\d+\.?\d*)\s*([KMGT]?B)',
+        re.IGNORECASE
+    )
+    
+    # Alternative pattern for when there's no progress bar brackets
+    # "8e3ba11ec2a2: Pulling fs layer" etc - these don't have size info
+    alt_progress_pattern = re.compile(
+        r'([a-f0-9]+):\s+Downloading\s+(\d+\.?\d*)\s*([KMGT]?B)\s*/\s*(\d+\.?\d*)\s*([KMGT]?B)',
+        re.IGNORECASE
+    )
     
     # Helper to parse sizes like "10MB", "5.5GB" to bytes
     def parse_size(size_str):
@@ -165,57 +185,69 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
         return int(value * units.get(unit, 1))
 
     try:
-        from .docker_utils import get_subprocess_hidden_kwargs
-        # Run docker pull command
-        # unbuffer output if possible
-        # We process stdout and stderr together
+        import threading
+        import queue
+        
+        # Run docker pull command with --progress=plain for parseable text output
+        # Modern Docker uses a fancy terminal UI by default that we can't parse
+        cmd = ["docker", "pull", "--progress=plain", image_name]
+        logging.info(f"Running command: {' '.join(cmd)}")
+        
+        # Use shell=True on Windows for proper output handling
+        import platform
+        use_shell = platform.system() == "Windows"
+        cmd_str = ' '.join(cmd) if use_shell else cmd
+        
         process = subprocess.Popen(
-            ["docker", "pull", image_name],
+            cmd_str if use_shell else cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, 
-            bufsize=0, # Unbuffered
-            shell=False,
-            **get_subprocess_hidden_kwargs()
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            bufsize=1,
+            shell=use_shell,
         )
         
         logging.info(f"Subprocess started with PID {process.pid}")
         
-        # We need to read character by character to handle \r updates
-        # or use a loop that can handle partial lines
-        buffer = ""
+        lines_received = 0
+        output_queue = queue.Queue()
         
+        def reader_thread():
+            """Thread to read stdout and put lines in queue."""
+            try:
+                for line in process.stdout:
+                    output_queue.put(line)
+            except Exception as e:
+                logging.error(f"Reader thread error: {e}")
+            finally:
+                output_queue.put(None)  # Signal end of output
+        
+        # Start reader thread
+        reader = threading.Thread(target=reader_thread, daemon=True)
+        reader.start()
+        
+        # Process lines from queue
         while True:
-            # Read character by character to ensure we capture everything 
-            # immediately without waiting for buffer fills
-            char = process.stdout.read(1)
-            if not char and process.poll() is not None:
-                break
-                
-            if char:
-                # Decode bytes to string
-                try:
-                    text = char.decode('utf-8', errors='replace')
-                except:
-                    continue
+            try:
+                raw_line = output_queue.get(timeout=0.5)
+                if raw_line is None:
+                    break
                     
-                buffer += text
-                
-                # split by newline or carriage return
-                # We need to handle \r because docker updates lines in place
-                while '\n' in buffer or '\r' in buffer:
-                    if '\n' in buffer and ('\r' not in buffer or buffer.find('\n') < buffer.find('\r')):
-                        line, buffer = buffer.split('\n', 1)
-                    elif '\r' in buffer:
-                        line, buffer = buffer.split('\r', 1)
-                    else:
-                        break # should not happen given while condition
-                        
-                    line = line.strip()
+                # Handle carriage returns (Docker progress updates)
+                for part in raw_line.split('\r'):
+                    line = part.strip()
                     if not line:
                         continue
-                        
-                    # Log raw line for debugging (verbose, but necessary now)
-                    # logging.debug(f"CLI RAW: {line}")
+                    
+                    # Log first few lines to diagnose if output is being captured
+                    lines_received += 1
+                    if lines_received <= 5:
+                        logging.info(f"Docker CLI line {lines_received}: {repr(line)[:100]}")
+                    
+                    # Log raw line for debugging - ENABLED to diagnose progress issues
+                    # Look for "Downloading" in the line to reduce noise (show first few only)
+                    if "Downloading" in line and len(logger.layers) < 3:
+                        logging.info(f"Docker progress line sample: {repr(line)[:100]}")
                     
                     # Check for "Already exists" or "Pull complete"
                     if "Pull complete" in line or "Already exists" in line:
@@ -232,13 +264,23 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
                             
                     # Check for Downloading progress
                     match = progress_pattern.search(line)
+                    if not match:
+                        # Try alternative pattern without brackets
+                        match = alt_progress_pattern.search(line)
+                    
                     if match:
                         layer_id = match.group(1)
-                        current_str = match.group(2)
-                        total_str = match.group(3)
+                        # New pattern: group 2 = current number, group 3 = current unit
+                        # group 4 = total number, group 5 = total unit
+                        current_str = f"{match.group(2)}{match.group(3)}"
+                        total_str = f"{match.group(4)}{match.group(5)}"
                         
                         current_bytes = parse_size(current_str)
                         total_bytes = parse_size(total_str)
+                        
+                        # Log when we successfully parse a progress update for the first time
+                        if len(logger.layers) == 1 and total_bytes > 0:
+                            logging.info(f"Docker download progress parsing started: layer={layer_id}, total={total_str}")
                         
                         event = {
                             "status": "Downloading",
@@ -250,7 +292,14 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
                         }
                         logger.parse_progress_event(event)
                         logger.emit_progress()
-        
+                    elif "Downloading" in line:
+                        # Regex didn't match a "Downloading" line - log for debugging
+                        logging.warning(f"Failed to parse Downloading line: {repr(line)}")
+            except queue.Empty:
+                # Check if process has ended
+                if process.poll() is not None:
+                    break
+                continue
         return_code = process.poll()
         
         if return_code != 0:
