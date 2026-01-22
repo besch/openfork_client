@@ -135,15 +135,17 @@ RUN mkdir -p \
 # GGUF models stay compressed in RAM unlike FP8 safetensors
 # ============================================================================
 
-# Download LTX-2 Distilled GGUF Q4 model (~6GB instead of 21GB!)
-# Source: unsloth/LTX-2-GGUF
+# Download LTX-2 Distilled GGUF Q4 model (~12GB - stays compressed in RAM!)
+# Source: Kijai/LTXV2_comfy
 RUN echo "Downloading LTX-2 Distilled GGUF Q4 model..." && \
-    huggingface-cli download unsloth/LTX-2-GGUF \
-    ltx-2-19b-distilled-Q4_K_M.gguf \
-    --local-dir models/unet \
-    --local-dir-use-symlinks False \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf" \
     --token ${HF_TOKEN} && \
-    echo "✓ LTX-2 GGUF Q4 downloaded (~6GB)" && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf models/unet/ && \
+    rm -rf /tmp/kijai_models && \
+    echo "✓ LTX-2 GGUF Q4 downloaded (~12GB)" && \
     ls -lh models/unet/
 
 # Download VAE (~5GB) - Still needs safetensors version
@@ -159,17 +161,14 @@ RUN echo "Downloading VAE..." && \
     echo "✓ VAE downloaded (5GB)" && \
     ls -lh models/vae/
 
-# Download Gemma-3 GGUF Q4 text encoder (~4GB instead of 26GB!)
-# Source: Kijai/LTXV2_comfy
-RUN echo "Downloading Gemma-3 GGUF Q4 text encoder..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
-    --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "text_encoders/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q8_0.gguf" \
+# Download Gemma-2 2B GGUF Q8 text encoder (~2.8GB instead of 26GB!)
+# Source: bartowski/gemma-2-2b-it-GGUF (verified GGUF format)
+RUN echo "Downloading Gemma-2 GGUF Q8 text encoder..." && \
+    huggingface-cli download bartowski/gemma-2-2b-it-GGUF \
+    gemma-2-2b-it-Q8_0.gguf \
+    --local-dir models/clip_gguf \
     --token ${HF_TOKEN} && \
-    mv /tmp/kijai_models/text_encoders/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q8_0.gguf models/clip_gguf/ && \
-    rm -rf /tmp/kijai_models && \
-    echo "✓ Gemma GGUF downloaded (~3GB)" && \
+    echo "✓ Gemma GGUF downloaded (~2.8GB)" && \
     ls -lh models/clip_gguf/
 
 # Download LTX-2 embeddings connector (required for text encoding)
@@ -178,9 +177,9 @@ RUN echo "Downloading LTX-2 embeddings connector..." && \
     huggingface-cli download Kijai/LTXV2_comfy \
     --repo-type model \
     --local-dir /tmp/kijai_models \
-    --include "text_encoders/ltx-2-19b-embeddings_connector_distill.safetensors" \
+    --include "text_encoders/ltx-2-19b-embeddings_connector_distill_bf16.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/kijai_models/text_encoders/ltx-2-19b-embeddings_connector_distill.safetensors models/clip/ && \
+    mv /tmp/kijai_models/text_encoders/ltx-2-19b-embeddings_connector_distill_bf16.safetensors models/clip/ && \
     rm -rf /tmp/kijai_models && \
     echo "✓ Embeddings connector downloaded" && \
     ls -lh models/clip/
