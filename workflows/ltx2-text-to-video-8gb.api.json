@@ -7,7 +7,7 @@
       },
       "class_type": "UNETLoader",
       "_meta": {
-        "title": "FP8 Transformer (8GB Optimized)"
+        "title": "8GB OPTIMIZED: FP8 Transformer"
       }
     },
     "15": {
@@ -16,9 +16,9 @@
         "strength_model": 1.0,
         "model": ["1", 0]
       },
-      "class_type": "LoraLoader",
+      "class_type": "LoraLoaderModelOnly",
       "_meta": {
-        "title": "Distilled LoRA (Enables 6-8 steps)"
+        "title": "Distilled LoRA (6 steps)"
       }
     },
     "2": {
@@ -29,7 +29,7 @@
       },
       "class_type": "DualCLIPLoader",
       "_meta": {
-        "title": "FP8 Gemma-3 + FP4 Projections"
+        "title": "8GB OPTIMIZED: FP8 Gemma-3"
       }
     },
     "3": {
@@ -37,14 +37,20 @@
         "text": "A cinematic video prompt placeholder",
         "clip": ["2", 0]
       },
-      "class_type": "CLIPTextEncode"
+      "class_type": "CLIPTextEncode",
+      "_meta": {
+        "title": "Positive Prompt"
+      }
     },
     "4": {
       "inputs": {
-        "text": "",
+        "text": "blurry, low quality, static, distorted, watermarks",
         "clip": ["2", 0]
       },
-      "class_type": "CLIPTextEncode"
+      "class_type": "CLIPTextEncode",
+      "_meta": {
+        "title": "Negative Prompt"
+      }
     },
     "5": {
       "inputs": {
@@ -56,14 +62,15 @@
     },
     "6": {
       "inputs": {
-        "width": 480,
-        "height": 320,
-        "num_frames": 41,
-        "batch_size": 1
+        "width": 768,
+        "height": 432,
+        "length": 41,
+        "batch_size": 1,
+        "autopad": true
       },
-      "class_type": "LTXVBaseSampler",
+      "class_type": "EmptyLTXVLatentVideo",
       "_meta": {
-        "title": "8GB SAFE: 480x320, 41 frames (~1.7s @ 24fps)"
+        "title": "Latent Generation (Safe 8GB Size)"
       }
     },
     "7": {
@@ -90,7 +97,7 @@
       },
       "class_type": "BasicScheduler",
       "_meta": {
-        "title": "Scheduler (6 steps with distilled LoRA)"
+        "title": "Scheduler (6 steps)"
       }
     },
     "10": {
@@ -103,35 +110,33 @@
       "inputs": {
         "vae_name": "LTX2_video_vae_bf16.safetensors"
       },
-      "class_type": "VAELoader",
-      "_meta": {
-        "title": "VAE Loader (BF16)"
-      }
+      "class_type": "VAELoader"
     },
     "12": {
       "inputs": {
+        "noise": ["10", 0],
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
         "latent_image": ["6", 0]
       },
-      "class_type": "SamplerCustom",
+      "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "8GB SAFE: 480x320, 41 frames (~1.7s @ 24fps)"
+        "title": "Sampler"
       }
     },
     "13": {
       "inputs": {
         "samples": ["12", 0],
         "vae": ["11", 0],
-        "tile_size": 192,
-        "overlap": 32,
-        "temporal_size": 16,
+        "tile_size": 128,
+        "overlap": 16,
+        "temporal_size": 8,
         "temporal_overlap": 4
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "VAE Decode Tiled (8GB Ultra-Conservative)"
+        "title": "Ultra-Low RAM VAE Decode"
       }
     },
     "14": {
@@ -139,11 +144,11 @@
         "images": ["13", 0],
         "frame_rate": 24,
         "loop_count": 0,
-        "filename_prefix": "ltx2_t2v_8gb",
+        "filename_prefix": "ltx2_8gb",
         "format": "video/h264-mp4",
         "pix_fmt": "yuv420p",
-        "crf": 19,
-        "save_metadata": true,
+        "crf": 23,
+        "save_metadata": false,
         "trim_to_audio": false,
         "pingpong": false,
         "save_output": true

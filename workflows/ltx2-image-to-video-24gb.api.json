@@ -7,7 +7,7 @@
       },
       "class_type": "UNETLoader",
       "_meta": {
-        "title": "Load LTX-2 FP8 UNET (Split Loading)"
+        "title": "Load LTX-2 FP8 UNET (Split Loading for Speed)"
       }
     },
     "2": {
@@ -16,14 +16,20 @@
         "clip_name2": "ltx-2-19b-dev-fp4_projections_only.safetensors",
         "type": "ltxv"
       },
-      "class_type": "DualCLIPLoader"
+      "class_type": "DualCLIPLoader",
+      "_meta": {
+        "title": "Load Gemma-3 12B Text Encoder (FP8 Optimized)"
+      }
     },
     "3": {
       "inputs": {
         "text": "A cinematic video prompt placeholder",
         "clip": ["2", 0]
       },
-      "class_type": "CLIPTextEncode"
+      "class_type": "CLIPTextEncode",
+      "_meta": {
+        "title": "Positive Prompt"
+      }
     },
     "4": {
       "inputs": {
@@ -31,12 +37,49 @@
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
-      "_meta": {"title": "Negative"}
+      "_meta": {
+        "title": "Negative Prompt"
+      }
     },
-    "5": {
+    "15": {
+      "inputs": {
+        "image": "start_image.png"
+      },
+      "class_type": "LoadImage",
+      "_meta": {
+        "title": "Load Start Image"
+      }
+    },
+    "16": {
+      "inputs": {
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
+      },
+      "class_type": "VAELoader",
+      "_meta": {
+        "title": "Load VAE (Separate for Consistent Memory Management)"
+      }
+    },
+    "17": {
       "inputs": {
         "positive": ["3", 0],
         "negative": ["4", 0],
+        "vae": ["16", 0],
+        "image": ["15", 0],
+        "width": 1280,
+        "height": 720,
+        "length": 97,
+        "batch_size": 1,
+        "strength": 0.85
+      },
+      "class_type": "LTXVImgToVideo",
+      "_meta": {
+        "title": "24GB: Image-to-Video (1280x720, 97 frames)"
+      }
+    },
+    "5": {
+      "inputs": {
+        "positive": ["17", 0],
+        "negative": ["17", 1],
         "frame_rate": 24
       },
       "class_type": "LTXVConditioning"
@@ -63,7 +106,10 @@
         "steps": 25,
         "denoise": 1.0
       },
-      "class_type": "BasicScheduler"
+      "class_type": "BasicScheduler",
+      "_meta": {
+        "title": "Scheduler (25 steps for 24GB)"
+      }
     },
     "10": {
       "inputs": {
@@ -71,36 +117,18 @@
       },
       "class_type": "RandomNoise"
     },
-    "15": {
-      "inputs": {
-        "image": "start_image.png",
-        "upload": "image"
-      },
-      "class_type": "LoadImage"
-    },
-    "16": {
-      "inputs": {
-        "vae_name": "LTX2_video_vae_bf16.safetensors"
-      },
-      "class_type": "VAELoader"
-    },
-    "20": {
-      "inputs": {
-        "width": 1024,
-        "height": 576,
-        "batch_size": 1
-      },
-      "class_type": "EmptyLatentImage"
-    },
     "11": {
       "inputs": {
         "noise": ["10", 0],
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["20", 0]
+        "latent_image": ["17", 2]
       },
-      "class_type": "SamplerCustom"
+      "class_type": "SamplerCustomAdvanced",
+      "_meta": {
+        "title": "Standard Sampler (Advanced)"
+      }
     },
     "12": {
       "inputs": {
@@ -111,7 +139,10 @@
         "temporal_size": 64,
         "temporal_overlap": 8
       },
-      "class_type": "VAEDecodeTiled"
+      "class_type": "VAEDecodeTiled",
+      "_meta": {
+        "title": "VAE Decode Tiled (24GB Safe)"
+      }
     },
     "14": {
       "inputs": {

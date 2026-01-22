@@ -53,12 +53,13 @@
       "inputs": {
         "width": 768,
         "height": 512,
-        "num_frames": 97,
-        "batch_size": 1
+        "length": 97,
+        "batch_size": 1,
+        "autopad": true
       },
-      "class_type": "LTXVBaseSampler",
+      "class_type": "EmptyLTXVLatentVideo",
       "_meta": {
-        "title": "16GB SAFE: 768x512, 97 frames (~4s @ 24fps)"
+        "title": "16GB SAFE: 1024x576, 97 frames (~4s @ 24fps)"
       }
     },
     "7": {
@@ -105,14 +106,15 @@
     },
     "12": {
       "inputs": {
+        "noise": ["10", 0],
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
         "latent_image": ["6", 0]
       },
-      "class_type": "SamplerCustom",
+      "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "16GB SAFE: 768x512, 97 frames (4 seconds)"
+        "title": "16GB SAFE: 1024x576, 97 frames (4 seconds)"
       }
     },
     "13": {

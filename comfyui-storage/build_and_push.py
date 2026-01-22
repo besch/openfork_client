@@ -22,16 +22,16 @@ class ImageConfig:
 
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
-    # ImageConfig("Dockerfile.heartmula", "beschiak/openfork-heartmula:latest", build=True, push=True),
+    ImageConfig("Dockerfile.heartmula", "beschiak/openfork-heartmula:latest", build=True, push=True),
     ImageConfig("Dockerfile.wan22-24gb", "beschiak/openfork-wan22-24gb:latest", push=True),
-    ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
     ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", push=True),
+    ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
     ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest", push=True),
     # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 2
-RETRY_DELAY_SECONDS = 600  # 10 minutes
+RETRY_DELAY_SECONDS = 1200  # 20 minutes
 
 
 def run_command(command: List[str], description: str) -> bool:

@@ -585,11 +585,17 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
         api_graph['9']['inputs']['steps'] = steps
         logging.info(f"Injected steps into LTX-2 i2v BasicScheduler node 9: {steps}")
 
-    # Inject dimensions into LTXVBaseSampler, EmptyLTXVLatentVideo, EmptyLatentImage and LTXVImageEncode
+    # Inject dimensions into LTXVImgToVideo, LTXVBaseSampler, EmptyLTXVLatentVideo, EmptyLatentImage and LTXVImageEncode
     # Different workflow versions may use different nodes for latent generation
     sampler_found = False
     for node_id, node in api_graph.items():
-        if node.get("class_type") == "LTXVBaseSampler":
+        if node.get("class_type") == "LTXVImgToVideo":
+            width, height = get_dimensions(aspect_ratio)
+            node['inputs']['width'] = width
+            node['inputs']['height'] = height
+            logging.info(f"Injected dimensions into LTX-2 i2v LTXVImgToVideo node {node_id}: {width}x{height}")
+            sampler_found = True
+        elif node.get("class_type") == "LTXVBaseSampler":
             width, height = get_dimensions(aspect_ratio)
             node['inputs']['width'] = width
             node['inputs']['height'] = height
@@ -614,7 +620,7 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVImageEncode node {node_id}: {width}x{height}")
     
     if not sampler_found:
-        logging.warning("Could not find LTXVBaseSampler, EmptyLTXVLatentVideo, or EmptyLatentImage node in LTX-2 i2v workflow for dimension injection")
+        logging.warning("Could not find LTXVImgToVideo, LTXVBaseSampler, EmptyLTXVLatentVideo, or EmptyLatentImage node in LTX-2 i2v workflow for dimension injection")
 
     # Inject Camera Control LoRA (only if not already using distilled LoRA workflow)
     if camera_movement and camera_movement != "none":
