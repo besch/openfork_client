@@ -163,13 +163,14 @@ RUN echo "Downloading VAE..." && \
 
 # Download Gemma-2 2B GGUF Q8 text encoder (~2.8GB instead of 26GB!)
 # Source: bartowski/gemma-2-2b-it-GGUF (verified GGUF format)
+# MUST go in models/clip/ - same folder as embeddings connector
 RUN echo "Downloading Gemma-2 GGUF Q8 text encoder..." && \
     huggingface-cli download bartowski/gemma-2-2b-it-GGUF \
     gemma-2-2b-it-Q8_0.gguf \
-    --local-dir models/clip_gguf \
+    --local-dir models/clip \
     --token ${HF_TOKEN} && \
     echo "✓ Gemma GGUF downloaded (~2.8GB)" && \
-    ls -lh models/clip_gguf/
+    ls -lh models/clip/
 
 # Download LTX-2 embeddings connector (required for text encoding)
 # Source: Kijai/LTXV2_comfy
