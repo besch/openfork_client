@@ -1,7 +1,7 @@
-# LTX-2 19B Docker Image (8GB VRAM Optimized) - FULLY CORRECTED v3
-# Based on verified Kijai/LTXV2_comfy and GitMylo repositories
-# Uses FP8 quantized models with DualCLIPLoader approach
-# Tested configuration for RTX 4060/3060 8GB cards
+# LTX-2 19B Docker Image (8GB VRAM Optimized) - GGUF VERSION
+# Uses GGUF quantized models that STAY COMPRESSED in RAM
+# Critical for 8GB VRAM + 32GB RAM systems
+# Based on Kijai/LTXV2_comfy GGUF recommendations
 
 FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
@@ -66,7 +66,8 @@ RUN python -m pip install --no-cache-dir \
     psutil==6.1.0 \
     sentencepiece==0.2.0 \
     protobuf==5.28.3 \
-    comfy-kitchen>=0.1.0
+    comfy-kitchen>=0.1.0 \
+    gguf
 
 # ComfyUI dependencies
 RUN python -m pip install --no-cache-dir \
@@ -107,11 +108,21 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom
     && cd custom_nodes/VideoHelperSuite \
     && python -m pip install --no-cache-dir -r requirements.txt || true
 
+# ============================================================================
+# CRITICAL: Install ComfyUI-GGUF for GGUF model loading
+# This enables UnetLoaderGGUF and DualCLIPLoaderGGUF nodes
+# ============================================================================
+RUN git clone https://github.com/city96/ComfyUI-GGUF.git custom_nodes/ComfyUI-GGUF \
+    && rm -rf custom_nodes/ComfyUI-GGUF/.git \
+    && cd custom_nodes/ComfyUI-GGUF \
+    && python -m pip install --no-cache-dir -r requirements.txt || true
+
 # Create model directories
 RUN mkdir -p \
     models/checkpoints \
     models/unet \
     models/clip \
+    models/clip_gguf \
     models/vae \
     models/latent_upscale_models \
     models/loras \
@@ -120,24 +131,22 @@ RUN mkdir -p \
     temp
 
 # ============================================================================
-# MODEL DOWNLOADS - VERIFIED 8GB VRAM CONFIGURATION
+# MODEL DOWNLOADS - GGUF QUANTIZED FOR TRUE 8GB OPERATION
+# GGUF models stay compressed in RAM unlike FP8 safetensors
 # ============================================================================
 
-# Download LTX-2 FP8 diffusion model (~21.6GB)
-# Source: Kijai/LTXV2_comfy
-RUN echo "Downloading LTX-2 FP8 diffusion model..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
-    --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors" \
+# Download LTX-2 Distilled GGUF Q4 model (~6GB instead of 21GB!)
+# Source: unsloth/LTX-2-GGUF
+RUN echo "Downloading LTX-2 Distilled GGUF Q4 model..." && \
+    huggingface-cli download unsloth/LTX-2-GGUF \
+    ltx-2-19b-distilled-Q4_K_M.gguf \
+    --local-dir models/unet \
+    --local-dir-use-symlinks False \
     --token ${HF_TOKEN} && \
-    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors \
-       models/unet/ && \
-    rm -rf /tmp/kijai_models && \
-    echo "✓ FP8 diffusion model downloaded (21.6GB)" && \
+    echo "✓ LTX-2 GGUF Q4 downloaded (~6GB)" && \
     ls -lh models/unet/
 
-# Download VAE (~5GB)
+# Download VAE (~5GB) - Still needs safetensors version
 # Source: Kijai/LTXV2_comfy
 RUN echo "Downloading VAE..." && \
     huggingface-cli download Kijai/LTXV2_comfy \
@@ -150,49 +159,33 @@ RUN echo "Downloading VAE..." && \
     echo "✓ VAE downloaded (5GB)" && \
     ls -lh models/vae/
 
-# Download Gemma-3 12B FP8 text encoder (~13.2GB)
-# CRITICAL: This is the FP8 conversion for 8GB VRAM
-# Source: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
-RUN echo "Downloading Gemma-3 12B FP8 text encoder..." && \
-    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
+# Download Gemma-3 GGUF Q4 text encoder (~4GB instead of 26GB!)
+# Source: Kijai/LTXV2_comfy
+RUN echo "Downloading Gemma-3 GGUF Q4 text encoder..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
     --repo-type model \
-    --local-dir /tmp/fp8_models \
-    --include "gemma_3_12B_it_fp8_e4m3fn.safetensors" \
+    --local-dir /tmp/kijai_models \
+    --include "text_encoders/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q8_0.gguf" \
     --token ${HF_TOKEN} && \
-    mv /tmp/fp8_models/gemma_3_12B_it_fp8_e4m3fn.safetensors \
-       models/clip/ && \
-    rm -rf /tmp/fp8_models && \
-    echo "✓ Gemma-3 FP8 downloaded (13.2GB)" && \
+    mv /tmp/kijai_models/text_encoders/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q8_0.gguf models/clip_gguf/ && \
+    rm -rf /tmp/kijai_models && \
+    echo "✓ Gemma GGUF downloaded (~3GB)" && \
+    ls -lh models/clip_gguf/
+
+# Download LTX-2 embeddings connector (required for text encoding)
+# Source: Kijai/LTXV2_comfy
+RUN echo "Downloading LTX-2 embeddings connector..." && \
+    huggingface-cli download Kijai/LTXV2_comfy \
+    --repo-type model \
+    --local-dir /tmp/kijai_models \
+    --include "text_encoders/ltx-2-19b-embeddings_connector_distill.safetensors" \
+    --token ${HF_TOKEN} && \
+    mv /tmp/kijai_models/text_encoders/ltx-2-19b-embeddings_connector_distill.safetensors models/clip/ && \
+    rm -rf /tmp/kijai_models && \
+    echo "✓ Embeddings connector downloaded" && \
     ls -lh models/clip/
 
-# Download LTX-2 projections for DualCLIPLoader (~2.86GB)
-# CRITICAL: This file enables DualCLIPLoader compatibility
-# Source: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
-RUN echo "Downloading LTX-2 projections..." && \
-    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-    --repo-type model \
-    --local-dir /tmp/fp8_models \
-    --include "ltx-2-19b-dev-fp4_projections_only.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/fp8_models/ltx-2-19b-dev-fp4_projections_only.safetensors \
-       models/clip/ && \
-    rm -rf /tmp/fp8_models && \
-    echo "✓ Projections downloaded (2.86GB)" && \
-    ls -lh models/clip/
-
-# Download spatial upscaler (996MB)
-RUN echo "Downloading spatial upscaler..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/lightricks_models \
-    --include "ltx-2-spatial-upscaler-x2-1.0.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/lightricks_models/ltx-2-spatial-upscaler-x2-1.0.safetensors \
-       models/latent_upscale_models/ && \
-    rm -rf /tmp/lightricks_models && \
-    echo "✓ Spatial upscaler downloaded"
-
-# Download distilled LoRA
+# Download distilled LoRA (optional, for even faster generation)
 RUN echo "Downloading distilled LoRA..." && \
     huggingface-cli download Lightricks/LTX-2 \
     --repo-type model \
@@ -204,72 +197,13 @@ RUN echo "Downloading distilled LoRA..." && \
     rm -rf /tmp/lightricks_models && \
     echo "✓ Distilled LoRA downloaded"
 
-# Download Camera Control LoRAs from separate repositories
-# Each camera control LoRA is in its own HuggingFace repository
-
-RUN echo "Downloading Dolly-In camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-In \
-    ltx-2-19b-lora-camera-control-dolly-in.safetensors \
-    --local-dir models/loras \
-    --local-dir-use-symlinks False \
-    --token ${HF_TOKEN} && \
-    echo "✓ Dolly-In LoRA downloaded"
-
-RUN echo "Downloading Dolly-Out camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Out \
-    ltx-2-19b-lora-camera-control-dolly-out.safetensors \
-    --local-dir models/loras \
-    --local-dir-use-symlinks False \
-    --token ${HF_TOKEN} && \
-    echo "✓ Dolly-Out LoRA downloaded"
-
-RUN echo "Downloading Dolly-Left camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Left \
-    ltx-2-19b-lora-camera-control-dolly-left.safetensors \
-    --local-dir models/loras \
-    --local-dir-use-symlinks False \
-    --token ${HF_TOKEN} && \
-    echo "✓ Dolly-Left LoRA downloaded"
-
-RUN echo "Downloading Dolly-Right camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Dolly-Right \
-    ltx-2-19b-lora-camera-control-dolly-right.safetensors \
-    --local-dir models/loras \
-    --local-dir-use-symlinks False \
-    --token ${HF_TOKEN} && \
-    echo "✓ Dolly-Right LoRA downloaded"
-
-RUN echo "Downloading Jib-Up camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Up \
-    ltx-2-19b-lora-camera-control-jib-up.safetensors \
-    --local-dir models/loras \
-    --local-dir-use-symlinks False \
-    --token ${HF_TOKEN} && \
-    echo "✓ Jib-Up LoRA downloaded"
-
-RUN echo "Downloading Jib-Down camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Jib-Down \
-    ltx-2-19b-lora-camera-control-jib-down.safetensors \
-    --local-dir models/loras \
-    --local-dir-use-symlinks False \
-    --token ${HF_TOKEN} && \
-    echo "✓ Jib-Down LoRA downloaded"
-
-RUN echo "Downloading Static camera control LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-Static \
-    ltx-2-19b-lora-camera-control-static.safetensors \
-    --local-dir models/loras \
-    --local-dir-use-symlinks False \
-    --token ${HF_TOKEN} && \
-    echo "✓ Static LoRA downloaded"
-
 # Verify all downloads
 RUN echo "=== Model Download Summary ===" && \
     echo "UNET Models:" && ls -lh models/unet/ && \
     echo "VAE Models:" && ls -lh models/vae/ && \
+    echo "CLIP GGUF Models:" && ls -lh models/clip_gguf/ && \
     echo "CLIP Models:" && ls -lh models/clip/ && \
     echo "LoRA Models:" && ls -lh models/loras/ && \
-    echo "Upscaler Models:" && ls -lh models/latent_upscale_models/ && \
     echo "=== Total disk usage ===" && \
     du -sh models/
 

@@ -2,34 +2,22 @@
   "prompt": {
     "1": {
       "inputs": {
-        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
-        "weight_dtype": "fp8_e4m3fn"
+        "unet_name": "ltx-2-19b-distilled-Q4_K_M.gguf"
       },
-      "class_type": "UNETLoader",
+      "class_type": "UnetLoaderGGUF",
       "_meta": {
-        "title": "8GB OPTIMIZED: FP8 Transformer"
-      }
-    },
-    "15": {
-      "inputs": {
-        "lora_name": "ltx-2-19b-distilled-lora-384.safetensors",
-        "strength_model": 1.0,
-        "model": ["1", 0]
-      },
-      "class_type": "LoraLoaderModelOnly",
-      "_meta": {
-        "title": "Distilled LoRA (6 steps)"
+        "title": "GGUF Q4 Transformer (TRUE 8GB - stays compressed)"
       }
     },
     "2": {
       "inputs": {
-        "clip_name1": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "clip_name2": "ltx-2-19b-dev-fp4_projections_only.safetensors",
+        "clip_name1": "gemma-2-2b-it-Q8_0.gguf",
+        "clip_name2": "ltx-2-19b-embeddings_connector_distill.safetensors",
         "type": "ltxv"
       },
-      "class_type": "DualCLIPLoader",
+      "class_type": "DualCLIPLoaderGGUF",
       "_meta": {
-        "title": "8GB OPTIMIZED: FP8 Gemma-3"
+        "title": "GGUF Text Encoder (stays compressed in RAM)"
       }
     },
     "3": {
@@ -70,12 +58,12 @@
       },
       "class_type": "EmptyLTXVLatentVideo",
       "_meta": {
-        "title": "Latent Generation (Safe 8GB Size)"
+        "title": "Latent (768x432, 41 frames)"
       }
     },
     "7": {
       "inputs": {
-        "model": ["15", 0],
+        "model": ["1", 0],
         "positive": ["5", 0],
         "negative": ["5", 1],
         "cfg": 3.0
@@ -90,14 +78,14 @@
     },
     "9": {
       "inputs": {
-        "model": ["15", 0],
+        "model": ["1", 0],
         "scheduler": "simple",
-        "steps": 6,
+        "steps": 8,
         "denoise": 1.0
       },
       "class_type": "BasicScheduler",
       "_meta": {
-        "title": "Scheduler (6 steps)"
+        "title": "Scheduler (8 steps - distilled model)"
       }
     },
     "10": {
@@ -129,14 +117,14 @@
       "inputs": {
         "samples": ["12", 0],
         "vae": ["11", 0],
-        "tile_size": 128,
-        "overlap": 16,
-        "temporal_size": 8,
+        "tile_size": 256,
+        "overlap": 32,
+        "temporal_size": 16,
         "temporal_overlap": 4
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Ultra-Low RAM VAE Decode"
+        "title": "VAE Decode Tiled"
       }
     },
     "14": {
