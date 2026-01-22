@@ -440,10 +440,14 @@ async def startup_event():
                 "version": "3B",
             }
         
-        # Add bnb_config if we have quantization
+        # NOTE: HeartMuLaGenPipeline.from_pretrained() does NOT support bnb_config parameter!
+        # The pipeline handles model loading internally and doesn't expose quantization options.
+        # For 16GB VRAM, we rely on lazy_load and codec CPU offload instead of quantization.
         if bnb_config is not None:
-            pipeline_kwargs["bnb_config"] = bnb_config
-            logger.info("✓ Quantization will be applied during model loading")
+            logger.warning("⚠️  Quantization requested but HeartMuLa pipeline does NOT support bnb_config!")
+            logger.warning("   The HeartMuLaGenPipeline.from_pretrained() method doesn't accept quantization parameters.")
+            logger.warning("   Falling back to lazy_load + codec CPU offload for 16GB VRAM support.")
+            # DO NOT add bnb_config to pipeline_kwargs - it will cause an error!
         
         # Add lazy_load for memory-constrained environments
         # NOTE: lazy_load may not be a supported parameter in all heartlib versions
