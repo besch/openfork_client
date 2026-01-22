@@ -24,3 +24,4 @@ fastapi
 uvicorn
 python-multipart
 pydantic
+Pillow==10.3.0
