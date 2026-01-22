@@ -161,28 +161,31 @@ RUN echo "Downloading VAE..." && \
     echo "✓ VAE downloaded (5GB)" && \
     ls -lh models/vae/
 
-# Download Gemma-2 2B GGUF Q8 text encoder (~2.8GB instead of 26GB!)
-# Source: bartowski/gemma-2-2b-it-GGUF (verified GGUF format)
-# MUST go in models/clip/ - same folder as embeddings connector
-RUN echo "Downloading Gemma-2 GGUF Q8 text encoder..." && \
-    huggingface-cli download bartowski/gemma-2-2b-it-GGUF \
-    gemma-2-2b-it-Q8_0.gguf \
-    --local-dir models/clip \
+# Download Gemma-3 12B FP4 MIXED text encoder (9.4GB - much smaller than FP8/BF16!)
+# Source: Comfy-Org/ltx-2 (official ComfyUI models)
+# This should expand to ~18GB in RAM vs ~26GB for FP8
+RUN echo "Downloading Gemma-3 12B FP4 Mixed text encoder from Comfy-Org..." && \
+    huggingface-cli download Comfy-Org/ltx-2 \
+    --repo-type model \
+    --local-dir /tmp/comfy_models \
+    --include "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" \
     --token ${HF_TOKEN} && \
-    echo "✓ Gemma GGUF downloaded (~2.8GB)" && \
+    mv /tmp/comfy_models/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors models/clip/ && \
+    rm -rf /tmp/comfy_models && \
+    echo "✓ Gemma-3 FP4 Mixed downloaded (9.4GB)" && \
     ls -lh models/clip/
 
-# Download LTX-2 embeddings connector (required for text encoding)
-# Source: Kijai/LTXV2_comfy
-RUN echo "Downloading LTX-2 embeddings connector..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
+# Download LTX-2 FP4 projections (required for DualCLIPLoader)
+# Source: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
+RUN echo "Downloading LTX-2 projections..." && \
+    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
     --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "text_encoders/ltx-2-19b-embeddings_connector_distill_bf16.safetensors" \
+    --local-dir /tmp/fp8_models \
+    --include "ltx-2-19b-dev-fp4_projections_only.safetensors" \
     --token ${HF_TOKEN} && \
-    mv /tmp/kijai_models/text_encoders/ltx-2-19b-embeddings_connector_distill_bf16.safetensors models/clip/ && \
-    rm -rf /tmp/kijai_models && \
-    echo "✓ Embeddings connector downloaded" && \
+    mv /tmp/fp8_models/ltx-2-19b-dev-fp4_projections_only.safetensors models/clip/ && \
+    rm -rf /tmp/fp8_models && \
+    echo "✓ Projections downloaded" && \
     ls -lh models/clip/
 
 # Download distilled LoRA (optional, for even faster generation)
