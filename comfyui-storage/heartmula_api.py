@@ -405,18 +405,20 @@ async def startup_event():
         logger.info("LOADING PIPELINE - This will take 10-15 minutes")
         logger.info("=" * 80)
         
-        # CRITICAL FIX: Enable lazy_load for VRAM < 20GB
+        # CRITICAL FIX: Enable lazy_load for VRAM < 26GB
         # lazy_load=True loads modules on demand and unloads after use, saving GPU memory
         # This is the official HeartMuLa recommendation for single GPU setups with limited VRAM
-        use_lazy_load = total_vram_gb < 20 if torch.cuda.is_available() else False
+        # HeartMuLa 3B uses ~23.2GB VRAM in bfloat16, so even 24GB GPUs need lazy loading!
+        use_lazy_load = total_vram_gb < 26 if torch.cuda.is_available() else False
         if use_lazy_load:
             logger.info(f"Enabling lazy_load for {total_vram_gb:.1f}GB VRAM (modules load/unload on demand)")
         
         # Build pipeline kwargs
-        # CRITICAL: For 16GB VRAM, use device/dtype dictionaries to offload codec to CPU
+        # CRITICAL: For limited VRAM, use device/dtype dictionaries to offload codec to CPU
         # HeartCodec uses FP32 for audio quality and takes ~0.5GB VRAM
         # On tight memory, offloading it to CPU frees critical inference memory
-        use_codec_cpu_offload = total_vram_gb < 18 if torch.cuda.is_available() else False
+        # HeartMuLa 3B uses ~23.2GB VRAM, so even 24GB GPUs benefit from this!
+        use_codec_cpu_offload = total_vram_gb < 26 if torch.cuda.is_available() else False
         
         if use_codec_cpu_offload:
             logger.info(f"Enabling codec CPU offload for {total_vram_gb:.1f}GB VRAM")
@@ -474,7 +476,7 @@ async def startup_event():
         # IMPORTANT: On 16GB VRAM, skip warmup to preserve memory for actual generation
         # (total_vram_gb was already calculated earlier in Stage 4)
         
-        skip_warmup = total_vram_gb < 20  # Skip warmup on <20GB VRAM to preserve memory
+        skip_warmup = total_vram_gb < 26  # Skip warmup on <26GB VRAM to preserve memory
         
         if skip_warmup:
             update_loading_progress("warmup", 95, "Skipping warmup (low VRAM mode)")
