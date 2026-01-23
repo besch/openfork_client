@@ -105,8 +105,11 @@ def load_custom_voice_model():
         logger.info("Loading Qwen3-TTS CustomVoice model...")
         from qwen_tts import Qwen3TTSModel
         
-        # Use 0.6B model for 8GB VRAM, can switch to 1.7B for better quality
-        model_name = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+        # Use environment variable to select model size (default 0.6B)
+        # 16GB VRAM service can set QWEN_MODEL_SIZE=1.7B
+        model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
+        model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-CustomVoice"
+        logger.info(f"Loading CustomVoice model: {model_name}")
         
         # Check if FlashAttention is available
         try:
@@ -159,8 +162,10 @@ def load_base_model():
         logger.info("Loading Qwen3-TTS Base model for voice cloning...")
         from qwen_tts import Qwen3TTSModel
         
-        # Use 0.6B model for 8GB VRAM
-        model_name = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+        # Use environment variable to select model size (default 0.6B)
+        model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
+        model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-Base"
+        logger.info(f"Loading Base model: {model_name}")
         
         try:
             import flash_attn

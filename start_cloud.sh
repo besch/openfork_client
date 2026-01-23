@@ -377,6 +377,18 @@ if [ "$START_HEARTMULA" = "true" ]; then
   fi
 fi
 
+if [ "$START_QWEN3TTS" = "true" ]; then
+  # Qwen3-TTS Model Selection
+  # If 16GB service requested OR VRAM > 16GB, use 1.7B model
+  if [[ "${SERVICE_TYPE:-auto}" == *"16gb"* ]] || [ "$TOTAL_VRAM_MB" -gt 16000 ]; then
+      export QWEN_MODEL_SIZE="1.7B"
+      log "Selecting Qwen3-TTS 1.7B model (Capacity: ${TOTAL_VRAM_MB}MB | Request: ${SERVICE_TYPE})"
+  else
+      export QWEN_MODEL_SIZE="0.6B"
+      log "Selecting Qwen3-TTS 0.6B model for 8GB VRAM (Capacity: ${TOTAL_VRAM_MB}MB)"
+  fi
+fi
+
 # Start ComfyUI
 if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   # Determine ComfyUI launch flags based on SERVICE_TYPE

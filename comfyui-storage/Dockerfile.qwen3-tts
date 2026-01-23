@@ -49,11 +49,24 @@ RUN MAX_JOBS=4 python -m pip install --no-cache-dir flash-attn --no-build-isolat
 # Create directories
 RUN mkdir -p /app/input /app/output /app/models
 
-# Pre-download the 0.6B model (smaller, faster for 8GB VRAM)
-# The model will be downloaded on first use if this fails
-RUN python -c "from huggingface_hub import hf_hub_download; \
+# Build argument for model size (0.6B or 1.7B)
+ARG MODEL_SIZE=0.6B
+ENV QWEN_MODEL_SIZE=${MODEL_SIZE}
+
+# Pre-download models to bake them into the image
+# This ensures zero-download startup time
+RUN python -c "from huggingface_hub import snapshot_download; \
     import os; \
-    os.makedirs('/app/models/hub', exist_ok=True)" || true
+    size = os.environ.get('QWEN_MODEL_SIZE', '0.6B'); \
+    print(f'Pre-downloading Qwen3-TTS {size} models...'); \
+    # Download Base model (used for Voice Cloning) \
+    snapshot_download(f'Qwen/Qwen3-TTS-12Hz-{size}-Base'); \
+    # Download CustomVoice model (used for TTS) \
+    snapshot_download(f'Qwen/Qwen3-TTS-12Hz-{size}-CustomVoice'); \
+    # Download VoiceDesign model (only for 1.7B usually, but good to have if size is 1.7B) \
+    if size == '1.7B': \
+        snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'); \
+    print('Model download complete.')"
 
 # Copy the API wrapper script
 COPY qwen3_tts_api.py /app/qwen3_tts_api.py
