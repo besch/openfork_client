@@ -2,6 +2,7 @@ cli.py
 comfyui-storage/build_and_push.py
 comfyui-storage/diffrhythm_api.py
 comfyui-storage/heartmula_api.py
+comfyui-storage/qwen3_tts_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/turbodiffusion_api_server.py
 config.py
@@ -28,6 +29,7 @@ services/processors/audio/chatterbox.py
 services/processors/audio/diffrhythm_cli.py
 services/processors/audio/foley.py
 services/processors/audio/heartmula_cli.py
+services/processors/audio/qwen3_tts.py
 services/processors/audio/stable_audio.py
 services/processors/audio/vibevoice.py
 services/processors/base.py
@@ -82,6 +84,7 @@ workflows/qwen-image-inpaint.api.json
 workflows/qwen-image-t2i-8gb.api.json
 workflows/qwen-image-t2i.api.json
 workflows/qwen.api.json
+workflows/qwen3-tts.api.json
 workflows/stable-audio-open.api.json
 workflows/stream-diffvsr-video-upscale.api.json
 workflows/svi-film-i2v-12gb.api.json
