@@ -1,0 +1,48 @@
+{
+  "api_type": "rest",
+  "base_url": "http://localhost:8000",
+  "endpoints": {
+    "generate": {
+      "method": "POST",
+      "path": "/generate",
+      "params": {
+        "text": "string",
+        "language": "Auto",
+        "speaker": "Olivia",
+        "instruct": "optional",
+        "mode": "custom_voice"
+      }
+    },
+    "voice_clone": {
+      "method": "POST",
+      "path": "/generate/voice-clone-path",
+      "params": {
+        "text": "string",
+        "language": "Auto",
+        "ref_audio_path": "string",
+        "ref_text": "optional",
+        "x_vector_only": false
+      }
+    },
+    "status": {
+      "method": "GET",
+      "path": "/status/{job_id}"
+    },
+    "download": {
+      "method": "GET",
+      "path": "/download/{job_id}"
+    }
+  },
+  "supported_languages": [
+    "Auto", "Chinese", "English", "Japanese", "Korean", 
+    "German", "French", "Russian", "Portuguese", "Spanish", "Italian"
+  ],
+  "supported_speakers": [
+    "Vivian", "Chelsie", "Austin", "Ethan",
+    "Ryan", "Olivia", "Lily", "Emma",
+    "Haruto", "Yuki", "Minjun", "Sora",
+    "Leon", "Mia", "Louis", "Chloe",
+    "Ivan", "Anna", "Miguel", "Sofia",
+    "Mateo", "Lucia", "Leonardo", "Giulia"
+  ]
+}

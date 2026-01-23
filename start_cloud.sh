@@ -303,6 +303,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/heartmula_api.py" ] && cp -v "$DGN_SOURCE_DIR/heartmula_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagnose_heartmula.sh" ] && cp -v "$DGN_SOURCE_DIR/diagnose_heartmula.sh" /app/ && chmod +x /app/diagnose_heartmula.sh
           [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
       fi
       
@@ -328,6 +329,7 @@ log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 # Defaults
 START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
+START_QWEN3TTS="false"
 START_COMFYUI="true"
 ENABLE_4BIT="false"
 
@@ -344,14 +346,18 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -f "/app/diffrhythm_api.py" ]; then
       log "Auto-mode: Detected DiffRhythm image. Selecting DiffRhythm service."
       START_DIFFRHYTHM="true"
+  elif [ -f "/app/qwen3_tts_api.py" ]; then
+      log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
+      START_QWEN3TTS="true"
+      SERVICE_TYPE="qwen3-tts"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
 else
   # MANUAL MODE: Check for keywords
-  # MANUAL MODE: Check for keywords
   if [[ "$SERVICE_TYPE" == *"heartmula"* ]]; then START_HEARTMULA="true"; fi
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
+  if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
 fi
 
 # Resource constraints and VRAM management
@@ -439,6 +445,13 @@ if [ "$START_DIFFRHYTHM" = "true" ] && [ -f "/app/diffrhythm_api.py" ]; then
   log "Found DiffRhythm API script. Starting..."
   (cd /app && "$PYTHON_EXE" diffrhythm_api.py > /tmp/diffrhythm_api.log 2>&1) &
   wait_for_url "DiffRhythm API" "http://127.0.0.1:8000/health" 120 "/tmp/diffrhythm_api.log"
+fi
+
+# Start Qwen3-TTS REST API
+if [ "$START_QWEN3TTS" = "true" ] && [ -f "/app/qwen3_tts_api.py" ]; then
+  log "Found Qwen3-TTS API script. Starting..."
+  (cd /app && "$PYTHON_EXE" qwen3_tts_api.py > /tmp/qwen3_tts_api.log 2>&1) &
+  wait_for_url "Qwen3-TTS API" "http://127.0.0.1:8000/health" 300 "/tmp/qwen3_tts_api.log"
 fi
 
 # Start HeartMuLa REST API
