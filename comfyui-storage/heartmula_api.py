@@ -16,7 +16,7 @@ import sys
 
 # CRITICAL: Set CUDA memory allocation config BEFORE importing torch
 # This reduces memory fragmentation which is critical for 16GB VRAM
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,garbage_collection_threshold:0.9"
 
 import uuid
 import logging
