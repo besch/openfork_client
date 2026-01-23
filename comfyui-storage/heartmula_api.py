@@ -13,6 +13,11 @@ IMPROVEMENTS:
 
 import os
 import sys
+
+# CRITICAL: Set CUDA memory allocation config BEFORE importing torch
+# This reduces memory fragmentation which is critical for 16GB VRAM
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import uuid
 import logging
 import tempfile
@@ -356,20 +361,47 @@ async def startup_event():
         logger.info(f"BITSANDBYTES_AVAILABLE: {BITSANDBYTES_AVAILABLE}")
         logger.info(f"HEARTMULA_QUANTIZATION env: {quantization_type}")
         
+        # Auto-detect GPU VRAM for automatic quantization decision
+        auto_quantize = False
+        if torch.cuda.is_available() and quantization_type == "none":
+            vram_for_quant_check = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            if vram_for_quant_check < 20:
+                logger.info(f"Auto-enabling 4-bit quantization for {vram_for_quant_check:.1f}GB VRAM (< 20GB threshold)")
+                quantization_type = "4bit"
+                auto_quantize = True
+        
         if quantization_type == "4bit":
             if BITSANDBYTES_AVAILABLE:
-                logger.info("Enabling 4-bit quantization (nf4)...")
+                # Auto-detect GPU generation for optimal quantization type
+                # RTX 50 series (Blackwell) = compute capability 10.0+ = fp4
+                # RTX 30/40 series = compute capability 8.x-9.x = nf4
+                quant_type = "nf4"  # Default for legacy GPUs
+                try:
+                    if torch.cuda.is_available():
+                        major, _ = torch.cuda.get_device_capability()
+                        if major >= 10:
+                            quant_type = "fp4"
+                            logger.info("Detected Blackwell GPU (compute 10.0+) - using FP4 quantization")
+                        else:
+                            logger.info(f"Detected legacy GPU (compute {major}.x) - using NF4 quantization")
+                except Exception:
+                    pass
+                
+                logger.info(f"Enabling 4-bit quantization ({quant_type})...")
                 bnb_config = BitsAndBytesConfig(
                     load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_quant_type=quant_type,
                     bnb_4bit_use_double_quant=True,
                     bnb_4bit_compute_dtype=torch.bfloat16
                 )
-                logger.info("✓ Quantization config created (will use ~6GB VRAM)")
+                # Benchmarks from HeartMuLa_ComfyUI:
+                # - BF16 (no quantization): ~12.7 GB VRAM
+                # - 4-bit Quantization: ~8.3 GB VRAM (35% savings)
+                logger.info(f"✓ Quantization config created (expected ~8.3GB VRAM vs ~12.7GB without)")
             else:
                 logger.error("❌ CRITICAL: 4-bit quantization requested but bitsandbytes NOT available!")
                 logger.error("   This WILL cause OOM on 16GB VRAM!")
-                logger.error("   Install bitsandbytes: pip install bitsandbytes")
+                logger.error("   Install bitsandbytes: pip install bitsandbytes>=0.42.0")
                 # Don't raise error, but warn strongly
         elif quantization_type == "8bit":
             if BITSANDBYTES_AVAILABLE:
@@ -377,12 +409,13 @@ async def startup_event():
                 bnb_config = BitsAndBytesConfig(
                     load_in_8bit=True,
                 )
-                logger.info("✓ Quantization config created (will use ~8-10GB VRAM)")
+                logger.info("✓ Quantization config created (expected ~10GB VRAM)")
             else:
                 logger.error("❌ CRITICAL: 8-bit quantization requested but bitsandbytes NOT available!")
                 logger.error("   This WILL cause OOM on 16GB VRAM!")
         else:
-            logger.info("Loading model in full precision (requires 16GB+ VRAM)")
+            logger.info("Loading model in full precision (requires 24GB+ VRAM)")
+            logger.info("  For 16GB VRAM: set HEARTMULA_QUANTIZATION=4bit")
         
         # Stage 4: Prepare device and dtype
         update_loading_progress("device_setup", 25, "Configuring device and dtype")
@@ -405,20 +438,33 @@ async def startup_event():
         logger.info("LOADING PIPELINE - This will take 10-15 minutes")
         logger.info("=" * 80)
         
-        # CRITICAL FIX: Enable lazy_load for VRAM < 26GB
+        # CRITICAL: Enable lazy_load for VRAM < 26GB
         # lazy_load=True loads modules on demand and unloads after use, saving GPU memory
         # This is the official HeartMuLa recommendation for single GPU setups with limited VRAM
-        # HeartMuLa 3B uses ~23.2GB VRAM in bfloat16, so even 24GB GPUs need lazy loading!
         use_lazy_load = total_vram_gb < 26 if torch.cuda.is_available() else False
         if use_lazy_load:
             logger.info(f"Enabling lazy_load for {total_vram_gb:.1f}GB VRAM (modules load/unload on demand)")
         
+        # CRITICAL: 4-bit quantization support for 16GB and 12GB VRAM
+        # Based on HeartMuLa_ComfyUI implementation which successfully runs on 12GB!
+        # - BF16 (no quantization): ~12.7 GB VRAM
+        # - 4-bit Quantization (NF4): ~8.3 GB VRAM (35% savings!)
+        use_quantization = bnb_config is not None and BITSANDBYTES_AVAILABLE
+        
+        if use_quantization:
+            logger.info("=" * 60)
+            logger.info("4-BIT QUANTIZATION ENABLED")
+            logger.info("=" * 60)
+            logger.info(f"  Quant Type: {bnb_config.bnb_4bit_quant_type}")
+            logger.info(f"  Compute Dtype: {bnb_config.bnb_4bit_compute_dtype}")
+            logger.info(f"  Double Quant: {bnb_config.bnb_4bit_use_double_quant}")
+            logger.info(f"  Expected VRAM: ~8.3 GB (vs ~12.7 GB without)")
+            logger.info("=" * 60)
+        
         # Build pipeline kwargs
-        # CRITICAL: For limited VRAM, use device/dtype dictionaries to offload codec to CPU
+        # For limited VRAM, use device/dtype dictionaries to offload codec to CPU
         # HeartCodec uses FP32 for audio quality and takes ~0.5GB VRAM
-        # On tight memory, offloading it to CPU frees critical inference memory
-        # HeartMuLa 3B uses ~23.2GB VRAM, so even 24GB GPUs benefit from this!
-        use_codec_cpu_offload = total_vram_gb < 26 if torch.cuda.is_available() else False
+        use_codec_cpu_offload = total_vram_gb < 20 if torch.cuda.is_available() else False
         
         if use_codec_cpu_offload:
             logger.info(f"Enabling codec CPU offload for {total_vram_gb:.1f}GB VRAM")
@@ -442,29 +488,36 @@ async def startup_event():
                 "version": "3B",
             }
         
-        # NOTE: HeartMuLaGenPipeline.from_pretrained() does NOT support bnb_config parameter!
-        # The pipeline handles model loading internally and doesn't expose quantization options.
-        # For 16GB VRAM, we rely on lazy_load and codec CPU offload instead of quantization.
-        if bnb_config is not None:
-            logger.warning("⚠️  Quantization requested but HeartMuLa pipeline does NOT support bnb_config!")
-            logger.warning("   The HeartMuLaGenPipeline.from_pretrained() method doesn't accept quantization parameters.")
-            logger.warning("   Falling back to lazy_load + codec CPU offload for 16GB VRAM support.")
-            # DO NOT add bnb_config to pipeline_kwargs - it will cause an error!
+        # Add bnb_config for 4-bit quantization if enabled
+        # This is SUPPORTED by HeartMuLaGenPipeline - confirmed by HeartMuLa_ComfyUI implementation
+        if use_quantization:
+            pipeline_kwargs["bnb_config"] = bnb_config
         
-        # Add lazy_load for memory-constrained environments
-        # NOTE: lazy_load may not be a supported parameter in all heartlib versions
-        # We'll try to pass it and fall back if it fails
+        # Load the pipeline with all optimizations
+        # Try with lazy_load first, fall back if not supported
         try:
             pipe = HeartMuLaGenPipeline.from_pretrained(
                 model_path,
                 lazy_load=use_lazy_load,
                 **pipeline_kwargs
             )
+            if use_lazy_load:
+                logger.info("✓ Pipeline loaded with lazy_load=True")
         except TypeError as e:
-            if "lazy_load" in str(e):
+            error_str = str(e).lower()
+            if "lazy_load" in error_str:
                 logger.warning("lazy_load not supported in this heartlib version, loading without it")
                 pipe = HeartMuLaGenPipeline.from_pretrained(
                     model_path,
+                    **pipeline_kwargs
+                )
+            elif "bnb_config" in error_str:
+                logger.warning("bnb_config not supported in this heartlib version, loading without quantization")
+                if "bnb_config" in pipeline_kwargs:
+                    del pipeline_kwargs["bnb_config"]
+                pipe = HeartMuLaGenPipeline.from_pretrained(
+                    model_path,
+                    lazy_load=use_lazy_load,
                     **pipeline_kwargs
                 )
             else:
