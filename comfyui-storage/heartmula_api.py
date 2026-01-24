@@ -371,8 +371,8 @@ async def startup_event():
         # Auto-detect GPU VRAM for automatic quantization decision
         if torch.cuda.is_available() and quantization_type == "none":
             vram_for_quant_check = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            if vram_for_quant_check < 28:
-                logger.info(f"Auto-enabling 4-bit quantization for {vram_for_quant_check:.1f}GB VRAM (< 28GB threshold)")
+            if vram_for_quant_check < 20:
+                logger.info(f"Auto-enabling 4-bit quantization for {vram_for_quant_check:.1f}GB VRAM (< 20GB threshold)")
                 quantization_type = "4bit"
         
         if quantization_type == "4bit":
