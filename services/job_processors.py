@@ -58,6 +58,9 @@ from services.processors import (
     SVIShotImageToVideoJobProcessor,
     SVIFilmImageToVideoJobProcessor,
     HeartMuLaCLIJobProcessor,
+    Qwen3TTSJobProcessor,
+    Qwen3VoiceDesignJobProcessor,
+    Qwen3VoiceCloneJobProcessor,
 )
 
 __all__ = [
@@ -96,6 +99,9 @@ __all__ = [
     "SVIShotImageToVideoJobProcessor",
     "SVIFilmImageToVideoJobProcessor",
     "HeartMuLaCLIJobProcessor",
+    "Qwen3TTSJobProcessor",
+    "Qwen3VoiceDesignJobProcessor",
+    "Qwen3VoiceCloneJobProcessor",
 ]
 
 
