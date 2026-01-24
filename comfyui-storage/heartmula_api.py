@@ -411,22 +411,14 @@ async def startup_event():
         # Stage 5: Load pipeline
         update_loading_progress("loading_pipeline", 30, "Loading HeartMuLa pipeline...")
         
-        # Determine optimization flags based on quantization and VRAM
-        # If Quantized (4-bit): ~8.3GB VRAM usage -> Safe for 12GB+ cards without lazy_load
-        # If Full Precision: ~23.2GB VRAM usage -> Needs lazy_load on 24GB cards
-        is_quantized = bnb_config is not None
+        # Lazy Load and Offload Logic
+        # We enable these optimizations for any GPU with < 26GB VRAM (covers 16GB and 24GB cards)
+        # This ensures stability for both 4-bit (16GB) and Full Precision (24GB) modes.
+        use_lazy_load = total_vram_gb < 26 if torch.cuda.is_available() else False
+        use_codec_cpu_offload = total_vram_gb < 26 if torch.cuda.is_available() else False
         
-        if is_quantized:
-            # 4-bit mode is memory efficient, only lazy load on very small cards
-            use_lazy_load = total_vram_gb < 11 if torch.cuda.is_available() else False
-            use_codec_cpu_offload = total_vram_gb < 11 if torch.cuda.is_available() else False
-            logger.info(f"Quantization enabled: Lazy load/offload disabled (VRAM > 11GB safe)")
-        else:
-            # Full precision requires massive memory
-            use_lazy_load = total_vram_gb < 26 if torch.cuda.is_available() else False
-            use_codec_cpu_offload = total_vram_gb < 26 if torch.cuda.is_available() else False
-            if use_lazy_load:
-                logger.info(f"Full precision mode: Lazy load enabled (VRAM {total_vram_gb:.1f}GB < 26GB)")
+        if use_lazy_load:
+            logger.info(f"Memory optimization enabled: lazy_load=True, cpu_offload=True (VRAM {total_vram_gb:.1f}GB < 26GB)")
         
         pipeline_kwargs = {
             "device": device,
