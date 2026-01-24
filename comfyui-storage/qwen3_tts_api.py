@@ -125,6 +125,7 @@ def load_custom_voice_model():
             device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
+            trust_remote_code=True,
         )
         logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
@@ -137,7 +138,10 @@ def load_voice_design_model():
         logger.info("Loading Qwen3-TTS VoiceDesign model...")
         from qwen_tts import Qwen3TTSModel
         
-        model_name = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+        # Use environment variable to select model size (default 0.6B)
+        # Note: Dockerfile only pre-downloads VoiceDesign for 1.7B
+        model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
+        model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-VoiceDesign"
         
         try:
             import flash_attn
@@ -150,6 +154,7 @@ def load_voice_design_model():
             device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
+            trust_remote_code=True,
         )
         logger.info("VoiceDesign model loaded successfully")
     return voice_design_model
@@ -178,7 +183,9 @@ def load_base_model():
             device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
+            trust_remote_code=True,
         )
+
         logger.info("Base model loaded successfully")
     return base_model
 

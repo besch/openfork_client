@@ -201,7 +201,10 @@ class DockerProdManager:
                 if shutdown_event.is_set():
                     break
                 if line:
+                    # Decode utf-8 with replacement for invalid bytes
                     decoded_line = line.decode('utf-8', errors='replace').strip()
+                    # Force encode to ascii to remove characters that crash Windows consoles (like progress bars)
+                    decoded_line = decoded_line.encode('ascii', errors='replace').decode('ascii')
                     if decoded_line:
                         logging.info(f"[{service_type}] {decoded_line}")
         except docker.errors.NotFound:
