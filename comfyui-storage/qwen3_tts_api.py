@@ -47,16 +47,17 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 SUPPORTED_LANGUAGES = ["Auto", "Chinese", "English", "Japanese", "Korean", "German", 
                        "French", "Russian", "Portuguese", "Spanish", "Italian"]
 
+# CORRECTED: Official 9 speakers for CustomVoice models
 SUPPORTED_SPEAKERS = [
-    "Vivian",      # Chinese female
-    "Serena",      # Chinese female
-    "Uncle_Fu",    # Chinese male
-    "Dylan",       # Chinese male (Beijing)
-    "Eric",        # Chinese male (Sichuan)
-    "Ryan",        # English male
-    "Aiden",       # English male
-    "Ono_Anna",    # Japanese female
-    "Sohee"        # Korean female
+    "Vivian",      # Chinese female - Bright, slightly edgy
+    "Serena",      # Chinese female - Warm, gentle
+    "Uncle_Fu",    # Chinese male - Seasoned, low, mellow
+    "Dylan",       # Chinese male (Beijing) - Youthful, clear, natural
+    "Eric",        # Chinese male (Sichuan) - Lively, slightly husky
+    "Ryan",        # English male - Dynamic, strong rhythmic drive
+    "Aiden",       # English male - Sunny American, clear midrange
+    "Ono_Anna",    # Japanese female - Playful, light, nimble
+    "Sohee"        # Korean female - Warm, rich emotion
 ]
 
 
@@ -109,68 +110,13 @@ def load_custom_voice_model():
             attn_impl = "sdpa"
             logger.info("FlashAttention not available, using SDPA")
         
-        try:
-            custom_voice_model = Qwen3TTSModel.from_pretrained(
-                model_name,
-                # device_map="cuda:0", # Removed to fix meta tensor issue
-                dtype=torch.bfloat16,
-                attn_implementation=attn_impl,
-                trust_remote_code=True,
-            ).to("cuda")
-        except OSError as e:
-            if "speech_tokenizer" in str(e):
-                print(f"⚠️ Missing preprocessor_config.json detected. Attempting repair for {model_name}...")
-                
-                # Find the snapshot directory
-                try:
-                    from huggingface_hub import scan_cache_dir
-                    import shutil
-                    
-                    cache_info = scan_cache_dir()
-                    snapshot_path = None
-                    for repo in cache_info.repos:
-                        if model_name in repo.repo_id:
-                            for revision in repo.revisions:
-                                snapshot_path = revision.snapshot_path
-                                break
-                    
-                    if snapshot_path:
-                        print(f"Repairing snapshot at: {snapshot_path}")
-                        tokenizer_path = os.path.join(snapshot_path, "speech_tokenizer")
-                        
-                        config_path = os.path.join(tokenizer_path, "config.json")
-                        preprocessor_path = os.path.join(tokenizer_path, "preprocessor_config.json")
-                        
-                        if os.path.exists(config_path) and not os.path.exists(preprocessor_path):
-                            print(f"Copying config.json to preprocessor_config.json in {tokenizer_path}")
-                            try:
-                                shutil.copyfile(config_path, preprocessor_path)
-                                print("File copied successfully.")
-                            except Exception as copy_err:
-                                print(f"Copy failed: {copy_err}")
-                        elif not os.path.exists(config_path):
-                             print(f"CRITICAL: config.json also missing in {tokenizer_path}")
-                        else:
-                             print(f"preprocessor_config.json already exists or other issue.")
-
-                        # Retry loading
-                        print("Retrying model load...")
-                        custom_voice_model = Qwen3TTSModel.from_pretrained(
-                            model_name,
-                            # device_map="cuda:0", # Removed to fix meta tensor issue
-                            dtype=torch.bfloat16,
-                            attn_implementation=attn_impl,
-                            trust_remote_code=True,
-                        ).to("cuda")
-                    else:
-                        print("Could not find snapshot path to repair.")
-                        raise e
-                except Exception as repair_err:
-                    print(f"Repair failed: {repair_err}")
-                    raise e
-            else:
-                raise e
-                
+        custom_voice_model = Qwen3TTSModel.from_pretrained(
+            model_name,
+            dtype=torch.bfloat16,
+            attn_implementation=attn_impl,
+            trust_remote_code=True,
+        ).to("cuda")
+        
         logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
 
@@ -188,9 +134,11 @@ def load_voice_design_model():
         logger.info("Loading Qwen3-TTS VoiceDesign model...")
         from qwen_tts import Qwen3TTSModel
         
-        # Use environment variable to select model size (default 0.6B)
-        # Note: Dockerfile only pre-downloads VoiceDesign for 1.7B
+        # VoiceDesign only available for 1.7B
         model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
+        if model_size != "1.7B":
+            raise ValueError("VoiceDesign model is only available for 1.7B variant")
+        
         model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-VoiceDesign"
         
         try:
@@ -201,7 +149,6 @@ def load_voice_design_model():
         
         voice_design_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            # device_map="cuda:0", # Removed to fix meta tensor issue
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
@@ -230,7 +177,6 @@ def load_base_model():
         
         base_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            # device_map="cuda:0", # Removed to fix meta tensor issue
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
@@ -369,14 +315,16 @@ async def health_check():
 @app.get("/info")
 async def get_info():
     """Get supported languages and speakers."""
+    model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
     return {
         "languages": SUPPORTED_LANGUAGES,
         "speakers": SUPPORTED_SPEAKERS,
-        "modes": ["custom_voice", "voice_design", "voice_clone"],
+        "modes": ["custom_voice", "voice_design" if model_size == "1.7B" else None, "voice_clone"],
+        "model_size": model_size,
         "models": {
-            "custom_voice": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-            "voice_design": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-            "base": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+            "custom_voice": f"Qwen/Qwen3-TTS-12Hz-{model_size}-CustomVoice",
+            "voice_design": f"Qwen/Qwen3-TTS-12Hz-{model_size}-VoiceDesign" if model_size == "1.7B" else None,
+            "base": f"Qwen/Qwen3-TTS-12Hz-{model_size}-Base"
         }
     }
 

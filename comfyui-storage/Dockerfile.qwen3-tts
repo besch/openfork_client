@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# Qwen3-TTS Docker Image - 8GB VRAM Optimized
+# Qwen3-TTS Docker Image - 8GB/16GB VRAM Optimized
 # Supports: CustomVoice TTS, Voice Design, Voice Cloning
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
@@ -13,7 +13,7 @@ ENV HF_HOME=/app/models
 ENV TRANSFORMERS_CACHE=/app/models
 ENV TORCH_HOME=/app/models
 
-# System dependencies - Python 3.12 (distutils removed in 3.12, not needed with modern pip)
+# System dependencies - Python 3.12
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
@@ -42,6 +42,9 @@ RUN python -m pip install --no-cache-dir \
     soundfile \
     numpy
 
+# Install huggingface-hub CLI for reliable model downloads
+RUN python -m pip install --no-cache-dir "huggingface_hub[cli]"
+
 # Install FlashAttention 2 for memory efficiency (optional, may fail on some systems)
 RUN MAX_JOBS=4 python -m pip install --no-cache-dir flash-attn --no-build-isolation || \
     echo "FlashAttention 2 installation failed, continuing without it"
@@ -53,24 +56,42 @@ RUN mkdir -p /app/input /app/output /app/models
 ARG MODEL_SIZE=0.6B
 ENV QWEN_MODEL_SIZE=${MODEL_SIZE}
 
-# Pre-download models to bake them into the image
-# This ensures zero-download startup time
-RUN python - <<EOF
-import os
-from huggingface_hub import snapshot_download
-size = os.environ.get('QWEN_MODEL_SIZE', '0.6B')
-print(f'Pre-downloading Qwen3-TTS {size} models...')
-# Download Base model (used for Voice Cloning)
-snapshot_download(f'Qwen/Qwen3-TTS-12Hz-{size}-Base')
-# Download CustomVoice model (used for TTS)
-snapshot_download(f'Qwen/Qwen3-TTS-12Hz-{size}-CustomVoice')
-# Download VoiceDesign model (only for 1.7B variants)
-if size == '1.7B':
-    snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign')
-EOF
+# Pre-download models using huggingface-cli (more reliable than Python snapshot_download)
+# This ensures complete file downloads including preprocessor_config.json
 
-# Copy the API wrapper script
+# Always download the tokenizer (shared across all models)
+RUN huggingface-cli download Qwen/Qwen3-TTS-Tokenizer-12Hz \
+    --cache-dir /app/models \
+    --local-dir-use-symlinks False
+
+# Download 0.6B models (default for 8GB variant)
+RUN huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice \
+    --cache-dir /app/models \
+    --local-dir-use-symlinks False
+
+RUN huggingface-cli download Qwen/Qwen3-TTS-12Hz-0.6B-Base \
+    --cache-dir /app/models \
+    --local-dir-use-symlinks False
+
+# For 1.7B variant (16GB), download additional models
+RUN if [ "$MODEL_SIZE" = "1.7B" ]; then \
+        echo "Downloading 1.7B models for 16GB variant..."; \
+        huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+            --cache-dir /app/models \
+            --local-dir-use-symlinks False && \
+        huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+            --cache-dir /app/models \
+            --local-dir-use-symlinks False && \
+        huggingface-cli download Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+            --cache-dir /app/models \
+            --local-dir-use-symlinks False; \
+    else \
+        echo "Using 0.6B models for 8GB variant"; \
+    fi
+
+# Copy the API wrapper script (will be downloaded at runtime from GitHub)
+# This allows dynamic updates without rebuilding the image
 
 EXPOSE 8000
-CMD ["/bin/bash", "-c", "curl -s -L -o qwen3_tts_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/qwen3_tts_api.py && python qwen3_tts_api.py"]
 
+CMD ["/bin/bash", "-c", "curl -s -L -o qwen3_tts_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/qwen3_tts_api.py && python qwen3_tts_api.py"]

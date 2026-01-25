@@ -8,7 +8,7 @@
       "params": {
         "text": "string",
         "language": "Auto",
-        "speaker": "Olivia",
+        "speaker": "Vivian",
         "instruct": "optional",
         "mode": "custom_voice"
       }
@@ -38,11 +38,61 @@
     "German", "French", "Russian", "Portuguese", "Spanish", "Italian"
   ],
   "supported_speakers": [
-    "Vivian", "Chelsie", "Austin", "Ethan",
-    "Ryan", "Olivia", "Lily", "Emma",
-    "Haruto", "Yuki", "Minjun", "Sora",
-    "Leon", "Mia", "Louis", "Chloe",
-    "Ivan", "Anna", "Miguel", "Sofia",
-    "Mateo", "Lucia", "Leonardo", "Giulia"
-  ]
+    "Vivian",
+    "Serena",
+    "Uncle_Fu",
+    "Dylan",
+    "Eric",
+    "Ryan",
+    "Aiden",
+    "Ono_Anna",
+    "Sohee"
+  ],
+  "speaker_details": {
+    "Vivian": {
+      "description": "Bright, slightly edgy young female voice",
+      "native_language": "Chinese",
+      "gender": "female"
+    },
+    "Serena": {
+      "description": "Warm, gentle young female voice",
+      "native_language": "Chinese",
+      "gender": "female"
+    },
+    "Uncle_Fu": {
+      "description": "Seasoned male voice with a low, mellow timbre",
+      "native_language": "Chinese",
+      "gender": "male"
+    },
+    "Dylan": {
+      "description": "Youthful Beijing male voice with a clear, natural timbre",
+      "native_language": "Chinese (Beijing Dialect)",
+      "gender": "male"
+    },
+    "Eric": {
+      "description": "Lively Chengdu male voice with a slightly husky brightness",
+      "native_language": "Chinese (Sichuan Dialect)",
+      "gender": "male"
+    },
+    "Ryan": {
+      "description": "Dynamic male voice with strong rhythmic drive",
+      "native_language": "English",
+      "gender": "male"
+    },
+    "Aiden": {
+      "description": "Sunny American male voice with a clear midrange",
+      "native_language": "English",
+      "gender": "male"
+    },
+    "Ono_Anna": {
+      "description": "Playful Japanese female voice with a light, nimble timbre",
+      "native_language": "Japanese",
+      "gender": "female"
+    },
+    "Sohee": {
+      "description": "Warm Korean female voice with rich emotion",
+      "native_language": "Korean",
+      "gender": "female"
+    }
+  }
 }
