@@ -231,6 +231,11 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         
         # Log memory after generation
         log_memory_usage()
+        
+        # Cleanup after generation to be safe
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     except Exception as e:
         duration = datetime.now() - start_time
@@ -436,15 +441,15 @@ async def startup_event():
         update_loading_progress("loading_pipeline", 30, "Loading HeartMuLa pipeline...")
         
         # Lazy Load and Offload Logic
-        # We enable these optimizations ONLY for < 20GB VRAM (e.g. 16GB cards)
-        # 24GB cards should have enough memory to run without offloading (which causes CPU bottlenecks)
-        use_lazy_load = total_vram_gb < 20 if torch.cuda.is_available() else False
-        use_codec_cpu_offload = total_vram_gb < 20 if torch.cuda.is_available() else False
+        # We enable these optimizations for < 32GB VRAM to prevent OOM on longer generations (e.g. 60s+)
+        # 24GB cards struggle with full model + activations for long context without offloading
+        use_lazy_load = total_vram_gb < 32 if torch.cuda.is_available() else False
+        use_codec_cpu_offload = total_vram_gb < 32 if torch.cuda.is_available() else False
         
         if use_lazy_load:
-            logger.info(f"Memory optimization enabled: lazy_load=True, cpu_offload=True (VRAM {total_vram_gb:.1f}GB < 20GB)")
+            logger.info(f"Memory optimization enabled: lazy_load=True, cpu_offload=True (VRAM {total_vram_gb:.1f}GB < 32GB)")
         else:
-            logger.info(f"Memory optimization disabled: Full GPU mode (VRAM {total_vram_gb:.1f}GB >= 20GB)")
+            logger.info(f"Memory optimization disabled: Full GPU mode (VRAM {total_vram_gb:.1f}GB >= 32GB)")
         
         pipeline_kwargs = {
             "device": device,
