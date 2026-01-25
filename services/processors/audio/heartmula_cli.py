@@ -233,7 +233,8 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         """Submit a generation request to the HeartMuLa API."""
         try:
             # Calculate requested duration with VRAM-aware limits
-            requested_duration = params.get("duration", self.DEFAULT_MAX_DURATION)
+            # Check 'duration' first, then 'duration_seconds' (standard in generationParams)
+            requested_duration = params.get("duration", params.get("duration_seconds", self.DEFAULT_MAX_DURATION))
             
             # Enforce workflow-configured max duration to prevent OOM
             actual_duration = min(requested_duration, self.max_audio_duration_seconds)

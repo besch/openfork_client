@@ -120,15 +120,76 @@ def load_custom_voice_model():
             attn_impl = "sdpa"
             logger.info("FlashAttention not available, using SDPA")
         
-        custom_voice_model = Qwen3TTSModel.from_pretrained(
-            model_name,
-            device_map="cuda:0",
-            dtype=torch.bfloat16,
-            attn_implementation=attn_impl,
-            trust_remote_code=True,
-        )
+        try:
+            custom_voice_model = Qwen3TTSModel.from_pretrained(
+                model_name,
+                device_map="cuda:0",
+                dtype=torch.bfloat16,
+                attn_implementation=attn_impl,
+                trust_remote_code=True,
+            )
+        except OSError as e:
+            if "speech_tokenizer" in str(e):
+                print(f"⚠️ Missing preprocessor_config.json detected. Attempting repair for {model_name}...")
+                
+                # Find the snapshot directory
+                try:
+                    from huggingface_hub import scan_cache_dir
+                    import shutil
+                    
+                    cache_info = scan_cache_dir()
+                    snapshot_path = None
+                    for repo in cache_info.repos:
+                        if model_name in repo.repo_id:
+                            for revision in repo.revisions:
+                                snapshot_path = revision.snapshot_path
+                                break
+                    
+                    if snapshot_path:
+                        print(f"Repairing snapshot at: {snapshot_path}")
+                        tokenizer_path = os.path.join(snapshot_path, "speech_tokenizer")
+                        
+                        config_path = os.path.join(tokenizer_path, "config.json")
+                        preprocessor_path = os.path.join(tokenizer_path, "preprocessor_config.json")
+                        
+                        if os.path.exists(config_path) and not os.path.exists(preprocessor_path):
+                            print(f"Copying config.json to preprocessor_config.json in {tokenizer_path}")
+                            try:
+                                shutil.copyfile(config_path, preprocessor_path)
+                                print("File copied successfully.")
+                            except Exception as copy_err:
+                                print(f"Copy failed: {copy_err}")
+                        elif not os.path.exists(config_path):
+                             print(f"CRITICAL: config.json also missing in {tokenizer_path}")
+                        else:
+                             print(f"preprocessor_config.json already exists or other issue.")
+
+                        # Retry loading
+                        print("Retrying model load...")
+                        custom_voice_model = Qwen3TTSModel.from_pretrained(
+                            model_name,
+                            device_map="cuda:0",
+                            dtype=torch.bfloat16,
+                            attn_implementation=attn_impl,
+                            trust_remote_code=True,
+                        )
+                    else:
+                        print("Could not find snapshot path to repair.")
+                        raise e
+                except Exception as repair_err:
+                    print(f"Repair failed: {repair_err}")
+                    raise e
+            else:
+                raise e
+                
         logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
+
+@app.on_event("startup")
+async def startup_event():
+    """Load models on startup."""
+    # Run in executor to avoid blocking main thread
+    asyncio.create_task(asyncio.to_thread(load_custom_voice_model))
 
 
 def load_voice_design_model():

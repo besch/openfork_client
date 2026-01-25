@@ -18,12 +18,15 @@ class ImageConfig:
     tag: str
     build: bool = False
     push: bool = False
+    build_args: dict = None
 
 
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
-    # ImageConfig("Dockerfile.heartmula", "beschiak/openfork-heartmula:latest", build=True, push=True),
-    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.heartmula-16gb", "beschiak/openfork-heartmula-16gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.heartmula-24gb", "beschiak/openfork-heartmula-24gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb:latest", build=True, build_args={"MODEL_SIZE": "0.6B"}),
+    # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb:latest", build=True, push=True, build_args={"MODEL_SIZE": "1.7B"}),
     # ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
 ]
 
@@ -56,7 +59,7 @@ def run_command(command: List[str], description: str) -> bool:
         return False
 
 
-def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False) -> bool:
+def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False, build_args: dict = None) -> bool:
     """
     Build a Docker image. No retry logic for builds - failure is ignored.
     """
@@ -69,6 +72,10 @@ def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool =
         command.extend(["--build-arg", f"HF_TOKEN={hf_token}"])
     else:
         command.extend(["--build-arg", "HF_TOKEN"])
+        
+    if build_args:
+        for key, value in build_args.items():
+            command.extend(["--build-arg", f"{key}={value}"])
         
     command.extend(["-f", dockerfile, "-t", tag, "."])
     
@@ -108,7 +115,7 @@ def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: boo
     # Build the image if configured (per-image or global)
     should_build = config.build or global_build
     if should_build:
-        if not build_image(config.dockerfile, config.tag, hf_token, rebuild):
+        if not build_image(config.dockerfile, config.tag, hf_token, rebuild, config.build_args):
             print(f"\n⚠️ FAILED to build {config.tag}. Ignoring build failure as requested.")
             return "build_failed"
     else:
