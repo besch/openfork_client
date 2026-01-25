@@ -70,8 +70,7 @@ if size == '1.7B':
 EOF
 
 # Copy the API wrapper script
-COPY qwen3_tts_api.py /app/qwen3_tts_api.py
 
 EXPOSE 8000
-CMD ["python", "qwen3_tts_api.py"]
+CMD ["/bin/bash", "-c", "curl -s -L -o qwen3_tts_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/qwen3_tts_api.py && python qwen3_tts_api.py"]
 

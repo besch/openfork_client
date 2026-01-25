@@ -272,12 +272,36 @@ class CustomHeartMuLaGenPipeline(HeartMuLaGenPipeline):
         # Inject quantization config if present
         if self.bnb_config:
             load_kwargs["quantization_config"] = self.bnb_config
+            # FORCE device_map to 'auto' or explicit dict for bitsandbytes
+            # passing torch.device object sometimes fails to trigger accelerate hooks correctly
+            if isinstance(load_kwargs.get("device_map"), torch.device):
+                 load_kwargs["device_map"] = {"": 0} 
             
-        logger.info(f"Loading HeartMuLa model with kwargs: {list(load_kwargs.keys())}")
+        logger.info(f"Loading HeartMuLa model with kwargs keys: {list(load_kwargs.keys())}")
+        if self.bnb_config:
+            logger.info(f"Quantization Enabled: {self.bnb_config}")
+
         self._mula = HeartMuLa.from_pretrained(
             self.mula_path,
             **load_kwargs
         )
+        
+        # VERIFY QUANTIZATION
+        try:
+            logger.info("Verifying model parameter dtypes:")
+            param_count = 0
+            for name, param in self._mula.named_parameters():
+                logger.info(f"  {name}: {param.dtype} on {param.device}")
+                param_count += 1
+                if param_count >= 5:
+                    break
+            
+            # Check footprint
+            mem_params = sum([p.nelement() * p.element_size() for p in self._mula.parameters()])
+            logger.info(f"Model Parameter Size in Memory: {mem_params / 1024**3:.2f} GB")
+        except Exception as e:
+            logger.warning(f"Could not verify parameters: {e}")
+
         return self._mula
 
     @classmethod
@@ -412,13 +436,15 @@ async def startup_event():
         update_loading_progress("loading_pipeline", 30, "Loading HeartMuLa pipeline...")
         
         # Lazy Load and Offload Logic
-        # We enable these optimizations for any GPU with < 26GB VRAM (covers 16GB and 24GB cards)
-        # This ensures stability for both 4-bit (16GB) and Full Precision (24GB) modes.
-        use_lazy_load = total_vram_gb < 26 if torch.cuda.is_available() else False
-        use_codec_cpu_offload = total_vram_gb < 26 if torch.cuda.is_available() else False
+        # We enable these optimizations ONLY for < 20GB VRAM (e.g. 16GB cards)
+        # 24GB cards should have enough memory to run without offloading (which causes CPU bottlenecks)
+        use_lazy_load = total_vram_gb < 20 if torch.cuda.is_available() else False
+        use_codec_cpu_offload = total_vram_gb < 20 if torch.cuda.is_available() else False
         
         if use_lazy_load:
-            logger.info(f"Memory optimization enabled: lazy_load=True, cpu_offload=True (VRAM {total_vram_gb:.1f}GB < 26GB)")
+            logger.info(f"Memory optimization enabled: lazy_load=True, cpu_offload=True (VRAM {total_vram_gb:.1f}GB < 20GB)")
+        else:
+            logger.info(f"Memory optimization disabled: Full GPU mode (VRAM {total_vram_gb:.1f}GB >= 20GB)")
         
         pipeline_kwargs = {
             "device": device,
