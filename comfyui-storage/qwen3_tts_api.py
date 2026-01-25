@@ -64,7 +64,7 @@ class TTSRequest(BaseModel):
     """Request model for TTS generation."""
     text: str
     language: str = "Auto"
-    speaker: str = "Olivia"
+    speaker: str = "Vivian"
     instruct: Optional[str] = None
     mode: str = "custom_voice"  # custom_voice, voice_design, voice_clone
     voice_design_instruct: Optional[str] = None
