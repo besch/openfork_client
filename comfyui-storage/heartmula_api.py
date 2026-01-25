@@ -216,6 +216,14 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             
             logger.info(f"[{job_id}] ✓ Completed in {duration.total_seconds():.1f}s")
             logger.info(f"[{job_id}] Output: {output_path.name} ({file_size:.2f} MB)")
+            
+            # CRITICAL: Aggressive memory cleanup after generation to prevent OOM on subsequent runs
+            logger.info(f"[{job_id}] Cleaning up GPU memory...")
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            log_memory_usage()
         else:
             # Fallback: check if wav tensor was returned
             if isinstance(wav, torch.Tensor):
@@ -226,6 +234,14 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
                 jobs[job_id]["output_path"] = str(output_path)
                 jobs[job_id]["completed_at"] = datetime.now().isoformat()
                 logger.info(f"[{job_id}] ✓ Saved manually")
+                
+                # Memory cleanup after manual save
+                logger.info(f"[{job_id}] Cleaning up GPU memory...")
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                log_memory_usage()
             else:
                 raise RuntimeError(f"Output file not created and no tensor returned")
         
@@ -245,6 +261,14 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
         jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        
+        # CRITICAL: Clean up GPU memory even on failure to prevent OOM accumulation
+        logger.info(f"[{job_id}] Cleaning up GPU memory after error...")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        log_memory_usage()
 
 
 
