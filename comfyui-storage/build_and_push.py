@@ -24,7 +24,7 @@ class ImageConfig:
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.heartmula-16gb", "beschiak/openfork-heartmula-16gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.heartmula-24gb", "beschiak/openfork-heartmula-24gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.heartmula-24gb", "beschiak/openfork-heartmula-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb:latest", build=True, build_args={"MODEL_SIZE": "0.6B"}),
     # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb:latest", build=True, push=True, build_args={"MODEL_SIZE": "1.7B"}),
     # ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),

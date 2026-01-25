@@ -422,11 +422,18 @@ async def startup_event():
         bnb_config = None
         
         # Auto-detect GPU VRAM for automatic quantization decision
-        if torch.cuda.is_available() and quantization_type == "none":
+        # CRITICAL FIX FOR 16GB: Force 4-bit quantization regardless of env var
+        if torch.cuda.is_available():
             vram_for_quant_check = torch.cuda.get_device_properties(0).total_memory / 1024**3
             if vram_for_quant_check < 20:
-                logger.info(f"Auto-enabling 4-bit quantization for {vram_for_quant_check:.1f}GB VRAM (< 20GB threshold)")
-                quantization_type = "4bit"
+                if quantization_type == "none":
+                    logger.info("=" * 80)
+                    logger.info(f"🔧 AUTO-ENABLING 4-bit quantization for {vram_for_quant_check:.1f}GB VRAM")
+                    logger.info("🔧 This is REQUIRED for GPUs with <20GB VRAM")
+                    logger.info("=" * 80)
+                    quantization_type = "4bit"
+                else:
+                    logger.info(f"✓ 4-bit quantization already enabled for {vram_for_quant_check:.1f}GB VRAM")
         
         if quantization_type == "4bit":
             if BITSANDBYTES_AVAILABLE:
@@ -451,7 +458,18 @@ async def startup_event():
                 )
                 logger.info(f"✓ Quantization config created ({quant_type})")
             else:
-                logger.error("❌ CRITICAL: 4-bit quantization missing bitsandbytes!")
+                logger.error("=" * 80)
+                logger.error("❌ CRITICAL ERROR: 4-bit quantization requested but bitsandbytes NOT available!")
+                logger.error("❌ This GPU has {:.1f}GB VRAM - 4-bit quantization is REQUIRED".format(total_vram_gb))
+                logger.error("=" * 80)
+                logger.error("SOLUTIONS:")
+                logger.error("  1. Install bitsandbytes:")
+                logger.error("     pip install bitsandbytes>=0.43.0 --break-system-packages")
+                logger.error("  2. Or rebuild Docker image (Dockerfile.heartmula-16gb includes it)")
+                logger.error("=" * 80)
+                load_error = "bitsandbytes required for 16GB VRAM but not installed"
+                update_loading_progress("failed", 0, load_error)
+                return
 
         # Stage 4: Prepare device and dtype
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -465,15 +483,24 @@ async def startup_event():
         update_loading_progress("loading_pipeline", 30, "Loading HeartMuLa pipeline...")
         
         # Lazy Load and Offload Logic
-        # We enable these optimizations for < 32GB VRAM to prevent OOM on longer generations (e.g. 60s+)
-        # 24GB cards struggle with full model + activations for long context without offloading
+        # CRITICAL FIX FOR 16GB: Only offload codec to CPU if VRAM is EXTREMELY limited (<14GB)
+        # For 16GB with 4-bit quantization: HeartMuLa ~4-6GB + HeartCodec ~7-8GB = ~11-14GB (fits!)
+        # Original bug: used < 32GB threshold, causing 16GB GPUs to offload unnecessarily
         use_lazy_load = total_vram_gb < 32 if torch.cuda.is_available() else False
-        use_codec_cpu_offload = total_vram_gb < 32 if torch.cuda.is_available() else False
+        use_codec_cpu_offload = total_vram_gb < 14 if torch.cuda.is_available() else False
+        
+        if use_codec_cpu_offload:
+            logger.warning("=" * 80)
+            logger.warning(f"⚠️  VRAM VERY LIMITED: {total_vram_gb:.1f}GB < 14GB threshold")
+            logger.warning("⚠️  Offloading HeartCodec to CPU - expect 10-50x SLOWER generation")
+            logger.warning("⚠️  Consider using a GPU with more VRAM for production workloads")
+            logger.warning("=" * 80)
+        elif total_vram_gb >= 14:
+            logger.info(f"✓ Keeping both models on GPU (VRAM {total_vram_gb:.1f}GB >= 14GB)")
+            logger.info(f"✓ Expected memory usage: ~{11 if bnb_config else 24}GB during generation")
         
         if use_lazy_load:
-            logger.info(f"Memory optimization enabled: lazy_load=True, cpu_offload=True (VRAM {total_vram_gb:.1f}GB < 32GB)")
-        else:
-            logger.info(f"Memory optimization disabled: Full GPU mode (VRAM {total_vram_gb:.1f}GB >= 32GB)")
+            logger.info(f"✓ Memory optimization: lazy_load=True (VRAM {total_vram_gb:.1f}GB < 32GB)")
         
         pipeline_kwargs = {
             "device": device,
