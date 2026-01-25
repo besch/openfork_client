@@ -48,26 +48,15 @@ SUPPORTED_LANGUAGES = ["Auto", "Chinese", "English", "Japanese", "Korean", "Germ
                        "French", "Russian", "Portuguese", "Spanish", "Italian"]
 
 SUPPORTED_SPEAKERS = [
-    # Chinese speakers
-    "Vivian", "Chelsie", "Austin", "Ethan",
-    # English speakers  
-    "Ryan", "Olivia", "Lily", "Emma",
-    # Japanese speakers
-    "Haruto", "Yuki",
-    # Korean speakers
-    "Minjun", "Sora",
-    # German speakers
-    "Leon", "Mia",
-    # French speakers
-    "Louis", "Chloe",
-    # Russian speakers
-    "Ivan", "Anna",
-    # Portuguese speakers
-    "Miguel", "Sofia",
-    # Spanish speakers
-    "Mateo", "Lucia",
-    # Italian speakers
-    "Leonardo", "Giulia"
+    "Vivian",      # Chinese female
+    "Serena",      # Chinese female
+    "Uncle_Fu",    # Chinese male
+    "Dylan",       # Chinese male (Beijing)
+    "Eric",        # Chinese male (Sichuan)
+    "Ryan",        # English male
+    "Aiden",       # English male
+    "Ono_Anna",    # Japanese female
+    "Sohee"        # Korean female
 ]
 
 
