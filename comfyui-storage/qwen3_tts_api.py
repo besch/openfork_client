@@ -116,14 +116,22 @@ def load_custom_voice_model():
             attn_impl = "sdpa"
             logger.info("FlashAttention not available, using SDPA")
         
-        # IMPORTANT: Do NOT use device_map with Qwen3-TTS as it causes meta tensor issues
-        # The model will automatically use CUDA if available
+        # Check CUDA availability
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading model to device: {device}")
+        
+        # Load model with explicit device placement to avoid meta tensors
         custom_voice_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
+            low_cpu_mem_usage=False,  # Disable to avoid meta tensors
         )
+        
+        # Explicitly move to device if needed
+        if device == "cuda":
+            custom_voice_model = custom_voice_model.to(device)
         
         logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
@@ -155,12 +163,19 @@ def load_voice_design_model():
         except ImportError:
             attn_impl = "sdpa"
         
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
         voice_design_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
+            low_cpu_mem_usage=False,
         )
+        
+        if device == "cuda":
+            voice_design_model = voice_design_model.to(device)
+            
         logger.info("VoiceDesign model loaded successfully")
     return voice_design_model
 
@@ -183,13 +198,18 @@ def load_base_model():
         except ImportError:
             attn_impl = "sdpa"
         
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
         base_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            device_map="cuda:0",
-            dtype=torch.bfloat16,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
+            low_cpu_mem_usage=False,
         )
+        
+        if device == "cuda":
+            base_model = base_model.to(device)
 
         logger.info("Base model loaded successfully")
     return base_model
