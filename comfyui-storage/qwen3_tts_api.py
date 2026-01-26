@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
+# FIX: Initialize tqdm's lock before any threading operations
+import tqdm
+import threading
+if not hasattr(tqdm.tqdm, '_lock'):
+    tqdm.tqdm._lock = threading.RLock()
+
 import torch
 import soundfile as sf
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
@@ -110,9 +116,10 @@ def load_custom_voice_model():
             attn_impl = "sdpa"
             logger.info("FlashAttention not available, using SDPA")
         
+        # IMPORTANT: Do NOT use device_map with Qwen3-TTS as it causes meta tensor issues
+        # The model will automatically use CUDA if available
         custom_voice_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
@@ -150,7 +157,6 @@ def load_voice_design_model():
         
         voice_design_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,

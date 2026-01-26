@@ -12,6 +12,8 @@ ENV PIP_NO_CACHE_DIR=1
 ENV HF_HOME=/app/models
 ENV TRANSFORMERS_CACHE=/app/models
 ENV TORCH_HOME=/app/models
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
 
 # System dependencies - Python 3.12
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,7 +34,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
         torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
 
-# Install qwen-tts package and dependencies
+# Install qwen-tts package and dependencies with tqdm fix
 RUN python -m pip install --no-cache-dir \
     qwen-tts \
     fastapi \
@@ -40,10 +42,11 @@ RUN python -m pip install --no-cache-dir \
     python-multipart \
     requests \
     soundfile \
-    numpy
+    numpy \
+    "tqdm>=4.66.0"
 
 # Install huggingface-hub CLI for reliable model downloads
-RUN python -m pip install --no-cache-dir "huggingface_hub[cli]"
+RUN python -m pip install --no-cache-dir "huggingface_hub[cli]>=0.20.0"
 
 # Install FlashAttention 2 for memory efficiency (optional, may fail on some systems)
 RUN MAX_JOBS=4 python -m pip install --no-cache-dir flash-attn --no-build-isolation || \
