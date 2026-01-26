@@ -117,24 +117,18 @@ def load_custom_voice_model():
             logger.info("FlashAttention not available, using SDPA")
         
         # Check CUDA availability
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
         logger.info(f"Loading model to device: {device}")
         
-        # FIXED: Explicitly load to CPU with device_map disabled, then move to CUDA
-        # This prevents meta tensor issues in the qwen_tts library's internal model loading
+        # FIXED: Use device_map with explicit device string, not "auto"
+        # The qwen_tts library requires device_map="cuda:0" or "cpu", not "auto"
         custom_voice_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
-            device_map=None,  # Explicitly disable device_map
-            low_cpu_mem_usage=False,  # Explicitly disable to prevent meta tensors
+            device_map=device,  # Use explicit device string
         )
-        
-        # Move model to target device after loading
-        if device == "cuda":
-            logger.info("Moving model to CUDA...")
-            custom_voice_model = custom_voice_model.to(device)
         
         logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
