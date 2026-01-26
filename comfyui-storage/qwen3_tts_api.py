@@ -112,10 +112,11 @@ def load_custom_voice_model():
         
         custom_voice_model = Qwen3TTSModel.from_pretrained(
             model_name,
+            device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
-        ).to("cuda")
+        )
         
         logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
@@ -149,10 +150,11 @@ def load_voice_design_model():
         
         voice_design_model = Qwen3TTSModel.from_pretrained(
             model_name,
+            device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
-        ).to("cuda")
+        )
         logger.info("VoiceDesign model loaded successfully")
     return voice_design_model
 
@@ -177,10 +179,11 @@ def load_base_model():
         
         base_model = Qwen3TTSModel.from_pretrained(
             model_name,
+            device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation=attn_impl,
             trust_remote_code=True,
-        ).to("cuda")
+        )
 
         logger.info("Base model loaded successfully")
     return base_model
