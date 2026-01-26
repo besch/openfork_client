@@ -120,18 +120,15 @@ def load_custom_voice_model():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Loading model to device: {device}")
         
-        # Load model with explicit device placement to avoid meta tensors
+        # Load model - device placement is handled internally by the library
         custom_voice_model = Qwen3TTSModel.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
             low_cpu_mem_usage=False,  # Disable to avoid meta tensors
+            device_map="auto" if device == "cuda" else None,  # Let the library handle device placement
         )
-        
-        # Explicitly move to device if needed
-        if device == "cuda":
-            custom_voice_model = custom_voice_model.to(device)
         
         logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
@@ -171,10 +168,8 @@ def load_voice_design_model():
             attn_implementation=attn_impl,
             trust_remote_code=True,
             low_cpu_mem_usage=False,
+            device_map="auto" if device == "cuda" else None,
         )
-        
-        if device == "cuda":
-            voice_design_model = voice_design_model.to(device)
             
         logger.info("VoiceDesign model loaded successfully")
     return voice_design_model
@@ -206,10 +201,8 @@ def load_base_model():
             attn_implementation=attn_impl,
             trust_remote_code=True,
             low_cpu_mem_usage=False,
+            device_map="auto" if device == "cuda" else None,
         )
-        
-        if device == "cuda":
-            base_model = base_model.to(device)
 
         logger.info("Base model loaded successfully")
     return base_model
