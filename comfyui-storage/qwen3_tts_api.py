@@ -47,17 +47,17 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 SUPPORTED_LANGUAGES = ["Auto", "Chinese", "English", "Japanese", "Korean", "German", 
                        "French", "Russian", "Portuguese", "Spanish", "Italian"]
 
-# CORRECTED: Official 9 speakers for CustomVoice models
+# CORRECTED: Official 9 speakers for CustomVoice models (lowercase required by model)
 SUPPORTED_SPEAKERS = [
-    "Vivian",      # Chinese female - Bright, slightly edgy
-    "Serena",      # Chinese female - Warm, gentle
-    "Uncle_Fu",    # Chinese male - Seasoned, low, mellow
-    "Dylan",       # Chinese male (Beijing) - Youthful, clear, natural
-    "Eric",        # Chinese male (Sichuan) - Lively, slightly husky
-    "Ryan",        # English male - Dynamic, strong rhythmic drive
-    "Aiden",       # English male - Sunny American, clear midrange
-    "Ono_Anna",    # Japanese female - Playful, light, nimble
-    "Sohee"        # Korean female - Warm, rich emotion
+    "vivian",      # Chinese female - Bright, slightly edgy
+    "serena",      # Chinese female - Warm, gentle
+    "uncle_fu",    # Chinese male - Seasoned, low, mellow
+    "dylan",       # Chinese male (Beijing) - Youthful, clear, natural
+    "eric",        # Chinese male (Sichuan) - Lively, slightly husky
+    "ryan",        # English male - Dynamic, strong rhythmic drive
+    "aiden",       # English male - Sunny American, clear midrange
+    "ono_anna",    # Japanese female - Playful, light, nimble
+    "sohee"        # Korean female - Warm, rich emotion
 ]
 
 
@@ -65,7 +65,7 @@ class TTSRequest(BaseModel):
     """Request model for TTS generation."""
     text: str
     language: str = "Auto"
-    speaker: str = "Vivian"
+    speaker: str = "vivian"  # Default lowercase
     instruct: Optional[str] = None
     mode: str = "custom_voice"  # custom_voice, voice_design, voice_clone
     voice_design_instruct: Optional[str] = None
@@ -192,6 +192,9 @@ def load_base_model():
 def generate_custom_voice(text: str, language: str, speaker: str, instruct: Optional[str] = None) -> str:
     """Generate speech using CustomVoice model."""
     model = load_custom_voice_model()
+    
+    # Convert speaker to lowercase (model requirement)
+    speaker = speaker.lower()
     
     if instruct:
         wavs, sr = model.generate_custom_voice(

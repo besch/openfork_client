@@ -44,12 +44,15 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
         inputs = self.job.get("inputs") or {}
         text = self.positive_prompt or inputs.get("text", "")
         language = inputs.get("language", "Auto")
-        speaker = inputs.get("speaker", "Olivia")
+        speaker = inputs.get("speaker", "vivian")
         instruct = inputs.get("instruct")
 
         if not text:
             self._fail_job("No text provided for TTS generation")
             return
+
+        # IMPORTANT: Convert speaker to lowercase (model requirement)
+        speaker = speaker.lower()
 
         if not self._wait_for_api():
             self._fail_job(f"Qwen3-TTS API did not become available for job {self.job_id}")

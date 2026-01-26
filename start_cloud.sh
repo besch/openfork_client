@@ -342,7 +342,13 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   if [ -f "/app/heartmula_api.py" ]; then
       log "Auto-mode: Detected HeartMuLa image. Selecting HeartMuLa service."
       START_HEARTMULA="true"
-      SERVICE_TYPE="heartmula-16gb"
+      if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+          SERVICE_TYPE="heartmula-24gb"
+          log "Auto-selected 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="heartmula-16gb"
+          log "Auto-selected 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/app/diffrhythm_api.py" ]; then
       log "Auto-mode: Detected DiffRhythm image. Selecting DiffRhythm service."
       START_DIFFRHYTHM="true"

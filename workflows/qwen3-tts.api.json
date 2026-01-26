@@ -38,58 +38,58 @@
     "German", "French", "Russian", "Portuguese", "Spanish", "Italian"
   ],
   "supported_speakers": [
-    "Vivian",
-    "Serena",
-    "Uncle_Fu",
-    "Dylan",
-    "Eric",
-    "Ryan",
-    "Aiden",
-    "Ono_Anna",
-    "Sohee"
+    "vivian",
+    "serena",
+    "uncle_fu",
+    "dylan",
+    "eric",
+    "ryan",
+    "aiden",
+    "ono_anna",
+    "sohee"
   ],
   "speaker_details": {
-    "Vivian": {
+    "vivian": {
       "description": "Bright, slightly edgy young female voice",
       "native_language": "Chinese",
       "gender": "female"
     },
-    "Serena": {
+    "serena": {
       "description": "Warm, gentle young female voice",
       "native_language": "Chinese",
       "gender": "female"
     },
-    "Uncle_Fu": {
+    "uncle_fu": {
       "description": "Seasoned male voice with a low, mellow timbre",
       "native_language": "Chinese",
       "gender": "male"
     },
-    "Dylan": {
+    "dylan": {
       "description": "Youthful Beijing male voice with a clear, natural timbre",
       "native_language": "Chinese (Beijing Dialect)",
       "gender": "male"
     },
-    "Eric": {
+    "eric": {
       "description": "Lively Chengdu male voice with a slightly husky brightness",
       "native_language": "Chinese (Sichuan Dialect)",
       "gender": "male"
     },
-    "Ryan": {
+    "ryan": {
       "description": "Dynamic male voice with strong rhythmic drive",
       "native_language": "English",
       "gender": "male"
     },
-    "Aiden": {
+    "aiden": {
       "description": "Sunny American male voice with a clear midrange",
       "native_language": "English",
       "gender": "male"
     },
-    "Ono_Anna": {
+    "ono_anna": {
       "description": "Playful Japanese female voice with a light, nimble timbre",
       "native_language": "Japanese",
       "gender": "female"
     },
-    "Sohee": {
+    "sohee": {
       "description": "Warm Korean female voice with rich emotion",
       "native_language": "Korean",
       "gender": "female"

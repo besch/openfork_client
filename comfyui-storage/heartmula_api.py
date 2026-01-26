@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-HeartMuLa REST API Server - AGGRESSIVE MEMORY MANAGEMENT VERSION
-This version completely reloads the model between jobs to ensure memory is released.
+HeartMuLa REST API Server - ULTRA MEMORY OPTIMIZED VERSION
+For 16GB VRAM GPUs - Forces codec to CPU and uses aggressive memory management.
 
-CRITICAL CHANGE: After each generation, we DELETE the entire pipeline and reload it.
-This is slower (adds ~30s overhead) but guarantees memory cleanup.
+Key optimizations:
+1. Force codec CPU offloading for all GPUs <20GB
+2. Use lazy_load=True (official recommendation)
+3. Clear CUDA cache before/after every operation
+4. Aggressive garbage collection
 """
 
 import os
 import sys
 
 # CRITICAL: Set CUDA memory allocation config BEFORE importing torch
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,garbage_collection_threshold:0.9"
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,garbage_collection_threshold:0.6,max_split_size_mb:128"
 
 import uuid
 import logging
@@ -33,16 +36,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Try to import optional dependencies
-try:
-    from transformers import BitsAndBytesConfig
-    BITSANDBYTES_AVAILABLE = True
-    logger.info("✓ bitsandbytes available")
-except ImportError:
-    logger.warning("⚠️  bitsandbytes not available - quantization will be disabled")
-    BITSANDBYTES_AVAILABLE = False
-    BitsAndBytesConfig = None
-
 # Import HeartMuLa pipeline
 try:
     from heartlib import HeartMuLaGenPipeline
@@ -52,9 +45,9 @@ except ImportError as e:
     sys.exit(1)
 
 app = FastAPI(
-    title="HeartMuLa API (Aggressive Reload)",
-    version="2.0.0",
-    description="Music generation API with aggressive memory management"
+    title="HeartMuLa API (Ultra Memory Optimized)",
+    version="2.1.0",
+    description="Music generation API optimized for 16GB VRAM"
 )
 
 # Job storage
@@ -66,10 +59,10 @@ WORK_DIR = Path("/app")
 OUTPUT_DIR = WORK_DIR / "output"
 MODEL_DIR = WORK_DIR / "ckpt"
 
-# Global pipeline variable - NOW RELOADED AFTER EACH JOB
+# Global pipeline variable
 pipe = None
 load_error = None
-model_config = None  # Store config for reloading
+model_config = None
 
 
 class GenerateRequest(BaseModel):
@@ -94,99 +87,109 @@ class JobStatus(BaseModel):
     completed_at: Optional[str] = None
 
 
-def log_memory_usage():
+def log_memory_usage(context=""):
     """Log current memory usage."""
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1024**3
         reserved = torch.cuda.memory_reserved() / 1024**3
         total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        logger.info(f"GPU Memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {total:.2f}GB total")
+        free = total - allocated
+        logger.info(f"[{context}] GPU Memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved, {free:.2f}GB free of {total:.2f}GB total")
 
 
 def aggressive_cleanup():
     """
-    NUCLEAR OPTION: Delete everything and force cleanup.
-    This is called after EVERY job to ensure memory is completely freed.
+    Ultra-aggressive memory cleanup.
+    Called before model loading and after generation.
     """
-    global pipe
+    logger.info("🧹 Aggressive cleanup starting...")
+    log_memory_usage("Before cleanup")
     
-    logger.info("=" * 80)
-    logger.info("🧹 AGGRESSIVE CLEANUP: Deleting pipeline and freeing all memory")
-    logger.info("=" * 80)
+    # Force garbage collection multiple times
+    for i in range(3):
+        gc.collect()
     
-    # Log memory before cleanup
-    log_memory_usage()
-    
-    # Delete the pipeline
-    if pipe is not None:
-        try:
-            # Try to move models to CPU first (helps with cleanup)
-            if hasattr(pipe, '_mula') and pipe._mula is not None:
-                try:
-                    pipe._mula.cpu()
-                except:
-                    pass
-            if hasattr(pipe, '_codec') and pipe._codec is not None:
-                try:
-                    pipe._codec.cpu()
-                except:
-                    pass
-        except:
-            pass
-        
-        del pipe
-        pipe = None
-    
-    # Force garbage collection
-    gc.collect()
-    
-    # Clear CUDA cache multiple times (sometimes one isn't enough)
+    # Clear CUDA cache aggressively
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
         torch.cuda.empty_cache()  # Yes, twice
+        torch.cuda.reset_peak_memory_stats()
     
-    # Log memory after cleanup
-    log_memory_usage()
-    
-    logger.info("✓ Aggressive cleanup complete")
-    logger.info("=" * 80)
+    log_memory_usage("After cleanup")
+    logger.info("✓ Cleanup complete")
 
 
 def load_model():
     """
-    Load the HeartMuLa model.
-    This is called:
-    1. On startup
-    2. After EVERY job (to reload after deletion)
+    Load the HeartMuLa model with ultra memory optimization.
     """
     global pipe, model_config
     
-    logger.info("🔄 Loading HeartMuLa model...")
-    log_memory_usage()
+    logger.info("=" * 80)
+    logger.info("🔄 Loading HeartMuLa model with memory optimization...")
+    logger.info("=" * 80)
     
     if model_config is None:
         raise RuntimeError("Model config not initialized")
     
-    # Clear cache before loading
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    # Aggressive cleanup before loading
+    aggressive_cleanup()
     
-    # Load the pipeline with stored config
+    # Load the pipeline
+    logger.info(f"Loading with config: {model_config}")
     pipe = HeartMuLaGenPipeline.from_pretrained(
         str(MODEL_DIR),
         **model_config
     )
     
     logger.info("✓ Model loaded successfully")
-    log_memory_usage()
+    log_memory_usage("After model load")
+    logger.info("=" * 80)
+
+
+def unload_model():
+    """
+    Completely unload the model to free memory.
+    """
+    global pipe
+    
+    logger.info("=" * 80)
+    logger.info("🗑️  Unloading model...")
+    logger.info("=" * 80)
+    
+    if pipe is not None:
+        try:
+            # Move components to CPU first
+            if hasattr(pipe, '_mula') and pipe._mula is not None:
+                try:
+                    pipe._mula.cpu()
+                except Exception as e:
+                    logger.warning(f"Could not move mula to CPU: {e}")
+            
+            if hasattr(pipe, '_codec') and pipe._codec is not None:
+                try:
+                    pipe._codec.cpu()
+                except Exception as e:
+                    logger.warning(f"Could not move codec to CPU: {e}")
+        except Exception as e:
+            logger.warning(f"Error during component cleanup: {e}")
+        
+        # Delete the pipeline
+        del pipe
+        pipe = None
+    
+    # Aggressive cleanup
+    aggressive_cleanup()
+    
+    logger.info("✓ Model unloaded")
+    logger.info("=" * 80)
 
 
 def generate_music_sync(job_id: str, request: GenerateRequest):
     """
-    Synchronous music generation.
-    After generation, pipeline is DELETED and RELOADED.
+    Synchronous music generation with reload cycle.
+    Unloads model after each job to guarantee memory cleanup.
     """
     global pipe
     start_time = datetime.now()
@@ -199,11 +202,16 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         
         logger.info(f"[{job_id}] Starting generation...")
         logger.info(f"[{job_id}] Style: '{request.style_prompt}', Lyrics: {len(request.lyrics)} chars")
+        log_memory_usage(f"Job {job_id} start")
         
         # Ensure model is loaded
         if pipe is None:
             logger.info(f"[{job_id}] Model not loaded, loading now...")
             load_model()
+        
+        # Additional cleanup before generation
+        aggressive_cleanup()
+        log_memory_usage(f"Job {job_id} pre-gen")
         
         # Generate seed
         import random
@@ -218,24 +226,21 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             "tags": request.style_prompt,
         }
         
-        # Memory cleanup BEFORE generation
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-        
-        log_memory_usage()
-        
         # Generation
         logger.info(f"[{job_id}] Running inference...")
-        wav = pipe(
-            inputs,
-            max_audio_length_ms=request.max_audio_length_ms,
-            save_path=str(output_path),
-            topk=request.topk,
-            temperature=request.temperature,
-            cfg_scale=request.cfg_scale,
-        )
+        with torch.inference_mode():  # Use inference mode for memory efficiency
+            wav = pipe(
+                inputs,
+                max_audio_length_ms=request.max_audio_length_ms,
+                save_path=str(output_path),
+                topk=request.topk,
+                temperature=request.temperature,
+                cfg_scale=request.cfg_scale,
+            )
+        
+        # Immediate cleanup after generation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
         # Verify output
         if output_path.exists():
@@ -260,10 +265,10 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             else:
                 raise RuntimeError("Output file not created")
         
-        # CRITICAL: AGGRESSIVE CLEANUP AFTER EVERY JOB
-        aggressive_cleanup()
+        # CRITICAL: Unload model after EVERY job
+        unload_model()
         
-        # Reload model for next job
+        # Reload for next job
         logger.info(f"[{job_id}] Reloading model for next job...")
         load_model()
 
@@ -276,8 +281,8 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         jobs[job_id]["error"] = str(e)
         jobs[job_id]["completed_at"] = datetime.now().isoformat()
         
-        # Cleanup even on error
-        aggressive_cleanup()
+        # Cleanup on error
+        unload_model()
         
         # Try to reload for next job
         try:
@@ -292,78 +297,56 @@ async def startup_event():
     global pipe, model_config, load_error
     
     logger.info("=" * 80)
-    logger.info("HeartMuLa API Server Starting (Aggressive Reload Mode)")
+    logger.info("HeartMuLa API Server Starting (Ultra Memory Optimized)")
     logger.info("=" * 80)
     
     try:
-        # Configure model loading parameters
-        quantization_type = os.environ.get("HEARTMULA_QUANTIZATION", "none").lower()
-        bnb_config = None
-        
-        # Auto-detect for <20GB GPUs
+        # Get VRAM info
         if torch.cuda.is_available():
             vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            if vram_gb < 20 and quantization_type == "none":
-                logger.info(f"Auto-enabling 4-bit for {vram_gb:.1f}GB VRAM")
-                quantization_type = "4bit"
+            logger.info(f"Detected GPU with {vram_gb:.2f}GB VRAM")
+        else:
+            vram_gb = 0
+            logger.warning("No CUDA device detected")
         
-        # Setup quantization if needed
-        if quantization_type == "4bit" and BITSANDBYTES_AVAILABLE:
-            quant_type = "nf4"
-            if torch.cuda.is_available():
-                major, _ = torch.cuda.get_device_capability()
-                if major >= 10:
-                    quant_type = "fp4"
+        # CRITICAL: For 16GB GPUs, FORCE codec to CPU
+        # This is the key to making it work on 16GB
+        force_codec_cpu = vram_gb < 20  # Any GPU under 20GB
+        
+        if force_codec_cpu:
+            logger.warning(f"⚠️  GPU has {vram_gb:.1f}GB VRAM - FORCING codec to CPU")
+            logger.warning("⚠️  This will slow down generation but prevent OOM")
             
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type=quant_type,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.bfloat16
-            )
-            logger.info(f"✓ Configured {quant_type} quantization (not passing to from_pretrained)")
-        
-        # Determine device/dtype
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-        
-        # Determine offloading strategy
-        total_vram_gb = 0
-        if torch.cuda.is_available():
-            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        
-        use_lazy_load = total_vram_gb < 32
-        use_codec_cpu_offload = total_vram_gb < 14
-        
-        if use_codec_cpu_offload:
-            logger.warning(f"⚠️  Very limited VRAM ({total_vram_gb:.1f}GB) - offloading codec to CPU")
-        
-        # Store config for reloading
-        model_config = {
-            "device": device,
-            "dtype": dtype,
-            "version": "3B",
-            "lazy_load": use_lazy_load,
-        }
-        
-        if use_codec_cpu_offload:
-            model_config["device"] = {
-                "mula": torch.device("cuda"),
-                "codec": torch.device("cpu"),
+            model_config = {
+                "device": {
+                    "mula": torch.device("cuda"),
+                    "codec": torch.device("cpu"),  # Force codec to CPU
+                },
+                "dtype": {
+                    "mula": torch.bfloat16,
+                    "codec": torch.float32,  # CPU uses float32
+                },
+                "version": "3B",
+                "lazy_load": True,  # Official recommendation
             }
-            model_config["dtype"] = {
-                "mula": dtype,
-                "codec": torch.float32,
+        else:
+            # Large GPU - can keep everything on CUDA
+            model_config = {
+                "device": torch.device("cuda"),
+                "dtype": torch.bfloat16,
+                "version": "3B",
+                "lazy_load": True,
             }
         
-        # DO NOT add bnb_config to model_config - HeartMuLaGenPipeline doesn't support it
+        logger.info(f"Model config: {model_config}")
         
-        # Load model once
+        # Load model
         load_model()
         
         logger.info("=" * 80)
-        logger.info("✓ API Ready - Aggressive reload mode active")
-        logger.info("✓ Model will be reloaded after EVERY job to ensure memory cleanup")
+        logger.info("✓ API Ready - Ultra memory optimized mode")
+        logger.info("✓ Codec offloaded to CPU for memory efficiency")
+        logger.info("✓ Model will reload after EVERY job")
         logger.info("=" * 80)
         
     except Exception as e:
@@ -375,10 +358,10 @@ async def startup_event():
 @app.get("/")
 async def root():
     return {
-        "service": "HeartMuLa API (Aggressive Reload)",
-        "version": "2.0.0",
+        "service": "HeartMuLa API (Ultra Memory Optimized)",
+        "version": "2.1.0",
         "model_loaded": pipe is not None,
-        "mode": "aggressive_reload"
+        "mode": "codec_cpu_offload"
     }
 
 
@@ -395,8 +378,13 @@ async def health_check():
     
     if torch.cuda.is_available():
         try:
-            response["gpu_memory_allocated_gb"] = round(torch.cuda.memory_allocated() / 1024**3, 2)
-            response["gpu_memory_reserved_gb"] = round(torch.cuda.memory_reserved() / 1024**3, 2)
+            allocated = torch.cuda.memory_allocated() / 1024**3
+            reserved = torch.cuda.memory_reserved() / 1024**3
+            total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            response["gpu_memory_allocated_gb"] = round(allocated, 2)
+            response["gpu_memory_reserved_gb"] = round(reserved, 2)
+            response["gpu_memory_total_gb"] = round(total, 2)
+            response["gpu_memory_free_gb"] = round(total - allocated, 2)
         except:
             pass
     
