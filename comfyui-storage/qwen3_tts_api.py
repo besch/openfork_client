@@ -120,17 +120,20 @@ def load_custom_voice_model():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Loading model to device: {device}")
         
-        # FIXED: Load model without device_map to avoid meta tensor issues
-        # Load to CPU first, then move to target device
+        # FIXED: Explicitly load to CPU with device_map disabled, then move to CUDA
+        # This prevents meta tensor issues in the qwen_tts library's internal model loading
         custom_voice_model = Qwen3TTSModel.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
+            device_map=None,  # Explicitly disable device_map
+            low_cpu_mem_usage=False,  # Explicitly disable to prevent meta tensors
         )
         
         # Move model to target device after loading
         if device == "cuda":
+            logger.info("Moving model to CUDA...")
             custom_voice_model = custom_voice_model.to(device)
         
         logger.info("CustomVoice model loaded successfully")
