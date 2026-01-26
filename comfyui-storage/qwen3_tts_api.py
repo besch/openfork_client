@@ -160,15 +160,15 @@ def load_voice_design_model():
         except ImportError:
             attn_impl = "sdpa"
         
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
         
+        # FIXED: Use explicit device string in device_map
         voice_design_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
-            low_cpu_mem_usage=False,
-            device_map="auto" if device == "cuda" else None,
+            device_map=device,
         )
             
         logger.info("VoiceDesign model loaded successfully")
@@ -193,15 +193,15 @@ def load_base_model():
         except ImportError:
             attn_impl = "sdpa"
         
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
         
+        # FIXED: Use explicit device string in device_map
         base_model = Qwen3TTSModel.from_pretrained(
             model_name,
-            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
             attn_implementation=attn_impl,
             trust_remote_code=True,
-            low_cpu_mem_usage=False,
-            device_map="auto" if device == "cuda" else None,
+            device_map=device,
         )
 
         logger.info("Base model loaded successfully")
