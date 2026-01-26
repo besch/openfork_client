@@ -321,7 +321,7 @@ async def startup_event():
                 bnb_4bit_use_double_quant=True,
                 bnb_4bit_compute_dtype=torch.bfloat16
             )
-            logger.info(f"✓ Using {quant_type} quantization")
+            logger.info(f"✓ Configured {quant_type} quantization (not passing to from_pretrained)")
         
         # Determine device/dtype
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -356,8 +356,7 @@ async def startup_event():
                 "codec": torch.float32,
             }
         
-        if bnb_config:
-            model_config["bnb_config"] = bnb_config
+        # DO NOT add bnb_config to model_config - HeartMuLaGenPipeline doesn't support it
         
         # Load model once
         load_model()
