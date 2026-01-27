@@ -35,7 +35,7 @@ class LLMJobProcessor(BaseJobProcessor):
             
         system_prompt = inputs.get("system_prompt", "You are a helpful assistant.")
         temperature = inputs.get("temperature", 0.7)
-        max_tokens = inputs.get("max_tokens", 2000)
+        max_tokens = inputs.get("max_tokens", 16000)
 
         seed = inputs.get("seed")
         if seed is None:
@@ -122,7 +122,7 @@ class LLMJobProcessor(BaseJobProcessor):
                 ],
                 "stream": False,
                 "format": json_schema,
-                "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed},
+                "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed, "num_ctx": 32768},
             }
 
             logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
