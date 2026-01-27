@@ -50,6 +50,7 @@ class DockerDownloadManager:
         self._active_downloads: Set[str] = set()  # service_types currently downloading
         self._download_queue: list[str] = []  # service_types waiting to download
         self._download_status: Dict[str, DownloadStatus] = {}
+        self._cancellation_events: Dict[str, threading.Event] = {}
         self._shutdown = False
         
     def has_image(self, service_type: str) -> bool:
@@ -122,17 +123,29 @@ class DockerDownloadManager:
             # where multiple threads could pass the has_image check simultaneously
             if self.has_image(service_type):
                 logging.debug(f"Image for {service_type} already exists, skipping download")
+                # Clear failed status if image exists now
+                self._download_status.pop(service_type, None)
                 return False
+            
+            # Clear any previous FAILED status to allow retry
+            # This is important for resuming after a cancelled download
+            if service_type in self._download_status:
+                prev_status = self._download_status[service_type]
+                if prev_status == DownloadStatus.FAILED:
+                    logging.info(f"Clearing previous FAILED status for {service_type} to allow retry")
+                    del self._download_status[service_type]
             
             # Check if we can start a new download
             if len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS:
                 self._active_downloads.add(service_type)
-                self._download_status[service_type] = DownloadStatus.DOWNLOADING
+                # Create and store a cancellation event for this download
+                cancel_event = threading.Event()
+                self._cancellation_events[service_type] = cancel_event
                 
                 # Start download thread (daemon=True so it doesn't block exit)
                 thread = threading.Thread(
                     target=self._download_worker,
-                    args=(service_type,),
+                    args=(service_type, cancel_event),
                     daemon=True,
                     name=f"docker-download-{service_type}"
                 )
@@ -145,8 +158,35 @@ class DockerDownloadManager:
                 self._download_status[service_type] = DownloadStatus.PENDING
                 logging.info(f"Queued download for {service_type} (max concurrent reached)")
                 return True
+
+    def cancel_download(self, service_type: str):
+        """
+        Cancel an active or queued download.
+        
+        Args:
+            service_type: The service type to cancel download for
+        """
+        logging.info(f"Request to cancel download for: {service_type}")
+        with self._lock:
+            # 1. Remove from queue if it's there
+            if service_type in self._download_queue:
+                self._download_queue.remove(service_type)
+                self._download_status[service_type] = DownloadStatus.FAILED
+                logging.info(f"Removed {service_type} from download queue")
+                return
+
+            # 2. Signal active download if it's running
+            if service_type in self._cancellation_events:
+                self._cancellation_events[service_type].set()
+                logging.info(f"Signaled cancellation for active download: {service_type}")
+                # The worker will handle cleanup in finally block when it detects the signal
+            elif service_type in self._active_downloads:
+                # Edge case: download is active but no cancellation event (shouldn't happen)
+                logging.warning(f"Download for {service_type} is active but has no cancellation event")
+                self._active_downloads.discard(service_type)
+                self._download_status[service_type] = DownloadStatus.FAILED
     
-    def _download_worker(self, service_type: str):
+    def _download_worker(self, service_type: str, cancel_event: threading.Event):
         """Worker function that runs in a background thread to download an image.
         
         Reports download state to server for 3-tier cache priority routing:
@@ -158,6 +198,11 @@ class DockerDownloadManager:
         time and VRAM, not cache state. This is purely for routing efficiency.
         """
         try:
+            # Set status to DOWNLOADING immediately
+            with self._lock:
+                self._download_status[service_type] = DownloadStatus.DOWNLOADING
+                logging.info(f"Download worker started for {service_type}, status set to DOWNLOADING")
+            
             # Report download start to server (enables tier 1 routing)
             self._report_download_state(service_type, "start")
             
@@ -165,7 +210,7 @@ class DockerDownloadManager:
             logging.info(f"Background download starting for image: {image_name}")
             
             # Use the existing pull_image method which handles progress reporting
-            self.docker_manager.pull_image(image_name)
+            self.docker_manager.pull_image(image_name, shutdown_event=cancel_event, service_type=service_type)
             
             with self._lock:
                 self._download_status[service_type] = DownloadStatus.COMPLETED
@@ -226,15 +271,24 @@ class DockerDownloadManager:
         with self._lock:
             self._active_downloads.discard(service_type)
             
+            # Clean up cancellation event
+            if service_type in self._cancellation_events:
+                del self._cancellation_events[service_type]
+                logging.debug(f"Cleaned up cancellation event for {service_type}")
+            
             # Start next queued download if any
             if self._download_queue and not self._shutdown:
                 next_service = self._download_queue.pop(0)
                 self._active_downloads.add(next_service)
                 self._download_status[next_service] = DownloadStatus.DOWNLOADING
                 
+                # Create and store a cancellation event for this download
+                cancel_event = threading.Event()
+                self._cancellation_events[next_service] = cancel_event
+
                 thread = threading.Thread(
                     target=self._download_worker,
-                    args=(next_service,),
+                    args=(next_service, cancel_event),
                     daemon=True,
                     name=f"docker-download-{next_service}"
                 )
@@ -282,3 +336,6 @@ class DockerDownloadManager:
         with self._lock:
             self._shutdown = True
             self._download_queue.clear()
+            # Signal all active downloads to stop
+            for event in self._cancellation_events.values():
+                event.set()

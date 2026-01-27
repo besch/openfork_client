@@ -45,7 +45,7 @@ class DockerProdManager:
     def get_container_name(self, service_type: str) -> str:
         return f"dgn-client-comfyui-{service_type}"
 
-    def pull_image(self, image_name: str):
+    def pull_image(self, image_name: str, shutdown_event: threading.Event = None, service_type: str = None):
         if not self.client:
             logging.error(f"Cannot pull image '{image_name}': Docker client not initialized.")
             return
@@ -90,7 +90,7 @@ class DockerProdManager:
             
             try:
                 from .docker_progress_logger import stream_pull_with_progress
-                stream_pull_with_progress(self.client, image_name, throttle_interval=0.5)
+                stream_pull_with_progress(self.client, image_name, throttle_interval=0.5, shutdown_event=shutdown_event, service_type=service_type)
                 logging.info(f"Successfully pulled image: {image_name}")
             except docker.errors.APIError as e:
                 logging.error(f"Failed to pull image '{image_name}': {e}")

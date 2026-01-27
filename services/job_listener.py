@@ -379,11 +379,19 @@ class JobListener:
                                     break  # Exit the peeked jobs loop after processing one job
                                 else:
                                     # Image not available - start background download
-                                    if download_manager and not download_manager.is_downloading(service_type) and not download_manager.is_queued(service_type):
-                                        logging.info(f"Image for service '{service_type}' not available. Starting background download...")
-                                        download_manager.start_background_download(service_type)
-                                    elif download_manager and (download_manager.is_downloading(service_type) or download_manager.is_queued(service_type)):
-                                        logging.debug(f"Image for service '{service_type}' already downloading/queued.")
+                                    if download_manager:
+                                        status = download_manager.get_download_status(service_type)
+                                        is_downloading = download_manager.is_downloading(service_type)
+                                        is_queued = download_manager.is_queued(service_type)
+                                        
+                                        if not is_downloading and not is_queued:
+                                            if status and status.value == 'failed':
+                                                logging.info(f"Image for service '{service_type}' previously failed. Retrying download...")
+                                            else:
+                                                logging.info(f"Image for service '{service_type}' not available. Starting background download...")
+                                            download_manager.start_background_download(service_type)
+                                        else:
+                                            logging.debug(f"Image for service '{service_type}' already downloading/queued (status: {status.value if status else 'unknown'}).")
                                     # Continue to check next job
                         
                         # Handle pre-fetch suggestions when idle

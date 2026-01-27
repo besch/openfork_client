@@ -51,6 +51,11 @@ class DockerDevManager:
         logging.debug("set_docker_image_map called on dev manager (no-op).")
         pass
 
+    def pull_image(self, image_name: str, shutdown_event: threading.Event = None, service_type: str = None):
+        """No-op for dev manager as it builds images locally via docker-compose."""
+        logging.info(f"Dev mode pull_image called for {image_name} (no-op).")
+        pass
+
     def _get_compose_file(self, service_type: str) -> str:
         """Gets the docker-compose file path from the loaded service config."""
         service_info = self.service_config.get(service_type)

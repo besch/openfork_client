@@ -43,6 +43,11 @@ def listen_for_ipc_commands(client: DGNClient):
                 logging.error("Received AUTH_FAILED_PERMANENTLY command from main process.")
                 client.orchestrator_service.mark_auth_failed_permanently()
                 SHUTDOWN_EVENT.set()
+            elif cmd_type == "CANCEL_DOWNLOAD":
+                service_type = payload.get("service_type")
+                logging.info(f"Received CANCEL_DOWNLOAD command for {service_type}.")
+                if client.download_manager:
+                    client.download_manager.cancel_download(service_type)
             else:
                 logging.warning(f"Received unknown IPC command type: {cmd_type}")
 
@@ -80,7 +85,7 @@ def setup_client(args):
         refresh_token=args.refresh_token,
         dgn_api_key=args.dgn_api_key,
         accept_policy=args.accept_policy,
-        allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None
+        allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None,
     )
 
     client.load_config() # Fetch config from orchestrator
