@@ -36,6 +36,9 @@ app = FastAPI(title="Qwen3-TTS API", version="1.0.0")
 custom_voice_model = None
 voice_design_model = None
 base_model = None
+
+# Threading locks for model loading
+model_load_lock = threading.Lock()
 model_lock = asyncio.Lock()
 
 # Job storage
@@ -97,40 +100,47 @@ class JobStatus(BaseModel):
 def load_custom_voice_model():
     """Load the CustomVoice model."""
     global custom_voice_model
-    if custom_voice_model is None:
-        logger.info("Loading Qwen3-TTS CustomVoice model...")
-        from qwen_tts import Qwen3TTSModel
+    
+    # Use double-checked locking for thread safety
+    if custom_voice_model is not None:
+        return custom_voice_model
         
-        # Use environment variable to select model size (default 0.6B)
-        # 16GB VRAM service can set QWEN_MODEL_SIZE=1.7B
-        model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
-        model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-CustomVoice"
-        logger.info(f"Loading CustomVoice model: {model_name}")
-        
-        # Check if FlashAttention is available
-        try:
-            import flash_attn
-            attn_impl = "flash_attention_2"
-            logger.info("Using FlashAttention 2")
-        except ImportError:
-            attn_impl = "sdpa"
-            logger.info("FlashAttention not available, using SDPA")
-        
-        # Check CUDA availability
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        logger.info(f"Loading model to device: {device}")
-        
-        # FIXED: Use device_map with explicit device string, not "auto"
-        # The qwen_tts library requires device_map="cuda:0" or "cpu", not "auto"
-        custom_voice_model = Qwen3TTSModel.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            attn_implementation=attn_impl,
-            trust_remote_code=True,
-            device_map=device,  # Use explicit device string
-        )
-        
-        logger.info("CustomVoice model loaded successfully")
+    with model_load_lock:
+        if custom_voice_model is None:
+            logger.info("Loading Qwen3-TTS CustomVoice model...")
+            from qwen_tts import Qwen3TTSModel
+            
+            # Use environment variable to select model size (default 0.6B)
+            # 16GB VRAM service can set QWEN_MODEL_SIZE=1.7B
+            model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
+            model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-CustomVoice"
+            logger.info(f"Loading CustomVoice model: {model_name}")
+            
+            # Check if FlashAttention is available
+            try:
+                import flash_attn
+                attn_impl = "flash_attention_2"
+                logger.info("Using FlashAttention 2")
+            except ImportError:
+                attn_impl = "sdpa"
+                logger.info("FlashAttention not available, using SDPA")
+            
+            # Check CUDA availability
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading model to device: {device}")
+            
+            # FIXED: Use device_map with explicit device string, not "auto"
+            # ADDED: low_cpu_mem_usage=False to prevent "meta tensor" errors with accelerate
+            custom_voice_model = Qwen3TTSModel.from_pretrained(
+                model_name,
+                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                attn_implementation=attn_impl,
+                trust_remote_code=True,
+                device_map=device,
+                low_cpu_mem_usage=False,
+            )
+            
+            logger.info("CustomVoice model loaded successfully")
     return custom_voice_model
 
 @app.on_event("startup")
@@ -143,68 +153,82 @@ async def startup_event():
 def load_voice_design_model():
     """Load the VoiceDesign model."""
     global voice_design_model
-    if voice_design_model is None:
-        logger.info("Loading Qwen3-TTS VoiceDesign model...")
-        from qwen_tts import Qwen3TTSModel
+    
+    if voice_design_model is not None:
+        return voice_design_model
         
-        # VoiceDesign only available for 1.7B
-        model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
-        if model_size != "1.7B":
-            raise ValueError("VoiceDesign model is only available for 1.7B variant")
-        
-        model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-VoiceDesign"
-        
-        try:
-            import flash_attn
-            attn_impl = "flash_attention_2"
-        except ImportError:
-            attn_impl = "sdpa"
-        
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        
-        # FIXED: Use explicit device string in device_map
-        voice_design_model = Qwen3TTSModel.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            attn_implementation=attn_impl,
-            trust_remote_code=True,
-            device_map=device,
-        )
+    with model_load_lock:
+        if voice_design_model is None:
+            logger.info("Loading Qwen3-TTS VoiceDesign model...")
+            from qwen_tts import Qwen3TTSModel
             
-        logger.info("VoiceDesign model loaded successfully")
+            # VoiceDesign only available for 1.7B
+            model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
+            if model_size != "1.7B":
+                raise ValueError("VoiceDesign model is only available for 1.7B variant")
+            
+            model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-VoiceDesign"
+            
+            try:
+                import flash_attn
+                attn_impl = "flash_attention_2"
+            except ImportError:
+                attn_impl = "sdpa"
+            
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            
+            # FIXED: Use explicit device string in device_map
+            # ADDED: low_cpu_mem_usage=False
+            voice_design_model = Qwen3TTSModel.from_pretrained(
+                model_name,
+                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                attn_implementation=attn_impl,
+                trust_remote_code=True,
+                device_map=device,
+                low_cpu_mem_usage=False,
+            )
+                
+            logger.info("VoiceDesign model loaded successfully")
     return voice_design_model
 
 
 def load_base_model():
     """Load the Base model for voice cloning."""
     global base_model
-    if base_model is None:
-        logger.info("Loading Qwen3-TTS Base model for voice cloning...")
-        from qwen_tts import Qwen3TTSModel
+    
+    if base_model is not None:
+        return base_model
         
-        # Use environment variable to select model size (default 0.6B)
-        model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
-        model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-Base"
-        logger.info(f"Loading Base model: {model_name}")
-        
-        try:
-            import flash_attn
-            attn_impl = "flash_attention_2"
-        except ImportError:
-            attn_impl = "sdpa"
-        
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        
-        # FIXED: Use explicit device string in device_map
-        base_model = Qwen3TTSModel.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-            attn_implementation=attn_impl,
-            trust_remote_code=True,
-            device_map=device,
-        )
+    with model_load_lock:
+        if base_model is None:
+            logger.info("Loading Qwen3-TTS Base model for voice cloning...")
+            from qwen_tts import Qwen3TTSModel
+            
+            # Use environment variable to select model size (default 0.6B)
+            model_size = os.getenv("QWEN_MODEL_SIZE", "0.6B")
+            model_name = f"Qwen/Qwen3-TTS-12Hz-{model_size}-Base"
+            logger.info(f"Loading Base model: {model_name}")
+            
+            try:
+                import flash_attn
+                attn_impl = "flash_attention_2"
+            except ImportError:
+                attn_impl = "sdpa"
+            
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            
+            # FIXED: Use explicit device string in device_map
+            # ADDED: low_cpu_mem_usage=False
+            base_model = Qwen3TTSModel.from_pretrained(
+                model_name,
+                dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+                attn_implementation=attn_impl,
+                trust_remote_code=True,
+                device_map=device,
+                low_cpu_mem_usage=False,
+            )
 
-        logger.info("Base model loaded successfully")
+            logger.info("Base model loaded successfully")
     return base_model
 
 
@@ -272,27 +296,28 @@ async def process_tts_job(job_id: str, request: TTSRequest):
     try:
         jobs[job_id]["status"] = "processing"
         
-        if request.mode == "custom_voice":
-            output_path = await asyncio.get_event_loop().run_in_executor(
-                executor,
-                generate_custom_voice,
-                request.text,
-                request.language,
-                request.speaker,
-                request.instruct
-            )
-        elif request.mode == "voice_design":
-            if not request.voice_design_instruct:
-                raise ValueError("voice_design_instruct is required for voice_design mode")
-            output_path = await asyncio.get_event_loop().run_in_executor(
-                executor,
-                generate_voice_design,
-                request.text,
-                request.language,
-                request.voice_design_instruct
-            )
-        else:
-            raise ValueError(f"Unknown mode: {request.mode}")
+        async with model_lock:
+            if request.mode == "custom_voice":
+                output_path = await asyncio.get_event_loop().run_in_executor(
+                    executor,
+                    generate_custom_voice,
+                    request.text,
+                    request.language,
+                    request.speaker,
+                    request.instruct
+                )
+            elif request.mode == "voice_design":
+                if not request.voice_design_instruct:
+                    raise ValueError("voice_design_instruct is required for voice_design mode")
+                output_path = await asyncio.get_event_loop().run_in_executor(
+                    executor,
+                    generate_voice_design,
+                    request.text,
+                    request.language,
+                    request.voice_design_instruct
+                )
+            else:
+                raise ValueError(f"Unknown mode: {request.mode}")
         
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["output_path"] = output_path
@@ -311,15 +336,16 @@ async def process_voice_clone_job(job_id: str, text: str, language: str,
     try:
         jobs[job_id]["status"] = "processing"
         
-        output_path = await asyncio.get_event_loop().run_in_executor(
-            executor,
-            generate_voice_clone,
-            text,
-            language,
-            ref_audio_path,
-            ref_text,
-            x_vector_only
-        )
+        async with model_lock:
+            output_path = await asyncio.get_event_loop().run_in_executor(
+                executor,
+                generate_voice_clone,
+                text,
+                language,
+                ref_audio_path,
+                ref_text,
+                x_vector_only
+            )
         
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["output_path"] = output_path
