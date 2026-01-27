@@ -434,24 +434,25 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
             self._fail_job("No voice clone reference audio provided")
             return
 
-        # Download the voice reference audio
-        clone_path = self.orchestrator_service.download_asset_by_url(
-            voice_clone_urls[0], self.input_dir
-        )
-        if not clone_path:
-            self._fail_job(f"Failed to download voice clone from {voice_clone_urls[0]}")
-            return
-
-        if not self._wait_for_api():
-            self._fail_job(f"Qwen3-TTS API did not become available for job {self.job_id}")
-            return
-
-        remote_job_id = self._submit_voice_clone(text, language, clone_path, ref_text)
-        if not remote_job_id:
-            self._fail_job(f"Failed to submit voice clone for job {self.job_id}")
-            return
-
+        clone_path = None
         try:
+            # Download the voice reference audio
+            clone_path = self.orchestrator_service.download_asset_by_url(
+                voice_clone_urls[0], self.input_dir
+            )
+            if not clone_path:
+                self._fail_job(f"Failed to download voice clone from {voice_clone_urls[0]}")
+                return
+
+            if not self._wait_for_api():
+                self._fail_job(f"Qwen3-TTS API did not become available for job {self.job_id}")
+                return
+
+            remote_job_id = self._submit_voice_clone(text, language, clone_path, ref_text)
+            if not remote_job_id:
+                self._fail_job(f"Failed to submit voice clone for job {self.job_id}")
+                return
+
             result = self._poll_for_completion(remote_job_id)
 
             if result.get("status") != "completed":
@@ -494,6 +495,13 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
         finally:
             self._cleanup_remote_job(remote_job_id)
             self._cleanup_local_file()
+            # Clean up the reference audio file downloaded to host
+            if clone_path and os.path.exists(clone_path):
+                try:
+                    os.remove(clone_path)
+                    logging.info(f"Cleaned up local reference audio: {clone_path}")
+                except OSError:
+                    pass
 
     def _wait_for_api(self, timeout: int = 60) -> bool:
         """Wait for the Qwen3-TTS API to become available."""
@@ -512,23 +520,41 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
 
     def _submit_voice_clone(self, text: str, language: str, ref_audio_path: str, 
                             ref_text: Optional[str] = None) -> Optional[str]:
-        """Submit a voice clone request."""
+        """Submit a voice clone request by uploading the reference audio."""
         try:
-            payload = {
+            # Prepare the form data
+            data = {
                 "text": text,
                 "language": language,
-                "ref_audio_path": ref_audio_path,
-                "ref_text": ref_text,
-                "x_vector_only": ref_text is None,
+                "x_vector_only": "true" if not ref_text else "false",
             }
+            if ref_text:
+                data["ref_text"] = ref_text
 
-            response = requests.post(f"{self.api_base_url}/generate/voice-clone-path", json=payload, timeout=30)
+            # Prepare the file for upload
+            with open(ref_audio_path, "rb") as f:
+                files = {
+                    "ref_audio": (os.path.basename(ref_audio_path), f, "audio/mpeg" if ref_audio_path.endswith(".mp3") else "audio/wav")
+                }
+
+                logging.info(f"Submitting voice clone with file upload: {ref_audio_path}")
+                response = requests.post(
+                    f"{self.api_base_url}/generate/voice-clone", 
+                    data=data, 
+                    files=files, 
+                    timeout=30
+                )
 
             if response.status_code == 200:
-                return response.json().get("job_id")
-            return None
+                data = response.json()
+                remote_job_id = data.get("job_id")
+                logging.info(f"Voice clone job submitted: {remote_job_id}")
+                return remote_job_id
+            else:
+                logging.error(f"Failed to submit voice clone: {response.status_code} - {response.text}")
+                return None
 
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
             logging.error(f"Failed to submit voice clone request: {e}")
             return None
 
