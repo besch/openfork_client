@@ -77,13 +77,27 @@ class DockerPullProgressLogger:
         total_bytes = sum(layer["total"] for layer in self.layers.values())
         current_bytes = sum(layer["current"] for layer in self.layers.values())
         
-        # If we have no bytes info (only 'Already exists' layers), 
-        # count by number of layers
-        if total_bytes == 0:
-            completed_layers = sum(1 for layer in self.layers.values() if layer.get("complete"))
-            return int((completed_layers / len(self.layers)) * 100) if self.layers else 0
+        # If we have any bytes info (at least one layer has a known total size > 0),
+        # use byte-based progress.
+        if total_bytes > 0:
+            return int((current_bytes / total_bytes) * 100)
             
-        return int((current_bytes / total_bytes) * 100)
+        # Fallback to counting layers if NO layers have reported size yet
+        # (happens with 'Already exists' layers or initial 'Pulling' state)
+        completed_layers = sum(1 for layer in self.layers.values() if layer.get("complete"))
+        
+        # SENSITIVE: If we have layers that are NOT complete and haven't reported size yet,
+        # don't cap at 100% based on layers alone. This avoids the 100% spike at startup.
+        if completed_layers < len(self.layers):
+            return int((completed_layers / len(self.layers)) * 100)
+        elif len(self.layers) > 0:
+            # If all known layers are complete but total_bytes is 0,
+            # it might be that Docker hasn't reported ALL layers yet.
+            # We return 99% instead of 100% to avoid premature completion UI spikes
+            # unless we're actually done (handled by emit_complete).
+            return 99 if any(l.get("status") in ("Downloading", "Extracting") for l in self.layers.values()) else 100
+            
+        return 0
     
     def get_current_status(self) -> str:
         """Get the most relevant current status."""
