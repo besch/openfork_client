@@ -52,8 +52,11 @@ class DGNClient:
         self.available_vram = get_available_vram()
         self.compatible_services = set()
         
+        # Shared event to wake up the job listener immediately when a download completes
+        self.job_wakeup_event = threading.Event()
+        
         # Initialize download manager for Docker image pre-fetching (only when not headless)
-        self.download_manager = DockerDownloadManager(docker_manager) if docker_manager else None
+        self.download_manager = DockerDownloadManager(docker_manager, wakeup_event=self.job_wakeup_event) if docker_manager else None
 
         if self.accept_policy == "mine" and not self.orchestrator_service.use_api_key:
             user_id = self.orchestrator_service._get_user_id_from_token()

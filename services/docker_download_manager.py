@@ -34,7 +34,7 @@ class DockerDownloadManager:
     
     MAX_CONCURRENT_DOWNLOADS = 1
     
-    def __init__(self, docker_manager, orchestrator_service=None, provider_id=None):
+    def __init__(self, docker_manager, orchestrator_service=None, provider_id=None, wakeup_event=None):
         """
         Initialize the download manager.
         
@@ -42,10 +42,12 @@ class DockerDownloadManager:
             docker_manager: The DockerProdManager instance for Docker operations
             orchestrator_service: Optional OrchestratorService for reporting cached images
             provider_id: Optional provider ID for server-side tracking
+            wakeup_event: Optional threading.Event to set when a download completes
         """
         self.docker_manager = docker_manager
         self.orchestrator_service = orchestrator_service
         self.provider_id = provider_id
+        self.wakeup_event = wakeup_event
         self._lock = threading.Lock()
         self._active_downloads: Set[str] = set()  # service_types currently downloading
         self._download_queue: list[str] = []  # service_types waiting to download
@@ -271,6 +273,12 @@ class DockerDownloadManager:
         with self._lock:
             self._active_downloads.discard(service_type)
             
+            # Signal wakeup event if provided - this tells the job listener 
+            # to check for new processable jobs immediately
+            if self.wakeup_event:
+                logging.info("Signaling job_wakeup_event after download completion.")
+                self.wakeup_event.set()
+
             # Clean up cancellation event
             if service_type in self._cancellation_events:
                 del self._cancellation_events[service_type]

@@ -98,6 +98,10 @@ class JobListener:
     def listen_for_jobs(self) -> None:
         """Listen for jobs from the orchestrator (for dedicated providers)."""
         while not self.shutdown_event.is_set():
+            # Clear wakeup event at start of loop
+            if hasattr(self.client, 'job_wakeup_event'):
+                self.client.job_wakeup_event.clear()
+
             job = None
             try:
                 # Acquire the processing lock BEFORE fetching a job to ensure
@@ -148,7 +152,16 @@ class JobListener:
             if not (job and job.get('id')):
                     # Use faster polling frequency for headless cloud instances
                     poll_interval = TimeoutConfig.HEADLESS_JOB_POLL_INTERVAL if HEADLESS_MODE else TimeoutConfig.JOB_POLL_INTERVAL
-                    self.shutdown_event.wait(poll_interval)
+                    
+                    # Wait for poll interval, but interrupt if shutdown OR if a download completes
+                    # We check in 0.5s increments to handle both events responsively
+                    import time
+                    wait_until = time.time() + poll_interval
+                    while time.time() < wait_until and not self.shutdown_event.is_set():
+                        if hasattr(self.client, 'job_wakeup_event') and self.client.job_wakeup_event.is_set():
+                            logging.info("Waking up job listener due to download completion.")
+                            break
+                        self.shutdown_event.wait(0.5)
         logging.info("Shutdown event received. Exiting job listening loop.")
 
     def _get_service_type_for_job(self, job: Dict[str, Any]) -> Optional[str]:
@@ -214,6 +227,10 @@ class JobListener:
         
         try:
             while not self.shutdown_event.is_set():
+                # Clear wakeup event at start of loop
+                if hasattr(self.client, 'job_wakeup_event'):
+                    self.client.job_wakeup_event.clear()
+
                 logging.info("Top of auto-mode loop iteration.")
                 job = None
                 found_processable_job = False
@@ -375,6 +392,11 @@ class JobListener:
                                             self.client.active_service_type = None
                                             self.orchestrator_service.update_provider_status(self.provider_id, 'available')
                                             logging.info("Provider status set to available. Waiting for next job...")
+                                    else:
+                                        # Reservation failed - job may have been taken by another provider
+                                        error_msg = job.get('error') if isinstance(job, dict) else "Unknown"
+                                        logging.warning(f"Failed to reserve job {peeked_job.get('id')}. Server response: {error_msg}. Moving to next available job.")
+                                        continue  # Try next peeked job
                                     
                                     break  # Exit the peeked jobs loop after processing one job
                                 else:
@@ -400,10 +422,24 @@ class JobListener:
                         if not found_processable_job:
                             self._handle_prefetch_suggestions(download_manager)
                         
-                        if not found_processable_job and available_jobs:
-                            logging.info("All available jobs require images that are still downloading. Waiting...")
-                        elif not found_processable_job:
-                            logging.info("No new jobs found in this check.")
+                        if not found_processable_job:
+                            if available_jobs:
+                                # Count how many were actually ready vs downloading
+                                ready_count = 0
+                                downloading_count = 0
+                                for pj in available_jobs:
+                                    st = self._get_service_type_for_job(pj)
+                                    if download_manager and download_manager.has_image(st):
+                                        ready_count += 1
+                                    else:
+                                        downloading_count += 1
+                                        
+                                if ready_count > 0:
+                                    logging.info(f"{ready_count} jobs were ready but reservation failed. Provider may be busy in DB or jobs were taken. Waiting...")
+                                else:
+                                    logging.info(f"All {len(available_jobs)} available jobs require images that are still downloading. Waiting...")
+                            else:
+                                logging.info("No new jobs found in this check.")
 
                             
                 except TokenExpiredError:
@@ -418,6 +454,14 @@ class JobListener:
                     break  # Exit the loop, Electron will restart the client
                 except Exception as e:
                     logging.error(f"An error occurred in auto job listening loop: {e}", exc_info=True)
+                    
+                    # Ensure provider status is reset to available on error
+                    # This prevents the provider from being stuck in 'busy' state in the DB
+                    try:
+                        self.orchestrator_service.update_provider_status(self.provider_id, 'available')
+                    except Exception as status_err:
+                        logging.error(f"Failed to reset provider status after error: {status_err}")
+
                     if job and job.get('id'):
                         logging.error(f"Failure occurred with active job {job.get('id')}. Cleaning up...")
                         # Emit JOB_FAILED event
@@ -439,7 +483,15 @@ class JobListener:
                 if not found_processable_job:
                     # Use faster polling frequency for headless cloud instances
                     poll_interval = TimeoutConfig.HEADLESS_JOB_POLL_INTERVAL if HEADLESS_MODE else TimeoutConfig.JOB_POLL_INTERVAL
-                    self.shutdown_event.wait(poll_interval)
+                    
+                    # Wait for poll interval, but interrupt if shutdown OR if a download completes
+                    import time
+                    wait_until = time.time() + poll_interval
+                    while time.time() < wait_until and not self.shutdown_event.is_set():
+                        if hasattr(self.client, 'job_wakeup_event') and self.client.job_wakeup_event.is_set():
+                            logging.info("Waking up auto job listener due to download completion.")
+                            break
+                        self.shutdown_event.wait(0.5)
         finally:
             logging.info("Shutdown event received or loop exited. Exiting auto job listening loop.")
             
