@@ -20,7 +20,7 @@ from services.processors.output_handlers import VideoOutputHandler
 from services.orchestrator_service import TokenExpiredError
 from utils.comfyui_workflow_utils import materialize_start_image
 from utils.media_utils import get_video_duration
-from config import SUPABASE_URL
+from config import SUPABASE_URL, THUMBNAIL_WIDTH
 
 
 class TurboDiffusionBaseProcessor(BaseJobProcessor, VideoOutputHandler):
@@ -124,7 +124,7 @@ class TurboDiffusionBaseProcessor(BaseJobProcessor, VideoOutputHandler):
             thumbnail_storage_path = None
             from utils.media_utils import generate_thumbnail
             thumbnail_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
-            if generate_thumbnail(local_path, thumbnail_path, width=100):
+            if generate_thumbnail(local_path, thumbnail_path, width=THUMBNAIL_WIDTH):
                 thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_path, self.job_id)
                 if os.path.exists(thumbnail_path):
                     os.remove(thumbnail_path)

@@ -5,6 +5,7 @@ from typing import Union
 import os
 import json
 from services.docker_utils import get_subprocess_hidden_kwargs
+from config import THUMBNAIL_WIDTH
 
 def get_audio_duration(file_path: str) -> float:
     """Gets the duration of an audio file using ffprobe."""
@@ -44,15 +45,15 @@ def get_video_duration(file_path: str) -> float:
         logging.error(f"Error getting video duration for {file_path}: {e}")
         return 0.0
 
-def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = 100) -> bool:
-    """Generates a thumbnail for a video file with specified width (default 100px)."""
+def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = THUMBNAIL_WIDTH) -> bool:
+    """Generates a thumbnail for a video file with specified width (default 512px)."""
     command = [
         "ffmpeg",
         "-y",
         "-ss", "00:00:01.000",
         "-i", video_path,
         "-vframes", "1",
-        "-vf", f"scale={width}:-1",  # Scale to specified width, maintain aspect ratio
+        "-vf", f"scale={width}:-2:flags=lanczos",  # Scale to specified width, maintain aspect ratio, ensure even height, use high quality scaler
         "-nostdin",
         "-v", "error",
         thumbnail_path

@@ -6,6 +6,7 @@ import os
 import logging
 
 from services.docker_manager import docker_manager
+from config import THUMBNAIL_WIDTH
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
 from utils.comfyui_workflow_utils import inject_video_into_upscaler_workflow
@@ -123,7 +124,7 @@ class VideoUpscalerJobProcessor(ComfyUIProcessor, VideoOutputHandler):
                 thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
                 thumbnail_storage_path = None
 
-                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=100):
+                if generate_thumbnail(temp_host_path, thumbnail_local_path, width=THUMBNAIL_WIDTH):
                     thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(
                         thumbnail_local_path, self.job_id
                     )

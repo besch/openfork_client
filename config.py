@@ -20,6 +20,7 @@ os.chdir(ROOT_DIR)
 
 CACHE_DIR = os.path.join(ROOT_DIR, '.cache')
 DEV_MODE = False
+THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "512"))
 
 # Headless mode detection - when running inside a cloud container (RunPod/Vast.ai),
 # Docker operations should be skipped as ComfyUI is already running in the same container.
