@@ -1,4 +1,4 @@
-# LTX-2 19B Docker Image (8GB VRAM Optimized) - GGUF VERSION
+# LTX-2 19B Docker Image (8GB VRAM Optimized) - GGUF VERSION - FIXED
 # Uses GGUF quantized models that STAY COMPRESSED in RAM
 # Critical for 8GB VRAM + 32GB RAM systems
 # Based on Kijai/LTXV2_comfy GGUF recommendations
@@ -15,6 +15,8 @@ ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
 ENV PYTHONUNBUFFERED=1
+# FIXED: Add PYTHONPATH to ensure custom nodes are discoverable
+ENV PYTHONPATH=/opt/ComfyUI:/opt/ComfyUI/custom_nodes:$PYTHONPATH
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,6 +41,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Upgrade pip
 RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
+ENV PATH=/usr/local/bin:$PATH
+
 # Install PyTorch with CUDA 12.8
 RUN python -m pip install --no-cache-dir \
     torch==2.7.1+cu128 \
@@ -46,7 +50,7 @@ RUN python -m pip install --no-cache-dir \
     torchaudio \
     --extra-index-url https://download.pytorch.org/whl/cu128
 
-# Install core dependencies
+# Install core dependencies including huggingface-hub with CLI
 RUN python -m pip install --no-cache-dir \
     "huggingface-hub[cli]==0.26.2" \
     einops==0.8.0 \
@@ -66,8 +70,13 @@ RUN python -m pip install --no-cache-dir \
     psutil==6.1.0 \
     sentencepiece==0.2.0 \
     protobuf==5.28.3 \
-    comfy-kitchen>=0.1.0 \
-    gguf
+    comfy-kitchen>=0.1.0
+
+# FIXED: Install GGUF package FIRST with verification
+RUN python -m pip install --no-cache-dir --upgrade gguf && \
+    python -c "import gguf; print('✓ GGUF package installed successfully')"
+
+
 
 # ComfyUI dependencies
 RUN python -m pip install --no-cache-dir \
@@ -76,11 +85,12 @@ RUN python -m pip install --no-cache-dir \
     spandrel==0.4.0 \
     soundfile==0.12.1 \
     matplotlib==3.9.2 \
-    gitpython==3.1.43
+    gitpython==3.1.43 \
+    huggingface_hub
 
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI
+# Clone ComfyUI - use latest
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout master \
@@ -111,11 +121,17 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom
 # ============================================================================
 # CRITICAL: Install ComfyUI-GGUF for GGUF model loading
 # This enables UnetLoaderGGUF and DualCLIPLoaderGGUF nodes
+# FIXED: Proper installation order and verification
 # ============================================================================
+
+# Clone ComfyUI-GGUF
 RUN git clone https://github.com/city96/ComfyUI-GGUF.git custom_nodes/ComfyUI-GGUF \
-    && rm -rf custom_nodes/ComfyUI-GGUF/.git \
-    && cd custom_nodes/ComfyUI-GGUF \
-    && python -m pip install --no-cache-dir -r requirements.txt || true
+    && rm -rf custom_nodes/ComfyUI-GGUF/.git
+
+# FIXED: Install GGUF dependencies from the custom node directory
+RUN cd custom_nodes/ComfyUI-GGUF && \
+    python -m pip install --no-cache-dir --upgrade gguf && \
+    if [ -f requirements.txt ]; then python -m pip install --no-cache-dir -r requirements.txt; fi
 
 # Create model directories
 RUN mkdir -p \
@@ -138,11 +154,7 @@ RUN mkdir -p \
 # Download LTX-2 Distilled GGUF Q4 model (~12GB - stays compressed in RAM!)
 # Source: Kijai/LTXV2_comfy
 RUN echo "Downloading LTX-2 Distilled GGUF Q4 model..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
-    --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf" \
-    --token ${HF_TOKEN} && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/kijai_models/diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf models/unet/ && \
     rm -rf /tmp/kijai_models && \
     echo "✓ LTX-2 GGUF Q4 downloaded (~12GB)" && \
@@ -151,11 +163,7 @@ RUN echo "Downloading LTX-2 Distilled GGUF Q4 model..." && \
 # Download VAE (~5GB) - Still needs safetensors version
 # Source: Kijai/LTXV2_comfy
 RUN echo "Downloading VAE..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
-    --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "VAE/LTX2_video_vae_bf16.safetensors" \
-    --token ${HF_TOKEN} && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['VAE/LTX2_video_vae_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/kijai_models/VAE/LTX2_video_vae_bf16.safetensors models/vae/ && \
     rm -rf /tmp/kijai_models && \
     echo "✓ VAE downloaded (5GB)" && \
@@ -165,11 +173,7 @@ RUN echo "Downloading VAE..." && \
 # Source: Comfy-Org/ltx-2 (official ComfyUI models)
 # This should expand to ~18GB in RAM vs ~26GB for FP8
 RUN echo "Downloading Gemma-3 12B FP4 Mixed text encoder from Comfy-Org..." && \
-    huggingface-cli download Comfy-Org/ltx-2 \
-    --repo-type model \
-    --local-dir /tmp/comfy_models \
-    --include "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" \
-    --token ${HF_TOKEN} && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Comfy-Org/ltx-2', repo_type='model', local_dir='/tmp/comfy_models', allow_patterns=['split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/comfy_models/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors models/clip/ && \
     rm -rf /tmp/comfy_models && \
     echo "✓ Gemma-3 FP4 Mixed downloaded (9.4GB)" && \
@@ -178,11 +182,7 @@ RUN echo "Downloading Gemma-3 12B FP4 Mixed text encoder from Comfy-Org..." && \
 # Download LTX-2 FP4 projections (required for DualCLIPLoader)
 # Source: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
 RUN echo "Downloading LTX-2 projections..." && \
-    huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-    --repo-type model \
-    --local-dir /tmp/fp8_models \
-    --include "ltx-2-19b-dev-fp4_projections_only.safetensors" \
-    --token ${HF_TOKEN} && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn', repo_type='model', local_dir='/tmp/fp8_models', allow_patterns=['ltx-2-19b-dev-fp4_projections_only.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/fp8_models/ltx-2-19b-dev-fp4_projections_only.safetensors models/clip/ && \
     rm -rf /tmp/fp8_models && \
     echo "✓ Projections downloaded" && \
@@ -190,11 +190,7 @@ RUN echo "Downloading LTX-2 projections..." && \
 
 # Download distilled LoRA (optional, for even faster generation)
 RUN echo "Downloading distilled LoRA..." && \
-    huggingface-cli download Lightricks/LTX-2 \
-    --repo-type model \
-    --local-dir /tmp/lightricks_models \
-    --include "ltx-2-19b-distilled-lora-384.safetensors" \
-    --token ${HF_TOKEN} && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Lightricks/LTX-2', repo_type='model', local_dir='/tmp/lightricks_models', allow_patterns=['ltx-2-19b-distilled-lora-384.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/lightricks_models/ltx-2-19b-distilled-lora-384.safetensors \
        models/loras/ && \
     rm -rf /tmp/lightricks_models && \
@@ -218,6 +214,4 @@ ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ENV CUDA_MODULE_LOADING=LAZY
 
 # Entry point with 8GB VRAM optimization flags
-# --lowvram: Aggressive model offloading to CPU RAM
-# --reserve-vram 1: Reserve 1GB for system overhead
 CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--lowvram", "--reserve-vram", "1"]

@@ -1474,6 +1474,7 @@ def get_zimage_dimensions(aspect_ratio: str) -> tuple[int, int]:
 def inject_prompt_into_zimage_workflow(
     workflow_api_data: Dict, 
     prompt: str, 
+    negative_prompt: str = "",
     aspect_ratio: str = "1:1",
     advanced_settings: Optional[Dict] = None,
     seed: Optional[int] = None
@@ -1505,6 +1506,10 @@ def inject_prompt_into_zimage_workflow(
                 break
         else:
             logging.warning("Could not find CLIPTextEncode node in Z-Image workflow")
+
+    # Inject negative prompt (Node 42)
+    if '42' in api_graph and 'inputs' in api_graph['42'] and 'text' in api_graph['42']['inputs']:
+        api_graph['42']['inputs']['text'] = negative_prompt
     
     # Inject dimensions into EmptySD3LatentImage (Node 41)
     width, height = get_zimage_dimensions(aspect_ratio)
@@ -1573,7 +1578,8 @@ def inject_image_into_zimage_controlnet_workflow(
     control_mode: str = "pose",
     strength: float = 1.0,
     aspect_ratio: str = "1:1",
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    negative_prompt: str = ""
 ):
     """
     Loads a Z-Image ControlNet ComfyUI API-formatted workflow, injects prompt, image, and control settings.
@@ -1601,6 +1607,10 @@ def inject_image_into_zimage_controlnet_workflow(
                 break
         else:
             logging.warning("Could not find CLIPTextEncode node in Z-Image ControlNet workflow")
+
+    # Inject negative prompt (Node 42)
+    if '42' in api_graph and 'inputs' in api_graph['42'] and 'text' in api_graph['42']['inputs']:
+        api_graph['42']['inputs']['text'] = negative_prompt
     
     # Node 58 is LoadImage - inject reference image filename
     if '58' in api_graph and 'inputs' in api_graph['58']:
@@ -1647,7 +1657,8 @@ def inject_image_into_zimage_inpaint_workflow(
     image_filename: str,
     mask_filename: str,
     denoise_strength: float = 0.8,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    negative_prompt: str = ""
 ):
     """
     Loads a Z-Image Inpaint ComfyUI API-formatted workflow, injects prompt, image, and mask.
