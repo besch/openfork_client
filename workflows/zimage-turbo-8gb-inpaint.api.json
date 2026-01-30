@@ -1,0 +1,120 @@
+{
+  "prompt": {
+    "39": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen_3_4b.safetensors",
+        "type": "lumina2",
+        "device": "default"
+      }
+    },
+    "40": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "ae.safetensors"
+      }
+    },
+    "42": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "",
+        "clip": ["39", 0]
+      }
+    },
+    "43": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["44", 0],
+        "vae": ["40", 0]
+      }
+    },
+    "44": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 0,
+        "control_after_generate": "randomize",
+        "steps": 9,
+        "cfg": 1,
+        "sampler_name": "res_multistep",
+        "scheduler": "simple",
+        "denoise": 0.8,
+        "model": ["47", 0],
+        "positive": ["45", 0],
+        "negative": ["42", 0],
+        "latent_image": ["61", 0]
+      }
+    },
+    "45": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "A beautiful landscape with mountains",
+        "clip": ["39", 0]
+      }
+    },
+    "46": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "z_image_turbo_bf16.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    "47": {
+      "class_type": "ModelSamplingAuraFlow",
+      "inputs": {
+        "shift": 3,
+        "model": ["46", 0]
+      }
+    },
+    "58": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "input_image.png"
+      }
+    },
+    "59": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "input_mask.png"
+      }
+    },
+    "60": {
+      "class_type": "ImageToMask",
+      "inputs": {
+        "image": ["63", 0],
+        "channel": "red"
+      }
+    },
+    "61": {
+      "class_type": "VAEEncodeForInpaint",
+      "inputs": {
+        "pixels": ["62", 0],
+        "vae": ["40", 0],
+        "mask": ["60", 0],
+        "grow_mask_by": 6
+      }
+    },
+    "62": {
+      "class_type": "ImageScaleToMaxDimension",
+      "inputs": {
+        "image": ["58", 0],
+        "upscale_method": "lanczos",
+        "largest_size": 1024
+      }
+    },
+    "63": {
+      "class_type": "ImageScaleToMaxDimension",
+      "inputs": {
+        "image": ["59", 0],
+        "upscale_method": "nearest-exact",
+        "largest_size": 1024
+      }
+    },
+    "9": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "zimage_inpaint",
+        "images": ["43", 0]
+      }
+    }
+  }
+}

@@ -50,9 +50,6 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && python -m pip install --no-cache-dir -r custom_nodes/was-node-suite-comfyui/requirements.txt \
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Copy user configurations
-COPY --chown=user:user ./storage/ComfyUI/user /opt/ComfyUI/user
-
 # Create model directories and download models (combined)
 RUN mkdir -p models/text_encoders models/diffusion_models models/vae models/model_patches \
     && wget -q -O models/text_encoders/qwen_3_4b.safetensors \

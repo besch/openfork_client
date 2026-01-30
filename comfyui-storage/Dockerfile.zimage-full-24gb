@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1.4
+# Z-Image Full (BF16 / 24GB) Docker Image
+# Optimized for 24GB VRAM using full BF16 weights
+
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Python packages
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg ninja uv "huggingface_hub[cli]"
+
+WORKDIR /opt/ComfyUI
+
+# Clone repos and install custom nodes
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Create model directories and download models
+# Z-Image BF16 for 24GB tier
+RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
+    && wget -q -O models/text_encoders/qwen_3_4b.safetensors \
+        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
+    && wget -q -O models/vae/ae.safetensors \
+        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" \
+    # Download Full BF16 model
+    && huggingface-cli download Comfy-Org/z_image_full \
+        --include "*bf16.safetensors" --local-dir models/unet --local-dir-use-symlinks False
+
+WORKDIR /opt/ComfyUI
+# Check usage of SageAttention or other runtime needs
+CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]

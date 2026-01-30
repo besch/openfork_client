@@ -23,9 +23,10 @@
       }
     },
     "42": {
-      "class_type": "ConditioningZeroOut",
+      "class_type": "CLIPTextEncode",
       "inputs": {
-        "conditioning": ["45", 0]
+        "text": "",
+        "clip": ["39", 0]
       }
     },
     "43": {
@@ -40,9 +41,9 @@
       "inputs": {
         "seed": 0,
         "control_after_generate": "randomize",
-        "steps": 9,
-        "cfg": 1,
-        "sampler_name": "res_multistep",
+        "steps": 30,
+        "cfg": 4.0,
+        "sampler_name": "euler",
         "scheduler": "simple",
         "denoise": 1,
         "model": ["47", 0],
@@ -61,8 +62,8 @@
     "46": {
       "class_type": "UNETLoader",
       "inputs": {
-        "unet_name": "z_image_turbo_bf16.safetensors",
-        "weight_dtype": "default"
+        "unet_name": "Z-Image-FP8.safetensors",
+        "weight_dtype": "fp8_e4m3fn"
       }
     },
     "47": {
@@ -75,7 +76,7 @@
     "9": {
       "class_type": "SaveImage",
       "inputs": {
-        "filename_prefix": "zimage",
+        "filename_prefix": "zimage_full_16gb",
         "images": ["43", 0]
       }
     }

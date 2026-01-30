@@ -15,9 +15,10 @@
       }
     },
     "42": {
-      "class_type": "ConditioningZeroOut",
+      "class_type": "CLIPTextEncode",
       "inputs": {
-        "conditioning": ["45", 0]
+        "text": "",
+        "clip": ["39", 0]
       }
     },
     "43": {
@@ -32,12 +33,12 @@
       "inputs": {
         "seed": 0,
         "control_after_generate": "randomize",
-        "steps": 9,
-        "cfg": 1,
-        "sampler_name": "res_multistep",
+        "steps": 30,
+        "cfg": 4.0,
+        "sampler_name": "euler",
         "scheduler": "simple",
-        "denoise": 0.8,
-        "model": ["47", 0],
+        "denoise": 1,
+        "model": ["60", 0],
         "positive": ["45", 0],
         "negative": ["42", 0],
         "latent_image": ["61", 0]
@@ -51,10 +52,9 @@
       }
     },
     "46": {
-      "class_type": "UNETLoader",
+      "class_type": "UnetLoaderGGUF",
       "inputs": {
-        "unet_name": "z_image_turbo_bf16.safetensors",
-        "weight_dtype": "default"
+        "unet_name": "Z-Image-Q4_K_M.gguf"
       }
     },
     "47": {
@@ -70,26 +70,22 @@
         "image": "input_image.png"
       }
     },
-    "59": {
-      "class_type": "LoadImage",
-      "inputs": {
-        "image": "input_mask.png"
-      }
-    },
     "60": {
-      "class_type": "ImageToMask",
+      "class_type": "ZImageFunControlnet",
       "inputs": {
-        "image": ["63", 0],
-        "channel": "red"
+        "model": ["47", 0],
+        "model_patch": ["64", 0],
+        "vae": ["40", 0],
+        "image": ["62", 0],
+        "control_mode": "pose",
+        "strength": 1.0
       }
     },
     "61": {
-      "class_type": "VAEEncodeForInpaint",
+      "class_type": "VAEEncode",
       "inputs": {
         "pixels": ["62", 0],
-        "vae": ["40", 0],
-        "mask": ["60", 0],
-        "grow_mask_by": 6
+        "vae": ["40", 0]
       }
     },
     "62": {
@@ -100,18 +96,16 @@
         "largest_size": 1024
       }
     },
-    "63": {
-      "class_type": "ImageScaleToMaxDimension",
+    "64": {
+      "class_type": "ModelPatchLoader",
       "inputs": {
-        "image": ["59", 0],
-        "upscale_method": "nearest-exact",
-        "largest_size": 1024
+        "name": "Z-Image-Turbo-Fun-Controlnet-Union.safetensors"
       }
     },
     "9": {
       "class_type": "SaveImage",
       "inputs": {
-        "filename_prefix": "zimage_inpaint",
+        "filename_prefix": "zimage_full_controlnet",
         "images": ["43", 0]
       }
     }
