@@ -61,6 +61,9 @@ from services.processors import (
     Qwen3TTSJobProcessor,
     Qwen3VoiceDesignJobProcessor,
     Qwen3VoiceCloneJobProcessor,
+    QwenImageEditTurboProcessor,
+    QwenImageInpaintTurboProcessor,
+    QwenImageT2ITurboProcessor,
 )
 
 __all__ = [
@@ -102,6 +105,9 @@ __all__ = [
     "Qwen3TTSJobProcessor",
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
+    "QwenImageEditTurboProcessor",
+    "QwenImageInpaintTurboProcessor",
+    "QwenImageT2ITurboProcessor",
 ]
 
 

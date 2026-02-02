@@ -36,6 +36,7 @@ from .audio.qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor,
 from .image.text_to_image import TextToImageJobProcessor
 from .image.zimage import ZImageTextToImageProcessor, ZImageControlNetProcessor, ZImageInpaintProcessor
 from .image.qwen import QwenImageEditProcessor, QwenImageInpaintProcessor, QwenImageT2IProcessor
+from .image.qwen_turbo import QwenImageEditTurboProcessor, QwenImageInpaintTurboProcessor, QwenImageT2ITurboProcessor
 
 # Text processors
 from .llm.llm import LLMJobProcessor
@@ -79,6 +80,9 @@ __all__ = [
     "Qwen3TTSJobProcessor",
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
+    "QwenImageEditTurboProcessor",
+    "QwenImageInpaintTurboProcessor",
+    "QwenImageT2ITurboProcessor",
 ]
 
 

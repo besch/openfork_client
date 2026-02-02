@@ -1,0 +1,126 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "type": "qwen_image",
+        "device": "cpu"
+      }
+    },
+    "2": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "qwen_image_vae.safetensors"
+      }
+    },
+    "3": {
+      "class_type": "UnetLoaderGGUF",
+      "inputs": {
+        "unet_name": "qwen-image-edit-2511-Q4_K_M.gguf"
+      }
+    },
+    "4": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "input_image.png"
+      }
+    },
+    "5": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "input_mask.png"
+      }
+    },
+    "6": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "A photo of a person",
+        "clip": ["1", 0]
+      }
+    },
+    "7": {
+      "class_type": "ConditioningZeroOut",
+      "inputs": {
+        "conditioning": ["6", 0]
+      }
+    },
+    "8": {
+      "class_type": "ImageScaleToMaxDimension",
+      "inputs": {
+        "image": ["4", 0],
+        "upscale_method": "lanczos",
+        "largest_size": 1024
+      }
+    },
+    "9": {
+      "class_type": "ImageScaleToMaxDimension",
+      "inputs": {
+        "image": ["5", 0],
+        "upscale_method": "nearest-exact",
+        "largest_size": 1024
+      }
+    },
+    "10": {
+      "class_type": "ImageToMask",
+      "inputs": {
+        "image": ["9", 0],
+        "channel": "red"
+      }
+    },
+    "11": {
+      "class_type": "VAEEncodeForInpaint",
+      "inputs": {
+        "pixels": ["8", 0],
+        "vae": ["2", 0],
+        "mask": ["10", 0],
+        "grow_mask_by": 6
+      }
+    },
+    "12": {
+      "class_type": "LoraLoaderModelOnly",
+      "inputs": {
+        "lora_name": "Wuli-Qwen-Image-2512-Turbo-LoRA-2steps-V1.0-bf16.safetensors",
+        "strength_model": 1.0,
+        "model": ["3", 0]
+      }
+    },
+    "13": {
+      "class_type": "ModelSamplingAuraFlow",
+      "inputs": {
+        "shift": 3,
+        "model": ["12", 0]
+      }
+    },
+    "14": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 0,
+        "control_after_generate": "randomize",
+        "steps": 2,
+        "cfg": 1,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 0.8,
+        "model": ["13", 0],
+        "positive": ["6", 0],
+        "negative": ["7", 0],
+        "latent_image": ["11", 0]
+      }
+    },
+    "15": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["14", 0],
+        "vae": ["2", 0]
+      }
+    },
+    "16": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "qwen_inpaint_turbo",
+        "images": ["15", 0]
+      }
+    }
+  }
+}

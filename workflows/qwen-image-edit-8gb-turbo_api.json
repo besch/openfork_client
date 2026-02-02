@@ -1,0 +1,103 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "type": "qwen_image",
+        "device": "cpu"
+      }
+    },
+    "2": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "qwen_image_vae.safetensors"
+      }
+    },
+    "3": {
+      "class_type": "UnetLoaderGGUF",
+      "inputs": {
+        "unet_name": "qwen-image-edit-2511-Q4_K_M.gguf"
+      }
+    },
+    "4": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "input_image.png"
+      }
+    },
+    "5": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "A photo of a person",
+        "clip": ["1", 0]
+      }
+    },
+    "6": {
+      "class_type": "ConditioningZeroOut",
+      "inputs": {
+        "conditioning": ["5", 0]
+      }
+    },
+    "7": {
+      "class_type": "ImageScaleToMaxDimension",
+      "inputs": {
+        "image": ["4", 0],
+        "upscale_method": "lanczos",
+        "largest_size": 1024
+      }
+    },
+    "8": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": ["7", 0],
+        "vae": ["2", 0]
+      }
+    },
+    "9": {
+      "class_type": "LoraLoaderModelOnly",
+      "inputs": {
+        "lora_name": "Wuli-Qwen-Image-2512-Turbo-LoRA-2steps-V1.0-bf16.safetensors",
+        "strength_model": 1.0,
+        "model": ["3", 0]
+      }
+    },
+    "10": {
+      "class_type": "ModelSamplingAuraFlow",
+      "inputs": {
+        "shift": 3,
+        "model": ["9", 0]
+      }
+    },
+    "11": {
+      "class_type": "KSampler",
+      "inputs": {
+        "seed": 0,
+        "control_after_generate": "randomize",
+        "steps": 2,
+        "cfg": 1,
+        "sampler_name": "euler",
+        "scheduler": "simple",
+        "denoise": 0.7,
+        "model": ["10", 0],
+        "positive": ["5", 0],
+        "negative": ["6", 0],
+        "latent_image": ["8", 0]
+      }
+    },
+    "12": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["11", 0],
+        "vae": ["2", 0]
+      }
+    },
+    "13": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "qwen_edit_turbo",
+        "images": ["12", 0]
+      }
+    }
+  }
+}
