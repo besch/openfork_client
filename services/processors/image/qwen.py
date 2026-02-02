@@ -30,6 +30,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
 
         inputs = self.job.get("inputs", {})
         denoise_strength = inputs.get("denoise_strength", 0.7)
+        aspect_ratio = inputs.get("aspect_ratio", "1:1")
 
         # Get source image - either from base64 or storage path
         source_image_filename = self._get_source_image()
@@ -46,6 +47,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             self.positive_prompt,
             source_image_filename,
             denoise_strength,
+            aspect_ratio=aspect_ratio,
             seed=seed,
         )
         payload = {"prompt": wf_ready}
@@ -126,16 +128,22 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy image to container: {e}")
 
-    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, seed=None):
+    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, aspect_ratio="1:1", seed=None):
         """Inject prompt and image into the editing workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
+        # Calculate dimensions
+        width, height = self._get_dimensions(aspect_ratio)
+        max_dim = max(width, height)
+
         # Update prompt in CLIPTextEncode node
         for node_id, node in wf.items():
             if node.get("class_type") == "CLIPTextEncode":
                 node["inputs"]["text"] = prompt
             elif node.get("class_type") == "LoadImage":
                 node["inputs"]["image"] = image_filename
+            elif node.get("class_type") == "ImageScaleToMaxDimension":
+                node["inputs"]["largest_size"] = max_dim
             elif node.get("class_type") == "KSampler":
                 node["inputs"]["denoise"] = denoise_strength
                 if seed is not None:
@@ -144,6 +152,20 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
                     node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
         
         return wf
+
+    def _get_dimensions(self, aspect_ratio):
+        """Calculate width and height based on aspect ratio."""
+        ratio_map = {
+            "1:1": (1024, 1024),
+            "16:9": (1360, 768),
+            "9:16": (768, 1360),
+            "4:3": (1152, 864),
+            "3:4": (864, 1152),
+            "3:2": (1216, 832),
+            "2:3": (832, 1216),
+            "21:9": (1536, 640),
+        }
+        return ratio_map.get(aspect_ratio, (1024, 1024))
 
 
 class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
@@ -160,6 +182,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
 
         inputs = self.job.get("inputs", {})
         denoise_strength = inputs.get("denoise_strength", 0.8)
+        aspect_ratio = inputs.get("aspect_ratio", "1:1")
 
         # Get source image
         source_image_filename = self._get_source_image()
@@ -182,6 +205,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             source_image_filename,
             mask_filename,
             denoise_strength,
+            aspect_ratio=aspect_ratio,
             seed=seed,
         )
         payload = {"prompt": wf_ready}
@@ -296,10 +320,14 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy images to container: {e}")
 
-    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength, seed=None):
+    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength, aspect_ratio="1:1", seed=None):
         """Inject prompt and images into the inpainting workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
+        # Calculate dimensions
+        width, height = self._get_dimensions(aspect_ratio)
+        max_dim = max(width, height)
+
         image_node_count = 0
         for node_id, node in wf.items():
             if node.get("class_type") == "CLIPTextEncode":
@@ -311,6 +339,8 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
                 else:
                     node["inputs"]["image"] = mask_filename
                 image_node_count += 1
+            elif node.get("class_type") == "ImageScaleToMaxDimension":
+                node["inputs"]["largest_size"] = max_dim
             elif node.get("class_type") == "KSampler":
                 node["inputs"]["denoise"] = denoise_strength
                 if seed is not None:
@@ -319,6 +349,20 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
                     node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
         
         return wf
+
+    def _get_dimensions(self, aspect_ratio):
+        """Calculate width and height based on aspect ratio."""
+        ratio_map = {
+            "1:1": (1024, 1024),
+            "16:9": (1360, 768),
+            "9:16": (768, 1360),
+            "4:3": (1152, 864),
+            "3:4": (864, 1152),
+            "3:2": (1216, 832),
+            "2:3": (832, 1216),
+            "21:9": (1536, 640),
+        }
+        return ratio_map.get(aspect_ratio, (1024, 1024))
 
 
 class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
@@ -375,6 +419,7 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
             "3:4": (864, 1152),
             "3:2": (1216, 832),
             "2:3": (832, 1216),
+            "21:9": (1536, 640),
         }
         return ratio_map.get(aspect_ratio, (1024, 1024))
 

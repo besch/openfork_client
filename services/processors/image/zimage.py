@@ -51,7 +51,8 @@ class ZImageTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
         wf_ready = inject_prompt_into_zimage_workflow(
             workflow_data, 
             self.positive_prompt, 
-            aspect_ratio,
+            negative_prompt=inputs.get("negative_prompt", ""),
+            aspect_ratio=aspect_ratio,
             advanced_settings=advanced_settings if advanced_settings else None,
             seed=inputs.get("seed")
         )
@@ -185,6 +186,7 @@ class ZImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
 
         inputs = self.job.get("inputs", {})
         denoise_strength = inputs.get("denoise_strength", 0.8)
+        aspect_ratio = inputs.get("aspect_ratio", "1:1")
 
         # Get source image - either from base64 or storage path
         source_image_filename = None
@@ -283,6 +285,7 @@ class ZImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             source_image_filename,
             mask_filename,
             denoise_strength=denoise_strength,
+            aspect_ratio=aspect_ratio,
             seed=inputs.get("seed")
         )
         payload = {"prompt": wf_ready}

@@ -1646,7 +1646,12 @@ def inject_image_into_zimage_controlnet_workflow(
                 node["inputs"]["seed"] = new_seed
                 break
     
-    logging.info(f"Z-Image ControlNet configured - Mode: {control_mode}, Strength: {strength}, Image: {image_filename}, Seed: {new_seed}")
+    # Inject dimensions (Node 62 is ImageScaleToMaxDimension)
+    width, height = get_zimage_dimensions(aspect_ratio)
+    if '62' in api_graph and 'inputs' in api_graph['62']:
+        api_graph['62']['inputs']['largest_size'] = max(width, height)
+    
+    logging.info(f"Z-Image ControlNet configured - Mode: {control_mode}, Strength: {strength}, Image: {image_filename}, Size: {width}x{height}, Seed: {new_seed}")
     
     return api_graph
 
@@ -1657,6 +1662,7 @@ def inject_image_into_zimage_inpaint_workflow(
     image_filename: str,
     mask_filename: str,
     denoise_strength: float = 0.8,
+    aspect_ratio: str = "1:1",
     seed: Optional[int] = None,
     negative_prompt: str = ""
 ):
@@ -1717,8 +1723,15 @@ def inject_image_into_zimage_inpaint_workflow(
                 node["inputs"]["seed"] = new_seed
                 node["inputs"]["denoise"] = denoise_strength
                 break
+
+    # Inject dimensions (Nodes 62 and 63 are ImageScaleToMaxDimension)
+    width, height = get_zimage_dimensions(aspect_ratio)
+    if '62' in api_graph and 'inputs' in api_graph['62']:
+        api_graph['62']['inputs']['largest_size'] = max(width, height)
+    if '63' in api_graph and 'inputs' in api_graph['63']:
+        api_graph['63']['inputs']['largest_size'] = max(width, height)
     
-    logging.info(f"Z-Image Inpaint configured - Image: {image_filename}, Mask: {mask_filename}, Denoise: {denoise_strength}, Seed: {new_seed}")
+    logging.info(f"Z-Image Inpaint configured - Image: {image_filename}, Mask: {mask_filename}, Size: {width}x{height}, Denoise: {denoise_strength}, Seed: {new_seed}")
     
     return api_graph
 
