@@ -36,6 +36,7 @@ services/processors/base.py
 services/processors/comfyui_processor.py
 services/processors/image/__init__.py
 services/processors/image/qwen.py
+services/processors/image/qwen_turbo.py
 services/processors/image/text_to_image.py
 services/processors/image/zimage.py
 services/processors/llm/__init__.py
@@ -77,10 +78,13 @@ workflows/ltx2-image-to-video-8gb.api.json
 workflows/ltx2-text-to-video-16gb.api.json
 workflows/ltx2-text-to-video-24gb.api.json
 workflows/ltx2-text-to-video-8gb.api.json
+workflows/qwen-image-edit-8gb-turbo_api.json
 workflows/qwen-image-edit-8gb.api.json
 workflows/qwen-image-edit.api.json
+workflows/qwen-image-inpaint-8gb-turbo_api.json
 workflows/qwen-image-inpaint-8gb.api.json
 workflows/qwen-image-inpaint.api.json
+workflows/qwen-image-t2i-8gb-turbo_api.json
 workflows/qwen-image-t2i-8gb.api.json
 workflows/qwen-image-t2i.api.json
 workflows/qwen.api.json
