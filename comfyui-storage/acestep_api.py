@@ -33,10 +33,10 @@ logger = logging.getLogger("AceStepAPI")
 # Import ACE-Step pipeline
 # In the Dockerfile, this script is placed in /app/acestep_repo/
 try:
-    from acestep.acestep_v15_pipeline import AceStepV15Pipeline
-    logger.info("✓ ACE-Step pipeline imported successfully")
+    from acestep.acestep_v15_pipeline import AceStepPipeline
+    logger.info("ACE-Step pipeline imported successfully")
 except ImportError as e:
-    logger.error(f"✗ Failed to import ACE-Step pipeline: {e}")
+    logger.error(f"Failed to import ACE-Step pipeline: {e}")
     sys.exit(1)
 
 app = FastAPI(
@@ -98,17 +98,16 @@ def load_model():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # Initialize pipeline
-        # ACE-Step 1.5.0+ supports offload_to_cpu in pipeline init or generate
-        pipe = AceStepV15Pipeline(
+        pipe = AceStepPipeline(
             config_path="acestep-v15-turbo",
             lm_model_path="acestep-5Hz-lm-1.7B",
             device=device,
             offload_to_cpu=CPU_OFFLOAD
         )
-        logger.info(f"✓ ACE-Step model loaded successfully on {device}")
+        logger.info(f"ACE-Step model loaded successfully on {device}")
         load_error = None
     except Exception as e:
-        logger.error(f"✗ Failed to load ACE-Step model: {e}")
+        logger.error(f"Failed to load ACE-Step model: {e}")
         traceback.print_exc()
         load_error = str(e)
         raise e
@@ -155,7 +154,7 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         logger.info(f"[{job_id}] ✓ Completed in {duration.total_seconds():.1f}s")
         
     except Exception as e:
-        logger.error(f"[{job_id}] ✗ Failed: {e}")
+        logger.error(f"[{job_id}] Failed: {e}")
         traceback.print_exc()
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
