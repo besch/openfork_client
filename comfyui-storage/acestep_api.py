@@ -136,23 +136,28 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         actual_seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
         
         # ACE-Step handler call
-        # duration_ms should be length of the audio
+        # audio_duration should be length of the audio in seconds
         result = handler.generate_music(
             captions=request.style_prompt,
             lyrics=request.lyrics,
             seed=actual_seed,
-            duration_seconds=request.max_audio_length_ms / 1000.0,
+            audio_duration=request.max_audio_length_ms / 1000.0,
             inference_steps=8, # Default for turbo
+            guidance_scale=request.cfg_scale,
         )
         
         if result.get("is_error"):
             raise Exception(result.get("error", "Unknown error in generation"))
             
-        wav = result.get("audio")
-        sample_rate = result.get("sample_rate", 32000)
+        audios = result.get("audios", [])
+        if not audios:
+            raise Exception("No audio generated")
+            
+        wav = audios[0].get("tensor")
+        sample_rate = audios[0].get("sample_rate", 32000)
         
         if wav is None:
-            raise Exception("No audio generated")
+            raise Exception("No audio tensor found in result")
             
         # Save output
         if isinstance(wav, torch.Tensor):
