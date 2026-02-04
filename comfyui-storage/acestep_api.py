@@ -30,13 +30,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AceStepAPI")
 
-# Import ACE-Step pipeline
-# In the Dockerfile, this script is placed in /app/acestep_repo/
+# Import ACE-Step handler
 try:
-    from acestep.acestep_v15_pipeline import AceStepPipeline
-    logger.info("ACE-Step pipeline imported successfully")
+    from acestep.handler import AceStepHandler
+    logger.info("ACE-Step handler imported successfully")
 except ImportError as e:
-    logger.error(f"Failed to import ACE-Step pipeline: {e}")
+    logger.error(f"Failed to import ACE-Step handler: {e}")
     sys.exit(1)
 
 app = FastAPI(
@@ -56,8 +55,8 @@ CHECKPOINT_DIR = WORK_DIR / "checkpoints"
 # Environment variable for CPU offloading (set in 8GB Dockerfile)
 CPU_OFFLOAD = os.getenv("ACESTEP_CPU_OFFLOAD", "false").lower() == "true"
 
-# Global pipeline variable
-pipe = None
+# Global handler variable
+handler = None
 load_error = None
 
 class GenerateRequest(BaseModel):
@@ -88,23 +87,31 @@ def cleanup():
         torch.cuda.synchronize()
 
 def load_model():
-    """Load the ACE-Step model."""
-    global pipe, load_error
+    """Load the ACE-Step model using the handler."""
+    global handler, load_error
     try:
-        logger.info(f"🔄 Loading ACE-Step model (CPU Offload: {CPU_OFFLOAD})...")
+        logger.info(f"Loading ACE-Step model (CPU Offload: {CPU_OFFLOAD})...")
         cleanup()
         
+        if handler is None:
+            handler = AceStepHandler()
+            
         # Determine device
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Initialize pipeline
-        pipe = AceStepPipeline(
+        # Initialize service
+        status, success = handler.initialize_service(
+            project_root=str(WORK_DIR),
             config_path="acestep-v15-turbo",
-            lm_model_path="acestep-5Hz-lm-1.7B",
             device=device,
-            offload_to_cpu=CPU_OFFLOAD
+            offload_to_cpu=CPU_OFFLOAD,
+            offload_dit_to_cpu=CPU_OFFLOAD
         )
-        logger.info(f"ACE-Step model loaded successfully on {device}")
+        
+        if not success:
+            raise Exception(f"Handler initialization failed: {status}")
+            
+        logger.info(f"ACE-Step model initialized: {status[:100]}...")
         load_error = None
     except Exception as e:
         logger.error(f"Failed to load ACE-Step model: {e}")
@@ -122,36 +129,47 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         
         logger.info(f"[{job_id}] Starting generation: Style='{request.style_prompt}', Lyrics={len(request.lyrics)} chars")
         
-        if pipe is None:
+        if handler is None:
             load_model()
             
         import random
         actual_seed = request.seed if request.seed is not None else random.randint(0, 2**32 - 1)
         
-        # ACE-Step pipeline call
-        # Based on their Gradio interface / CLI logic
-        wav = pipe.generate(
+        # ACE-Step handler call
+        # duration_ms should be length of the audio
+        result = handler.generate_music(
+            captions=request.style_prompt,
             lyrics=request.lyrics,
-            tags=request.style_prompt,
-            negative_tags="",
             seed=actual_seed,
-            duration_ms=request.max_audio_length_ms,
-            temperature=request.temperature,
-            top_k=request.topk,
-            top_p=0.95,
-            cfg_scale=request.cfg_scale,
+            duration_seconds=request.max_audio_length_ms / 1000.0,
+            inference_steps=8, # Default for turbo
         )
         
+        if result.get("is_error"):
+            raise Exception(result.get("error", "Unknown error in generation"))
+            
+        wav = result.get("audio")
+        sample_rate = result.get("sample_rate", 32000)
+        
+        if wav is None:
+            raise Exception("No audio generated")
+            
         # Save output
-        # wav is usually a torch.Tensor (1, length) or similar
-        torchaudio.save(str(output_path), wav.cpu(), 32000)
+        if isinstance(wav, torch.Tensor):
+            if wav.ndim == 1:
+                wav = wav.unsqueeze(0)
+            torchaudio.save(str(output_path), wav.cpu(), sample_rate)
+        else:
+            # Fallback if it's already a path or list
+            logger.warning(f"Unexpected audio type: {type(wav)}")
+            raise Exception("Generated audio is not a tensor")
         
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["output_path"] = str(output_path)
         jobs[job_id]["completed_at"] = datetime.now().isoformat()
         
         duration = datetime.now() - start_time
-        logger.info(f"[{job_id}] ✓ Completed in {duration.total_seconds():.1f}s")
+        logger.info(f"[{job_id}] Completed in {duration.total_seconds():.1f}s")
         
     except Exception as e:
         logger.error(f"[{job_id}] Failed: {e}")
@@ -172,8 +190,8 @@ async def startup_event():
 @app.get("/health")
 async def health_check():
     return {
-        "status": "healthy" if pipe is not None else "initializing",
-        "model_loaded": pipe is not None,
+        "status": "healthy" if handler is not None else "initializing",
+        "model_loaded": handler is not None,
         "load_error": load_error,
         "cuda_available": torch.cuda.is_available()
     }
