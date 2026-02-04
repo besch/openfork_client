@@ -5,6 +5,7 @@ comfyui-storage/diffrhythm_api.py
 comfyui-storage/heartmula_api.py
 comfyui-storage/qwen3_tts_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
+comfyui-storage/temp_handler.py
 comfyui-storage/turbodiffusion_api_server.py
 config.py
 dgn_client.py
