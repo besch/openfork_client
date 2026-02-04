@@ -29,6 +29,7 @@ from .audio.foley import FoleyJobProcessor
 from .audio.vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
 from .audio.diffrhythm_cli import DiffRhythmCLIJobProcessor
 from .audio.heartmula_cli import HeartMuLaCLIJobProcessor
+from .audio.acestep_cli import AceStepCLIJobProcessor
 from .audio.chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProcessor
 from .audio.qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
 
@@ -77,6 +78,7 @@ __all__ = [
     "SVIShotImageToVideoJobProcessor",
     "SVIFilmImageToVideoJobProcessor",
     "HeartMuLaCLIJobProcessor",
+    "AceStepCLIJobProcessor",
     "Qwen3TTSJobProcessor",
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
