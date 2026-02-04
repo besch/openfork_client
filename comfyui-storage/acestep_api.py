@@ -86,18 +86,51 @@ def cleanup():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
+# Patch handler to slice latents for VRAM efficiency if needed
+def patch_handler(handler_instance):
+    import types
+    # Use the existing logger instead of importing loguru
+    global logger
+    
+    # Patch service_generate to slice latents if CFG returned 2x batch size
+    # We use the class method to avoid double self passing if the instance method is already bound
+    original_service_generate = handler_instance.__class__.service_generate
+    
+    def patched_service_generate(self, *args, **kwargs):
+        # Call the original class method with self
+        outputs = original_service_generate(self, *args, **kwargs)
+        if "target_latents" in outputs:
+            lats = outputs["target_latents"]
+            # Detect if it's CFG overhead (batch 2 for 1 requested)
+            # Find captions in args or kwargs
+            captions = kwargs.get("captions")
+            if captions is None and len(args) > 0:
+                captions = args[0]
+            
+            if captions is not None and isinstance(captions, list) and len(captions) == 1 and lats.shape[0] == 2:
+                logger.info(f"Monkeypatch: Slicing CFG latents from {lats.shape} to [1, ...] to save VRAM")
+                # Take the second half (conditioned)
+                outputs["target_latents"] = lats[1:] 
+        return outputs
+    
+    handler_instance.service_generate = types.MethodType(patched_service_generate, handler_instance)
+    logger.info("ACE-Step handler monkeypatched for VRAM optimization")
+
 def load_model():
     """Load the ACE-Step model using the handler."""
     global handler, load_error
     try:
-        logger.info(f"Loading ACE-Step model (CPU Offload: {CPU_OFFLOAD})...")
-        cleanup()
-        
-        if handler is None:
-            handler = AceStepHandler()
+        if handler is not None:
+            return
             
+        cleanup() # Keep cleanup before loading
+        
         # Determine device
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        logger.info(f"Loading ACE-Step model on {device} (Offload={CPU_OFFLOAD})")
+        
+        handler = AceStepHandler()
         
         # Initialize service
         status, success = handler.initialize_service(
@@ -108,10 +141,13 @@ def load_model():
             offload_dit_to_cpu=CPU_OFFLOAD
         )
         
+        # Apply VRAM optimization patch
+        patch_handler(handler)
+        
+        logger.info(f"Model initialization: {status}")
         if not success:
-            raise Exception(f"Handler initialization failed: {status}")
+            raise Exception(f"Model failed to initialize: {status}")
             
-        logger.info(f"ACE-Step model initialized: {status[:100]}...")
         load_error = None
     except Exception as e:
         logger.error(f"Failed to load ACE-Step model: {e}")
