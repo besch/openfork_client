@@ -92,12 +92,24 @@ def patch_handler(handler_instance):
     # Use the existing logger instead of importing loguru
     global logger
     
+    # Patch model.generate_audio to fix the 'guidance_sale' typo in the handler
+    if hasattr(handler_instance, "model") and hasattr(handler_instance.model, "generate_audio"):
+        original_generate_audio = handler_instance.model.generate_audio
+        def patched_generate_audio(*args, **kwargs):
+            if "diffusion_guidance_sale" in kwargs:
+                # Rename key to fix the likely typo in the original handler
+                kwargs["diffusion_guidance_scale"] = kwargs.pop("diffusion_guidance_sale")
+            return original_generate_audio(*args, **kwargs)
+        handler_instance.model.generate_audio = patched_generate_audio
+        logger.info("ACE-Step model.generate_audio monkeypatched to fix guidance_scale typo")
+
     # Patch service_generate to slice latents if CFG returned 2x batch size
     # We use the class method to avoid double self passing if the instance method is already bound
     original_service_generate = handler_instance.__class__.service_generate
     
     def patched_service_generate(self, *args, **kwargs):
-        # Call the original class method with self
+        # Fix a likely typo in the original handler if it exists in the model's generate_audio
+        # Some versions have 'diffusion_guidance_sale' instead of 'scale'
         outputs = original_service_generate(self, *args, **kwargs)
         if "target_latents" in outputs:
             lats = outputs["target_latents"]
@@ -193,7 +205,7 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             raise Exception("No audio generated")
             
         wav = audios[0].get("tensor")
-        sample_rate = audios[0].get("sample_rate", 32000)
+        sample_rate = audios[0].get("sample_rate", 48000) # ACE-Step default is 48k
         
         if wav is None:
             raise Exception("No audio tensor found in result")
