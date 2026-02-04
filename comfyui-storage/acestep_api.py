@@ -137,6 +137,7 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
         
         # ACE-Step handler call
         # audio_duration should be length of the audio in seconds
+        # We enforce batch_size=1 to avoid OOM on 8GB cards
         result = handler.generate_music(
             captions=request.style_prompt,
             lyrics=request.lyrics,
@@ -144,6 +145,8 @@ def generate_music_sync(job_id: str, request: GenerateRequest):
             audio_duration=request.max_audio_length_ms / 1000.0,
             inference_steps=8, # Default for turbo
             guidance_scale=request.cfg_scale,
+            batch_size=1,
+            use_tiled_decode=True
         )
         
         if result.get("is_error"):
