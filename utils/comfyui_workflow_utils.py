@@ -518,6 +518,28 @@ def inject_prompt_into_ltx2_video_workflow(
     if not sampler_found:
         logging.warning("Could not find LTXVBaseSampler or EmptyLTXVLatentVideo node in LTX-2 workflow for dimension injection")
 
+    # Inject CFG Scale via LoraLoader strength (since it's a distilled LoRA workflow) OR via Sampler if using CFGGuider
+    # For LTX-2 Distilled, CFG is often hardcoded in the LoRA strength or hidden in a node.
+    # We will try to find a CFGGuider or KSampler node to inject CFG if present.
+    # Use Node 12 (CFGGuider) if present, or check Sampler inputs.
+
+    cfg_injected = False
+    # Check for CFGGuider node (Node 12 in I2V, maybe different in T2V)
+    if '12' in api_graph and api_graph['12'].get("class_type") == "CFGGuider":
+        if cfg_scale is not None:
+            api_graph['12']['inputs']['cfg'] = cfg_scale
+            logging.info(f"Injected cfg={cfg_scale} into LTX-2 CFGGuider node 12")
+            cfg_injected = True
+            
+    if not cfg_injected:
+        # Fallback: Check all nodes for 'cfg' input
+        for node_id, node in api_graph.items():
+            if 'inputs' in node and 'cfg' in node['inputs']:
+                if cfg_scale is not None:
+                    node['inputs']['cfg'] = cfg_scale
+                    logging.info(f"Injected cfg={cfg_scale} into LTX-2 node {node_id} ({node.get('class_type')})")
+                    cfg_injected = True
+
     # Inject Camera Control LoRA (only if not already using distilled LoRA workflow)
     if camera_movement and camera_movement != "none":
         lora_filename = get_camera_lora_filename(camera_movement)
@@ -534,6 +556,7 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     aspect_ratio: str = "16:9",
     seed: Optional[int] = None,
     steps: Optional[int] = None,
+    cfg_scale: Optional[float] = None,
     camera_movement: Optional[str] = None,
     camera_movement_strength: float = 1.0
 ):
@@ -618,9 +641,31 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
             node['inputs']['width'] = width
             node['inputs']['height'] = height
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVImageEncode node {node_id}: {width}x{height}")
-    
+
     if not sampler_found:
         logging.warning("Could not find LTXVImgToVideo, LTXVBaseSampler, EmptyLTXVLatentVideo, or EmptyLatentImage node in LTX-2 i2v workflow for dimension injection")
+
+    # Inject CFG Scale via LoraLoader strength (since it's a distilled LoRA workflow) OR via Sampler if using CFGGuider
+    # For LTX-2 Distilled, CFG is often hardcoded in the LoRA strength or hidden in a node.
+    # We will try to find a CFGGuider or KSampler node to inject CFG if present.
+    # Use Node 12 (CFGGuider) if present, or check Sampler inputs.
+
+    cfg_injected = False
+    # Check for CFGGuider node (Node 12 in I2V, maybe different in T2V)
+    if '12' in api_graph and api_graph['12'].get("class_type") == "CFGGuider":
+        if cfg_scale is not None:
+            api_graph['12']['inputs']['cfg'] = cfg_scale
+            logging.info(f"Injected cfg={cfg_scale} into LTX-2 i2v CFGGuider node 12")
+            cfg_injected = True
+            
+    if not cfg_injected:
+        # Fallback: Check all nodes for 'cfg' input
+        for node_id, node in api_graph.items():
+            if 'inputs' in node and 'cfg' in node['inputs']:
+                if cfg_scale is not None:
+                    node['inputs']['cfg'] = cfg_scale
+                    logging.info(f"Injected cfg={cfg_scale} into LTX-2 i2v node {node_id} ({node.get('class_type')})")
+                    cfg_injected = True
 
     # Inject Camera Control LoRA (only if not already using distilled LoRA workflow)
     if camera_movement and camera_movement != "none":
