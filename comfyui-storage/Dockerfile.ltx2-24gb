@@ -91,129 +91,69 @@ RUN mkdir -p models/checkpoints \
 ENV LTX2_TIER=24gb
 
 # Download LTX-2 FP8 UNET model for UNETLoader (split loading approach)
-# This provides faster loading and better memory management even on 24GB
-# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/diffusion_models
 RUN echo "Downloading LTX-2 FP8 UNET (split model)..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
-    --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors" \
-    --token ${HF_TOKEN} && \
-    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors \
-       models/unet/ && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors models/unet/ && \
     rm -rf /tmp/kijai_models && \
-    python3 -c "import os; size=os.path.getsize('models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors')/(1024**3); print(f'UNET Model: {size:.2f}GB'); assert size > 20, 'File too small, corrupted'" && \
+    python -c "import os; size=os.path.getsize('models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors')/(1024**3); print(f'UNET Model: {size:.2f}GB'); assert size > 20, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Download VAE models from Kijai - required for separate VAELoader
-# Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/VAE
 RUN echo "Downloading VAE model for VAELoader..." && \
-    huggingface-cli download Kijai/LTXV2_comfy \
-    --repo-type model \
-    --local-dir /tmp/kijai_models \
-    --include "VAE/LTX2_video_vae_bf16.safetensors" \
-    --token ${HF_TOKEN} && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['VAE/LTX2_video_vae_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/kijai_models/VAE/LTX2_video_vae_bf16.safetensors models/vae/ && \
     rm -rf /tmp/kijai_models && \
-    python3 -c "import os; size=os.path.getsize('models/vae/LTX2_video_vae_bf16.safetensors')/(1024**3); print(f'VAE: {size:.2f}GB'); assert size > 0.1, 'File too small, corrupted'" && \
+    python -c "import os; size=os.path.getsize('models/vae/LTX2_video_vae_bf16.safetensors')/(1024**3); print(f'VAE: {size:.2f}GB'); assert size > 0.1, 'File too small, corrupted'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download Audio VAE from Kijai (~1GB)
+RUN echo "Downloading Audio VAE model..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['VAE/LTX2_audio_vae_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/kijai_models/VAE/LTX2_audio_vae_bf16.safetensors models/vae/LTX2-Audio-VAE-BF16.safetensors && \
+    ln -s /opt/ComfyUI/models/vae/LTX2-Audio-VAE-BF16.safetensors models/checkpoints/LTX2-Audio-VAE-BF16.safetensors && \
+    rm -rf /tmp/kijai_models && \
+    python -c "import os; size=os.path.getsize('models/vae/LTX2-Audio-VAE-BF16.safetensors')/(1024**3); print(f'Audio VAE: {size:.2f}GB'); assert size > 0.1, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Download spatial upscaler
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading spatial upscaler..."; \
-        huggingface-cli download Lightricks/LTX-2 \
-            ltx-2-spatial-upscaler-x2-1.0.safetensors \
-            --local-dir models/latent_upscale_models \
-            --local-dir-use-symlinks False \
-            --token "$HF_TOKEN" \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Upscaler: {size:.2f}GB'); assert size > 0.8, f'File too small ({size:.2f}GB), corrupted or incomplete download'; \
-assert size < 3.0, f'File unexpectedly large ({size:.2f}GB), may be corrupted'; \
-print(f'✓ Spatial upscaler download verified: {size:.2f}GB')" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+RUN echo "Downloading spatial upscaler..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Lightricks/LTX-2', repo_type='model', local_dir='/tmp/models', allow_patterns=['ltx-2-spatial-upscaler-x2-1.0.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/models/ltx-2-spatial-upscaler-x2-1.0.safetensors models/latent_upscale_models/ && \
+    rm -rf /tmp/models && \
+    python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Upscaler: {size:.2f}GB'); assert size > 0.8, 'Too small'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Download distilled LoRA for fast iteration (FIXED: size check updated to 8.0 GB)
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading distilled LoRA..."; \
-        huggingface-cli download Lightricks/LTX-2 \
-            ltx-2-19b-distilled-lora-384.safetensors \
-            --local-dir models/loras \
-            --local-dir-use-symlinks False \
-            --token "$HF_TOKEN" \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/loras/ltx-2-19b-distilled-lora-384.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/loras/ltx-2-19b-distilled-lora-384.safetensors')/(1024**3); print(f'LoRA: {size:.2f}GB'); assert size > 0.8, f'File too small ({size:.2f}GB), corrupted or incomplete download'; \
-assert size < 8.0, f'File unexpectedly large ({size:.2f}GB), may be corrupted'; \
-print(f'✓ LoRA download verified: {size:.2f}GB')" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+# Download distilled LoRA
+RUN echo "Downloading distilled LoRA..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Lightricks/LTX-2', repo_type='model', local_dir='/tmp/models', allow_patterns=['ltx-2-19b-distilled-lora-384.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/models/ltx-2-19b-distilled-lora-384.safetensors models/loras/ && \
+    rm -rf /tmp/models && \
+    python -c "import os; size=os.path.getsize('models/loras/ltx-2-19b-distilled-lora-384.safetensors')/(1024**3); print(f'LoRA: {size:.2f}GB'); assert size > 5.0, 'Too small'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
+# Download Gemma-3 12B FP8 text encoder
+RUN echo "Downloading Gemma-3 12B FP8 text encoder..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn', repo_type='model', local_dir='/tmp/models', allow_patterns=['gemma_3_12B_it_fp8_e4m3fn.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/models/gemma_3_12B_it_fp8_e4m3fn.safetensors models/clip/ && \
+    rm -rf /tmp/models && \
+    python -c "import os; size=os.path.getsize('models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors')/(1024**3); print(f'Gemma FP8: {size:.2f}GB'); assert size > 5.0, 'Too small'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
+# Download LTX-2 projections
+RUN echo "Downloading LTX-2 projections..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn', repo_type='model', local_dir='/tmp/models', allow_patterns=['ltx-2-19b-dev-fp4_projections_only.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/models/ltx-2-19b-dev-fp4_projections_only.safetensors models/clip/ && \
+    rm -rf /tmp/models && \
+    python -c "import os; size=os.path.getsize('models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors')/(1024**3); print(f'Projections: {size:.2f}GB'); assert size > 0.05, 'Too small'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Download Gemma-3 12B FP8 text encoder (~6GB, optimized for quality and speed)
-# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading Gemma-3 12B FP8 encoder..."; \
-        huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-            gemma_3_12B_it_fp8_e4m3fn.safetensors \
-            --local-dir models/clip \
-            --local-dir-use-symlinks False \
-            --token "$HF_TOKEN" \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors')/(1024**3); print(f'Gemma FP8: {size:.2f}GB'); assert size > 5, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Download LTX-2 projections for DualCLIPLoader compatibility
-# Source: https://huggingface.co/GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
-RUN MAX_RETRIES=3; \
-    for i in $(seq 1 $MAX_RETRIES); do \
-        echo "Attempt $i/$MAX_RETRIES: Downloading DualCLIPLoader projections..."; \
-        huggingface-cli download GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn \
-            ltx-2-19b-dev-fp4_projections_only.safetensors \
-            --local-dir models/clip \
-            --local-dir-use-symlinks False \
-            --token "$HF_TOKEN" \
-            --resume-download \
-        && break || { \
-            echo "Download failed, retrying..."; \
-            rm -rf models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors* ; \
-            sleep 10; \
-        }; \
-    done \
-    && python3 -c "import os; size=os.path.getsize('models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors')/(1024**3); print(f'Projections: {size:.2f}GB'); assert size > 0.05, 'File too small, corrupted'" \
-    && rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Download Camera Control LoRAs (Lightricks Official)- 24GB
+# Download Camera Control LoRAs
 RUN for model in Dolly-In Dolly-Out Dolly-Left Dolly-Right Jib-Up Jib-Down Static; do \
         echo "Downloading Camera Control LoRA: $model..."; \
         filename_lower=$(echo "$model" | tr '[:upper:]' '[:lower:]'); \
         target_file="ltx-2-19b-lora-camera-control-${filename_lower}.safetensors"; \
-        # Try download, if fails (e.g. repo doesnt exist), just continue but warn \
-        (huggingface-cli download Lightricks/LTX-2-19b-LoRA-Camera-Control-$model \
-            "$target_file" \
-            --local-dir models/loras \
-            --local-dir-use-symlinks False \
-            --token "$HF_TOKEN" && \
-        echo "✓ Downloaded $model") || echo "⚠️ Failed to download $model (skipping)"; \
+        python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=f'Lightricks/LTX-2-19b-LoRA-Camera-Control-{os.environ[\"model\"]}', repo_type='model', local_dir='/tmp/models', allow_patterns=[os.environ[\"target_file\"]], token=os.getenv('HF_TOKEN'))" env model="$model" target_file="$target_file" || true; \
+        [ -f /tmp/models/$target_file ] && mv /tmp/models/$target_file models/loras/ && rm -rf /tmp/models || echo "Skipping $model"; \
     done
 
 # Copy vision processor configs for LTXVGemmaCLIPModelLoader (from gated repo, pre-downloaded)
@@ -229,6 +169,8 @@ import sys\n\
 files_to_verify = {\n\
     "models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors": 20.0,\n\
     "models/vae/LTX2_video_vae_bf16.safetensors": 2.0,\n\
+    "models/vae/LTX2-Audio-VAE-BF16.safetensors": 0.1,\n\
+    "models/checkpoints/LTX2-Audio-VAE-BF16.safetensors": 0.1,\n\
     "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 6.0,\n\
     "models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors": 0.05,\n\
     "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 0.8,\n\

@@ -18,17 +18,23 @@ from datetime import datetime
 def get_dimensions(aspect_ratio: str, default_width: int = 768, default_height: int = 432) -> tuple[int, int]:
     """
     Returns (width, height) based on the aspect ratio string.
-    Using smaller dimensions suitable for GPUs with less VRAM.
-    All dimensions are divisible by 16.
+    Optimized for LTX2 Maxed Out Plan:
+    8GB: 768x432 (432p)
+    16GB: 1280x720 (720p)
+    24GB: 1920x1080 -> 1920x1088 (FHD)
     """
     if aspect_ratio == "16:9":
-        return 768, 432  # 432p
+        return 768, 432
+    elif aspect_ratio == "16:9-hd":
+        return 1280, 720
+    elif aspect_ratio == "16:9-fhd":
+        return 1920, 1088
     elif aspect_ratio == "9:16":
         return 432, 768
     elif aspect_ratio == "1:1":
         return 512, 512
     elif aspect_ratio == "4:3":
-        return 640, 480  # 480p
+        return 640, 480
     elif aspect_ratio == "3:4":
         return 480, 640
     elif aspect_ratio == "21:9":
@@ -454,6 +460,7 @@ def inject_prompt_into_ltx2_video_workflow(
     aspect_ratio: str = "16:9",
     seed: Optional[int] = None,
     steps: Optional[int] = None,
+    cfg_scale: Optional[float] = None,
     camera_movement: Optional[str] = None,
     camera_movement_strength: float = 1.0
 ):
@@ -495,18 +502,22 @@ def inject_prompt_into_ltx2_video_workflow(
     # Inject dimensions into LTXVBaseSampler or EmptyLTXVLatentVideo (find by class_type for workflow compatibility)
     # 8GB workflows use LTXVBaseSampler, 24GB workflows use EmptyLTXVLatentVideo
     # Also update LTXVImageEncode if present (for I2V workflows)
+    # ALSO inject length into LTXVEmptyLatentAudio (Node 22) if present
     sampler_found = False
+    video_length = 49 # Default for 8GB
     for node_id, node in api_graph.items():
         if node.get("class_type") == "LTXVBaseSampler":
             width, height = get_dimensions(aspect_ratio)
             node['inputs']['width'] = width
             node['inputs']['height'] = height
+            video_length = node['inputs'].get('num_frames', video_length)
             logging.info(f"Injected dimensions into LTX-2 LTXVBaseSampler node {node_id}: {width}x{height}")
             sampler_found = True
         elif node.get("class_type") == "EmptyLTXVLatentVideo":
             width, height = get_dimensions(aspect_ratio)
             node['inputs']['width'] = width
             node['inputs']['height'] = height
+            video_length = node['inputs'].get('length', video_length)
             logging.info(f"Injected dimensions into LTX-2 EmptyLTXVLatentVideo node {node_id}: {width}x{height}")
             sampler_found = True
         elif node.get("class_type") == "LTXVImageEncode":
@@ -514,21 +525,21 @@ def inject_prompt_into_ltx2_video_workflow(
             node['inputs']['width'] = width
             node['inputs']['height'] = height
             logging.info(f"Injected dimensions into LTX-2 LTXVImageEncode node {node_id}: {width}x{height}")
-    
+
+    # Sync Audio Latent length (Node 22)
+    if '22' in api_graph and api_graph['22'].get("class_type") == "LTXVEmptyLatentAudio":
+        api_graph['22']['inputs']['frames_number'] = video_length
+        logging.info(f"Synced LTXVEmptyLatentAudio frames_number to {video_length}")
+
     if not sampler_found:
         logging.warning("Could not find LTXVBaseSampler or EmptyLTXVLatentVideo node in LTX-2 workflow for dimension injection")
 
-    # Inject CFG Scale via LoraLoader strength (since it's a distilled LoRA workflow) OR via Sampler if using CFGGuider
-    # For LTX-2 Distilled, CFG is often hardcoded in the LoRA strength or hidden in a node.
-    # We will try to find a CFGGuider or KSampler node to inject CFG if present.
-    # Use Node 12 (CFGGuider) if present, or check Sampler inputs.
-
+    # Inject CFG Scale via Node 7 (CFGGuider) OR via Sampler if using CFGGuider
     cfg_injected = False
-    # Check for CFGGuider node (Node 12 in I2V, maybe different in T2V)
-    if '12' in api_graph and api_graph['12'].get("class_type") == "CFGGuider":
+    if '7' in api_graph and api_graph['7'].get("class_type") == "CFGGuider":
         if cfg_scale is not None:
-            api_graph['12']['inputs']['cfg'] = cfg_scale
-            logging.info(f"Injected cfg={cfg_scale} into LTX-2 CFGGuider node 12")
+            api_graph['7']['inputs']['cfg'] = cfg_scale
+            logging.info(f"Injected cfg={cfg_scale} into LTX-2 CFGGuider node 7")
             cfg_injected = True
             
     if not cfg_injected:
@@ -611,23 +622,27 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     # Inject dimensions into LTXVImgToVideo, LTXVBaseSampler, EmptyLTXVLatentVideo, EmptyLatentImage and LTXVImageEncode
     # Different workflow versions may use different nodes for latent generation
     sampler_found = False
+    video_length = 49 # Default
     for node_id, node in api_graph.items():
         if node.get("class_type") == "LTXVImgToVideo":
             width, height = get_dimensions(aspect_ratio)
             node['inputs']['width'] = width
             node['inputs']['height'] = height
+            video_length = node['inputs'].get('length', video_length)
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVImgToVideo node {node_id}: {width}x{height}")
             sampler_found = True
         elif node.get("class_type") == "LTXVBaseSampler":
             width, height = get_dimensions(aspect_ratio)
             node['inputs']['width'] = width
             node['inputs']['height'] = height
+            video_length = node['inputs'].get('num_frames', video_length)
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVBaseSampler node {node_id}: {width}x{height}")
             sampler_found = True
         elif node.get("class_type") == "EmptyLTXVLatentVideo":
             width, height = get_dimensions(aspect_ratio)
             node['inputs']['width'] = width
             node['inputs']['height'] = height
+            video_length = node['inputs'].get('length', video_length)
             logging.info(f"Injected dimensions into LTX-2 i2v EmptyLTXVLatentVideo node {node_id}: {width}x{height}")
             sampler_found = True
         elif node.get("class_type") == "EmptyLatentImage":
@@ -642,20 +657,20 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
             node['inputs']['height'] = height
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVImageEncode node {node_id}: {width}x{height}")
 
+    # Sync Audio Latent length (Node 22)
+    if '22' in api_graph and api_graph['22'].get("class_type") == "LTXVEmptyLatentAudio":
+        api_graph['22']['inputs']['frames_number'] = video_length
+        logging.info(f"Synced LTX-2 i2v LTXVEmptyLatentAudio frames_number to {video_length}")
+
     if not sampler_found:
         logging.warning("Could not find LTXVImgToVideo, LTXVBaseSampler, EmptyLTXVLatentVideo, or EmptyLatentImage node in LTX-2 i2v workflow for dimension injection")
 
-    # Inject CFG Scale via LoraLoader strength (since it's a distilled LoRA workflow) OR via Sampler if using CFGGuider
-    # For LTX-2 Distilled, CFG is often hardcoded in the LoRA strength or hidden in a node.
-    # We will try to find a CFGGuider or KSampler node to inject CFG if present.
-    # Use Node 12 (CFGGuider) if present, or check Sampler inputs.
-
+    # Inject CFG Scale via Node 7 (CFGGuider) OR via Sampler if using CFGGuider
     cfg_injected = False
-    # Check for CFGGuider node (Node 12 in I2V, maybe different in T2V)
-    if '12' in api_graph and api_graph['12'].get("class_type") == "CFGGuider":
+    if '7' in api_graph and api_graph['7'].get("class_type") == "CFGGuider":
         if cfg_scale is not None:
-            api_graph['12']['inputs']['cfg'] = cfg_scale
-            logging.info(f"Injected cfg={cfg_scale} into LTX-2 i2v CFGGuider node 12")
+            api_graph['7']['inputs']['cfg'] = cfg_scale
+            logging.info(f"Injected cfg={cfg_scale} into LTX-2 i2v CFGGuider node 7")
             cfg_injected = True
             
     if not cfg_injected:

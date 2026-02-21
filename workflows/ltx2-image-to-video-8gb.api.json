@@ -6,7 +6,7 @@
       },
       "class_type": "UnetLoaderGGUF",
       "_meta": {
-        "title": "GGUF Q4 Transformer (stays compressed at ~12GB)"
+        "title": "GGUF Q4 Transformer"
       }
     },
     "2": {
@@ -17,7 +17,7 @@
       },
       "class_type": "DualCLIPLoader",
       "_meta": {
-        "title": "FP8 Gemma-3 (expands to FP16 temporarily, then offloads)"
+        "title": "Dual CLIP Loader"
       }
     },
     "3": {
@@ -61,15 +61,15 @@
         "negative": ["4", 0],
         "vae": ["11", 0],
         "image": ["16", 0],
-        "width": 512,
-        "height": 288,
-        "length": 25,
+        "width": 768,
+        "height": 432,
+        "length": 49,
         "batch_size": 1,
         "strength": 0.85
       },
       "class_type": "LTXVImgToVideo",
       "_meta": {
-        "title": "I2V Conditioning (512x288 for 8GB+32GB RAM)"
+        "title": "Optimized I2V"
       }
     },
     "5": {
@@ -79,6 +79,28 @@
         "frame_rate": 24
       },
       "class_type": "LTXVConditioning"
+    },
+    "20": {
+      "inputs": {
+        "ckpt_name": "LTX2-Audio-VAE-BF16.safetensors"
+      },
+      "class_type": "LTXVAudioVAELoader"
+    },
+    "22": {
+      "inputs": {
+        "audio_vae": ["20", 0],
+        "frames_number": 49,
+        "batch_size": 1,
+        "frame_rate": 24
+      },
+      "class_type": "LTXVEmptyLatentAudio"
+    },
+    "23": {
+      "inputs": {
+        "video_latent": ["17", 2],
+        "audio_latent": ["22", 0]
+      },
+      "class_type": "LTXVConcatAVLatent"
     },
     "7": {
       "inputs": {
@@ -99,12 +121,12 @@
       "inputs": {
         "model": ["1", 0],
         "scheduler": "simple",
-        "steps": 8,
+        "steps": 12,
         "denoise": 1.0
       },
       "class_type": "BasicScheduler",
       "_meta": {
-        "title": "Scheduler (8 steps - distilled model)"
+        "title": "Scheduler (12 steps)"
       }
     },
     "10": {
@@ -119,16 +141,22 @@
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["17", 2]
+        "latent_image": ["23", 0]
       },
       "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "I2V Sampler"
+        "title": "I2V AV Sampler"
       }
+    },
+    "24": {
+      "inputs": {
+        "av_latent": ["12", 0]
+      },
+      "class_type": "LTXVSeparateAVLatent"
     },
     "13": {
       "inputs": {
-        "samples": ["12", 0],
+        "samples": ["24", 0],
         "vae": ["11", 0],
         "tile_size": 256,
         "overlap": 32,
@@ -137,12 +165,23 @@
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Ultra-Low RAM VAE Decode"
+        "title": "Video Decode"
+      }
+    },
+    "21": {
+      "inputs": {
+        "samples": ["24", 1],
+        "audio_vae": ["20", 0]
+      },
+      "class_type": "LTXVAudioVAEDecode",
+      "_meta": {
+        "title": "Audio Decode"
       }
     },
     "14": {
       "inputs": {
         "images": ["13", 0],
+        "audio": ["21", 0],
         "frame_rate": 24,
         "loop_count": 0,
         "filename_prefix": "ltx2_i2v_8gb",

@@ -7,7 +7,7 @@
       },
       "class_type": "UNETLoader",
       "_meta": {
-        "title": "Load LTX-2 FP8 UNET (Split Loading for Speed)"
+        "title": "Load LTX-2 FP8 UNET"
       }
     },
     "2": {
@@ -18,7 +18,7 @@
       },
       "class_type": "DualCLIPLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B Text Encoder (FP8 Optimized for Speed)"
+        "title": "Dual CLIP Loader"
       }
     },
     "3": {
@@ -49,24 +49,40 @@
       },
       "class_type": "LTXVConditioning"
     },
-    "16": {
-      "inputs": {
-        "vae_name": "LTX2_video_vae_bf16.safetensors"
-      },
-      "class_type": "VAELoader",
-      "_meta": {
-        "title": "Load VAE (Separate for Consistent Memory Management)"
-      }
-    },
     "20": {
       "inputs": {
-        "width": 1280,
-        "height": 720,
-        "length": 97,
+        "ckpt_name": "LTX2-Audio-VAE-BF16.safetensors"
+      },
+      "class_type": "LTXVAudioVAELoader"
+    },
+    "6": {
+      "inputs": {
+        "width": 1920,
+        "height": 1088,
+        "length": 241,
         "batch_size": 1,
         "autopad": true
       },
-      "class_type": "EmptyLTXVLatentVideo"
+      "class_type": "EmptyLTXVLatentVideo",
+      "_meta": {
+        "title": "Video Latent (Full HD, 10s)"
+      }
+    },
+    "22": {
+      "inputs": {
+        "audio_vae": ["20", 0],
+        "frames_number": 241,
+        "batch_size": 1,
+        "frame_rate": 24
+      },
+      "class_type": "LTXVEmptyLatentAudio"
+    },
+    "23": {
+      "inputs": {
+        "video_latent": ["6", 0],
+        "audio_latent": ["22", 0]
+      },
+      "class_type": "LTXVConcatAVLatent"
     },
     "7": {
       "inputs": {
@@ -87,10 +103,13 @@
       "inputs": {
         "model": ["1", 0],
         "scheduler": "simple",
-        "steps": 25,
+        "steps": 30,
         "denoise": 1.0
       },
-      "class_type": "BasicScheduler"
+      "class_type": "BasicScheduler",
+      "_meta": {
+        "title": "Scheduler (30 steps)"
+      }
     },
     "10": {
       "inputs": {
@@ -98,23 +117,35 @@
       },
       "class_type": "RandomNoise"
     },
-    "11": {
+    "12": {
       "inputs": {
         "noise": ["10", 0],
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["20", 0]
+        "latent_image": ["23", 0]
       },
       "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "Standard Sampler (Advanced)"
+        "title": "AV Sampler"
       }
     },
-    "12": {
+    "24": {
       "inputs": {
-        "samples": ["11", 0],
-        "vae": ["16", 0],
+        "av_latent": ["12", 0]
+      },
+      "class_type": "LTXVSeparateAVLatent"
+    },
+    "11": {
+      "inputs": {
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
+      },
+      "class_type": "VAELoader"
+    },
+    "13": {
+      "inputs": {
+        "samples": ["24", 0],
+        "vae": ["11", 0],
         "tile_size": 512,
         "overlap": 64,
         "temporal_size": 64,
@@ -122,27 +153,35 @@
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "VAE Decode Tiled (24GB Safe)"
+        "title": "Video Decode"
+      }
+    },
+    "21": {
+      "inputs": {
+        "samples": ["24", 1],
+        "audio_vae": ["20", 0]
+      },
+      "class_type": "LTXVAudioVAEDecode",
+      "_meta": {
+        "title": "Audio Decode"
       }
     },
     "14": {
       "inputs": {
-        "images": ["12", 0],
+        "images": ["13", 0],
+        "audio": ["21", 0],
         "frame_rate": 24,
         "loop_count": 0,
-        "filename_prefix": "ltx2_t2v_24gb",
+        "filename_prefix": "ltx2_24gb",
         "format": "video/h264-mp4",
         "pix_fmt": "yuv420p",
-        "crf": 19,
+        "crf": 17,
         "save_metadata": true,
         "trim_to_audio": false,
         "pingpong": false,
         "save_output": true
       },
-      "class_type": "VHS_VideoCombine",
-      "_meta": {
-        "title": "Save Video (VHS)"
-      }
+      "class_type": "VHS_VideoCombine"
     }
   }
 }
