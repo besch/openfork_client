@@ -50,8 +50,6 @@ services/processors/video/hunyuan_image.py
 services/processors/video/hunyuan_text.py
 services/processors/video/ltx2_image.py
 services/processors/video/ltx2_text.py
-services/processors/video/ltx_image.py
-services/processors/video/ltx_text.py
 services/processors/video/svi_film.py
 services/processors/video/svi_shot.py
 services/processors/video/turbodiffusion.py
@@ -73,8 +71,6 @@ workflows/hunyuan-text-to-video-fp8-fast.api.json
 workflows/hunyuan-text-to-video-fp8.api.json
 workflows/hunyuan-text-to-video.api.json
 workflows/hunyuan-video-foley.api.json
-workflows/ltx-image-to-video.api.json
-workflows/ltx-text-to-video.api.json
 workflows/ltx2-image-to-video-16gb.api.json
 workflows/ltx2-image-to-video-24gb.api.json
 workflows/ltx2-image-to-video-8gb.api.json
