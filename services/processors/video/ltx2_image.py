@@ -100,10 +100,11 @@ class LTX2ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         steps = inputs.get("steps")
         cfg_scale = inputs.get("cfg_scale")
         camera_movement = inputs.get("camera_movement")
+        strength = inputs.get("strength")
 
         wf_ready = inject_prompt_and_image_into_ltx2_video_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
-            steps=steps, cfg_scale=cfg_scale, camera_movement=camera_movement
+            steps=steps, cfg_scale=cfg_scale, camera_movement=camera_movement, strength=strength
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)

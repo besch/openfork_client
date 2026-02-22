@@ -45,6 +45,7 @@ RUN python -m pip install --no-cache-dir \
         GitPython PyGithub matrix-client==0.4.0 transformers \
         huggingface-hub color-matcher matplotlib mss toml \
         rich uv sentencepiece bitsandbytes xformers \
+        soundfile comfy-kitchen>=0.1.0 \
     && rm -rf /tmp/* /var/tmp/*
 
 WORKDIR /opt/ComfyUI

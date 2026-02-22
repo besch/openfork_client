@@ -569,7 +569,8 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
     steps: Optional[int] = None,
     cfg_scale: Optional[float] = None,
     camera_movement: Optional[str] = None,
-    camera_movement_strength: float = 1.0
+    camera_movement_strength: float = 1.0,
+    strength: Optional[float] = None
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image for LTX-2 image-to-video.
@@ -629,6 +630,10 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
             node['inputs']['width'] = width
             node['inputs']['height'] = height
             video_length = node['inputs'].get('length', video_length)
+            # Inject user-specified strength (denoise) if provided
+            if strength is not None and 'strength' in node['inputs']:
+                node['inputs']['strength'] = strength
+                logging.info(f"Injected strength={strength} into LTX-2 i2v LTXVImgToVideo node {node_id}")
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVImgToVideo node {node_id}: {width}x{height}")
             sampler_found = True
         elif node.get("class_type") == "LTXVBaseSampler":

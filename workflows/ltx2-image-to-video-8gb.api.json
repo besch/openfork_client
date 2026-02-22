@@ -65,7 +65,7 @@
         "height": 432,
         "length": 49,
         "batch_size": 1,
-        "strength": 0.85
+        "strength": 0.95
       },
       "class_type": "LTXVImgToVideo",
       "_meta": {
