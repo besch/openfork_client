@@ -109,6 +109,11 @@ RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/Co
     && cd custom_nodes/ComfyUI-LTXVideo \
     && python -m pip install --no-cache-dir -r requirements.txt || true
 
+# Install ComfyUI-KJNodes (Required for LTXVAudioVAELoader)
+RUN git clone --depth=1 https://github.com/Kijai/ComfyUI-KJNodes.git custom_nodes/ComfyUI-KJNodes \
+    && rm -rf custom_nodes/ComfyUI-KJNodes/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-KJNodes/requirements.txt || true)
+
 # Patch embeddings_connector.py
 RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
 

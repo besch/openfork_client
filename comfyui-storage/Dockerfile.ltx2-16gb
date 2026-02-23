@@ -67,6 +67,11 @@ RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custo
     && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
     && rm -rf /tmp/* /var/tmp/*
 
+# Install ComfyUI-KJNodes (Required for LTXVAudioVAELoader)
+RUN git clone --depth=1 https://github.com/Kijai/ComfyUI-KJNodes.git custom_nodes/ComfyUI-KJNodes \
+    && rm -rf custom_nodes/ComfyUI-KJNodes/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-KJNodes/requirements.txt || true)
+
 # Install VideoHelperSuite
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
     && rm -rf custom_nodes/VideoHelperSuite/.git \
