@@ -32,7 +32,7 @@ def generate_manifest():
     # Sort for consistency
     manifest.sort()
     
-    with open("manifest.txt", "w") as f:
+    with open("manifest.txt", "w", newline="\n") as f:
         f.write("\n".join(manifest))
     
     print(f"Generated manifest.txt with {len(manifest)} files.")

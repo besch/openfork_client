@@ -22,6 +22,7 @@ if [ -z "$TREE_JSON" ] || [[ "$TREE_JSON" == *"rate limit"* ]]; then
   curl -sL "$BASE_URL/manifest.txt" -o manifest.txt
   count=0
   while IFS= read -r file || [[ -n "$file" ]]; do
+    file=$(echo "$file" | tr -d '\r')
     [[ -z "$file" || "$file" =~ ^# ]] && continue
     dir=$(dirname "$file")
     [ "$dir" != "." ] && mkdir -p "$dir"
@@ -47,6 +48,7 @@ else
     {
       count=0
       while IFS= read -r file; do
+        file=$(echo "$file" | tr -d '\r')
         # Ensure directory exists
         dir=$(dirname "$file")
         if [ "$dir" != "." ]; then
