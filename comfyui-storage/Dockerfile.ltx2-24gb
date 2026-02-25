@@ -59,7 +59,7 @@ WORKDIR /opt/ComfyUI
 
 # Clone ComfyUI - CACHEBUST_COMFYUI forces re-clone to get latest built-in nodes
 # (LTXVAudioVAELoader and other audio nodes are built into ComfyUI core, not custom nodes)
-ARG CACHEBUST_COMFYUI=1
+ARG CACHEBUST_COMFYUI=2
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && rm -rf .git \
     && python -m pip install --no-cache-dir -r requirements.txt \
