@@ -60,7 +60,9 @@ RUN python -m pip install --no-cache-dir \
 
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI
+# Clone ComfyUI - CACHEBUST_COMFYUI forces re-clone to get latest built-in nodes
+# (LTXVAudioVAELoader and other audio nodes are built into ComfyUI core, not custom nodes)
+ARG CACHEBUST_COMFYUI=1
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && rm -rf .git \
     && python -m pip install --no-cache-dir -r requirements.txt \
@@ -71,14 +73,11 @@ RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_n
     && rm -rf custom_nodes/ComfyUI-Manager/.git \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install ComfyUI-LTXVideo (provides LTXVAudioVAELoader, LTXVAudioVAEDecode, etc.)
-# CACHEBUST forces Docker to re-clone when bumped, avoiding stale audio-less versions
+# Install ComfyUI-LTXVideo (custom video generation nodes)
 ARG CACHEBUST_LTXV=2
 RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
     && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
-    && grep -r "LTXVAudioVAELoader" custom_nodes/ComfyUI-LTXVideo/ > /dev/null \
-        || (echo "ERROR: ComfyUI-LTXVideo missing audio nodes! Update required." && exit 1) \
     && rm -rf /tmp/* /var/tmp/*
 
 # Install ComfyUI-KJNodes (additional utility nodes)
