@@ -29,8 +29,8 @@ class LLMJobProcessor(BaseJobProcessor):
             return
 
         inputs = self.job.get("inputs", {})
-        # Default to mistral:7b-instruct (better at JSON output than smaller models)
-        model_name = inputs.get("model", "mistral:7b-instruct")
+        # Default to qwen2.5:3b (blazing fast, excellent at JSON and creative writing)
+        model_name = inputs.get("model", "qwen2.5:3b")
             
         system_prompt = inputs.get("system_prompt", "You are a helpful assistant.")
         temperature = inputs.get("temperature", 0.7)
@@ -121,7 +121,7 @@ class LLMJobProcessor(BaseJobProcessor):
                 ],
                 "stream": False,
                 "format": json_schema,
-                "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed, "num_ctx": 32768},
+                "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed, "num_ctx": 8192},
             }
 
             logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
