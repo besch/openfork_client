@@ -12,7 +12,19 @@ export OLLAMA_HOST=0.0.0.0
 export OLLAMA_ORIGINS="*"
 ollama serve &
 OLLAMA_PID=$!
-sleep 5
+# Wait for Ollama to be responsive
+echo "Waiting for Ollama to be ready..."
+MAX_ATTEMPTS=30
+ATTEMPT=0
+while ! curl -s http://127.0.0.1:11434/api/tags > /dev/null; do
+  if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+    echo "Ollama failed to start in time"
+    exit 1
+  fi
+  ATTEMPT=$((ATTEMPT+1))
+  sleep 0.5
+done
+echo "Ollama is ready!"
 
 # Setup directories
 mkdir -p /data/.cache /data/input

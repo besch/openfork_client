@@ -24,7 +24,6 @@ class LLMJobProcessor(BaseJobProcessor):
         api_base = os.getenv("LLM_API_BASE", "http://127.0.0.1:11434")
 
         logging.info(f"Waiting for Ollama service to be ready at {api_base}...")
-        time.sleep(3)
 
         if not self._wait_for_ollama(api_base):
             return
@@ -61,7 +60,7 @@ class LLMJobProcessor(BaseJobProcessor):
             except requests.exceptions.RequestException as e:
                 if attempt % 10 == 0:
                     logging.debug(f"Ollama not ready yet (attempt {attempt + 1}/{timeout}): {e}")
-                time.sleep(1)
+                time.sleep(0.5)
 
         logging.error(f"Ollama service failed to become ready within {timeout} seconds at {api_base}")
         self._fail_job("Ollama service not ready")

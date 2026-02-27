@@ -13,8 +13,14 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     requests python-dotenv websocket-client py-cpuinfo GPUtil psutil \
     httpx supabase websockets ffmpeg-python tenacity docker
 
-# Pre-pull models during build
-RUN /bin/sh -c "ollama serve & pid=\$! && sleep 10 && ollama pull mistral:7b-instruct && kill \$pid"
+# Set persistence paths
+ENV OLLAMA_MODELS=/root/.ollama
+
+# Pre-pull models during build - Ensure they are fully baked into the image
+RUN /bin/sh -c "ollama serve & pid=\$! && \
+    sleep 5 && \
+    echo 'Pulling mistral:7b-instruct...' && ollama pull mistral:7b-instruct && \
+    kill \$pid"
 
 # Bake DGN client into image
 RUN mkdir -p /opt/dgn-client /data/.cache /data/input
@@ -29,7 +35,7 @@ RUN curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootst
 RUN echo "$(date -Iseconds)" > /opt/dgn-client/.installed
 
 # Copy startup script
-COPY comfyui-storage/llm-start.sh /start.sh
+COPY llm-start.sh /start.sh
 RUN chmod +x /start.sh
 
 ENTRYPOINT ["/start.sh"]
