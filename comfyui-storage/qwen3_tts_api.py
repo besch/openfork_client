@@ -97,6 +97,42 @@ class JobStatus(BaseModel):
     output_path: Optional[str] = None
 
 
+def prepare_model_dir(model_name: str) -> str:
+    """Prepare a local directory with symlinks to model files and speech_tokenizer."""
+    from huggingface_hub import snapshot_download
+    import shutil
+    
+    # Download models (pulls from HF cache if already there)
+    model_path = snapshot_download(model_name)
+    tokenizer_path = snapshot_download("Qwen/Qwen3-TTS-Tokenizer-12Hz")
+    
+    # Create a local mutable directory to hold symlinks
+    local_dir = f"/tmp/{model_name.replace('/', '_')}"
+    os.makedirs(local_dir, exist_ok=True)
+    
+    # Symlink all files from model_path to local_dir
+    for item in os.listdir(model_path):
+        src = os.path.join(model_path, item)
+        dst = os.path.join(local_dir, item)
+        if not os.path.exists(dst):
+            try:
+                os.symlink(src, dst)
+            except OSError:
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dst)
+                    
+    # Link tokenizer
+    st_dst = os.path.join(local_dir, "speech_tokenizer")
+    if not os.path.exists(st_dst):
+        try:
+            os.symlink(tokenizer_path, st_dst)
+        except OSError:
+            shutil.copytree(tokenizer_path, st_dst, dirs_exist_ok=True)
+            
+    return local_dir
+
 def load_custom_voice_model():
     """Load the CustomVoice model."""
     global custom_voice_model
@@ -129,10 +165,12 @@ def load_custom_voice_model():
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
             logger.info(f"Loading model to device: {device}")
             
+            local_model_path = prepare_model_dir(model_name)
+            
             # FIXED: Use device_map with explicit device string, not "auto"
             # ADDED: low_cpu_mem_usage=False to prevent "meta tensor" errors with accelerate
             custom_voice_model = Qwen3TTSModel.from_pretrained(
-                model_name,
+                local_model_path,
                 dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                 attn_implementation=attn_impl,
                 trust_remote_code=True,
@@ -177,10 +215,12 @@ def load_voice_design_model():
             
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
             
+            local_model_path = prepare_model_dir(model_name)
+            
             # FIXED: Use explicit device string in device_map
             # ADDED: low_cpu_mem_usage=False
             voice_design_model = Qwen3TTSModel.from_pretrained(
-                model_name,
+                local_model_path,
                 dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                 attn_implementation=attn_impl,
                 trust_remote_code=True,
@@ -217,10 +257,12 @@ def load_base_model():
             
             device = "cuda:0" if torch.cuda.is_available() else "cpu"
             
+            local_model_path = prepare_model_dir(model_name)
+            
             # FIXED: Use explicit device string in device_map
             # ADDED: low_cpu_mem_usage=False
             base_model = Qwen3TTSModel.from_pretrained(
-                model_name,
+                local_model_path,
                 dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
                 attn_implementation=attn_impl,
                 trust_remote_code=True,
