@@ -2,8 +2,8 @@
   "prompt": {
     "1": {
       "inputs": {
-        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
-        "weight_dtype": "fp8_e4m3fn"
+        "unet_name": "ltx/ltx-2-19b-phr00tmerge-nsfw-v6.safetensors",
+        "weight_dtype": "default"
       },
       "class_type": "UNETLoader",
       "_meta": {
@@ -12,8 +12,8 @@
     },
     "2": {
       "inputs": {
-        "clip_name1": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "clip_name2": "ltx-2-19b-dev-fp4_projections_only.safetensors",
+        "clip_name1": "gemma_3_12B_it_fp8_scaled.safetensors",
+        "clip_name2": "ltx-2-19b-embeddings_connector_dev_bf16.safetensors",
         "type": "ltxv"
       },
       "class_type": "DualCLIPLoader",

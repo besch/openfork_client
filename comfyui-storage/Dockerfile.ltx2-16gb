@@ -60,9 +60,8 @@ RUN python -m pip install --no-cache-dir \
 
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI - CACHEBUST_COMFYUI forces re-clone to get latest built-in nodes
-# (LTXVAudioVAELoader and other audio nodes are built into ComfyUI core, not custom nodes)
-ARG CACHEBUST_COMFYUI=2
+# ARG CACHEBUST_COMFYUI forces re-clone to get latest built-in nodes
+ARG CACHEBUST_COMFYUI=8
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && rm -rf .git \
     && python -m pip install --no-cache-dir -r requirements.txt \
@@ -74,7 +73,7 @@ RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_n
     && rm -rf /tmp/* /var/tmp/*
 
 # Install ComfyUI-LTXVideo (custom video generation nodes)
-ARG CACHEBUST_LTXV=2
+ARG CACHEBUST_LTXV=8
 RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
     && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
@@ -88,8 +87,37 @@ RUN git clone --depth=1 https://github.com/Kijai/ComfyUI-KJNodes.git custom_node
 # Install VideoHelperSuite
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
     && rm -rf custom_nodes/VideoHelperSuite/.git \
-    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
-    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
+    && (python -m pip install --no-cache-dir -r custom_nodes/VideoHelperSuite/requirements.txt || true) \
+    && rm -rf /tmp/* /var/tmp/*
+
+# Install ComfyUI-GGUF (GGUF model support)
+RUN git clone --depth=1 https://github.com/city96/ComfyUI-GGUF.git custom_nodes/ComfyUI-GGUF \
+    && rm -rf custom_nodes/ComfyUI-GGUF/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-GGUF/requirements.txt || true) \
+    && rm -rf /tmp/* /var/tmp/*
+
+# Install comfyui_essentials (SimpleMath+ etc)
+RUN git clone --depth=1 https://github.com/cubiq/ComfyUI_essentials.git custom_nodes/ComfyUI_essentials \
+    && rm -rf custom_nodes/ComfyUI_essentials/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI_essentials/requirements.txt || true) \
+    && rm -rf /tmp/* /var/tmp/*
+
+# Install comfyui-fill-nodes (FL_RIFE etc)
+RUN git clone --depth=1 https://github.com/filliptm/ComfyUI_Fill-Nodes.git custom_nodes/ComfyUI_Fill-Nodes \
+    && rm -rf custom_nodes/ComfyUI_Fill-Nodes/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI_Fill-Nodes/requirements.txt || true) \
+    && rm -rf /tmp/* /var/tmp/*
+
+# Install rgthree-comfy (Fast Groups Bypasser etc)
+RUN git clone --depth=1 https://github.com/rgthree/rgthree-comfy.git custom_nodes/rgthree-comfy \
+    && rm -rf custom_nodes/rgthree-comfy/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/rgthree-comfy/requirements.txt || true) \
+    && rm -rf /tmp/* /var/tmp/*
+
+# Install ComfyUI-Logic
+RUN git clone --depth=1 https://github.com/theUpsider/ComfyUI-Logic.git custom_nodes/ComfyUI-Logic \
+    && rm -rf custom_nodes/ComfyUI-Logic/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Logic/requirements.txt || true) \
     && rm -rf /tmp/* /var/tmp/*
 
 # Patch embeddings_connector.py
@@ -97,9 +125,9 @@ RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec pyt
 
 # Create model directories for split loading
 RUN mkdir -p models/checkpoints \
-    models/unet \
+    models/unet/ltx \
     models/vae \
-    models/clip \
+    models/clip/ltx \
     models/latent_upscale_models \
     models/loras
 
@@ -172,6 +200,27 @@ RUN echo "Downloading LTX-2 projections..." && \
     mv /tmp/models/ltx-2-19b-dev-fp4_projections_only.safetensors models/clip/ && \
     rm -rf /tmp/models && \
     python -c "import os; size=os.path.getsize('models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors')/(1024**3); print(f'Projections: {size:.2f}GB'); assert size > 0.05, 'Too small'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download LTX-2 Distilled Q8_0 GGUF model for "Uncensored" workflow support
+RUN echo "Downloading LTX-2 GGUF Q8_0 model..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/gguf', allow_patterns=['diffusion_models/ltx-2-19b-distilled_Q8_0.gguf'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/gguf/diffusion_models/ltx-2-19b-distilled_Q8_0.gguf models/unet/ltx/ && \
+    rm -rf /tmp/gguf && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download scaled Gemma-3 12B FP8 text encoder for "Uncensored" workflow support
+RUN echo "Downloading scaled Gemma-3 12B FP8 text encoder..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Comfy-Org/ltx-2', repo_type='model', local_dir='/tmp/scaled_gemma', allow_patterns=['split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/scaled_gemma/split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors models/clip/ && \
+    rm -rf /tmp/scaled_gemma && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download embeddings connector dev bf16 for "Uncensored" workflow support
+RUN echo "Downloading LTX-2 embeddings connector dev bf16..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/conn', allow_patterns=['text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/conn/text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors models/clip/ && \
+    rm -rf /tmp/conn && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Copy vision processor configs for LTXVGemmaCLIPModelLoader (from gated repo, pre-downloaded)

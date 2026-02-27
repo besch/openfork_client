@@ -92,9 +92,8 @@ RUN python -m pip install --no-cache-dir \
 
 WORKDIR /opt/ComfyUI
 
-# Clone ComfyUI - CACHEBUST_COMFYUI forces re-clone to get latest built-in nodes
-# (LTXVAudioVAELoader and other audio nodes are built into ComfyUI core, not custom nodes)
-ARG CACHEBUST_COMFYUI=2
+# ARG CACHEBUST_COMFYUI forces re-clone to get latest built-in nodes
+ARG CACHEBUST_COMFYUI=8
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout master \
@@ -108,7 +107,7 @@ RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/Comfy
     && rm -rf custom_nodes/ComfyUI-Manager/.git
 
 # Clone ComfyUI-LTXVideo (custom video generation nodes)
-ARG CACHEBUST_LTXV=2
+ARG CACHEBUST_LTXV=8
 RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
     && cd custom_nodes/ComfyUI-LTXVideo \
@@ -128,6 +127,26 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom
     && cd custom_nodes/VideoHelperSuite \
     && python -m pip install --no-cache-dir -r requirements.txt || true
 
+# Install comfyui_essentials (SimpleMath+ etc)
+RUN git clone --depth=1 https://github.com/cubiq/ComfyUI_essentials.git /opt/ComfyUI/custom_nodes/ComfyUI_essentials \
+    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI_essentials/.git \
+    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI_essentials/requirements.txt || true)
+
+# Install comfyui-fill-nodes (FL_RIFE etc)
+RUN git clone --depth=1 https://github.com/filliptm/ComfyUI_Fill-Nodes.git /opt/ComfyUI/custom_nodes/ComfyUI_Fill-Nodes \
+    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI_Fill-Nodes/.git \
+    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI_Fill-Nodes/requirements.txt || true)
+
+# Install rgthree-comfy (Fast Groups Bypasser etc)
+RUN git clone --depth=1 https://github.com/rgthree/rgthree-comfy.git /opt/ComfyUI/custom_nodes/rgthree-comfy \
+    && rm -rf /opt/ComfyUI/custom_nodes/rgthree-comfy/.git \
+    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/rgthree-comfy/requirements.txt || true)
+
+# Install ComfyUI-Logic
+RUN git clone --depth=1 https://github.com/theUpsider/ComfyUI-Logic.git /opt/ComfyUI/custom_nodes/ComfyUI-Logic \
+    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI-Logic/.git \
+    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI-Logic/requirements.txt || true)
+
 # ============================================================================
 # CRITICAL: Install ComfyUI-GGUF for GGUF model loading
 # This enables UnetLoaderGGUF and DualCLIPLoaderGGUF nodes
@@ -146,8 +165,8 @@ RUN cd custom_nodes/ComfyUI-GGUF && \
 # Create model directories
 RUN mkdir -p \
     models/checkpoints \
-    models/unet \
-    models/clip \
+    models/unet/ltx \
+    models/clip/ltx \
     models/clip_gguf \
     models/vae \
     models/latent_upscale_models \
@@ -165,10 +184,31 @@ RUN mkdir -p \
 # Source: Kijai/LTXV2_comfy
 RUN echo "Downloading LTX-2 Distilled GGUF Q4 model..." && \
     python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf models/unet/ && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf models/unet/ltx/ && \
     rm -rf /tmp/kijai_models && \
     echo "✓ LTX-2 GGUF Q4 downloaded (~12GB)" && \
-    ls -lh models/unet/
+    ls -lh models/unet/ltx/
+
+# Download LTX-2 Distilled Q8_0 GGUF model for "Uncensored" workflow support
+RUN echo "Downloading LTX-2 GGUF Q8_0 model..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/gguf', allow_patterns=['diffusion_models/ltx-2-19b-distilled_Q8_0.gguf'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/gguf/diffusion_models/ltx-2-19b-distilled_Q8_0.gguf models/unet/ltx/ && \
+    rm -rf /tmp/gguf && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download scaled Gemma-3 12B FP8 text encoder for "Uncensored" workflow support
+RUN echo "Downloading scaled Gemma-3 12B FP8 text encoder..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Comfy-Org/ltx-2', repo_type='model', local_dir='/tmp/scaled_gemma', allow_patterns=['split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/scaled_gemma/split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors models/clip/ && \
+    rm -rf /tmp/scaled_gemma && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download embeddings connector dev bf16 for "Uncensored" workflow support
+RUN echo "Downloading LTX-2 embeddings connector dev bf16..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/conn', allow_patterns=['text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/conn/text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors models/clip/ && \
+    rm -rf /tmp/conn && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Download VAE (~5GB) - Still needs safetensors version
 # Source: Kijai/LTXV2_comfy

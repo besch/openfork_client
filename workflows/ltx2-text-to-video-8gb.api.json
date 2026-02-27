@@ -2,7 +2,7 @@
   "prompt": {
     "1": {
       "inputs": {
-        "unet_name": "ltx-2-19b-distilled_Q4_K_M.gguf"
+        "unet_name": "ltx-2-19b-distilled_Q8_0.gguf"
       },
       "class_type": "UnetLoaderGGUF",
       "_meta": {
@@ -11,8 +11,8 @@
     },
     "2": {
       "inputs": {
-        "clip_name1": "gemma_3_12B_it_fp4_mixed.safetensors",
-        "clip_name2": "ltx-2-19b-dev-fp4_projections_only.safetensors",
+        "clip_name1": "gemma_3_12B_it_fp8_scaled.safetensors",
+        "clip_name2": "ltx-2-19b-embeddings_connector_dev_bf16.safetensors",
         "type": "ltxv"
       },
       "class_type": "DualCLIPLoader",
