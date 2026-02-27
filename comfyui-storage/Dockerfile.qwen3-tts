@@ -92,6 +92,9 @@ RUN if [ "$MODEL_SIZE" = "1.7B" ]; then \
         echo "Using 0.6B models for 8GB variant"; \
     fi
 
+# Fix speech_tokenizer loading issue by linking the tokenizer directly into the HF cache directories 
+RUN python -c "import os, glob; tok_dirs = glob.glob('/app/models/models--Qwen--Qwen3-TTS-Tokenizer-12Hz/snapshots/*/'); tok_dir = tok_dirs[0] if tok_dirs else None; [os.symlink(tok_dir, os.path.join(md, 'speech_tokenizer')) for md in glob.glob('/app/models/models--Qwen--Qwen3-TTS-12Hz-*/snapshots/*/') if 'Tokenizer' not in md and tok_dir and not os.path.exists(os.path.join(md, 'speech_tokenizer'))]"
+
 # Copy the API wrapper script (will be downloaded at runtime from GitHub)
 # This allows dynamic updates without rebuilding the image
 
