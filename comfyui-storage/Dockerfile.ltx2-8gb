@@ -219,16 +219,6 @@ RUN echo "Downloading VAE..." && \
     echo "✓ VAE downloaded (5GB)" && \
     ls -lh models/vae/
 
-# Download Audio VAE (~1GB)
-# Source: Kijai/LTXV2_comfy
-RUN echo "Downloading Audio VAE..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['VAE/LTX2_audio_vae_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/kijai_models/VAE/LTX2_audio_vae_bf16.safetensors models/vae/LTX2-Audio-VAE-BF16.safetensors && \
-    ln -s /opt/ComfyUI/models/vae/LTX2-Audio-VAE-BF16.safetensors models/checkpoints/LTX2-Audio-VAE-BF16.safetensors && \
-    rm -rf /tmp/kijai_models && \
-    echo "✓ Audio VAE downloaded" && \
-    ls -lh models/vae/
-
 # Download Gemma-3 12B FP4 MIXED text encoder (9.4GB - much smaller than FP8/BF16!)
 # Source: Comfy-Org/ltx-2 (official ComfyUI models)
 # This should expand to ~18GB in RAM vs ~26GB for FP8

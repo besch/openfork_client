@@ -7,7 +7,7 @@
       },
       "class_type": "UNETLoader",
       "_meta": {
-        "title": "Load LTX-2 FP8 UNET"
+        "title": "Load LTX-2 FP8 UNET (Split Loading for Speed)"
       }
     },
     "2": {
@@ -18,7 +18,7 @@
       },
       "class_type": "DualCLIPLoader",
       "_meta": {
-        "title": "Dual CLIP Loader"
+        "title": "Load Gemma-3 12B Text Encoder (FP8 Optimized for Speed)"
       }
     },
     "3": {
@@ -49,40 +49,24 @@
       },
       "class_type": "LTXVConditioning"
     },
+    "16": {
+      "inputs": {
+        "vae_name": "LTX2_video_vae_bf16.safetensors"
+      },
+      "class_type": "VAELoader",
+      "_meta": {
+        "title": "Load VAE (Separate for Consistent Memory Management)"
+      }
+    },
     "20": {
       "inputs": {
-        "ckpt_name": "LTX2-Audio-VAE-BF16.safetensors"
-      },
-      "class_type": "LTXVAudioVAELoader"
-    },
-    "6": {
-      "inputs": {
-        "width": 1920,
-        "height": 1088,
-        "length": 241,
+        "width": 1280,
+        "height": 720,
+        "length": 97,
         "batch_size": 1,
         "autopad": true
       },
-      "class_type": "EmptyLTXVLatentVideo",
-      "_meta": {
-        "title": "Video Latent (Full HD, 10s)"
-      }
-    },
-    "22": {
-      "inputs": {
-        "audio_vae": ["20", 0],
-        "frames_number": 241,
-        "batch_size": 1,
-        "frame_rate": 24
-      },
-      "class_type": "LTXVEmptyLatentAudio"
-    },
-    "23": {
-      "inputs": {
-        "video_latent": ["6", 0],
-        "audio_latent": ["22", 0]
-      },
-      "class_type": "LTXVConcatAVLatent"
+      "class_type": "EmptyLTXVLatentVideo"
     },
     "7": {
       "inputs": {
@@ -103,13 +87,10 @@
       "inputs": {
         "model": ["1", 0],
         "scheduler": "simple",
-        "steps": 30,
+        "steps": 25,
         "denoise": 1.0
       },
-      "class_type": "BasicScheduler",
-      "_meta": {
-        "title": "Scheduler (30 steps)"
-      }
+      "class_type": "BasicScheduler"
     },
     "10": {
       "inputs": {
@@ -117,35 +98,23 @@
       },
       "class_type": "RandomNoise"
     },
-    "12": {
+    "11": {
       "inputs": {
         "noise": ["10", 0],
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["23", 0]
+        "latent_image": ["20", 0]
       },
       "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "AV Sampler"
+        "title": "Standard Sampler (Advanced)"
       }
     },
-    "24": {
+    "12": {
       "inputs": {
-        "av_latent": ["12", 0]
-      },
-      "class_type": "LTXVSeparateAVLatent"
-    },
-    "11": {
-      "inputs": {
-        "vae_name": "LTX2_video_vae_bf16.safetensors"
-      },
-      "class_type": "VAELoader"
-    },
-    "13": {
-      "inputs": {
-        "samples": ["24", 0],
-        "vae": ["11", 0],
+        "samples": ["11", 0],
+        "vae": ["16", 0],
         "tile_size": 512,
         "overlap": 64,
         "temporal_size": 64,
@@ -153,35 +122,27 @@
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Video Decode"
-      }
-    },
-    "21": {
-      "inputs": {
-        "samples": ["24", 1],
-        "audio_vae": ["20", 0]
-      },
-      "class_type": "LTXVAudioVAEDecode",
-      "_meta": {
-        "title": "Audio Decode"
+        "title": "VAE Decode Tiled (24GB Safe)"
       }
     },
     "14": {
       "inputs": {
-        "images": ["13", 0],
-        "audio": ["21", 0],
+        "images": ["12", 0],
         "frame_rate": 24,
         "loop_count": 0,
-        "filename_prefix": "ltx2_24gb",
+        "filename_prefix": "ltx2_t2v_24gb",
         "format": "video/h264-mp4",
         "pix_fmt": "yuv420p",
-        "crf": 17,
+        "crf": 19,
         "save_metadata": true,
         "trim_to_audio": false,
         "pingpong": false,
         "save_output": true
       },
-      "class_type": "VHS_VideoCombine"
+      "class_type": "VHS_VideoCombine",
+      "_meta": {
+        "title": "Save Video (VHS)"
+      }
     }
   }
 }
