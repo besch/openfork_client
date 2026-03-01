@@ -81,7 +81,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
     # These are conservative estimates based on services.json disk_required_gb
     size_map = {
         "llm": 20,
-        "foley": 80,
+        "mmaudio": 60,
         "vibevoice": 80,
         "chatterbox": 80,
         "stream-diffvsr": 80,

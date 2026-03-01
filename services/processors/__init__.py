@@ -23,13 +23,14 @@ from .video.svi_film import SVIFilmImageToVideoJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
-from .audio.foley import FoleyJobProcessor
+
 from .audio.vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
 from .audio.diffrhythm_cli import DiffRhythmCLIJobProcessor
 from .audio.heartmula_cli import HeartMuLaCLIJobProcessor
 from .audio.acestep_cli import AceStepCLIJobProcessor
 from .audio.chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProcessor
 from .audio.qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
+from .audio.mmaudio import MMAudioJobProcessor
 
 # Image processors
 from .image.text_to_image import TextToImageJobProcessor
@@ -57,7 +58,7 @@ __all__ = [
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",
     "StableAudioJobProcessor",
-    "FoleyJobProcessor",
+
     "VibeVoiceJobProcessor",
     "VibeVoiceMultiCloneJobProcessor",
     "DiffRhythmCLIJobProcessor",
@@ -81,6 +82,7 @@ __all__ = [
     "QwenImageEditTurboProcessor",
     "QwenImageInpaintTurboProcessor",
     "QwenImageT2ITurboProcessor",
+    "MMAudioJobProcessor",
 ]
 
 

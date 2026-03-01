@@ -39,7 +39,7 @@ from services.processors import (
     TurboDiffusionT2VJobProcessor,
     TurboDiffusionI2VJobProcessor,
     StableAudioJobProcessor,
-    FoleyJobProcessor,
+
     VibeVoiceJobProcessor,
     VibeVoiceMultiCloneJobProcessor,
     DiffRhythmCLIJobProcessor,
@@ -63,6 +63,7 @@ from services.processors import (
     QwenImageEditTurboProcessor,
     QwenImageInpaintTurboProcessor,
     QwenImageT2ITurboProcessor,
+    MMAudioJobProcessor,
 )
 
 __all__ = [
@@ -82,7 +83,7 @@ __all__ = [
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",
     "StableAudioJobProcessor",
-    "FoleyJobProcessor",
+
     "VibeVoiceJobProcessor",
     "VibeVoiceMultiCloneJobProcessor",
     "DiffRhythmCLIJobProcessor",
@@ -106,6 +107,7 @@ __all__ = [
     "QwenImageEditTurboProcessor",
     "QwenImageInpaintTurboProcessor",
     "QwenImageT2ITurboProcessor",
+    "MMAudioJobProcessor",
 ]
 
 

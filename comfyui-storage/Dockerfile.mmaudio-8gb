@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1.4
+# MMAudio 8GB Docker Image
+# Uses small_44k model variant (~6-7GB VRAM, 44kHz output)
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV MMAUDIO_VARIANT=small_44k
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-distutils \
+    curl git wget ffmpeg \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+# Clone MMAudio and install dependencies
+RUN git clone --depth=1 https://github.com/hkchengrex/MMAudio.git /app \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install --no-cache-dir -e . \
+    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart
+
+# Create directories
+RUN mkdir -p /app/input /app/output /app/weights /app/ext_weights
+
+# Download model weights for small_44k variant
+RUN python -c "\
+from mmaudio.eval_utils import all_model_cfg; \
+cfg = all_model_cfg['small_44k']; \
+cfg.download_if_needed(); \
+print('All weights downloaded successfully')" \
+    && rm -rf ~/.cache/pip
+
+# Copy the API server
+COPY mmaudio_api.py /app/mmaudio_api.py
+
+EXPOSE 8000
+CMD ["python", "mmaudio_api.py"]
