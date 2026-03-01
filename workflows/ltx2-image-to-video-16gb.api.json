@@ -2,18 +2,18 @@
   "prompt": {
     "1": {
       "inputs": {
-        "unet_name": "ltx-2-19b-distilled_Q8_0.gguf"
+        "unet_name": "ltx/ltx-2-19b-distilled_Q8_0.gguf"
       },
       "class_type": "UnetLoaderGGUF",
       "_meta": {
-        "title": "Load LTX-2 FP8 UNET (Split Loading)"
+        "title": "Load LTX-2 Q8_0 GGUF UNET"
       }
     },
     "2": {
       "inputs": {
         "clip_name1": "gemma_3_12B_it_fp8_scaled.safetensors",
         "clip_name2": "ltx-2-19b-embeddings_connector_dev_bf16.safetensors",
-        "type": "ltxv"
+        "type": "ltxv2"
       },
       "class_type": "DualCLIPLoader",
       "_meta": {
@@ -32,7 +32,7 @@
     },
     "4": {
       "inputs": {
-        "text": "",
+        "text": "worst quality, inconsistent motion, blurry, jittery, distorted, missing audio, silent, muffled audio, distorted audio",
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
@@ -55,7 +55,16 @@
       },
       "class_type": "VAELoader",
       "_meta": {
-        "title": "Load VAE (Separate for Memory Efficiency)"
+        "title": "Load Video VAE"
+      }
+    },
+    "audio_vae": {
+      "inputs": {
+        "vae_name": "LTX2_audio_vae_bf16.safetensors"
+      },
+      "class_type": "LTXVAudioVAELoader",
+      "_meta": {
+        "title": "Load Audio VAE (LTX-2 core node)"
       }
     },
     "17": {
@@ -84,6 +93,27 @@
         "frame_rate": 24
       },
       "class_type": "LTXVConditioning"
+    },
+    "empty_audio_latent": {
+      "inputs": {
+        "length": 97,
+        "batch_size": 1,
+        "frame_rate": 24
+      },
+      "class_type": "LTXVEmptyLatentAudio",
+      "_meta": {
+        "title": "Empty Audio Latent"
+      }
+    },
+    "concat_av": {
+      "inputs": {
+        "video_latent": ["17", 2],
+        "audio_latent": ["empty_audio_latent", 0]
+      },
+      "class_type": "LTXVConcatAVLatent",
+      "_meta": {
+        "title": "Concatenate Audio+Video Latents"
+      }
     },
     "7": {
       "inputs": {
@@ -124,16 +154,25 @@
         "guider": ["7", 0],
         "sampler": ["8", 0],
         "sigmas": ["9", 0],
-        "latent_image": ["17", 2]
+        "latent_image": ["concat_av", 0]
       },
       "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "16GB SAFE: Image-to-Video Sampler"
+        "title": "16GB SAFE: Image-to-Video Sampler (Audio+Video)"
+      }
+    },
+    "separate_av": {
+      "inputs": {
+        "samples": ["11", 0]
+      },
+      "class_type": "LTXVSeparateAVLatent",
+      "_meta": {
+        "title": "Separate Audio/Video Latents"
       }
     },
     "12": {
       "inputs": {
-        "samples": ["11", 0],
+        "samples": ["separate_av", 0],
         "vae": ["16", 0],
         "tile_size": 256,
         "overlap": 32,
@@ -142,15 +181,27 @@
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "VAE Decode Tiled (16GB Safe)"
+        "title": "Decode Video Latent (Tiled, 16GB Safe)"
+      }
+    },
+    "decode_audio": {
+      "inputs": {
+        "samples": ["separate_av", 1],
+        "audio_vae": ["audio_vae", 0],
+        "frame_rate": 24
+      },
+      "class_type": "LTXVAudioVAEDecode",
+      "_meta": {
+        "title": "Decode Audio Latent"
       }
     },
     "14": {
       "inputs": {
         "images": ["12", 0],
+        "audio": ["decode_audio", 0],
         "frame_rate": 24,
         "loop_count": 0,
-        "filename_prefix": "ltx2_i2v_16gb",
+        "filename_prefix": "ltx2_i2v_16gb_audio",
         "format": "video/h264-mp4",
         "pix_fmt": "yuv420p",
         "crf": 19,
@@ -161,7 +212,7 @@
       },
       "class_type": "VHS_VideoCombine",
       "_meta": {
-        "title": "Save Video (VHS)"
+        "title": "Save Video+Audio (VHS)"
       }
     }
   }

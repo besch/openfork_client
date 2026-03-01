@@ -454,6 +454,7 @@ def inject_prompt_into_ltx2_video_workflow(
     aspect_ratio: str = "16:9",
     seed: Optional[int] = None,
     steps: Optional[int] = None,
+    cfg_scale: Optional[float] = None,
     camera_movement: Optional[str] = None,
     camera_movement_strength: float = 1.0
 ):
@@ -1785,4 +1786,3 @@ def inject_image_into_zimage_inpaint_workflow(
 
 
     return api_graph
-
