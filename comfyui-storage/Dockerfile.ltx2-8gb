@@ -2,7 +2,6 @@
 # Uses GGUF quantized models that STAY COMPRESSED in RAM
 # Critical for 8GB VRAM + 32GB RAM systems
 # Based on Kijai/LTXV2_comfy GGUF recommendations
-# AUDIO ENABLED: LTX-2 generates synchronized video+audio in a single pass
 
 FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
@@ -27,9 +26,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     curl \
     git \
-    ffmpeg \
-    libsndfile1 \
-    libmagic1 \
     libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
@@ -37,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     libgomp1 \
     git-lfs \
+    ffmpeg \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
@@ -54,7 +51,6 @@ RUN python -m pip install --no-cache-dir \
     --extra-index-url https://download.pytorch.org/whl/cu128
 
 # Install core dependencies including huggingface-hub with CLI
-# Added audio deps: librosa needed for LTX-2 audio codec (scipy/einops already present)
 RUN python -m pip install --no-cache-dir \
     "huggingface-hub[cli]==0.26.2" \
     einops==0.8.0 \
@@ -65,7 +61,6 @@ RUN python -m pip install --no-cache-dir \
     Pillow==10.4.0 \
     numpy==1.26.4 \
     scipy==1.14.1 \
-    librosa \
     opencv-python==4.10.0.84 \
     imageio==2.36.0 \
     imageio-ffmpeg==0.5.1 \
@@ -81,6 +76,8 @@ RUN python -m pip install --no-cache-dir \
 RUN python -m pip install --no-cache-dir --upgrade gguf && \
     python -c "import gguf; print('✓ GGUF package installed successfully')"
 
+
+
 # ComfyUI dependencies
 RUN python -m pip install --no-cache-dir \
     aiohttp==3.11.10 \
@@ -93,11 +90,7 @@ RUN python -m pip install --no-cache-dir \
 
 WORKDIR /opt/ComfyUI
 
-# ARG CACHEBUST_COMFYUI forces re-clone to get latest built-in nodes
-# CRITICAL: LTX-2 audio nodes (LTXVAudioVAELoader, LTXVSeparateAVLatent, etc.)
-# live in ComfyUI CORE (not a custom node). They require the latest nightly/main.
-# A stale clone will silently be missing these nodes - always pull fresh.
-ARG CACHEBUST_COMFYUI=9
+# Clone ComfyUI - use latest
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout master \
@@ -110,17 +103,11 @@ RUN cd /opt/ComfyUI && python -m pip install --no-cache-dir -r requirements.txt
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
     && rm -rf custom_nodes/ComfyUI-Manager/.git
 
-# Clone ComfyUI-LTXVideo (custom video generation nodes)
-ARG CACHEBUST_LTXV=9
+# Clone ComfyUI-LTXVideo (essential for LTX-2)
 RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
     && cd custom_nodes/ComfyUI-LTXVideo \
-    && (python -m pip install --no-cache-dir -r requirements.txt || true)
-
-# Install ComfyUI-KJNodes (additional utility nodes)
-RUN git clone --depth=1 https://github.com/Kijai/ComfyUI-KJNodes.git custom_nodes/ComfyUI-KJNodes \
-    && rm -rf custom_nodes/ComfyUI-KJNodes/.git \
-    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-KJNodes/requirements.txt || true)
+    && python -m pip install --no-cache-dir -r requirements.txt || true
 
 # Patch embeddings_connector.py
 RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
@@ -130,26 +117,6 @@ RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom
     && rm -rf custom_nodes/VideoHelperSuite/.git \
     && cd custom_nodes/VideoHelperSuite \
     && python -m pip install --no-cache-dir -r requirements.txt || true
-
-# Install comfyui_essentials (SimpleMath+ etc)
-RUN git clone --depth=1 https://github.com/cubiq/ComfyUI_essentials.git /opt/ComfyUI/custom_nodes/ComfyUI_essentials \
-    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI_essentials/.git \
-    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI_essentials/requirements.txt || true)
-
-# Install comfyui-fill-nodes (FL_RIFE etc)
-RUN git clone --depth=1 https://github.com/filliptm/ComfyUI_Fill-Nodes.git /opt/ComfyUI/custom_nodes/ComfyUI_Fill-Nodes \
-    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI_Fill-Nodes/.git \
-    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI_Fill-Nodes/requirements.txt || true)
-
-# Install rgthree-comfy (Fast Groups Bypasser etc)
-RUN git clone --depth=1 https://github.com/rgthree/rgthree-comfy.git /opt/ComfyUI/custom_nodes/rgthree-comfy \
-    && rm -rf /opt/ComfyUI/custom_nodes/rgthree-comfy/.git \
-    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/rgthree-comfy/requirements.txt || true)
-
-# Install ComfyUI-Logic
-RUN git clone --depth=1 https://github.com/theUpsider/ComfyUI-Logic.git /opt/ComfyUI/custom_nodes/ComfyUI-Logic \
-    && rm -rf /opt/ComfyUI/custom_nodes/ComfyUI-Logic/.git \
-    && (python -m pip install --no-cache-dir -r /opt/ComfyUI/custom_nodes/ComfyUI-Logic/requirements.txt || true)
 
 # ============================================================================
 # CRITICAL: Install ComfyUI-GGUF for GGUF model loading
@@ -167,11 +134,10 @@ RUN cd custom_nodes/ComfyUI-GGUF && \
     if [ -f requirements.txt ]; then python -m pip install --no-cache-dir -r requirements.txt; fi
 
 # Create model directories
-# NOTE: models/vae is used for BOTH video VAE and audio VAE
 RUN mkdir -p \
     models/checkpoints \
-    models/unet/ltx \
-    models/clip/ltx \
+    models/unet \
+    models/clip \
     models/clip_gguf \
     models/vae \
     models/latent_upscale_models \
@@ -186,75 +152,26 @@ RUN mkdir -p \
 # ============================================================================
 
 # Download LTX-2 Distilled GGUF Q4 model (~12GB - stays compressed in RAM!)
+# Source: Kijai/LTXV2_comfy
 RUN echo "Downloading LTX-2 Distilled GGUF Q4 model..." && \
     python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf models/unet/ltx/ && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-distilled_Q4_K_M.gguf models/unet/ && \
     rm -rf /tmp/kijai_models && \
     echo "✓ LTX-2 GGUF Q4 downloaded (~12GB)" && \
-    ls -lh models/unet/ltx/
+    ls -lh models/unet/
 
-# Download LTX-2 Distilled Q8_0 GGUF model
-RUN echo "Downloading LTX-2 GGUF Q8_0 model..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/gguf', allow_patterns=['diffusion_models/ltx-2-19b-distilled_Q8_0.gguf'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/gguf/diffusion_models/ltx-2-19b-distilled_Q8_0.gguf models/unet/ltx/ && \
-    rm -rf /tmp/gguf && \
-    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Download scaled Gemma-3 12B FP8 text encoder
-RUN echo "Downloading scaled Gemma-3 12B FP8 text encoder..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Comfy-Org/ltx-2', repo_type='model', local_dir='/tmp/scaled_gemma', allow_patterns=['split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/scaled_gemma/split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors models/clip/ && \
-    rm -rf /tmp/scaled_gemma && \
-    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Download embeddings connector dev bf16
-RUN echo "Downloading LTX-2 embeddings connector dev bf16..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/conn', allow_patterns=['text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/conn/text_encoders/ltx-2-19b-embeddings_connector_dev_bf16.safetensors models/clip/ && \
-    rm -rf /tmp/conn && \
-    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Download Video VAE (~5GB)
-RUN echo "Downloading Video VAE..." && \
+# Download VAE (~5GB) - Still needs safetensors version
+# Source: Kijai/LTXV2_comfy
+RUN echo "Downloading VAE..." && \
     python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['VAE/LTX2_video_vae_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/kijai_models/VAE/LTX2_video_vae_bf16.safetensors models/vae/ && \
     rm -rf /tmp/kijai_models && \
-    echo "✓ Video VAE downloaded" && \
+    echo "✓ VAE downloaded (5GB)" && \
     ls -lh models/vae/
 
-# ─────────────────────────────────────────────────────────────────────────────
-# AUDIO MODELS (required for LTX-2 synchronized audio-video generation)
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Download Audio VAE (~218MB) from Kijai/LTXV2_comfy
-# This is the CORRECT version with proper safetensors metadata.
-# The raw Lightricks/LTX-2 audio_vae/diffusion_pytorch_model.safetensors is
-# MISSING metadata and will throw "AssertionError: Metadata is required for audio VAE".
-# The LTXVAudioVAELoader core node looks for this file in models/vae/.
-RUN echo "Downloading Audio VAE (LTX-2 audio generation)..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['VAE/LTX2_audio_vae_bf16.safetensors'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/kijai_models/VAE/LTX2_audio_vae_bf16.safetensors models/vae/ && \
-    rm -rf /tmp/kijai_models && \
-    echo "✓ Audio VAE downloaded" && \
-    ls -lh models/vae/ && \
-    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Download Vocoder / TAE for audio (taeltx_2.safetensors, ~23.5MB)
-# taeltx_2 is the Tiny AutoEncoder for LTX-2 and also serves as the vocoder/codec
-# for the audio branch. It goes in models/vae/ and is referenced by LTXVAudioVAELoader.
-RUN echo "Downloading LTX-2 vocoder (taeltx_2)..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['VAE/taeltx_2.safetensors'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/kijai_models/VAE/taeltx_2.safetensors models/vae/ && \
-    rm -rf /tmp/kijai_models && \
-    echo "✓ Vocoder downloaded" && \
-    ls -lh models/vae/ && \
-    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# ─────────────────────────────────────────────────────────────────────────────
-# END AUDIO MODELS
-# ─────────────────────────────────────────────────────────────────────────────
-
 # Download Gemma-3 12B FP4 MIXED text encoder (9.4GB - much smaller than FP8/BF16!)
+# Source: Comfy-Org/ltx-2 (official ComfyUI models)
+# This should expand to ~18GB in RAM vs ~26GB for FP8
 RUN echo "Downloading Gemma-3 12B FP4 Mixed text encoder from Comfy-Org..." && \
     python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Comfy-Org/ltx-2', repo_type='model', local_dir='/tmp/comfy_models', allow_patterns=['split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/comfy_models/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors models/clip/ && \
@@ -263,6 +180,7 @@ RUN echo "Downloading Gemma-3 12B FP4 Mixed text encoder from Comfy-Org..." && \
     ls -lh models/clip/
 
 # Download LTX-2 FP4 projections (required for DualCLIPLoader)
+# Source: GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn
 RUN echo "Downloading LTX-2 projections..." && \
     python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn', repo_type='model', local_dir='/tmp/fp8_models', allow_patterns=['ltx-2-19b-dev-fp4_projections_only.safetensors'], token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/fp8_models/ltx-2-19b-dev-fp4_projections_only.safetensors models/clip/ && \
@@ -278,10 +196,10 @@ RUN echo "Downloading distilled LoRA..." && \
     rm -rf /tmp/lightricks_models && \
     echo "✓ Distilled LoRA downloaded"
 
-# Verify all downloads (video + audio)
+# Verify all downloads
 RUN echo "=== Model Download Summary ===" && \
-    echo "UNET Models:" && ls -lh models/unet/ltx/ && \
-    echo "VAE Models (video + audio):" && ls -lh models/vae/ && \
+    echo "UNET Models:" && ls -lh models/unet/ && \
+    echo "VAE Models:" && ls -lh models/vae/ && \
     echo "CLIP GGUF Models:" && ls -lh models/clip_gguf/ && \
     echo "CLIP Models:" && ls -lh models/clip/ && \
     echo "LoRA Models:" && ls -lh models/loras/ && \

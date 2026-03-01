@@ -2,18 +2,19 @@
   "prompt": {
     "1": {
       "inputs": {
-        "unet_name": "ltx-2-19b-distilled_Q8_0.gguf"
+        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
+        "weight_dtype": "fp8_e4m3fn"
       },
-      "class_type": "UnetLoaderGGUF",
+      "class_type": "UNETLoader",
       "_meta": {
         "title": "Load LTX-2 FP8 UNET (Split Loading)"
       }
     },
     "2": {
       "inputs": {
-        "clip_name1": "gemma_3_12B_it_fp8_scaled.safetensors",
-        "clip_name2": "ltx-2-19b-embeddings_connector_dev_bf16.safetensors",
-        "type": "ltxv2"
+        "clip_name1": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
+        "clip_name2": "ltx-2-19b-dev-fp4_projections_only.safetensors",
+        "type": "ltxv"
       },
       "class_type": "DualCLIPLoader",
       "_meta": {
@@ -23,10 +24,7 @@
     "3": {
       "inputs": {
         "text": "A cinematic video prompt placeholder",
-        "clip": [
-          "2",
-          0
-        ]
+        "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
@@ -36,10 +34,7 @@
     "4": {
       "inputs": {
         "text": "",
-        "clip": [
-          "2",
-          0
-        ]
+        "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
@@ -48,14 +43,8 @@
     },
     "5": {
       "inputs": {
-        "positive": [
-          "3",
-          0
-        ],
-        "negative": [
-          "4",
-          0
-        ],
+        "positive": ["3", 0],
+        "negative": ["4", 0],
         "frame_rate": 24
       },
       "class_type": "LTXVConditioning"
@@ -75,18 +64,9 @@
     },
     "7": {
       "inputs": {
-        "model": [
-          "1",
-          0
-        ],
-        "positive": [
-          "5",
-          0
-        ],
-        "negative": [
-          "5",
-          1
-        ],
+        "model": ["1", 0],
+        "positive": ["5", 0],
+        "negative": ["5", 1],
         "cfg": 3.0
       },
       "class_type": "CFGGuider"
@@ -99,10 +79,7 @@
     },
     "9": {
       "inputs": {
-        "model": [
-          "1",
-          0
-        ],
+        "model": ["1", 0],
         "scheduler": "simple",
         "steps": 20,
         "denoise": 1.0
@@ -129,26 +106,11 @@
     },
     "12": {
       "inputs": {
-        "noise": [
-          "10",
-          0
-        ],
-        "guider": [
-          "7",
-          0
-        ],
-        "sampler": [
-          "8",
-          0
-        ],
-        "sigmas": [
-          "9",
-          0
-        ],
-        "latent_image": [
-          "6",
-          0
-        ]
+        "noise": ["10", 0],
+        "guider": ["7", 0],
+        "sampler": ["8", 0],
+        "sigmas": ["9", 0],
+        "latent_image": ["6", 0]
       },
       "class_type": "SamplerCustomAdvanced",
       "_meta": {
@@ -157,14 +119,8 @@
     },
     "13": {
       "inputs": {
-        "samples": [
-          "12",
-          0
-        ],
-        "vae": [
-          "11",
-          0
-        ],
+        "samples": ["12", 0],
+        "vae": ["11", 0],
         "tile_size": 256,
         "overlap": 32,
         "temporal_size": 32,
@@ -177,10 +133,7 @@
     },
     "14": {
       "inputs": {
-        "images": [
-          "13",
-          0
-        ],
+        "images": ["13", 0],
         "frame_rate": 24,
         "loop_count": 0,
         "filename_prefix": "ltx2_t2v_16gb",
