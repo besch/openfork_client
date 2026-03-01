@@ -3,6 +3,7 @@ comfyui-storage/acestep_api.py
 comfyui-storage/build_and_push.py
 comfyui-storage/diffrhythm_api.py
 comfyui-storage/heartmula_api.py
+comfyui-storage/mmaudio_api.py
 comfyui-storage/qwen3_tts_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/temp_handler.py
@@ -32,6 +33,7 @@ services/processors/audio/chatterbox.py
 services/processors/audio/diffrhythm_cli.py
 services/processors/audio/foley.py
 services/processors/audio/heartmula_cli.py
+services/processors/audio/mmaudio.py
 services/processors/audio/qwen3_tts.py
 services/processors/audio/stable_audio.py
 services/processors/audio/vibevoice.py
