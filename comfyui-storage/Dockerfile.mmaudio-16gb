@@ -37,16 +37,24 @@ RUN git clone --depth=1 https://github.com/hkchengrex/MMAudio.git /app \
 # Create directories
 RUN mkdir -p /app/input /app/output /app/weights /app/ext_weights
 
-# Download model weights for large_44k_v2 variant
-RUN python -c "\
+# Download model weights for large_44k_v2 variant and CLIP/BigVGAN weights
+ARG HF_TOKEN
+RUN HF_TOKEN=$HF_TOKEN python -c "\
 from mmaudio.eval_utils import all_model_cfg; \
+from huggingface_hub import snapshot_download; \
 cfg = all_model_cfg['large_44k_v2']; \
 cfg.download_if_needed(); \
-print('All weights downloaded successfully')" \
+snapshot_download('apple/DFN5B-CLIP-ViT-H-14-384'); \
+snapshot_download('nvidia/bigvgan_v2_44khz_128band_512x'); \
+print('All weights and CLIP/BigVGAN downloaded successfully')" \
     && rm -rf ~/.cache/pip
+
+# Copy the API script locally
+COPY mmaudio_api.py /app/mmaudio_api.py
 
 # Expose API port
 EXPOSE 8000
 
 # Run the API server with dynamic script download
+ENV HF_HUB_OFFLINE=1
 CMD ["/bin/bash", "-c", "curl -s -L -o mmaudio_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/mmaudio_api.py && python mmaudio_api.py"]
