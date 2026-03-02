@@ -34,10 +34,14 @@ RUN git clone --depth=1 https://github.com/ysharma3501/LavaSR.git /app \
     && python -m pip install --no-cache-dir . \
     && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests
 
-# Pre-download model weights (if possible through python script/cli)
-# Assuming a standard HF model layout if requirements point to huggingface_hub
-RUN python -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download('YatharthS/LavaSR', 'checkpoint.pth', local_dir='/app/checkpoints')" || true
+# Pre-download model weights
+RUN python -c "from huggingface_hub import snapshot_download; \
+    snapshot_download('YatharthS/LavaSR'); \
+    snapshot_download('facebook/vocos-mel-spectrogram'); \
+    print('Weights downloaded successfully')"
+
+# Copy the API script locally
+COPY lavasr_api.py /app/lavasr_api.py
 
 # Create directories
 RUN mkdir -p /app/input /app/output /app/checkpoints
@@ -46,4 +50,5 @@ RUN mkdir -p /app/input /app/output /app/checkpoints
 EXPOSE 8000
 
 # Run the API server with dynamic script download
+ENV HF_HUB_OFFLINE=1
 CMD ["/bin/bash", "-c", "curl -s -L -o lavasr_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/lavasr_api.py && python lavasr_api.py"]

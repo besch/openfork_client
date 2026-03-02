@@ -31,8 +31,6 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="LavaSR API", version="1.0.0")
-
 # Job storage
 jobs = {}
 
@@ -44,21 +42,25 @@ CHECKPOINT_DIR = WORK_DIR / "checkpoints"
 
 # Global model instance
 lava_model = None
+model_loading = False
+model_error = None
 
 def load_model():
     """Load the LavaSR model to GPU."""
-    global lava_model
+    global lava_model, model_loading, model_error
+    model_loading = True
     try:
         logger.info("Loading LavaSR model...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
         # The library uses Hugging Face for model management
-        # We can point it to local checkpoints if downloaded
         lava_model = LavaEnhance2("YatharthS/LavaSR", device=device)
         logger.info(f"LavaSR model loaded on {device}")
     except Exception as e:
         logger.error(f"Failed to load LavaSR model: {e}", exc_info=True)
-        sys.exit(1)
+        model_error = str(e)
+    finally:
+        model_loading = False
 
 def run_lavasr_inference(job_id: str, input_path: str):
     """Run LavaSR inference using the Python API."""
@@ -98,24 +100,34 @@ def run_lavasr_inference(job_id: str, input_path: str):
         except Exception:
             pass
 
+from contextlib import asynccontextmanager
+import threading
 
-@app.on_event("startup")
-async def startup_event():
-    """Ensure directories exist and load model."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    """Ensure directories exist and start model loading."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     
-    load_model()
-    logger.info("LavaSR API Ready")
+    # Load model in a background thread so the API is reachable immediately
+    threading.Thread(target=load_model, daemon=True).start()
+    
+    logger.info("LavaSR API starting (model loading in background)...")
+    yield
+
+app = FastAPI(title="LavaSR API", version="1.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
-        "status": "healthy",
+        "status": "healthy" if model_error is None else "error",
         "model_loaded": lava_model is not None,
+        "model_loading": model_loading,
+        "model_error": model_error,
         "device": "cuda" if torch.cuda.is_available() else "cpu"
     }
 
@@ -129,6 +141,10 @@ async def enhance_endpoint(
     Start speech restoration.
     Accepts audio file upload.
     """
+    if lava_model is None:
+        if model_error:
+            raise HTTPException(status_code=503, detail=f"Model failed to load: {model_error}")
+        raise HTTPException(status_code=503, detail="Model is still loading")
     job_id = str(uuid.uuid4())
 
     # Save uploaded audio
