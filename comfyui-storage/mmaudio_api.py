@@ -12,6 +12,7 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Optional
+from contextlib import asynccontextmanager
 
 import torch
 import torchaudio
@@ -22,8 +23,6 @@ from pydantic import BaseModel
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-app = FastAPI(title="MMAudio API", version="1.0.0")
 
 # Job storage
 jobs = {}
@@ -76,7 +75,8 @@ def load_model():
     )
     _feature_utils = _feature_utils.to(_device, _dtype).eval()
     logger.info("MMAudio model loaded successfully")
-    logger.info(f"Memory usage: {torch.cuda.max_memory_allocated() / (2**30):.2f} GB")
+    if torch.cuda.is_available():
+        logger.info(f"Memory usage: {torch.cuda.max_memory_allocated() / (2**30):.2f} GB")
 
 
 @torch.inference_mode()
@@ -133,7 +133,8 @@ def generate_audio_sync(
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["output_path"] = str(output_path)
         logger.info(f"Job {job_id} completed: {output_path}")
-        logger.info(f"Memory usage: {torch.cuda.max_memory_allocated() / (2**30):.2f} GB")
+        if torch.cuda.is_available():
+            logger.info(f"Memory usage: {torch.cuda.max_memory_allocated() / (2**30):.2f} GB")
 
     except Exception as e:
         logger.error(f"Job {job_id} failed: {e}", exc_info=True)
@@ -147,19 +148,24 @@ def generate_audio_sync(
             pass
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Load model on startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load model on startup and clean up on shutdown."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     logger.info("MMAudio API starting...")
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
     if torch.cuda.is_available():
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
-        logger.info(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+        props = torch.cuda.get_device_properties(0)
+        logger.info(f"GPU: {props.name}")
+        logger.info(f"VRAM: {props.total_memory / 1024**3:.1f} GB")
 
     load_model()
+    yield
+
+
+app = FastAPI(title="MMAudio API", version="1.0.0", lifespan=lifespan)
 
 
 @app.get("/health")

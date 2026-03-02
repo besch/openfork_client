@@ -45,8 +45,8 @@ cfg.download_if_needed(); \
 print('All weights downloaded successfully')" \
     && rm -rf ~/.cache/pip
 
-# Copy the API server
-COPY mmaudio_api.py /app/mmaudio_api.py
-
+# Expose API port
 EXPOSE 8000
-CMD ["python", "mmaudio_api.py"]
+
+# Run the API server with dynamic script download
+CMD ["/bin/bash", "-c", "curl -s -L -o mmaudio_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/mmaudio_api.py && python mmaudio_api.py"]

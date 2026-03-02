@@ -42,8 +42,8 @@ RUN python -c "from huggingface_hub import hf_hub_download; \
 # Create directories
 RUN mkdir -p /app/input /app/output /app/checkpoints
 
-# Copy the API server
-COPY lavasr_api.py /app/lavasr_api.py
-
+# Expose API port
 EXPOSE 8000
-CMD ["python", "lavasr_api.py"]
+
+# Run the API server with dynamic script download
+CMD ["/bin/bash", "-c", "curl -s -L -o lavasr_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/lavasr_api.py && python lavasr_api.py"]
