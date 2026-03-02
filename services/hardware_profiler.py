@@ -2,6 +2,8 @@ import cpuinfo
 import GPUtil
 import psutil
 from typing import Optional, Tuple, List
+from services.disk_space_utils import get_disk_space_info
+
 
 def get_hardware_profile():
     """Get hardware profile of the system."""
@@ -26,11 +28,22 @@ def get_hardware_profile():
         "total": psutil.virtual_memory().total,
     }
 
+    # Get Disk information
+    disk_info = get_disk_space_info()
+    disk = {
+        "total": disk_info["total"],
+        "free": disk_info["free"],
+        "used": disk_info["used"],
+        "path": disk_info["path"]
+    }
+
     return {
         "cpu": cpu,
         "gpus": gpu_list,
         "ram": ram,
+        "disk": disk,
     }
+
 
 
 def get_available_vram() -> int:
@@ -93,8 +106,19 @@ def can_run_service(service_config: dict, available_vram_mb: Optional[int] = Non
         available_cores = get_cpu_core_count()
         if available_cores < required_cores:
             return False
+
+    # Check Disk Space (only if specified in config)
+    required_disk_gb = service_config.get("disk_required_gb")
+    if required_disk_gb:
+        from services.disk_space_utils import get_available_disk_space
+        available_disk_bytes = get_available_disk_space()
+        available_disk_gb = available_disk_bytes / (1024**3)
+        if available_disk_gb < required_disk_gb:
+            return False
     
     return True
+
+
 
 
 def get_service_incompatibility_reason(service_config: dict, available_vram_mb: Optional[int] = None) -> Optional[str]:
@@ -115,19 +139,32 @@ def get_service_incompatibility_reason(service_config: dict, available_vram_mb: 
     if available_vram_mb < required_vram:
         return f"requires {required_vram}MB VRAM, have {available_vram_mb}MB"
     
+    # Check CPU RAM
     required_cpu_ram = service_config.get("cpu_ram_required_mb")
     if required_cpu_ram:
         available_cpu_ram = get_available_system_ram()
         if available_cpu_ram < required_cpu_ram:
             return f"requires {required_cpu_ram}MB system RAM, have {available_cpu_ram}MB"
-    
+
+    # Check CPU cores
     required_cores = service_config.get("cpu_cores_required")
     if required_cores:
         available_cores = get_cpu_core_count()
         if available_cores < required_cores:
             return f"requires {required_cores} CPU cores, have {available_cores}"
+
     
+    # Check disk space
+    required_disk_gb = service_config.get("disk_required_gb")
+    if required_disk_gb:
+        from services.disk_space_utils import get_available_disk_space
+        available_disk_bytes = get_available_disk_space()
+        available_disk_gb = available_disk_bytes / (1024**3)
+        if available_disk_gb < required_disk_gb:
+            return f"requires {required_disk_gb}GB disk space, have {available_disk_gb:.1f}GB"
+            
     return None
+
 
 
 def get_compatible_services(services_config: dict) -> Tuple[List[str], List[str]]:

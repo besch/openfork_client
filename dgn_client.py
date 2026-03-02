@@ -132,9 +132,12 @@ class DGNClient:
 
             
             if self.compatible_services:
+                from services.disk_space_utils import get_available_disk_space
                 system_ram_mb = get_available_system_ram()
-                logging.info(f"GPU VRAM: {get_vram_requirement_display(self.available_vram)}, System RAM: {get_vram_requirement_display(system_ram_mb)}")
+                available_disk_bytes = get_available_disk_space()
+                logging.info(f"GPU VRAM: {get_vram_requirement_display(self.available_vram)}, System RAM: {get_vram_requirement_display(system_ram_mb)}, Disk Free: {available_disk_bytes / (1024**3):.1f}GB")
                 logging.info(f"Compatible services: {', '.join(sorted(self.compatible_services))}")
+
             else:
                 logging.warning("No compatible services found for current hardware!")
             

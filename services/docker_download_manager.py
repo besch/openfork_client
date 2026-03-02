@@ -10,6 +10,8 @@ import logging
 from typing import Dict, Optional, Set
 from enum import Enum
 import docker
+from services.disk_space_utils import estimate_image_size_bytes, check_sufficient_space
+
 
 
 class DownloadStatus(Enum):
@@ -129,7 +131,21 @@ class DockerDownloadManager:
                 self._download_status.pop(service_type, None)
                 return False
             
+            # Check for sufficient disk space before starting/queuing
+            image_name = self.docker_manager.get_image_name(service_type)
+            estimated_size = estimate_image_size_bytes(image_name)
+            has_space, available, required = check_sufficient_space(estimated_size)
+            
+            if not has_space:
+                logging.error(
+                    f"Insufficient disk space for {service_type}: "
+                    f"Need ~{required / 1024**3:.1f} GB, have {available / 1024**3:.1f} GB"
+                )
+                self._download_status[service_type] = DownloadStatus.FAILED
+                return False
+            
             # Clear any previous FAILED status to allow retry
+
             # This is important for resuming after a cancelled download
             if service_type in self._download_status:
                 prev_status = self._download_status[service_type]
