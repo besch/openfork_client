@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.4
+# LavaSR Docker Image (Optimized for 2GB)
+# Uses ysharma3501/LavaSR for fast speech restoration and enhancement
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-distutils \
+    curl git wget ffmpeg \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+# Clone LavaSR and install dependencies
+RUN git clone --depth=1 https://github.com/ysharma3501/LavaSR.git /app \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install --no-cache-dir librosa soundfile "vocos @ git+https://github.com/langtech-bsc/vocos.git@matcha" \
+    && python -m pip install --no-cache-dir . \
+    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests
+
+# Pre-download model weights (if possible through python script/cli)
+# Assuming a standard HF model layout if requirements point to huggingface_hub
+RUN python -c "from huggingface_hub import hf_hub_download; \
+    hf_hub_download('YatharthS/LavaSR', 'checkpoint.pth', local_dir='/app/checkpoints')" || true
+
+# Create directories
+RUN mkdir -p /app/input /app/output /app/checkpoints
+
+# Copy the API server
+COPY lavasr_api.py /app/lavasr_api.py
+
+EXPOSE 8000
+CMD ["python", "lavasr_api.py"]

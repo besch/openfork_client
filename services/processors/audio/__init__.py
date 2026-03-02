@@ -7,6 +7,7 @@ from .diffrhythm_cli import DiffRhythmCLIJobProcessor
 from .chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProcessor
 from .qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
 from .mmaudio import MMAudioJobProcessor
+from .lavasr import LavaSRJobProcessor
 
 __all__ = [
     "StableAudioJobProcessor",
@@ -20,5 +21,6 @@ __all__ = [
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
     "MMAudioJobProcessor",
+    "LavaSRJobProcessor",
 ]
 

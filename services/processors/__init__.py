@@ -31,6 +31,7 @@ from .audio.acestep_cli import AceStepCLIJobProcessor
 from .audio.chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProcessor
 from .audio.qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
 from .audio.mmaudio import MMAudioJobProcessor
+from .audio.lavasr import LavaSRJobProcessor
 
 # Image processors
 from .image.text_to_image import TextToImageJobProcessor
@@ -83,6 +84,7 @@ __all__ = [
     "QwenImageInpaintTurboProcessor",
     "QwenImageT2ITurboProcessor",
     "MMAudioJobProcessor",
+    "LavaSRJobProcessor",
 ]
 
 
