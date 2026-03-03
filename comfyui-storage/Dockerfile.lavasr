@@ -37,7 +37,6 @@ RUN git clone --depth=1 https://github.com/ysharma3501/LavaSR.git /app \
 # Pre-download model weights
 RUN python -c "from huggingface_hub import snapshot_download; \
     snapshot_download('YatharthS/LavaSR'); \
-    snapshot_download('facebook/vocos-mel-spectrogram'); \
     print('Weights downloaded successfully')"
 
 # Copy the API script locally
