@@ -4,6 +4,11 @@ import psutil
 from typing import Optional, Tuple, List
 from services.disk_space_utils import get_disk_space_info
 
+try:
+    from config import HEADLESS_MODE
+except ImportError:
+    HEADLESS_MODE = False
+
 
 def get_hardware_profile():
     """Get hardware profile of the system."""
@@ -108,8 +113,10 @@ def can_run_service(service_config: dict, available_vram_mb: Optional[int] = Non
             return False
 
     # Check Disk Space (only if specified in config)
+    # In headless/cloud mode the Docker image is pre-baked into the container,
+    # so there is nothing to download and disk space is irrelevant.
     required_disk_gb = service_config.get("disk_required_gb")
-    if required_disk_gb:
+    if required_disk_gb and not HEADLESS_MODE:
         from services.disk_space_utils import get_available_disk_space
         available_disk_bytes = get_available_disk_space()
         available_disk_gb = available_disk_bytes / (1024**3)
@@ -155,8 +162,10 @@ def get_service_incompatibility_reason(service_config: dict, available_vram_mb: 
 
     
     # Check disk space
+    # In headless/cloud mode the Docker image is pre-baked into the container,
+    # so there is nothing to download and disk space is irrelevant.
     required_disk_gb = service_config.get("disk_required_gb")
-    if required_disk_gb:
+    if required_disk_gb and not HEADLESS_MODE:
         from services.disk_space_utils import get_available_disk_space
         available_disk_bytes = get_available_disk_space()
         available_disk_gb = available_disk_bytes / (1024**3)

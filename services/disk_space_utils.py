@@ -47,7 +47,7 @@ def get_available_disk_space(path: str = None) -> int:
     
     # Ensure path exists, otherwise use root/home
     if not os.path.exists(path):
-        logging.warning(f"Path '{path}' does not exist, checking root directory instead")
+        logging.debug(f"Path '{path}' does not exist, checking root directory instead")
         if platform.system() == "Windows":
             path = "C:\\"
         else:
