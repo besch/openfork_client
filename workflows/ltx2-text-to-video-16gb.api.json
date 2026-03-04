@@ -2,12 +2,11 @@
   "prompt": {
     "1": {
       "inputs": {
-        "unet_name": "ltx-2-19b-dev-fp8_transformer_only.safetensors",
-        "weight_dtype": "fp8_e4m3fn"
+        "unet_name": "ltx-2-19b-distilled_Q6_K.gguf"
       },
-      "class_type": "UNETLoader",
+      "class_type": "UnetLoaderGGUF",
       "_meta": {
-        "title": "Load LTX-2 FP8 UNET (Split Loading)"
+        "title": "GGUF Q6_K Transformer (~15.9GB, no FP8 lowvram bug)"
       }
     },
     "2": {

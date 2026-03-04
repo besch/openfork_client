@@ -411,12 +411,9 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none"
       ;;
     *ltx2*-24gb*|*24gb*)
-      log "Applying 24GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"
-      # IMPORTANT: Use --lowvram NOT --highvram because total model size (~29.5GB) exceeds 24GB VRAM:
-      # - UNET: ~21GB (FP8 transformer)
-      # - CLIP: ~6GB (Gemma-3 12B FP8)
-      # - VAE: ~2.5GB (BF16)
-      # --lowvram enables model offloading to CPU when not in use
+      log "Applying 24GB VRAM optimizations for ComfyUI (GGUF Q8_0 model)"
+      # GGUF Q8_0 (~20.4GB) + Gemma FP8 (~6GB) = ~26.4GB total, slightly over 24GB VRAM
+      # Use --lowvram to allow CPU offloading when needed
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.5 --use-pytorch-cross-attention"
       ;;
     *hunyuan*)

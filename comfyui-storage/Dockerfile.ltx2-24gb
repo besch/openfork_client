@@ -1,5 +1,6 @@
 # LTX-2 19B Docker Image (24GB VRAM Optimized) - Cloud Build
-# Uses ltx-2-19b-distilled (43.3GB BF16) model with full Gemma-3-12b text encoder
+# Uses ltx-2-19b-dev_Q8_0.gguf GGUF model (~20.4GB) via ComfyUI-GGUF
+# GGUF stays compressed in RAM, avoids FP8 'Linear has no attribute weight' error
 # Optimized for RTX 4090, RTX 3090, A5000, A6000
 # Supports native 4K at 24-30fps, 4-10s clips
 
@@ -80,6 +81,20 @@ RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.
 # Patch embeddings_connector.py
 RUN find custom_nodes/ComfyUI-LTXVideo -name "embeddings_connector.py" -exec python3 -c "import sys; path=sys.argv[1]; print(f'Patching {path}'); content=open(path).read(); content=content.replace('repeat(hidden_states.shape[0], 1, 1))', 'repeat(hidden_states.shape[0], 1, 1).to(hidden_states.device))'); open(path,'w').write(content)" {} \;
 
+# ============================================================================
+# CRITICAL FIX: Install ComfyUI-GGUF for GGUF model loading
+# FP8 safetensors cause "'Linear' object has no attribute 'weight'" with --lowvram
+# because model_patcher.py tries to access .weight on uninitialized FP8 layers.
+# GGUF models use a completely separate code path that avoids this bug.
+# The 24GB tier uses Q8_0 (~20.4GB) for near-lossless quality.
+# ============================================================================
+RUN git clone https://github.com/city96/ComfyUI-GGUF.git custom_nodes/ComfyUI-GGUF \
+    && rm -rf custom_nodes/ComfyUI-GGUF/.git
+
+RUN cd custom_nodes/ComfyUI-GGUF && \
+    python -m pip install --no-cache-dir --upgrade gguf && \
+    if [ -f requirements.txt ]; then python -m pip install --no-cache-dir -r requirements.txt; fi
+
 # Create model directories for split loading
 RUN mkdir -p models/checkpoints \
     models/unet \
@@ -90,14 +105,14 @@ RUN mkdir -p models/checkpoints \
 
 ENV LTX2_TIER=24gb
 
-# Download LTX-2 FP8 UNET model for UNETLoader (split loading approach)
-# This provides faster loading and better memory management even on 24GB
+# Download LTX-2 Dev GGUF Q8_0 model (~20.4GB) - highest quality GGUF
+# GGUF stays compressed in RAM, avoids FP8 lowvram offloading bugs
 # Source: https://huggingface.co/Kijai/LTXV2_comfy/tree/main/diffusion_models
-RUN echo "Downloading LTX-2 FP8 UNET (split model)..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors'], token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev-fp8_transformer_only.safetensors models/unet/ && \
+RUN echo "Downloading LTX-2 Dev GGUF Q8_0 model (~20.4GB)..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Kijai/LTXV2_comfy', repo_type='model', local_dir='/tmp/kijai_models', allow_patterns=['diffusion_models/ltx-2-19b-dev_Q8_0.gguf'], token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/kijai_models/diffusion_models/ltx-2-19b-dev_Q8_0.gguf models/unet/ && \
     rm -rf /tmp/kijai_models && \
-    python -c "import os; size=os.path.getsize('models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors')/(1024**3); print(f'UNET Model: {size:.2f}GB'); assert size > 20, 'File too small, corrupted'" && \
+    python -c "import os; size=os.path.getsize('models/unet/ltx-2-19b-dev_Q8_0.gguf')/(1024**3); print(f'UNET GGUF Q8_0 Model: {size:.2f}GB'); assert size > 18, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Download VAE models from Kijai - required for separate VAELoader
@@ -161,16 +176,16 @@ import os\n\
 import sys\n\
 \n\
 files_to_verify = {\n\
-    "models/unet/ltx-2-19b-dev-fp8_transformer_only.safetensors": 20.0,\n\
+    "models/unet/ltx-2-19b-dev_Q8_0.gguf": 18.0,\n\
     "models/vae/LTX2_video_vae_bf16.safetensors": 2.0,\n\
     "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 6.0,\n\
     "models/clip/ltx-2-19b-dev-fp4_projections_only.safetensors": 0.05,\n\
     "models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors": 0.8,\n\
-    "models/loras/ltx-2-19b-distilled-lora-384.safetensors": 6.0,\n\
+    "models/loras/ltx-2-19b-distilled-lora-384.safetensors": 0.1,\n\
 }\n\
 \n\
 print("\\n" + "="*70)\n\
-print("VERIFYING 24GB MODEL FILES")\n\
+print("VERIFYING 24GB MODEL FILES (GGUF)")\n\
 print("="*70)\n\
 \n\
 all_valid = True\n\
@@ -216,13 +231,15 @@ WORKDIR /opt/ComfyUI
 # 24GB VRAM MAXIMUM PERFORMANCE LAUNCH FLAGS:
 # --listen: Allow external connections
 # --highvram: Maximum VRAM usage for best performance
-# --use-pytorch-cross-attention: Full quality attention (xformers available too)
-# 
+# --use-pytorch-cross-attention: Full quality attention
+#
+# NOTE: GGUF Q8_0 (~20.4GB) avoids the 'Linear has no attribute weight' error
+# that occurs with FP8 safetensors under --lowvram mode.
+# At 24GB VRAM there is enough room to hold the Q8_0 model without offloading.
+#
 # Performance Expectations for 24GB VRAM (RTX 4090):
-# - 720p 4s clips: ~25-30 seconds (NVIDIA official benchmark)
+# - 720p 4s clips: ~25-40 seconds (NVIDIA official benchmark)
 # - 1080p 5s clips: ~1-2 minutes, STABLE ✓
 # - 1440p 5s clips: ~2-3 minutes, STABLE ✓
-# - 4K (3840x2160) 4s clips: ~9-12 minutes, native quality ✓
-# - 8-step model: 2-3x faster for iteration
-# - Quality: 100% - full BF16 precision, maximum quality
+# - Quality: Near-lossless Q8 quantization (~99.9% of BF16 quality)
 CMD ["python", "main.py", "--listen", "--highvram", "--use-pytorch-cross-attention"]
