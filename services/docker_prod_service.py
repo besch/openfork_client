@@ -11,13 +11,38 @@ class DockerProdManager:
     def __init__(self):
         try:
             self.client = docker.from_env()
-            self.docker_image_map = {}
-            self.services_config = {}
         except docker.errors.DockerException:
-            logging.warning("Docker daemon not found or not running. Container management will be unavailable.")
-            self.client = None
-            self.docker_image_map = {}
-            self.services_config = {}
+            # On Windows, from_env might fail if DOCKER_HOST isn't perfectly formed
+            # or the pipe isn't available. Try explicit fallback connections.
+            import os
+            # Fallbacks: WSL injected port, Docker Desktop tcp expose, standard docker desktop named pipe
+            docker_hosts = [
+                os.environ.get("DOCKER_HOST"),
+                "tcp://127.0.0.1:2375",
+                "tcp://localhost:2375",
+                "npipe:////./pipe/docker_engine"
+            ]
+            
+            connected = False
+            for host in docker_hosts:
+                if not host:
+                    continue
+                try:
+                    logging.info(f"docker.from_env() failed. Trying explicit literal connection to {host}")
+                    self.client = docker.DockerClient(base_url=host)
+                    self.client.ping() # Verify connection actually works
+                    logging.info(f"Successfully connected to Docker at {host}")
+                    connected = True
+                    break
+                except (docker.errors.DockerException, Exception) as e:
+                    logging.debug(f"Failed to connect to {host}: {e}")
+            
+            if not connected:
+                logging.warning("Docker daemon not found or not running. Container management will be unavailable.")
+                self.client = None
+        
+        self.docker_image_map = {}
+        self.services_config = {}
 
     def set_docker_image_map(self, image_map: dict):
         if image_map:

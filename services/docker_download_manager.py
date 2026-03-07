@@ -67,8 +67,8 @@ class DockerDownloadManager:
         Returns:
             True if image exists locally, False otherwise
         """
-        if not self.docker_manager:
-            return True  # Headless mode - no Docker needed
+        if not self.docker_manager or not self.docker_manager.client:
+            return False if self.docker_manager else True  # Headless mode - no Docker needed
             
         try:
             image_name = self.docker_manager.get_image_name(service_type)

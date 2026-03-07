@@ -1,0 +1,183 @@
+<#
+.SYNOPSIS
+    Automated OpenFork AI Engine Setup
+    Enables WSL, installs Ubuntu, Docker Engine, and NVIDIA Container Toolkit.
+#>
+
+param (
+    [switch]$InstallOnly
+)
+
+$ErrorActionPreference = "Stop"
+$VerbosePreference = "Continue"
+
+function Write-Log {
+    param([string]$Message)
+    Write-Host "[OpenFork Setup] $Message" -ForegroundColor Cyan
+}
+
+function Check-IsAdmin {
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Check-IsAdmin)) {
+    Write-Log "Need Administrator privileges to install WSL features. Please re-run as Administrator."
+    Exit 1
+}
+
+Write-Log "Checking Windows Subsystem for Linux (WSL) status..."
+$wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
+$vmpFeature = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
+
+$requiresReboot = $false
+
+if ($null -ne $wslFeature -and $wslFeature.State -ne "Enabled") {
+    Write-Log "Enabling WSL feature..."
+    Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart
+    $requiresReboot = $true
+}
+
+if ($null -ne $vmpFeature -and $vmpFeature.State -ne "Enabled") {
+    Write-Log "Enabling Virtual Machine Platform feature..."
+    Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -NoRestart
+    $requiresReboot = $true
+}
+
+if ($requiresReboot) {
+    Write-Log "WSL features were enabled. A system reboot is required."
+    Write-Output "REBOOT_REQUIRED"
+    Exit 0
+}
+
+Write-Log "Checking for Ubuntu distribution..."
+try {
+    $dists = (wsl -l -v | Out-String) -replace "\0", ""
+    if ($dists -notmatch "Ubuntu") {
+        Write-Log "Installing Ubuntu without launch..."
+        wsl --install -d Ubuntu --no-launch
+        
+        Write-Log "Waiting for WSL to list Ubuntu..."
+        $retry = 0
+        while (((wsl -l -v | Out-String) -replace "\0", "") -notmatch "Ubuntu") {
+            if ($retry -gt 60) { throw "Timeout waiting for Ubuntu install" }
+            Start-Sleep -Seconds 2
+            $retry++
+        }
+
+        Write-Log "Provisioning default user automatically to bypass interactive prompt..."
+        # Use root to bypass initial prompt and silently create a default 'openfork' user
+        $provisionScript = @"
+if ! id -u openfork > /dev/null 2>&1; then
+    useradd -m -s /bin/bash openfork
+    echo "openfork:openfork" | chpasswd
+    usermod -aG sudo openfork
+    echo "openfork ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/openfork
+fi
+mkdir -p /etc
+echo -e "[boot]\nsystemd=true\n[user]\ndefault=openfork" > /etc/wsl.conf
+"@
+        $provisionScript | wsl -d Ubuntu --user root -e bash -c "cat > /tmp/provision.sh && bash /tmp/provision.sh"
+        
+        Write-Log "Restarting WSL to apply new default user and systemd setting..."
+        wsl --shutdown
+        Start-Sleep -Seconds 2
+    } else {
+        Write-Log "Ubuntu is already installed. Ensuring systemd is enabled..."
+        wsl -d Ubuntu --user root -e bash -c "if ! grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null; then mkdir -p /etc && echo -e '[boot]\nsystemd=true' >> /etc/wsl.conf && echo 'SYSTEMD_ENABLED' > /tmp/systemd_changed; fi"
+        if (wsl -d Ubuntu -e cat /tmp/systemd_changed 2>$null) {
+            Write-Log "Systemd was just enabled. Restarting WSL..."
+            wsl --shutdown
+            Start-Sleep -Seconds 2
+            wsl -d Ubuntu -e rm -f /tmp/systemd_changed
+        }
+    }
+} catch {
+    Write-Log "Failed to check or install Ubuntu via wsl command. Make sure WSL is fully updated."
+    Write-Output "ERROR: Failed to install Ubuntu."
+    Exit 1
+}
+
+Write-Log "Enabling Sparse VHD for automatic disk space reclamation..."
+try {
+    # This requires WSL version 2.0.0 or higher.
+    wsl --manage Ubuntu --set-sparse true
+    Write-Log "Sparse VHD enabled successfully."
+} catch {
+    Write-Log "Warning: Could not enable sparse VHD. Your Windows version may be too old to support automatic disk reclamation."
+}
+
+Write-Log "Ensuring WSL is running and executing setup script..."
+
+$script = @"
+#!/bin/bash
+set -e
+
+echo "[Linux] Checking for Docker..."
+if ! command -v docker &> /dev/null; then
+    echo "[Linux] Installing Docker Engine..."
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sed -i 's/sleep 20/sleep 1/g' get-docker.sh
+    sudo sh get-docker.sh
+    rm get-docker.sh
+else
+    echo "[Linux] Docker is already installed."
+fi
+
+echo "[Linux] Checking for NVIDIA Container Toolkit..."
+if ! command -v nvidia-ctk &> /dev/null; then
+    echo "[Linux] Installing NVIDIA Container Toolkit..."
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+      sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+      sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    sudo apt-get update
+    sudo apt-get install -y nvidia-container-toolkit
+    sudo nvidia-ctk runtime configure --runtime=docker
+else
+    echo "[Linux] NVIDIA Container Toolkit is already installed."
+fi
+
+echo "[Linux] Configuring Docker to listen on TCP..."
+# Create or modify daemon.json to listen on tcp and unix socket
+sudo mkdir -p /etc/docker
+echo '{"hosts": ["tcp://0.0.0.0:2375", "unix:///var/run/docker.sock"]}' | sudo tee /etc/docker/daemon.json
+
+# Override docker.service to not pass -H fd:// which conflicts with daemon.json hosts
+sudo mkdir -p /etc/systemd/system/docker.service.d
+echo -e "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd" | sudo tee /etc/systemd/system/docker.service.d/override.conf
+
+# Start docker
+if command -v systemctl &> /dev/null; then
+    sudo systemctl daemon-reload
+    sudo systemctl enable docker
+    sudo systemctl restart docker
+else
+    # Fallback to service if systemd somehow isn't active
+    sudo service docker restart
+fi
+
+# Ensure docker is ready before proceeding
+echo "[Linux] Waiting for Docker daemon to be ready..."
+sleep 2
+for i in {1..15}; do
+    if sudo docker info &> /dev/null; then
+        echo "[Linux] Docker daemon is running."
+        break
+    fi
+    sleep 1
+done
+
+echo "[Linux] OpenFork AI Engine Setup Complete."
+"@
+
+# Define bash script file path locally, transfer, and run
+$wslTempScript = "/tmp/openfork_setup.sh"
+# Execute the bash commands inside WSL
+Write-Log "Running Docker setup commands inside WSL Ubuntu..."
+# Using bash -c with multi-line string passed via stdin
+$script | wsl -d Ubuntu --user root -e bash -c "cat > /tmp/openfork_setup.sh && chmod +x /tmp/openfork_setup.sh && /tmp/openfork_setup.sh"
+
+Write-Log "Setup Complete!"
+Write-Output "SUCCESS"
+Exit 0

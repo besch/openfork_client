@@ -5,8 +5,19 @@ import sys
 import threading
 import requests
 import json
-
 import os
+
+# Force reset logging to ensure our config takes effect regardless of module import order
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s', 
+    stream=sys.stdout,
+    force=True
+)
+logging.getLogger().setLevel(logging.INFO)
 
 from config import DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from dgn_client import DGNClient
@@ -14,8 +25,6 @@ from services.docker_manager import docker_manager
 from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
 from services.heartbeat_manager import HeartbeatManager
 from services.job_listener import JobListener
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', stream=sys.stdout)
 
 def listen_for_ipc_commands(client: DGNClient):
     """

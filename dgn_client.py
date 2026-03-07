@@ -98,7 +98,7 @@ class DGNClient:
         try:
             config_url = f"{self.orchestrator_url}/api/config"
             logging.info(f"Fetching DGN configuration from {config_url}")
-            response = requests.get(config_url)
+            response = requests.get(config_url, timeout=15)
             response.raise_for_status()
 
             full_config = response.json()
