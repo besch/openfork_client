@@ -5,7 +5,8 @@
 #>
 
 param (
-    [switch]$InstallOnly
+    [switch]$InstallOnly,
+    [string]$InstallPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,8 +55,26 @@ Write-Log "Checking for Ubuntu distribution..."
 try {
     $dists = (wsl -l -v | Out-String) -replace "\0", ""
     if ($dists -notmatch "Ubuntu") {
-        Write-Log "Installing Ubuntu without launch..."
-        wsl --install -d Ubuntu --no-launch
+        if ($null -ne $InstallPath -and $InstallPath -ne "") {
+            Write-Log "Installing Ubuntu to custom path: $InstallPath"
+            if (-not (Test-Path $InstallPath)) {
+                New-Item -ItemType Directory -Path $InstallPath -Force
+            }
+            
+            $rootfsPath = Join-Path $InstallPath "ubuntu-rootfs.tar.gz"
+            $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz"
+            
+            Write-Log "Downloading Ubuntu rootfs (~130MB)..."
+            Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfsPath -UseBasicParsing
+            
+            Write-Log "Importing Ubuntu to $InstallPath..."
+            wsl --import Ubuntu $InstallPath $rootfsPath --version 2
+            
+            Remove-Item $rootfsPath -Force
+        } else {
+            Write-Log "Installing Ubuntu without launch (Default path)..."
+            wsl --install -d Ubuntu --no-launch
+        }
         
         Write-Log "Waiting for WSL to list Ubuntu..."
         $retry = 0
@@ -93,6 +112,8 @@ echo -e "[boot]\nsystemd=true\n[user]\ndefault=openfork" > /etc/wsl.conf
         }
     }
 } catch {
+    Write-Log "Detailed Error: $($_.Exception.Message)"
+    if ($_.ScriptStackTrace) { Write-Log "Stack: $($_.ScriptStackTrace)" }
     Write-Log "Failed to check or install Ubuntu via wsl command. Make sure WSL is fully updated."
     Write-Output "ERROR: Failed to install Ubuntu."
     Exit 1
@@ -141,7 +162,7 @@ fi
 echo "[Linux] Configuring Docker to listen on TCP..."
 # Create or modify daemon.json to listen on tcp and unix socket
 sudo mkdir -p /etc/docker
-echo '{"hosts": ["tcp://0.0.0.0:2375", "unix:///var/run/docker.sock"]}' | sudo tee /etc/docker/daemon.json
+echo '{"hosts": ["tcp://0.0.0.0:2375", "unix:///var/run/docker.sock"], "tls": false}' | sudo tee /etc/docker/daemon.json
 
 # Override docker.service to not pass -H fd:// which conflicts with daemon.json hosts
 sudo mkdir -p /etc/systemd/system/docker.service.d

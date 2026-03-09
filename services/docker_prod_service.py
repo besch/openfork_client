@@ -5,41 +5,110 @@ images from a Docker registry (e.g., Docker Hub).
 import docker
 import logging
 import threading
-from .docker_utils import docker_cp
+from .docker_utils import (
+    docker_cp,
+    should_use_api_file_copy,
+    copy_file_from_container_api,
+    copy_file_to_container_api,
+)
 
 class DockerProdManager:
+    def _get_wsl_ip(self):
+        """Attempts to detect the WSL VM IP address from Windows host."""
+        import sys
+        if sys.platform != "win32":
+            return None
+        try:
+            import subprocess
+            # Get WSL IP safely from Windows
+            output = subprocess.check_output(["wsl", "-d", "Ubuntu", "--", "hostname", "-I"], 
+                                             timeout=5, stderr=subprocess.DEVNULL)
+            ips = output.decode().strip().split()
+            return ips[0] if ips else None
+        except:
+            return None
+
     def __init__(self):
         try:
+            logging.info("Initializing Docker client...")
             self.client = docker.from_env()
-        except docker.errors.DockerException:
+            self.client.ping()
+            logging.info("Successfully connected to Docker via from_env()")
+        except (docker.errors.DockerException, Exception) as e:
             # On Windows, from_env might fail if DOCKER_HOST isn't perfectly formed
-            # or the pipe isn't available. Try explicit fallback connections.
+            # or the pipe isn't available. Try explicit fallback connections with retry.
             import os
-            # Fallbacks: WSL injected port, Docker Desktop tcp expose, standard docker desktop named pipe
+            import time
+            import sys
+            
+            error_msg = f"docker.from_env() failed: {e}. Entering fallback retry loop..."
+            print(f"DEBUG: {error_msg}", file=sys.stderr, flush=True)
+            logging.warning(error_msg)
+            
+            wsl_ip = self._get_wsl_ip()
             docker_hosts = [
                 os.environ.get("DOCKER_HOST"),
                 "tcp://127.0.0.1:2375",
                 "tcp://localhost:2375",
+                f"tcp://{wsl_ip}:2375" if wsl_ip else None,
                 "npipe:////./pipe/docker_engine"
             ]
             
+            # Remove duplicates and None values while preserving order
+            docker_hosts = list(dict.fromkeys([h for h in docker_hosts if h]))
+            
             connected = False
-            for host in docker_hosts:
-                if not host:
-                    continue
-                try:
-                    logging.info(f"docker.from_env() failed. Trying explicit literal connection to {host}")
-                    self.client = docker.DockerClient(base_url=host)
-                    self.client.ping() # Verify connection actually works
-                    logging.info(f"Successfully connected to Docker at {host}")
-                    connected = True
+            start_time = time.time()
+            retry_duration = 60
+            iteration = 0
+            
+            while True:
+                iteration += 1
+                current_time = time.time()
+                elapsed = current_time - start_time
+                
+                if elapsed >= retry_duration:
+                    debug_timeout = f"Docker connection retry timed out after {elapsed:.1f}s"
+                    print(f"DEBUG: {debug_timeout}", file=sys.stderr, flush=True)
                     break
-                except (docker.errors.DockerException, Exception) as e:
-                    logging.debug(f"Failed to connect to {host}: {e}")
+                    
+                print(f"DEBUG: Loop iteration {iteration}, elapsed {elapsed:.1f}s", file=sys.stderr, flush=True)
+                
+                for host in docker_hosts:
+                    if not host:
+                        continue
+                    try:
+                        print(f"DEBUG: Testing {host}...", file=sys.stderr, flush=True)
+                        self.client = docker.DockerClient(base_url=host, timeout=5)
+                        self.client.ping()
+                        
+                        success_msg = f"Successfully connected to Docker at {host}"
+                        print(f"INFO: {success_msg}", flush=True)
+                        logging.info(success_msg)
+                        connected = True
+                        break
+                    except Exception as ex:
+                        # Log specific error for each host to understand why it fails
+                        print(f"DEBUG: {host} failed: {type(ex).__name__}: {ex}", file=sys.stderr, flush=True)
+                
+                if connected:
+                    break
+                
+                wait_msg = f"Waiting for Docker daemon to become available... ({int(elapsed)}/{retry_duration}s)"
+                print(f"INFO: {wait_msg}", flush=True)
+                logging.info(wait_msg)
+                time.sleep(2)
             
             if not connected:
-                logging.warning("Docker daemon not found or not running. Container management will be unavailable.")
+                fail_msg = "CRITICAL: Docker daemon not found or not running after all fallback attempts."
+                print(f"ERROR: {fail_msg}", file=sys.stderr, flush=True)
+                logging.error(fail_msg)
                 self.client = None
+
+        self._use_api_file_copy = should_use_api_file_copy(self.client)
+        if self._use_api_file_copy:
+            base_url = getattr(getattr(self.client, "api", None), "base_url", "unknown")
+            logging.info(f"Using Docker API for file transfers via remote Docker host: {base_url}")
         
         self.docker_image_map = {}
         self.services_config = {}
@@ -203,11 +272,21 @@ class DockerProdManager:
 
     def copy_file_from_container(self, service_type: str, source_in_container: str, dest_on_host: str, shutdown_event: threading.Event):
         container_name = self.get_container_name(service_type)
+        if self._use_api_file_copy:
+            container = self.client.containers.get(container_name)
+            copy_file_from_container_api(container, source_in_container, dest_on_host, shutdown_event)
+            return
+
         source_path = f"{container_name}:{source_in_container}"
         docker_cp(source_path, dest_on_host, shutdown_event)
 
     def copy_file_to_container(self, service_type: str, source_on_host: str, dest_in_container: str, shutdown_event: threading.Event):
         container_name = self.get_container_name(service_type)
+        if self._use_api_file_copy:
+            container = self.client.containers.get(container_name)
+            copy_file_to_container_api(container, source_on_host, dest_in_container, shutdown_event)
+            return
+
         dest_path = f"{container_name}:{dest_in_container}"
         docker_cp(source_on_host, dest_path, shutdown_event)
 
