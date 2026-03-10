@@ -23,6 +23,7 @@ class DGNClient:
         dgn_api_key: str = None,
         accept_policy: str = "all",
         allowed_targets: list[str] = None,
+        monetize_mode: bool = False,
     ):
         self.orchestrator_url = orchestrator_url
         self.orchestrator_service = OrchestratorService(
@@ -43,6 +44,7 @@ class DGNClient:
         self.config = {}
         self.docker_image_map = {}
         self.accept_policy = accept_policy
+        self.monetize_mode = monetize_mode
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
         self.processing_lock = threading.Lock()

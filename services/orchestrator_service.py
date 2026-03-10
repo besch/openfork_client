@@ -192,7 +192,7 @@ class OrchestratorService:
             logging.error(f"Failed to decode JSON from resolve_targets response: {response.text}")
             return []
 
-    def get_next_job(self, provider_id: str, accept_policy: str, allowed_ids: list[str], job_id: str = None) -> Union[Dict, None]:
+    def get_next_job(self, provider_id: str, accept_policy: str, allowed_ids: list[str], job_id: str = None, monetize_mode: bool = False) -> Union[Dict, None]:
         """Get the next available job for a provider based on their policy."""
         try:
             base_url = f"{self.orchestrator_url}/api/dgn/jobs/{provider_id}"
@@ -200,6 +200,9 @@ class OrchestratorService:
                 "ts": int(time.time()),
                 "acceptPolicy": accept_policy,
             }
+
+            if monetize_mode:
+                params["monetize"] = "true"
 
             if job_id:
                 params["jobId"] = job_id
@@ -210,7 +213,7 @@ class OrchestratorService:
                     logging.error("Could not get user ID for 'own' policy. Aborting job fetch.")
                     return None
                 params["userId"] = user_id
-            
+
             if (accept_policy == 'project' or accept_policy == 'users') and allowed_ids:
                 params["allowedIds"] = ",".join(allowed_ids)
 

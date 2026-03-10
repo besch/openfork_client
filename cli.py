@@ -95,6 +95,7 @@ def setup_client(args):
         dgn_api_key=args.dgn_api_key,
         accept_policy=args.accept_policy,
         allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None,
+        monetize_mode=args.monetize_mode,
     )
 
     client.load_config() # Fetch config from orchestrator
@@ -255,6 +256,7 @@ def main():
     parser.add_argument('--allowed-targets', type=str, help='For specific_* policies, a comma-separated list of targets (e.g., user/project-slug or user/project-slug:branch-name).')
     # This argument is used solely for process identification by the cleanup logic
     parser.add_argument('--process-marker', type=str, help='Unique marker for process identification')
+    parser.add_argument('--monetize-mode', action='store_true', default=False, help='Enable monetize mode: poll only for paid monetize jobs and emit MONETIZE_JOB_COMPLETE events.')
     args = parser.parse_args()
     
     # Validate authentication - need either API key OR OAuth tokens

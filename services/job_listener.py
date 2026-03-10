@@ -39,12 +39,12 @@ class JobListener:
                 try:
                     service_type = self.client.get_service_type_for_workflow(workflow_type)
                     service_config = self.client.services_config.get(service_type, {})
-                    
+
                     if service_config and not can_run_service(service_config, self.client.available_vram):
                         reason = get_service_incompatibility_reason(service_config, self.client.available_vram)
                         error_msg = f"Job requires service '{service_type}' but hardware is incompatible: {reason}"
                         logging.error(error_msg)
-                        
+
                         # Emit JOB_FAILED event
                         print(json.dumps({
                             "type": "JOB_FAILED",
@@ -53,16 +53,19 @@ class JobListener:
                                 "error": error_msg
                             }
                         }), flush=True)
-                        
+
                         self.orchestrator_service.update_job_status(job.get('id'), 'failed')
                         return True
                 except ValueError:
                     # Unknown workflow type - let it proceed and fail later if needed
                     pass
-            
+
+            import time as _time
+            _job_start_time = _time.monotonic()
             processor = self.client._get_job_processor(job, self.shutdown_event)
             processor.process()
-            
+            _job_duration = int(_time.monotonic() - _job_start_time)
+
             # Emit JOB_COMPLETE event
             print(json.dumps({
                 "type": "JOB_COMPLETE",
@@ -70,6 +73,23 @@ class JobListener:
                     "id": job.get('id')
                 }
             }), flush=True)
+
+            # Emit MONETIZE_JOB_COMPLETE for wallet refresh in Electron
+            if job.get('monetize_job'):
+                _wf = job.get('workflow_type', '')
+                try:
+                    _svc = self.client.get_service_type_for_workflow(_wf)
+                except Exception:
+                    _svc = _wf
+                print(json.dumps({
+                    "type": "MONETIZE_JOB_COMPLETE",
+                    "payload": {
+                        "id": job.get('id'),
+                        "service_type": _svc,
+                        "duration_seconds": _job_duration,
+                    }
+                }), flush=True)
+
             return True
         except (TokenExpiredError, AuthError):
             self.orchestrator_service.signal_auth_expired()
@@ -111,7 +131,8 @@ class JobListener:
                     job = self.orchestrator_service.get_next_job(
                         provider_id=self.provider_id,
                         accept_policy=self.client.accept_policy,
-                        allowed_ids=self.client.allowed_ids
+                        allowed_ids=self.client.allowed_ids,
+                        monetize_mode=getattr(self.client, 'monetize_mode', False)
                     )
 
                     if job and job.get('id'):
