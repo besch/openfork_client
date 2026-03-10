@@ -1781,8 +1781,159 @@ def inject_image_into_zimage_inpaint_workflow(
         api_graph['63']['inputs']['largest_size'] = max(width, height)
     
     logging.info(f"Z-Image Inpaint configured - Image: {image_filename}, Mask: {mask_filename}, Size: {width}x{height}, Denoise: {denoise_strength}, Seed: {new_seed}")
-    
+
     return api_graph
 
+
+    return api_graph
+
+
+def get_ltx23_dimensions(aspect_ratio: str) -> tuple[int, int]:
+    """
+    Returns (width, height) for LTX-2.3 - dimensions must be divisible by 32.
+    LTX-2.3 generates at higher resolution than LTX-2.
+    """
+    if aspect_ratio == "16:9":
+        return 768, 432
+    elif aspect_ratio == "9:16":
+        return 432, 768
+    elif aspect_ratio == "1:1":
+        return 576, 576
+    elif aspect_ratio == "4:3":
+        return 672, 512
+    elif aspect_ratio == "3:4":
+        return 512, 672
+    elif aspect_ratio == "21:9":
+        return 896, 384
+    else:
+        return 768, 432
+
+
+def inject_prompt_into_ltx23_video_workflow(
+    workflow_api_data: Dict,
+    prompt: str,
+    negative_prompt: str,
+    aspect_ratio: str = "16:9",
+    seed: Optional[int] = None,
+    steps: Optional[int] = None,
+    cfg_scale: Optional[float] = None,
+) -> Dict:
+    """
+    Injects prompts and parameters into an LTX-2.3 text-to-video workflow.
+
+    LTX-2.3 workflow node structure:
+    - Node 3: Positive prompt (CLIPTextEncode)
+    - Node 4: Negative prompt (CLIPTextEncode)
+    - Node 6: EmptyLTXVLatentVideo (dimensions)
+    - Node 8: LTXVEmptyLatentAudio (frame count + frame rate)
+    - Node 11: GuiderParameters VIDEO (cfg)
+    - Node 13: LTXVScheduler (steps)
+    - Node 15: RandomNoise (seed)
+    """
+    api_graph = copy.deepcopy(workflow_api_data["prompt"])
+
+    # Inject positive prompt (Node 3)
+    if '3' in api_graph and api_graph['3'].get("class_type") == "CLIPTextEncode":
+        api_graph['3']['inputs']['text'] = prompt
+        logging.info(f"Injected positive prompt into LTX-2.3 node 3: {prompt[:50]}...")
+    else:
+        logging.warning("Could not find positive prompt CLIPTextEncode node 3 in LTX-2.3 workflow")
+
+    # Inject negative prompt (Node 4)
+    if '4' in api_graph and api_graph['4'].get("class_type") == "CLIPTextEncode":
+        api_graph['4']['inputs']['text'] = negative_prompt
+    else:
+        logging.warning("Could not find negative prompt CLIPTextEncode node 4 in LTX-2.3 workflow")
+
+    # Inject dimensions into EmptyLTXVLatentVideo (Node 6)
+    width, height = get_ltx23_dimensions(aspect_ratio)
+    if '6' in api_graph and api_graph['6'].get("class_type") == "EmptyLTXVLatentVideo":
+        api_graph['6']['inputs']['width'] = width
+        api_graph['6']['inputs']['height'] = height
+        length = api_graph['6']['inputs'].get('length', 121)
+        logging.info(f"Injected dimensions into LTX-2.3 node 6: {width}x{height}, {length} frames")
+
+    # Sync audio latent frame count with video (Node 8)
+    if '8' in api_graph and api_graph['8'].get("class_type") == "LTXVEmptyLatentAudio":
+        if '6' in api_graph:
+            video_length = api_graph['6']['inputs'].get('length', 121)
+            api_graph['8']['inputs']['frames_number'] = video_length
+            logging.info(f"Synced audio latent frames to {video_length}")
+
+    # Inject steps into LTXVScheduler (Node 13)
+    if steps is not None and '13' in api_graph and api_graph['13'].get("class_type") == "LTXVScheduler":
+        api_graph['13']['inputs']['steps'] = steps
+        logging.info(f"Injected steps={steps} into LTX-2.3 LTXVScheduler node 13")
+
+    # Inject seed into RandomNoise (Node 15)
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
+    if '15' in api_graph and api_graph['15'].get("class_type") == "RandomNoise":
+        api_graph['15']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Injected seed={actual_seed} into LTX-2.3 RandomNoise node 15")
+    else:
+        # Fallback: find any RandomNoise node
+        for node_id, node in api_graph.items():
+            if node.get("class_type") == "RandomNoise":
+                node['inputs']['noise_seed'] = actual_seed
+                logging.info(f"Injected seed={actual_seed} into LTX-2.3 RandomNoise node {node_id}")
+                break
+
+    # Inject video CFG into GuiderParameters VIDEO (Node 11)
+    if cfg_scale is not None and '11' in api_graph and api_graph['11'].get("class_type") == "GuiderParameters":
+        api_graph['11']['inputs']['cfg'] = cfg_scale
+        logging.info(f"Injected video cfg={cfg_scale} into LTX-2.3 GuiderParameters node 11")
+
+    # Replace date token in VHS_VideoCombine filename prefix
+    for node in api_graph.values():
+        if node.get("class_type") == "VHS_VideoCombine":
+            prefix = node["inputs"].get("filename_prefix", "")
+            if "%date:yyyy-MM-dd%" in prefix:
+                from datetime import datetime
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                node["inputs"]["filename_prefix"] = prefix.replace("%date:yyyy-MM-dd%", datestr)
+
+    return api_graph
+
+
+def inject_prompt_and_image_into_ltx23_video_workflow(
+    workflow_api_data: Dict,
+    prompt: str,
+    negative_prompt: str,
+    start_image_filename: str,
+    aspect_ratio: str = "16:9",
+    seed: Optional[int] = None,
+    steps: Optional[int] = None,
+    cfg_scale: Optional[float] = None,
+    strength: Optional[float] = None,
+) -> Dict:
+    """
+    Injects prompts, image, and parameters into an LTX-2.3 image-to-video workflow.
+
+    LTX-2.3 I2V workflow adds vs T2V:
+    - Node 21: LoadImage (start image filename)
+    - Node 22: LTXVPreprocess (image preprocessing)
+    - Node 23: LTXVImgToVideoConditionOnly (strength for image conditioning)
+    """
+    api_graph = inject_prompt_into_ltx23_video_workflow(
+        workflow_api_data, prompt, negative_prompt, aspect_ratio,
+        seed=seed, steps=steps, cfg_scale=cfg_scale
+    )
+
+    # Inject start image into LoadImage (Node 21)
+    if '21' in api_graph and api_graph['21'].get("class_type") == "LoadImage":
+        api_graph['21']['inputs']['image'] = start_image_filename
+        logging.info(f"Injected start image into LTX-2.3 i2v node 21: {start_image_filename}")
+    else:
+        # Fallback: find any LoadImage node
+        for node_id, node in api_graph.items():
+            if node.get("class_type") == "LoadImage":
+                node['inputs']['image'] = start_image_filename
+                logging.info(f"Injected start image into LTX-2.3 i2v node {node_id}: {start_image_filename}")
+                break
+
+    # Inject image conditioning strength into LTXVImgToVideoConditionOnly (Node 23)
+    if strength is not None and '23' in api_graph and api_graph['23'].get("class_type") == "LTXVImgToVideoConditionOnly":
+        api_graph['23']['inputs']['strength'] = strength
+        logging.info(f"Injected image strength={strength} into LTX-2.3 i2v node 23")
 
     return api_graph
