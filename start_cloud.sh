@@ -174,10 +174,17 @@ wait_for_url() {
       return 0
     fi
     [ $((waited % 10)) -eq 0 ] && log "  Waiting... ($waited/$max_wait seconds)"
-    # Output last few lines of log if waiting too long
+    # Output last lines of log if waiting too long
     if [ $waited -gt 30 ] && [ $((waited % 30)) -eq 0 ] && [ -f "$log_file" ]; then
-        log "  Last 3 lines of $log_file:"
-        tail -n 3 "$log_file" | sed 's/^/    /' || true
+        log "  Last 15 lines of $log_file:"
+        tail -n 15 "$log_file" | sed 's/^/    /' || true
+        # Highlight any import/load errors
+        local errs
+        errs=$(grep -i "cannot import\|error\|exception\|failed to\|traceback" "$log_file" 2>/dev/null | tail -n 10 || true)
+        if [ -n "$errs" ]; then
+            log "  === Errors/Warnings in log ==="
+            echo "$errs" | sed 's/^/    /' || true
+        fi
     fi
     sleep 2
     waited=$((waited + 2))
@@ -551,6 +558,28 @@ if [ -d "/opt/ComfyUI" ]; then
   fi
   
   wait_for_url "ComfyUI" "http://127.0.0.1:8188/system_stats" "$WAIT_TIME" "/tmp/comfyui.log"
+
+  # Dump ComfyUI startup log so import errors are visible in cloud logs
+  if [ -f "/tmp/comfyui.log" ]; then
+    log "=== ComfyUI startup log (first 100 lines) ==="
+    head -n 100 /tmp/comfyui.log | sed 's/^/  [comfyui] /' || true
+    log "=== ComfyUI import errors (if any) ==="
+    grep -i "cannot import\|failed to import\|error importing\|traceback\|modulenotfounderror\|importerror" /tmp/comfyui.log | sed 's/^/  [comfyui] /' || log "  (no import errors found)"
+    log "=== End ComfyUI startup log ==="
+  fi
+
+  # Verify critical LTX-2.3 audio nodes are registered (diagnose missing_node_type errors)
+  if [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]]; then
+    log "Checking LTX-2.3 audio node availability..."
+    for node in LTXAVTextEncoderLoader LTXVAudioVAELoader LTXVEmptyLatentAudio LTXVAudioVAEDecode LTXVConcatAVLatent LTXVSeparateAVLatent; do
+      result=$(curl -s "http://127.0.0.1:8188/object_info/$node" 2>/dev/null || echo "{}")
+      if echo "$result" | grep -q "\"$node\""; then
+        log "  [OK] $node is registered"
+      else
+        log "  [MISSING] $node is NOT registered — check ComfyUI import errors above"
+      fi
+    done
+  fi
 fi
 
 # Save restart configuration
