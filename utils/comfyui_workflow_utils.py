@@ -1788,11 +1788,27 @@ def inject_image_into_zimage_inpaint_workflow(
     return api_graph
 
 
-def get_ltx23_dimensions(aspect_ratio: str) -> tuple[int, int]:
+def get_ltx23_dimensions(aspect_ratio: str, tier: str = "24gb") -> tuple[int, int]:
     """
     Returns (width, height) for LTX-2.3 - dimensions must be divisible by 32.
-    LTX-2.3 generates at higher resolution than LTX-2.
+    16GB tier uses lower resolution to stay within VRAM activation budget.
     """
+    if tier == "16gb":
+        if aspect_ratio == "16:9":
+            return 576, 320
+        elif aspect_ratio == "9:16":
+            return 320, 576
+        elif aspect_ratio == "1:1":
+            return 448, 448
+        elif aspect_ratio == "4:3":
+            return 512, 384
+        elif aspect_ratio == "3:4":
+            return 384, 512
+        elif aspect_ratio == "21:9":
+            return 672, 288
+        else:
+            return 576, 320
+    # 24gb (default)
     if aspect_ratio == "16:9":
         return 768, 432
     elif aspect_ratio == "9:16":
@@ -1817,6 +1833,7 @@ def inject_prompt_into_ltx23_video_workflow(
     seed: Optional[int] = None,
     steps: Optional[int] = None,
     cfg_scale: Optional[float] = None,
+    tier: str = "24gb",
 ) -> Dict:
     """
     Injects prompts and parameters into an LTX-2.3 text-to-video workflow.
@@ -1846,7 +1863,7 @@ def inject_prompt_into_ltx23_video_workflow(
         logging.warning("Could not find negative prompt CLIPTextEncode node 4 in LTX-2.3 workflow")
 
     # Inject dimensions into EmptyLTXVLatentVideo (Node 6)
-    width, height = get_ltx23_dimensions(aspect_ratio)
+    width, height = get_ltx23_dimensions(aspect_ratio, tier=tier)
     if '6' in api_graph and api_graph['6'].get("class_type") == "EmptyLTXVLatentVideo":
         api_graph['6']['inputs']['width'] = width
         api_graph['6']['inputs']['height'] = height
@@ -1905,6 +1922,7 @@ def inject_prompt_and_image_into_ltx23_video_workflow(
     steps: Optional[int] = None,
     cfg_scale: Optional[float] = None,
     strength: Optional[float] = None,
+    tier: str = "24gb",
 ) -> Dict:
     """
     Injects prompts, image, and parameters into an LTX-2.3 image-to-video workflow.
@@ -1916,7 +1934,7 @@ def inject_prompt_and_image_into_ltx23_video_workflow(
     """
     api_graph = inject_prompt_into_ltx23_video_workflow(
         workflow_api_data, prompt, negative_prompt, aspect_ratio,
-        seed=seed, steps=steps, cfg_scale=cfg_scale
+        seed=seed, steps=steps, cfg_scale=cfg_scale, tier=tier
     )
 
     # Inject start image into LoadImage (Node 21)

@@ -1,9 +1,10 @@
-# LTX-2.3 22B Docker Image (24GB+ VRAM)
+# LTX-2.3 22B Docker Image (16GB+ VRAM)
 # LTX-2.3 is a DiT-based audio-video foundation model - generates synchronized video + audio
 # Uses ltx-2.3-22b-distilled.safetensors (46.1GB BF16) with --lowvram CPU offloading
 # The "LatentAudioNode" (LTXVEmptyLatentAudio) is provided by latest ComfyUI-LTXVideo
-# Minimum: 24GB VRAM (slow due to offloading) | Recommended: 48GB+ VRAM
+# Minimum: 16GB VRAM (very slow due to heavy offloading) | Recommended: 24GB+ VRAM
 # System RAM: 64GB+ required to hold the 46.1GB model in CPU RAM during offloading
+# Max Resolution: 576x320 @ 97 frames (4s) - reduced from 24GB's 768x432 @ 121 frames
 
 FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
@@ -87,7 +88,7 @@ RUN mkdir -p models/checkpoints \
     models/latent_upscale_models \
     models/text_encoders
 
-ENV LTX23_TIER=24gb
+ENV LTX23_TIER=16gb
 
 # ============================================================================
 # MODEL DOWNLOADS
@@ -164,11 +165,11 @@ WORKDIR /opt/ComfyUI
 
 # LTX-2.3 LAUNCH FLAGS:
 # --lowvram: Required - offloads 46.1GB model to CPU RAM during generation
-#            (slow but functional on 24GB VRAM; fast on 48GB+ VRAM without this flag)
+#            (very slow on 16GB VRAM due to heavy CPU offloading)
 # --reserve-vram 1.0: Reserve 1GB for system overhead
-# --use-split-cross-attention: Memory efficient attention
+# --use-pytorch-cross-attention: Native PyTorch attention (less VRAM than xformers split)
 #
 # SYSTEM RAM NOTE: Requires 64GB+ system RAM to hold 46.1GB model in CPU RAM
-# GENERATION SPEED on 24GB with offloading: ~10-30 min per clip (model layers swap in/out)
-# GENERATION SPEED on 48GB+ without offloading: ~2-5 min per clip
-CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1.0", "--use-split-cross-attention"]
+# GENERATION SPEED on 16GB with offloading: ~30-90 min per clip (very heavy swapping)
+# GENERATION SPEED on 24GB with offloading: ~10-30 min per clip
+CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1.0", "--use-pytorch-cross-attention"]

@@ -412,6 +412,11 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
       ;;
+    *ltx23*16gb*)
+      log "Applying LTX-2.3 16GB VRAM optimizations (46GB model via CPU offloading)"
+      # LTX-2.3 22B is 46GB; use --lowvram + pytorch cross-attention for best performance
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention --cache-none"
+      ;;
     *ltx2*-16gb*|*16gb*)
       log "Applying 16GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"
       # IMPORTANT: Use --lowvram because total model size (~29.5GB) far exceeds 16GB VRAM
