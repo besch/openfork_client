@@ -51,6 +51,9 @@ RUN python -m pip install --no-cache-dir \
 
 WORKDIR /opt/ComfyUI
 
+# Cache-busting ARG: pass --build-arg CACHEBUST=$(date +%s) to force fresh git clones
+ARG CACHEBUST=1
+
 # Clone ComfyUI
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && rm -rf .git \

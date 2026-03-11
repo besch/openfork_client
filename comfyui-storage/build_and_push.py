@@ -70,7 +70,7 @@ def run_command(command: List[str], description: str) -> bool:
         return False
 
 
-def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False, build_args: dict = None) -> bool:
+def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False, build_args: dict = None, fresh_clone: bool = False) -> bool:
     """
     Build a Docker image. No retry logic for builds - failure is ignored.
     """
@@ -78,7 +78,11 @@ def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool =
     
     if rebuild:
         command.append("--no-cache")
-        
+
+    if fresh_clone:
+        import time as _time
+        command.extend(["--build-arg", f"CACHEBUST={int(_time.time())}"])
+
     if hf_token:
         command.extend(["--build-arg", f"HF_TOKEN={hf_token}"])
     else:
@@ -113,7 +117,7 @@ def push_image(tag: str) -> bool:
     return False
 
 
-def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False, global_push: bool = False, global_build: bool = False) -> str:
+def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False, global_push: bool = False, global_build: bool = False, fresh_clone: bool = False) -> str:
     """
     Build and push a single image based on its configuration and global flags.
     Returns: "success", "build_failed", or "push_failed"
@@ -126,7 +130,7 @@ def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: boo
     # Build the image if configured (per-image or global)
     should_build = config.build or global_build
     if should_build:
-        if not build_image(config.dockerfile, config.tag, hf_token, rebuild, config.build_args):
+        if not build_image(config.dockerfile, config.tag, hf_token, rebuild, config.build_args, fresh_clone):
             print(f"\n⚠️ FAILED to build {config.tag}. Ignoring build failure as requested.")
             return "build_failed"
     else:
@@ -200,6 +204,8 @@ def main():
     parser.add_argument("--hf-token", type=str, help="Hugging Face token for gated models")
     parser.add_argument("--build", action="store_true", help="Build images (overrides per-image config)")
     parser.add_argument("--rebuild", action="store_true", help="Force rebuild by using --no-cache")
+
+    parser.add_argument("--fresh-clone", dest="fresh_clone", action="store_true", help="Bust cache only at git clone layers (ensures latest ComfyUI/extensions without full rebuild)")
     parser.add_argument("--push", action="store_true", help="Push images (overrides per-image config)")
     
     args = parser.parse_args()
@@ -238,7 +244,7 @@ def main():
     push_failed = []
     
     for config in IMAGES:
-        result = build_and_push_image(config, args.hf_token, args.rebuild, args.push, args.build)
+        result = build_and_push_image(config, args.hf_token, args.rebuild, args.push, args.build, getattr(args, "fresh_clone", False))
         if result == "success":
             successful.append(config.tag)
         elif result == "build_failed":
