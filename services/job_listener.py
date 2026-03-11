@@ -293,7 +293,8 @@ class JobListener:
                                         provider_id=self.provider_id,
                                         accept_policy=self.client.accept_policy,
                                         allowed_ids=self.client.allowed_ids,
-                                        job_id=peeked_job.get('id')
+                                        job_id=peeked_job.get('id'),
+                                        monetize_mode=getattr(self.client, 'monetize_mode', False)
                                     )
                                     
                                     if job and job.get('id'):
