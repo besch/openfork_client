@@ -621,6 +621,9 @@ def inject_prompt_and_image_into_ltx2_video_workflow(
             node['inputs']['width'] = width
             node['inputs']['height'] = height
             logging.info(f"Injected dimensions into LTX-2 i2v LTXVImgToVideo node {node_id}: {width}x{height}")
+            if strength is not None:
+                node['inputs']['strength'] = strength
+                logging.info(f"Injected strength={strength} into LTX-2 i2v LTXVImgToVideo node {node_id}")
             sampler_found = True
         elif node.get("class_type") == "LTXVBaseSampler":
             width, height = get_dimensions(aspect_ratio)

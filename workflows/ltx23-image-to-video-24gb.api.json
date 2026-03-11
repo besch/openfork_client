@@ -109,7 +109,7 @@
         "vae": ["1", 2],
         "image": ["22", 0],
         "latent": ["6", 0],
-        "strength": 0.85,
+        "strength": 0.7,
         "bypass_i2v": false
       },
       "class_type": "LTXVImgToVideoConditionOnly",
