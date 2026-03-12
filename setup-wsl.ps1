@@ -212,8 +212,9 @@ $driveLetter = $tempScriptPath[0].ToString().ToLower()
 $wslScriptPath = "/mnt/$driveLetter/" + $tempScriptPath.Substring(3).Replace('\', '/')
 
 Write-Log "Running Docker setup commands inside WSL Ubuntu..."
-# Using bash -c with multi-line string passed via stdin
-$script | wsl -d Ubuntu --user root -e bash -c "cat > /tmp/openfork_setup.sh && chmod +x /tmp/openfork_setup.sh && /tmp/openfork_setup.sh"
+wsl -d Ubuntu --user root -- bash $wslScriptPath
+
+Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue
 
 Write-Log "Setup Complete!"
 Write-Output "SUCCESS"
