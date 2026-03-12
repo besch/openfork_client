@@ -1,0 +1,9 @@
+{
+  "exclude": [
+    "venv/**",
+    "**/node_modules/**",
+    "**/__pycache__/**"
+  ],
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false
+}
