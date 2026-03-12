@@ -67,6 +67,14 @@ try {
             Write-Log "Downloading Ubuntu rootfs (~130MB)..."
             Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfsPath -UseBasicParsing
             
+            # Clean up any leftover VHDX from a previous failed import
+            # (causes ERROR_FILE_EXISTS even when no distro is registered)
+            $leftoverVhdx = Join-Path $InstallPath "ext4.vhdx"
+            if (Test-Path $leftoverVhdx) {
+                Write-Log "Found leftover ext4.vhdx from previous failed install. Removing..."
+                Remove-Item $leftoverVhdx -Force
+            }
+            
             Write-Log "Importing Ubuntu to $InstallPath..."
             wsl --import Ubuntu $InstallPath $rootfsPath --version 2
             
@@ -192,9 +200,17 @@ done
 echo "[Linux] OpenFork AI Engine Setup Complete."
 "@
 
-# Define bash script file path locally, transfer, and run
-$wslTempScript = "/tmp/openfork_setup.sh"
-# Execute the bash commands inside WSL
+# Write the bash script to a Windows temp file to avoid stdin pipe issues when running elevated.
+# When PowerShell is launched via Start-Process -Verb RunAs, the stdin pipe is broken,
+# so piping to `wsl ... cat >` silently produces an empty file. Using a file on disk is reliable.
+Write-Log "Writing setup script to temp file..."
+$tempScriptPath = "C:\Windows\Temp\openfork_setup.sh"
+[System.IO.File]::WriteAllText($tempScriptPath, $script.Replace("`r`n", "`n"), [System.Text.Encoding]::UTF8)
+
+# Convert Windows path to WSL /mnt/ path (works for any drive letter)
+$driveLetter = $tempScriptPath[0].ToString().ToLower()
+$wslScriptPath = "/mnt/$driveLetter/" + $tempScriptPath.Substring(3).Replace('\', '/')
+
 Write-Log "Running Docker setup commands inside WSL Ubuntu..."
 # Using bash -c with multi-line string passed via stdin
 $script | wsl -d Ubuntu --user root -e bash -c "cat > /tmp/openfork_setup.sh && chmod +x /tmp/openfork_setup.sh && /tmp/openfork_setup.sh"
