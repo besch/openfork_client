@@ -1,6 +1,7 @@
 import logging
 import json
 import threading
+import time
 from typing import Dict, Any, Optional
 
 from config import HEADLESS_MODE, TimeoutConfig
@@ -176,7 +177,6 @@ class JobListener:
                     
                     # Wait for poll interval, but interrupt if shutdown OR if a download completes
                     # We check in 0.5s increments to handle both events responsively
-                    import time
                     wait_until = time.time() + poll_interval
                     while time.time() < wait_until and not self.shutdown_event.is_set():
                         if hasattr(self.client, 'job_wakeup_event') and self.client.job_wakeup_event.is_set():
@@ -507,7 +507,6 @@ class JobListener:
                     poll_interval = TimeoutConfig.HEADLESS_JOB_POLL_INTERVAL if HEADLESS_MODE else TimeoutConfig.JOB_POLL_INTERVAL
                     
                     # Wait for poll interval, but interrupt if shutdown OR if a download completes
-                    import time
                     wait_until = time.time() + poll_interval
                     while time.time() < wait_until and not self.shutdown_event.is_set():
                         if hasattr(self.client, 'job_wakeup_event') and self.client.job_wakeup_event.is_set():

@@ -9,7 +9,7 @@ from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 from services.docker_download_manager import DockerDownloadManager
 from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display, get_service_incompatibility_reason, get_available_system_ram
-import services.job_processors as job_processors_module
+import services.processors as job_processors_module
 
 
 class DGNClient:
@@ -183,30 +183,9 @@ class DGNClient:
             )
         return ProcessorClass(self, job, shutdown_event)
 
-    def _process_job(self, job, shutdown_event: threading.Event):
-        """Processes a single DGN job by delegating to a specific job processor.
-        
-        Note: This method is now deprecated and kept for backward compatibility.
-        The job listener now handles processing directly to ensure proper locking.
-        """
-        try:
-            self.current_job = job
-            processor = self._get_job_processor(job, shutdown_event)
-            processor.process()
-        except TokenExpiredError:
-            self.orchestrator_service.signal_auth_expired()
-            logging.warning(
-                f"Auth expired during processing of job {job.get('id')}."
-            )
-        except Exception as e:
-            logging.error(
-                f"An error occurred while processing job {job.get('id')}: {e}",
-                exc_info=True,
-            )
-            if job and job.get("id"):
-                self.orchestrator_service.update_job_status(job.get("id"), "failed")
-        finally:
-            self.current_job = None
+    # NOTE: _process_job was removed (it was deprecated and lacked lock management).
+    # All job processing flows through JobListener._process_job_safely, which
+    # correctly holds self.processing_lock before fetching and processing each job.
 
 
 if __name__ == "__main__":
