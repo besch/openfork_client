@@ -6,7 +6,8 @@
 
 param (
     [switch]$InstallOnly,
-    [string]$InstallPath
+    [string]$InstallPath,
+    [string]$DistroName = "Ubuntu"
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,22 +57,22 @@ if ($requiresReboot) {
     Exit 0
 }
 
-Write-Log "Checking for Ubuntu distribution..."
+Write-Log "Checking for $DistroName distribution..."
 try {
     $dists = (wsl -l -v | Out-String) -replace "\0", ""
-    if ($dists -notmatch "Ubuntu") {
+    if ($dists -notmatch $DistroName) {
         if ($null -ne $InstallPath -and $InstallPath -ne "") {
-            Write-Log "Installing Ubuntu to custom path: $InstallPath"
+            Write-Log "Installing $DistroName to custom path: $InstallPath"
             if (-not (Test-Path $InstallPath)) {
                 New-Item -ItemType Directory -Path $InstallPath -Force
             }
-            
+
             $rootfsPath = Join-Path $InstallPath "ubuntu-rootfs.tar.gz"
             $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz"
-            
+
             Write-Log "Downloading Ubuntu rootfs (~130MB)..."
             Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfsPath -UseBasicParsing
-            
+
             # Clean up any leftover VHDX from a previous failed import
             # (causes ERROR_FILE_EXISTS even when no distro is registered)
             $leftoverVhdx = Join-Path $InstallPath "ext4.vhdx"
@@ -79,20 +80,20 @@ try {
                 Write-Log "Found leftover ext4.vhdx from previous failed install. Removing..."
                 Remove-Item $leftoverVhdx -Force
             }
-            
-            Write-Log "Importing Ubuntu to $InstallPath..."
-            wsl --import Ubuntu $InstallPath $rootfsPath --version 2
-            
+
+            Write-Log "Importing $DistroName to $InstallPath..."
+            wsl --import $DistroName $InstallPath $rootfsPath --version 2
+
             Remove-Item $rootfsPath -Force
         } else {
             Write-Log "Installing Ubuntu without launch (Default path)..."
             wsl --install -d Ubuntu --no-launch
         }
-        
-        Write-Log "Waiting for WSL to list Ubuntu..."
+
+        Write-Log "Waiting for WSL to list $DistroName..."
         $retry = 0
-        while (((wsl -l -v | Out-String) -replace "\0", "") -notmatch "Ubuntu") {
-            if ($retry -gt 60) { throw "Timeout waiting for Ubuntu install" }
+        while (((wsl -l -v | Out-String) -replace "\0", "") -notmatch $DistroName) {
+            if ($retry -gt 60) { throw "Timeout waiting for $DistroName install" }
             Start-Sleep -Seconds 2
             $retry++
         }
@@ -109,33 +110,33 @@ fi
 mkdir -p /etc
 echo -e "[boot]\nsystemd=true\n[user]\ndefault=openfork" > /etc/wsl.conf
 "@
-        $provisionScript | wsl -d Ubuntu --user root -e bash -c "cat > /tmp/provision.sh && bash /tmp/provision.sh"
-        
+        $provisionScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/provision.sh && bash /tmp/provision.sh"
+
         Write-Log "Restarting WSL to apply new default user and systemd setting..."
         wsl --shutdown
         Start-Sleep -Seconds 2
     } else {
-        Write-Log "Ubuntu is already installed. Ensuring systemd is enabled..."
-        wsl -d Ubuntu --user root -e bash -c "if ! grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null; then mkdir -p /etc && echo -e '[boot]\nsystemd=true' >> /etc/wsl.conf && echo 'SYSTEMD_ENABLED' > /tmp/systemd_changed; fi"
-        if (wsl -d Ubuntu -e cat /tmp/systemd_changed 2>$null) {
+        Write-Log "$DistroName is already installed. Ensuring systemd is enabled..."
+        wsl -d $DistroName --user root -e bash -c "if ! grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null; then mkdir -p /etc && echo -e '[boot]\nsystemd=true' >> /etc/wsl.conf && echo 'SYSTEMD_ENABLED' > /tmp/systemd_changed; fi"
+        if (wsl -d $DistroName -e cat /tmp/systemd_changed 2>$null) {
             Write-Log "Systemd was just enabled. Restarting WSL..."
             wsl --shutdown
             Start-Sleep -Seconds 2
-            wsl -d Ubuntu -e rm -f /tmp/systemd_changed
+            wsl -d $DistroName -e rm -f /tmp/systemd_changed
         }
     }
 } catch {
     Write-Log "Detailed Error: $($_.Exception.Message)"
     if ($_.ScriptStackTrace) { Write-Log "Stack: $($_.ScriptStackTrace)" }
-    Write-Log "Failed to check or install Ubuntu via wsl command. Make sure WSL is fully updated."
-    Write-Output "ERROR: Failed to install Ubuntu."
+    Write-Log "Failed to check or install $DistroName via wsl command. Make sure WSL is fully updated."
+    Write-Output "ERROR: Failed to install $DistroName."
     Exit 1
 }
 
 Write-Log "Enabling Sparse VHD for automatic disk space reclamation..."
 try {
     # This requires WSL version 2.0.0 or higher.
-    wsl --manage Ubuntu --set-sparse true
+    wsl --manage $DistroName --set-sparse true
     Write-Log "Sparse VHD enabled successfully."
 } catch {
     Write-Log "Warning: Could not enable sparse VHD. Your Windows version may be too old to support automatic disk reclamation."
@@ -216,8 +217,8 @@ $tempScriptPath = "C:\Windows\Temp\openfork_setup.sh"
 $driveLetter = $tempScriptPath[0].ToString().ToLower()
 $wslScriptPath = "/mnt/$driveLetter/" + $tempScriptPath.Substring(3).Replace('\', '/')
 
-Write-Log "Running Docker setup commands inside WSL Ubuntu..."
-wsl -d Ubuntu --user root -- bash $wslScriptPath
+Write-Log "Running Docker setup commands inside WSL $DistroName..."
+wsl -d $DistroName --user root -- bash $wslScriptPath
 
 Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue
 
