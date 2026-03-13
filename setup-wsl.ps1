@@ -12,9 +12,14 @@ param (
 $ErrorActionPreference = "Stop"
 $VerbosePreference = "Continue"
 
+$progressLog = "C:\Windows\Temp\openfork_install_progress.log"
+[System.IO.File]::WriteAllText($progressLog, "", [System.Text.Encoding]::UTF8)
+
 function Write-Log {
     param([string]$Message)
     Write-Host "[OpenFork Setup] $Message" -ForegroundColor Cyan
+    $ts = Get-Date -Format "HH:mm:ss"
+    Add-Content -Path $progressLog -Value "[$ts] $Message" -Encoding UTF8
 }
 
 function Check-IsAdmin {
