@@ -33,6 +33,19 @@ if (-not (Check-IsAdmin)) {
     Exit 1
 }
 
+# Check if Docker is already available natively on Windows
+try {
+    Write-Log "Checking if Docker is already available on Windows..."
+    $dockerCheck = docker version --format '{{.Server.Os}}' 2>$null
+    if ($null -ne $dockerCheck -and $dockerCheck -match "linux") {
+        Write-Log "Native Docker (Linux containers) detected on Windows. Skipping WSL distro installation."
+        Write-Output "SUCCESS"
+        Exit 0
+    }
+} catch {
+    # Ignore errors here, just proceed with normal installation
+}
+
 Write-Log "Checking Windows Subsystem for Linux (WSL) status..."
 $wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -ErrorAction SilentlyContinue
 $vmpFeature = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -ErrorAction SilentlyContinue
