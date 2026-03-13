@@ -48,20 +48,22 @@ def docker_cp(source_path: str, dest_path: str, shutdown_event: threading.Event)
     try:
         if os.name == 'nt':
             # On Windows, use shell=True and no pipe redirection to avoid
-            # handle inheritance issues that cause docker cp to hang with Docker Desktop
+            # handle inheritance issues that cause docker cp to hang with Docker Desktop.
+            # Pass command as a list (not a joined string) so subprocess uses list2cmdline()
+            # which correctly quotes arguments containing spaces or special characters.
             timeout = 600
-            
+
             result = subprocess.run(
-                ' '.join(command),
+                command,
                 shell=True,
                 timeout=timeout,
                 # Don't capture any output - this avoids pipe blocking
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, 
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 **hidden_kwargs
             )
-            
+
             if result.returncode != 0:
                 raise subprocess.CalledProcessError(result.returncode, command)
             

@@ -83,9 +83,15 @@ class DGNClient:
                 job_processors_module.LLMJobProcessor
             )
 
+        allowed_processor_names = set(job_processors_module.__all__)
         for workflow_type, config in self.config.items():
             processor_name = config.get("processor")
             if processor_name:
+                if processor_name not in allowed_processor_names:
+                    logging.warning(
+                        f"Processor class '{processor_name}' is not in the allowed processor list — skipping workflow '{workflow_type}'"
+                    )
+                    continue
                 processor_class = getattr(job_processors_module, processor_name, None)
                 if processor_class:
                     proc_map[workflow_type] = processor_class

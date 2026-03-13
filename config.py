@@ -62,8 +62,10 @@ class TimeoutConfig:
     # ComfyUI wait time for the server to become ready
     COMFYUI_READY_TIMEOUT = int(os.getenv("COMFYUI_READY_TIMEOUT", "180"))
     
-    # Maximum time to wait for a workflow to complete (2 hours default for long AI jobs)
-    WORKFLOW_TIMEOUT = int(os.getenv("WORKFLOW_TIMEOUT", "7200"))
+    # Maximum time to wait for a workflow to complete.
+    # 30 minutes is sufficient for the longest video jobs; 2 hours would leave a hung
+    # ComfyUI process tying up the GPU for far too long. Overridable via WORKFLOW_TIMEOUT env.
+    WORKFLOW_TIMEOUT = int(os.getenv("WORKFLOW_TIMEOUT", "1800"))
     
     # Default timeout for HTTP API requests
     API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", "30"))

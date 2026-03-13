@@ -258,8 +258,30 @@ def main():
     parser.add_argument('--process-marker', type=str, help='Unique marker for process identification')
     parser.add_argument('--monetize-mode', action='store_true', default=False, help='Enable monetize mode: poll only for paid monetize jobs and emit MONETIZE_JOB_COMPLETE events.')
     args = parser.parse_args()
-    
-    # Validate authentication - need either API key OR OAuth tokens
+
+    # Validate authentication - need either API key OR OAuth tokens.
+    # If tokens are not provided via CLI args (preferred, more secure), wait for
+    # an UPDATE_TOKENS message from stdin before proceeding.
+    if not args.dgn_api_key and not (args.access_token and args.refresh_token):
+        logging.info("No tokens in CLI args — waiting for UPDATE_TOKENS via stdin...")
+        try:
+            line = sys.stdin.readline()
+            if not line:
+                logging.error("stdin closed before receiving initial tokens. Aborting.")
+                sys.exit(1)
+            init_msg = json.loads(line.strip())
+            if init_msg.get("type") == "UPDATE_TOKENS":
+                payload = init_msg.get("payload", {})
+                args.access_token = payload.get("access_token")
+                args.refresh_token = payload.get("refresh_token")
+                logging.info("Received initial tokens via stdin.")
+            else:
+                logging.error(f"Expected UPDATE_TOKENS as first stdin message, got: {init_msg.get('type')}. Aborting.")
+                sys.exit(1)
+        except Exception as e:
+            logging.error(f"Failed to read initial tokens from stdin: {e}")
+            sys.exit(1)
+
     if not args.dgn_api_key and not (args.access_token and args.refresh_token):
         parser.error('Either --dgn-api-key OR both --access-token and --refresh-token are required')
 

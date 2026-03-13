@@ -2,6 +2,7 @@ import logging
 import json
 import threading
 import time
+import traceback
 from typing import Dict, Any, Optional
 
 from config import HEADLESS_MODE, TimeoutConfig
@@ -101,12 +102,13 @@ class JobListener:
                 f"An error occurred while processing job {job.get('id')}: {e}",
                 exc_info=True,
             )
-            # Emit JOB_FAILED event
+            # Emit JOB_FAILED event with traceback for remote debugging
             print(json.dumps({
                 "type": "JOB_FAILED",
                 "payload": {
                     "id": job.get('id'),
-                    "error": str(e)
+                    "error": str(e),
+                    "traceback": traceback.format_exc(),
                 }
             }), flush=True)
 
