@@ -115,16 +115,45 @@ echo -e "[boot]\nsystemd=true\n[user]\ndefault=openfork" > /etc/wsl.conf
         Write-Log "Restarting WSL to apply new default user and systemd setting..."
         wsl --shutdown
         Start-Sleep -Seconds 2
-    } else {
-        Write-Log "$DistroName is already installed. Ensuring systemd is enabled..."
-        wsl -d $DistroName --user root -e bash -c "if ! grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null; then mkdir -p /etc && echo -e '[boot]\nsystemd=true' >> /etc/wsl.conf && echo 'SYSTEMD_ENABLED' > /tmp/systemd_changed; fi"
-        if (wsl -d $DistroName -e cat /tmp/systemd_changed 2>$null) {
-            Write-Log "Systemd was just enabled. Restarting WSL..."
-            wsl --shutdown
-            Start-Sleep -Seconds 2
-            wsl -d $DistroName -e rm -f /tmp/systemd_changed
-        }
-    }
+     } else {
+         Write-Log "$DistroName is already installed. Ensuring systemd is enabled and default user is openfork..."
+         # Ensure the openfork user exists
+         $userExists = wsl -d $DistroName --user root -e bash -c "id -u openfork > /dev/null 2>&1 && echo 'true' || echo 'false'"
+         if ($userExists -eq 'false') {
+             Write-Log "Creating openfork user..."
+             $userScript = @"
+if ! id -u openfork > /dev/null 2>&1; then
+    useradd -m -s /bin/bash openfork
+    echo "openfork:openfork" | chpasswd
+    usermod -aG sudo openfork
+    echo "openfork ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/openfork
+fi
+"@
+             $userScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/user.sh && bash /tmp/user.sh"
+         }
+
+         # Ensure wsl.conf has systemd=true and default user openfork
+         $desiredWslConf = "[boot]`nsystemd=true[user]`ndefault=openfork`n"
+         $currentWslConf = wsl -d $DistroName --user root -e bash -c "cat /etc/wsl.conf 2>$null"
+         if ($currentWslConf -ne $desiredWslConf) {
+             Write-Log "Updating wsl.conf to desired state..."
+             $confScript = @"
+mkdir -p /etc
+echo -e '"$desiredWslConf"' > /etc/wsl.conf
+"@
+             $confScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/conf.sh && bash /tmp/conf.sh"
+             # Check if we changed the systemd setting (from not having systemd=true to having it)
+             $oldSystemd = $currentWslConf -match 'systemd=true'
+             $newSystemd = $desiredWslConf -match 'systemd=true'
+             if (-not $oldSystemd -and $newSystemd) {
+                 Write-Log "Systemd was just enabled. Restarting WSL..."
+                 wsl --shutdown
+                 Start-Sleep -Seconds 2
+             }
+         } else {
+             Write-Log "WSL conf is already correct."
+         }
+     }
 } catch {
     Write-Log "Detailed Error: $($_.Exception.Message)"
     if ($_.ScriptStackTrace) { Write-Log "Stack: $($_.ScriptStackTrace)" }
