@@ -22,6 +22,7 @@ from .video.ltx23_text_16gb import LTX23TextToVideo16GBJobProcessor
 from .video.ltx23_image_16gb import LTX23ImageToVideo16GBJobProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
+from .video.diagdistill import DiagDistillJobProcessor
 from .video.svi_shot import SVIShotImageToVideoJobProcessor
 from .video.svi_film import SVIFilmImageToVideoJobProcessor
 
@@ -66,6 +67,7 @@ __all__ = [
     "VideoUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",
+    "DiagDistillJobProcessor",
     "StableAudioJobProcessor",
 
     "VibeVoiceJobProcessor",
