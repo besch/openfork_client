@@ -1,6 +1,7 @@
 cli.py
 comfyui-storage/acestep_api.py
 comfyui-storage/build_and_push.py
+comfyui-storage/diagdistill_api.py
 comfyui-storage/diffrhythm_api.py
 comfyui-storage/heartmula_api.py
 comfyui-storage/lavasr_api.py
@@ -50,6 +51,7 @@ services/processors/llm/__init__.py
 services/processors/llm/llm.py
 services/processors/output_handlers.py
 services/processors/video/__init__.py
+services/processors/video/diagdistill.py
 services/processors/video/hunyuan_image.py
 services/processors/video/hunyuan_text.py
 services/processors/video/ltx23_image.py
