@@ -20,18 +20,55 @@ class DiagDistillJobProcessor(TurboDiffusionBaseProcessor):
     Uses the same pattern as TurboDiffusion (REST-based).
     """
     
-    API_PORT = 8000
+    SERVICE_NAME = "DiagDistill"
+
+    def __init__(self, client, job, shutdown_event):
+        super().__init__(client, job, shutdown_event)
+        # Try to get the port from the service config
+        wf_type = job.get("workflow_type")
+        self.api_port = 8000
+        try:
+            if wf_type in client.config:
+                service_id = client.config[wf_type].get("service_name")
+                if service_id and service_id in client.services_config:
+                    self.api_port = client.services_config[service_id].get("port", 8000)
+        except Exception as e:
+            logging.debug(f"Could not determine port from config: {e}")
+        
+        self.api_base_url = f"http://localhost:{self.api_port}"
+
+    def _wait_for_api(self, timeout: int = 600) -> bool:
+        """Wait for the DiagDistill API to become available."""
+        import time
+        import requests
+        start_time = time.time()
+        logging.info(f"Waiting for {self.SERVICE_NAME} API at {self.api_base_url} (timeout={timeout}s)...")
+        while time.time() - start_time < timeout:
+            if self.shutdown_event.is_set():
+                return False
+            try:
+                response = requests.get(f"{self.api_base_url}/health", timeout=10)
+                if response.status_code == 200:
+                    logging.info(f"{self.SERVICE_NAME} API is ready")
+                    return True
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(10)
+
+        logging.error(f"{self.SERVICE_NAME} API did not become available within {timeout}s at {self.api_base_url}")
+        return False
 
     def process(self):
         """Main processing method."""
         if not self.job:
-            self._fail_job("Job object is None for DiagDistillJobProcessor. Cannot proceed.")
+            self._fail_job(f"Job object is None for {self.SERVICE_NAME}Processor. Cannot proceed.")
             return
 
-        logging.info(f"Processing DiagDistill job {self.job_id}")
+        logging.info(f"Processing {self.SERVICE_NAME} job {self.job_id}")
 
-        if not self._wait_for_api(timeout=180):
-            self._fail_job(f"DiagDistill API did not become available for job {self.job_id}")
+        if not self._wait_for_api(timeout=600):
+            # The message is already logged in _wait_for_api
+            self._fail_job(f"{self.SERVICE_NAME} API timeout for job {self.job_id}")
             return
 
         inputs = self.job.get("inputs") or {}
@@ -46,6 +83,12 @@ class DiagDistillJobProcessor(TurboDiffusionBaseProcessor):
                 return
             start_image_full_path = os.path.join(self.input_dir, start_image_filename)
 
+        # DiagDistill only supports T2V (Text-to-Video)
+        # I2V is NOT supported by the DiagDistill repository
+        if start_image_full_path:
+            self._fail_job(f"DiagDistill does not support image-to-video (I2V). Only T2V is supported.")
+            return
+        
         # DiagDistill usually has many fixed parameters, but we'll pass standard ones
         resolution = inputs.get("resolution", "720p")
         seed = inputs.get("seed", 0)

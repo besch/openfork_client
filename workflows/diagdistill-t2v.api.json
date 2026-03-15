@@ -1,0 +1,4 @@
+{
+  "description": "DiagDistill T2V - HunyuanVideo distillation via Diagonal Distillation",
+  "note": "This workflow uses DiagDistillJobProcessor which communicates directly with the DiagDistill REST API for ultra-fast video generation"
+}

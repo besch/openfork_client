@@ -36,27 +36,88 @@ def run_diagdistill(job_id: str, prompt: str, negative_prompt: str, resolution: 
         jobs[job_id]["status"] = "processing"
         output_file = f"{OUTPUT_DIR}/{job_id}.mp4"
         
-        # Construct command for DiagDistill predict_video.py
-        # Based on: python predict_video.py --prompt "..." --output_path "..." --seed ...
+        # DiagDistill uses torchrun with inference.py and a YAML config file
+        # We need to create a custom config for each request
+        config_content = f"""# Auto-generated config for job {job_id}
+denoising_step_list:
+  - 1000
+  - 100
+warp_denoising_step: true
+use_diagonal_denoising: true
+enable_torch_compile: false
+use_taehv: true
+taehv_checkpoint_path: /opt/DiagDistill/checkpoints/taew2_1.pth
+num_frame_per_block: 3
+model_name: Wan2.1-T2V-1.3B
+model_kwargs:
+  local_attend: 12
+  timestep_shift: 5.0
+  sink_size: 3
+
+# Inference settings
+data_path: /tmp/{job_id}_prompt.txt
+output_folder: {OUTPUT_DIR}
+inference_iter: -1
+num_output_frames: 21
+use_ema: false
+seed: {seed}
+num_samples: 1
+save_with_index: true
+global_sink: true
+context_noise: 0
+
+# Model checkpoints - these need to be provided
+generator_ckpt: 
+lora_ckpt: 
+
+adapter:
+  type: "lora"
+  rank: 256
+  alpha: 256
+  dropout: 0.0
+  dtype: "bfloat16"
+  verbose: false
+"""
+        
+        # Write prompt to a text file (DiagDistill reads prompts from file)
+        prompt_file = f"/tmp/{job_id}_prompt.txt"
+        with open(prompt_file, "w") as f:
+            f.write(prompt)
+        
+        # Write config file
+        config_file = f"/tmp/{job_id}_config.yaml"
+        with open(config_file, "w") as f:
+            f.write(config_content)
+        
+        # Construct command for DiagDistill using torchrun
+        # Note: This requires the DiagDistill models to be downloaded
         cmd = [
-            "python", "predict_video.py",
-            "--prompt", prompt,
-            "--negative_prompt", negative_prompt,
-            "--output_path", output_file,
-            "--seed", str(seed),
-            "--steps", "16",
+            "torchrun",
+            "--nproc_per_node=1",
+            "--master_port=29500",
+            "inference.py",
+            "--config_path", config_file,
         ]
         
-        if start_image_path:
-            cmd.extend(["--image_path", start_image_path])
-            cmd.extend(["--mode", "i2v"])
-        else:
-            cmd.extend(["--mode", "t2v"])
-
         logging.info(f"Running command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd="/opt/DiagDistill", check=True)
         
-        if os.path.exists(output_file):
+        # Find the output video (DiagDistill creates timestamped folders)
+        # Look for the most recent video file in the output directory
+        output_folder = OUTPUT_DIR
+        video_files = []
+        if os.path.exists(output_folder):
+            for f in os.listdir(output_folder):
+                if f.endswith('.mp4'):
+                    video_files.append(os.path.join(output_folder, f))
+        
+        if video_files:
+            # Use the most recent video file
+            latest_video = max(video_files, key=os.path.getmtime)
+            # Move to expected location
+            if latest_video != output_file:
+                import shutil
+                shutil.move(latest_video, output_file)
             jobs[job_id]["status"] = "completed"
             jobs[job_id]["output_path"] = output_file
         else:
@@ -70,15 +131,28 @@ def run_diagdistill(job_id: str, prompt: str, negative_prompt: str, resolution: 
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
 
+class T2VRequest(BaseModel):
+    prompt: str
+    negative_prompt: str = ""
+    resolution: str = "720p"
+    seed: int = 0
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "cuda": torch.cuda.is_available()}
+    try:
+        cuda_ok = torch.cuda.is_available()
+        gpu_name = torch.cuda.get_device_name(0) if cuda_ok else "None"
+    except Exception as e:
+        logging.error(f"Health check error: {e}")
+        cuda_ok = False
+        gpu_name = "Error"
+    return {"status": "ok", "cuda": cuda_ok, "gpu_name": gpu_name}
 
 @app.post("/generate/t2v")
-def generate_t2v(background_tasks: BackgroundTasks, prompt: str, negative_prompt: str = "", resolution: str = "720p", seed: int = 0):
+def generate_t2v(req: T2VRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "pending", "job_id": job_id}
-    background_tasks.add_task(run_diagdistill, job_id, prompt, negative_prompt, resolution, seed)
+    background_tasks.add_task(run_diagdistill, job_id, req.prompt, req.negative_prompt, req.resolution, req.seed)
     return {"job_id": job_id}
 
 @app.post("/generate/i2v")

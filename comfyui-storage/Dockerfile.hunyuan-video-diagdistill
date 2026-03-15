@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-venv python3.11-distutils \
     curl git wget libgl1-mesa-glx libgl1-mesa-dri ffmpeg \
+    libglib2.0-0 libsm6 libxext6 libxrender-dev libgomp1 \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && apt-get clean \
@@ -28,10 +29,18 @@ WORKDIR /opt/DiagDistill
 # Install Python packages
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
-        torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128 \
+        torch==2.5.1 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir \
-        fastapi uvicorn pydantic python-multipart requests transformers accelerate hf_transfer \
-        diffusers==0.32.1 einops omegaconf sentencepiece
+        fastapi uvicorn pydantic==2.10.6 python-multipart requests \
+        transformers>=4.49.0 tokenizers>=0.20.3 accelerate>=1.1.1 tqdm \
+        diffusers==0.31.0 einops omegaconf sentencepiece \
+        opencv-python>=4.9.0.80 datasets imageio easydict ftypy \
+        imageio-ffmpeg wandb av==13.1.0 \
+        open-clip-torch git+https://github.com/openai/CLIP.git \
+        starlette pycocotools lmdb matplotlib scikit-image \
+        huggingface_hub[cli] dominate peft torchao \
+        pycuda onnx onnxruntime flask flask-socketio \
+        nvidia-pyindex nvidia-tensorrt
 
 # Set up environment for model downloads
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
