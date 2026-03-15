@@ -69,6 +69,7 @@ from services.processors import (
     QwenImageT2ITurboProcessor,
     MMAudioJobProcessor,
     LavaSRJobProcessor,
+    DiagDistillJobProcessor,
 )
 
 __all__ = [
@@ -118,6 +119,7 @@ __all__ = [
     "QwenImageT2ITurboProcessor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
+    "DiagDistillJobProcessor",
 ]
 
 

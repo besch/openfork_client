@@ -1,0 +1,49 @@
+# DiagDistill (HunyuanVideo Distillation) Docker Image
+# Based on Sphere-AI-Lab/diagdistill
+
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri ffmpeg \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+
+# Clone DiagDistill
+RUN git clone https://github.com/Sphere-AI-Lab/diagdistill.git /opt/DiagDistill
+
+WORKDIR /opt/DiagDistill
+
+# Install Python packages
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        fastapi uvicorn pydantic python-multipart requests transformers accelerate hf_transfer \
+        diffusers==0.32.1 einops omegaconf sentencepiece
+
+# Set up environment for model downloads
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+
+# Note: Models should be downloaded to /opt/DiagDistill/models
+# DiagDistill models are usually provided as safetensors.
+# For production, we would add huggingface-cli download commands here.
+# For now, we assume models are mounted or downloaded at runtime.
+
+# Copy our API wrapper
+COPY diagdistill_api.py /opt/DiagDistill/
+
+EXPOSE 8000
+
+CMD ["python", "diagdistill_api.py"]

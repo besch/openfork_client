@@ -30,6 +30,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb:latest", build=True, build_args={"MODEL_SIZE": "0.6B"}),
     # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb:latest", build=True, push=True, build_args={"MODEL_SIZE": "1.7B"}),
     # ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.hunyuan-video-diagdistill", "beschiak/openfork-diagdistill:latest", build=True, push=True),
     # ImageConfig("Dockerfile.acestep-8gb", "beschiak/openfork-acestep-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.acestep-16gb", "beschiak/openfork-acestep-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest", build=True, push=True),
