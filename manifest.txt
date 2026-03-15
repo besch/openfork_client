@@ -73,6 +73,7 @@ utils/media_utils.py
 utils/shutdown_handler.py
 workflows/chatterbox-tts.api.json
 workflows/chatterbox-voice-clone.api.json
+workflows/diagdistill-t2v.api.json
 workflows/flux-text-to-image.api.json
 workflows/hunyuan-image-to-video-fp8.api.json
 workflows/hunyuan-image-to-video.api.json
