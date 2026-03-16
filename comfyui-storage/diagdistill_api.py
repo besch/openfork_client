@@ -50,7 +50,6 @@ taehv_checkpoint_path: /opt/DiagDistill/checkpoints/taew2_1.pth
 num_frame_per_block: 3
 model_name: Wan2.1-T2V-1.3B
 model_kwargs:
-  local_attend: 12
   timestep_shift: 5.0
   sink_size: 3
 
