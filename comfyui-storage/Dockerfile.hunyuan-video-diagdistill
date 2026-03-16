@@ -48,9 +48,7 @@ ENV HF_HUB_ENABLE_HF_TRANSFER=1
 # For production, we would add huggingface-cli download commands here.
 # For now, we assume models are mounted or downloaded at runtime.
 
-# Copy our API wrapper
-COPY diagdistill_api.py /opt/DiagDistill/
-
 EXPOSE 8000
 
-CMD ["python", "diagdistill_api.py"]
+# Download API wrapper from GitHub at runtime (allows updates without rebuilding image)
+CMD ["/bin/bash", "-c", "curl -s -L -o /opt/DiagDistill/diagdistill_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/diagdistill_api.py && cd /opt/DiagDistill && python diagdistill_api.py"]
