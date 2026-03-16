@@ -27,20 +27,18 @@ RUN git clone https://github.com/Sphere-AI-Lab/diagdistill.git /opt/DiagDistill
 WORKDIR /opt/DiagDistill
 
 # Install Python packages
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir \
+RUN python -m pip install --no-cache-dir --upgrade pip --break-system-packages \
+    && python -m pip install --no-cache-dir --break-system-packages \
         torch==2.5.1 torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu128 \
-    && python -m pip install --no-cache-dir \
+    && python -m pip install --no-cache-dir --break-system-packages \
         fastapi uvicorn pydantic==2.10.6 python-multipart requests \
         transformers>=4.49.0 tokenizers>=0.20.3 accelerate>=1.1.1 tqdm \
         diffusers==0.31.0 einops omegaconf sentencepiece \
-        opencv-python>=4.9.0.80 datasets imageio easydict ftypy \
+        opencv-python>=4.9.0.80 datasets imageio easydict ftfy \
         imageio-ffmpeg wandb av==13.1.0 \
         open-clip-torch git+https://github.com/openai/CLIP.git \
         starlette pycocotools lmdb matplotlib scikit-image \
-        huggingface_hub[cli] dominate peft torchao \
-        pycuda onnx onnxruntime flask flask-socketio \
-        nvidia-pyindex nvidia-tensorrt
+        huggingface_hub dominate peft torchao onnx onnxruntime
 
 # Set up environment for model downloads
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
