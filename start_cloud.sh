@@ -311,6 +311,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/diagnose_heartmula.sh" ] && cp -v "$DGN_SOURCE_DIR/diagnose_heartmula.sh" /app/ && chmod +x /app/diagnose_heartmula.sh
           [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
       fi
       
@@ -337,6 +338,7 @@ log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
 START_QWEN3TTS="false"
+START_DIAGDISTILL="false"
 START_COMFYUI="true"
 ENABLE_4BIT="false"
 
@@ -363,6 +365,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
       START_QWEN3TTS="true"
       SERVICE_TYPE="qwen3-tts"
+  elif [ -f "/app/diagdistill_api.py" ]; then
+      log "Auto-mode: Detected DiagDistill image. Selecting DiagDistill service."
+      START_DIAGDISTILL="true"
+      if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+          SERVICE_TYPE="diagdistill-24gb"
+          log "Auto-selected 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="diagdistill-16gb"
+          log "Auto-selected 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -371,6 +383,7 @@ else
   if [[ "$SERVICE_TYPE" == *"heartmula"* ]]; then START_HEARTMULA="true"; fi
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
+  if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
 fi
 
 # Resource constraints and VRAM management
@@ -532,6 +545,29 @@ if [ "$START_HEARTMULA" = "true" ] && [ -f "/app/heartmula_api.py" ]; then
           log "Diagnostic script not found at /app/diagnose_heartmula.sh"
       fi
       exit 1
+  fi
+fi
+
+# Start DiagDistill REST API
+if [ "$START_DIAGDISTILL" = "true" ]; then
+  log "Starting DiagDistill API service..."
+  
+  # Check if DiagDistill API exists in either location
+  DIAGDISTILL_API=""
+  if [ -f "/app/diagdistill_api.py" ]; then
+    DIAGDISTILL_API="/app/diagdistill_api.py"
+    DIAGDISTILL_CD="/app"
+  elif [ -f "/opt/DiagDistill/diagdistill_api.py" ]; then
+    DIAGDISTILL_API="/opt/DiagDistill/diagdistill_api.py"
+    DIAGDISTILL_CD="/opt/DiagDistill"
+  fi
+  
+  if [ -n "$DIAGDISTILL_API" ]; then
+    log "Found DiagDistill API at $DIAGDISTILL_API. Starting..."
+    (cd "$DIAGDISTILL_CD" && "$PYTHON_EXE" diagdistill_api.py > /tmp/diagdistill_api.log 2>&1) &
+    wait_for_url "DiagDistill API" "http://127.0.0.1:8000/health" 600 "/tmp/diagdistill_api.log"
+  else
+    log "ERROR: DiagDistill API not found at /app/diagdistill_api.py or /opt/DiagDistill/diagdistill_api.py"
   fi
 fi
 
