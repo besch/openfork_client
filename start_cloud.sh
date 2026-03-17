@@ -403,6 +403,12 @@ if [ "$START_HEARTMULA" = "true" ]; then
   fi
 fi
 
+if [ "$START_DIAGDISTILL" = "true" ]; then
+  # DiagDistill (HunyuanVideo) needs full VRAM — always disable ComfyUI
+  log "DiagDistill selected. Disabling ComfyUI to reserve VRAM for HunyuanVideo."
+  START_COMFYUI="false"
+fi
+
 if [ "$START_QWEN3TTS" = "true" ]; then
   # Qwen3-TTS Model Selection
   # If 16GB service requested OR VRAM > 16GB, use 1.7B model
@@ -571,8 +577,8 @@ if [ "$START_DIAGDISTILL" = "true" ]; then
   fi
 fi
 
-# Start TurboDiffusion REST API
-if [ -f "/opt/TurboDiffusion/api_server.py" ]; then
+# Start TurboDiffusion REST API (skip if DiagDistill already claimed port 8000)
+if [ "$START_DIAGDISTILL" != "true" ] && [ -f "/opt/TurboDiffusion/api_server.py" ]; then
   log "Found TurboDiffusion API script. Starting..."
   (cd /opt/TurboDiffusion && "$PYTHON_EXE" api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
   wait_for_url "TurboDiffusion API" "http://127.0.0.1:8000/health" 120 "/tmp/turbodiffusion_api.log"
