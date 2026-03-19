@@ -2,28 +2,28 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors"
+        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
       },
       "class_type": "CheckpointLoaderSimple",
       "_meta": {
-        "title": "LTX-2.3 22B Dev FP8 Checkpoint"
+        "title": "LTX-2.3 22B Distilled Checkpoint"
       }
     },
     "2": {
       "inputs": {
-        "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
-        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
+        "text_encoder": "gemma_3_12B_it_fp8_scaled.safetensors",
+        "ckpt_name": "ltx-2.3-22b-distilled.safetensors",
         "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B FP4 Text Encoder (cpu)"
+        "title": "Load Gemma-3 12B FP8 Text Encoder (cpu)"
       }
     },
     "3": {
       "inputs": {
         "text": "A cinematic video prompt placeholder",
-        "clip": ["31", 1]
+        "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
@@ -33,7 +33,7 @@
     "4": {
       "inputs": {
         "text": "",
-        "clip": ["31", 1]
+        "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
@@ -65,7 +65,7 @@
     },
     "7": {
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors"
+        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
       },
       "class_type": "LTXVAudioVAELoader",
       "_meta": {
@@ -129,7 +129,7 @@
     },
     "12": {
       "inputs": {
-        "model": ["30", 0],
+        "model": ["1", 0],
         "positive": ["5", 0],
         "negative": ["5", 1],
         "parameters": ["11", 0],
@@ -236,29 +236,6 @@
       "class_type": "VHS_VideoCombine",
       "_meta": {
         "title": "Save Video + Audio (VHS)"
-      }
-    },
-    "30": {
-      "inputs": {
-        "model": ["1", 0],
-        "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
-        "strength_model": 1.0
-      },
-      "class_type": "LoraLoaderModelOnly",
-      "_meta": {
-        "title": "Load Distilled LoRA"
-      }
-    },
-    "31": {
-      "inputs": {
-        "clip": ["2", 0],
-        "lora_name": "gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors",
-        "strength_model": 1.0,
-        "strength_clip": 1.0
-      },
-      "class_type": "LoraLoader",
-      "_meta": {
-        "title": "Load Gemma Abliterated LoRA"
       }
     }
   }
