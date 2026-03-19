@@ -12,13 +12,12 @@
     "2": {
       "inputs": {
         "text_encoder": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "text_projection": "ltx-2.3_text_projection_bf16.safetensors",
         "ckpt_name": "ltx-2.3-22b-distilled.safetensors",
         "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B FP8 Text Encoder (cpu offload)"
+        "title": "Load Gemma-3 12B FP8 Text Encoder (Audio-Video)"
       }
     },
     "3": {
@@ -199,14 +198,14 @@
       "inputs": {
         "samples": ["17", 0],
         "vae": ["1", 2],
-        "tile_size": 512,
-        "overlap": 64,
-        "temporal_size": 512,
-        "temporal_overlap": 64
+        "tile_size": 256,
+        "overlap": 32,
+        "temporal_size": 256,
+        "temporal_overlap": 32
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video (Tiled VAE)"
+        "title": "Decode Video (Tiled VAE - reduced tiles for color accuracy)"
       }
     },
     "19": {
