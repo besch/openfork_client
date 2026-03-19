@@ -2,28 +2,28 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors"
       },
       "class_type": "CheckpointLoaderSimple",
       "_meta": {
-        "title": "LTX-2.3 22B Distilled Checkpoint"
+        "title": "LTX-2.3 22B Dev FP8 Checkpoint"
       }
     },
     "2": {
       "inputs": {
-        "text_encoder": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors",
+        "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
         "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B FP8 Text Encoder (Audio-Video)"
+        "title": "Load Gemma-3 12B FP4 Text Encoder (cpu)"
       }
     },
     "3": {
       "inputs": {
         "text": "A cinematic video prompt placeholder",
-        "clip": ["2", 0]
+        "clip": ["31", 1]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
@@ -33,7 +33,7 @@
     "4": {
       "inputs": {
         "text": "",
-        "clip": ["2", 0]
+        "clip": ["31", 1]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
@@ -65,7 +65,7 @@
     },
     "7": {
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+        "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors"
       },
       "class_type": "LTXVAudioVAELoader",
       "_meta": {
@@ -162,7 +162,7 @@
     },
     "12": {
       "inputs": {
-        "model": ["1", 0],
+        "model": ["30", 0],
         "positive": ["5", 0],
         "negative": ["5", 1],
         "parameters": ["11", 0],
@@ -231,14 +231,14 @@
       "inputs": {
         "samples": ["17", 0],
         "vae": ["1", 2],
-        "tile_size": 256,
-        "overlap": 32,
-        "temporal_size": 256,
-        "temporal_overlap": 32
+        "tile_size": 512,
+        "overlap": 64,
+        "temporal_size": 512,
+        "temporal_overlap": 64
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video (Tiled VAE - reduced tiles for color accuracy)"
+        "title": "Decode Video (Tiled VAE)"
       }
     },
     "19": {
@@ -269,6 +269,29 @@
       "class_type": "VHS_VideoCombine",
       "_meta": {
         "title": "Save Video + Audio (VHS)"
+      }
+    },
+    "30": {
+      "inputs": {
+        "model": ["1", 0],
+        "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+        "strength_model": 1.0
+      },
+      "class_type": "LoraLoaderModelOnly",
+      "_meta": {
+        "title": "Load Distilled LoRA"
+      }
+    },
+    "31": {
+      "inputs": {
+        "clip": ["2", 0],
+        "lora_name": "gemma-3-12b-it-abliterated_lora_rank64_bf16.safetensors",
+        "strength_model": 1.0,
+        "strength_clip": 1.0
+      },
+      "class_type": "LoraLoader",
+      "_meta": {
+        "title": "Load Gemma Abliterated LoRA"
       }
     }
   }
