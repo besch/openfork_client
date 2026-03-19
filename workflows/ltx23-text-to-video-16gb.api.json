@@ -12,12 +12,13 @@
     "2": {
       "inputs": {
         "text_encoder": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
+        "text_projection": "ltx-2.3_text_projection_bf16.safetensors",
         "ckpt_name": "ltx-2.3-22b-distilled.safetensors",
-        "device": "default"
+        "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B Text Encoder (Audio-Video)"
+        "title": "Load Gemma-3 12B FP8 Text Encoder (cpu offload)"
       }
     },
     "3": {

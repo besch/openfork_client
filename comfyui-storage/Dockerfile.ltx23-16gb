@@ -106,15 +106,29 @@ RUN echo "Downloading LTX-2.3 22B Distilled model (46.1GB)..." && \
     python -c "import os; size=os.path.getsize('models/checkpoints/ltx-2.3-22b-distilled.safetensors')/(1024**3); print(f'LTX-2.3 22B Distilled: {size:.2f}GB'); assert size > 40, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Download Gemma-3 12B FP8 text encoder (shared with LTX-2 - same encoder architecture)
-# LTXAVTextEncoderLoader loads Gemma weights + projections from the main LTX-2.3 checkpoint
+# Download Gemma-3 12B FP8 text encoder (slot 1 of DualCLIPLoader)
+# FP8 is used instead of FP4 for Ampere GPU compatibility (RTX A5000, RTX 3090, etc.)
+# Goes into models/text_encoders/ - NOT models/clip/
 RUN echo "Downloading Gemma-3 12B FP8 encoder..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn', filename='gemma_3_12B_it_fp8_e4m3fn.safetensors', \
     local_dir='/tmp/gemma', token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/gemma/gemma_3_12B_it_fp8_e4m3fn.safetensors models/clip/ && \
+    mv /tmp/gemma/gemma_3_12B_it_fp8_e4m3fn.safetensors models/text_encoders/ && \
     rm -rf /tmp/gemma && \
-    python -c "import os; size=os.path.getsize('models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors')/(1024**3); print(f'Gemma FP8: {size:.2f}GB'); assert size > 5, 'File too small, corrupted'" && \
+    python -c "import os; size=os.path.getsize('models/text_encoders/gemma_3_12B_it_fp8_e4m3fn.safetensors')/(1024**3); print(f'Gemma FP8: {size:.2f}GB'); assert size > 5, 'File too small, corrupted'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Download LTX-2.3 Text Projection (slot 2 of DualCLIPLoader) - REQUIRED for correct colors
+# This file connects Gemma prompt embeddings to the LTX-2.3 visual latent space.
+# Without it the model falls back to an internal degraded projection causing color distortion.
+# Source: Kijai/LTX2.3_comfy - confirmed 2.31GB at text_encoders/ltx-2.3_text_projection_bf16.safetensors
+RUN echo "Downloading LTX-2.3 text projection..." && \
+    python -c "import os; from huggingface_hub import hf_hub_download; \
+    hf_hub_download(repo_id='Kijai/LTX2.3_comfy', filename='text_encoders/ltx-2.3_text_projection_bf16.safetensors', \
+    local_dir='/tmp/proj', token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/proj/text_encoders/ltx-2.3_text_projection_bf16.safetensors models/text_encoders/ && \
+    rm -rf /tmp/proj && \
+    python -c "import os; size=os.path.getsize('models/text_encoders/ltx-2.3_text_projection_bf16.safetensors')/(1024**3); print(f'Text Projection: {size:.2f}GB'); assert size > 2.0, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Download LTX-2.3 Spatial Upscaler x2 (~1GB)
@@ -127,34 +141,46 @@ RUN echo "Downloading LTX-2.3 spatial upscaler..." && \
     python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Upscaler: {size:.2f}GB'); assert size > 0.5, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
+# Download LTX-2.3 Temporal Upscaler x2 (~1GB)
+RUN echo "Downloading LTX-2.3 temporal upscaler..." && \
+    python -c "import os; from huggingface_hub import hf_hub_download; \
+    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-temporal-upscaler-x2-1.0.safetensors', \
+    local_dir='/tmp/t_upscaler', token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/t_upscaler/ltx-2.3-temporal-upscaler-x2-1.0.safetensors models/latent_upscale_models/ && \
+    rm -rf /tmp/t_upscaler && \
+    python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Temporal Upscaler: {size:.2f}GB'); assert size > 0.2, 'File too small, corrupted'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
 # Copy vision processor configs for Gemma (same as LTX-2)
 COPY gemma-configs/preprocessor_config.json models/clip/gemma-3-12b-it/
 COPY gemma-configs/processor_config.json models/clip/gemma-3-12b-it/
 COPY gemma-configs/generation_config.json models/clip/gemma-3-12b-it/
 
-# Verify all models
-RUN echo '#!/usr/bin/env python3' > /tmp/verify_models.py && \
-    echo 'import os, sys' >> /tmp/verify_models.py && \
-    echo 'files = {' >> /tmp/verify_models.py && \
-    echo '    "models/checkpoints/ltx-2.3-22b-distilled.safetensors": 40.0,' >> /tmp/verify_models.py && \
-    echo '    "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 5.0,' >> /tmp/verify_models.py && \
-    echo '    "models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.0.safetensors": 0.5,' >> /tmp/verify_models.py && \
-    echo '}' >> /tmp/verify_models.py && \
-    echo 'print("="*60)' >> /tmp/verify_models.py && \
-    echo 'print("VERIFYING LTX-2.3 24GB MODEL FILES")' >> /tmp/verify_models.py && \
-    echo 'print("="*60)' >> /tmp/verify_models.py && \
-    echo 'ok = True' >> /tmp/verify_models.py && \
-    echo 'for path, min_gb in files.items():' >> /tmp/verify_models.py && \
-    echo '    if not os.path.exists(path):' >> /tmp/verify_models.py && \
-    echo '        print(f"MISSING: {path}"); ok = False; continue' >> /tmp/verify_models.py && \
-    echo '    gb = os.path.getsize(path)/(1024**3)' >> /tmp/verify_models.py && \
-    echo '    if gb < min_gb:' >> /tmp/verify_models.py && \
-    echo '        print(f"TOO SMALL: {path} ({gb:.2f}GB)"); ok = False' >> /tmp/verify_models.py && \
-    echo '    else:' >> /tmp/verify_models.py && \
-    echo '        print(f"OK: {path} ({gb:.2f}GB)")' >> /tmp/verify_models.py && \
-    echo 'if not ok: sys.exit(1)' >> /tmp/verify_models.py && \
-    echo 'print("All LTX-2.3 model files verified!")' >> /tmp/verify_models.py && \
-    python3 /tmp/verify_models.py && rm /tmp/verify_models.py
+# # Verify all models
+# RUN echo '#!/usr/bin/env python3' > /tmp/verify_models.py && \
+#     echo 'import os, sys' >> /tmp/verify_models.py && \
+#     echo 'files = {' >> /tmp/verify_models.py && \
+#     echo '    "models/checkpoints/ltx-2.3-22b-distilled.safetensors": 40.0,' >> /tmp/verify_models.py && \
+#     echo '    "models/text_encoders/gemma_3_12B_it_fp8_e4m3fn.safetensors": 5.0,' >> /tmp/verify_models.py && \
+#     echo '    "models/text_encoders/ltx-2.3_text_projection_bf16.safetensors": 2.0,' >> /tmp/verify_models.py && \
+#     echo '    "models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.0.safetensors": 0.5,' >> /tmp/verify_models.py && \
+#     echo '    "models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors": 0.2,' >> /tmp/verify_models.py && \
+#     echo '}' >> /tmp/verify_models.py && \
+#     echo 'print("="*60)' >> /tmp/verify_models.py && \
+#     echo 'print("VERIFYING LTX-2.3 24GB MODEL FILES")' >> /tmp/verify_models.py && \
+#     echo 'print("="*60)' >> /tmp/verify_models.py && \
+#     echo 'ok = True' >> /tmp/verify_models.py && \
+#     echo 'for path, min_gb in files.items():' >> /tmp/verify_models.py && \
+#     echo '    if not os.path.exists(path):' >> /tmp/verify_models.py && \
+#     echo '        print(f"MISSING: {path}"); ok = False; continue' >> /tmp/verify_models.py && \
+#     echo '    gb = os.path.getsize(path)/(1024**3)' >> /tmp/verify_models.py && \
+#     echo '    if gb < min_gb:' >> /tmp/verify_models.py && \
+#     echo '        print(f"TOO SMALL: {path} ({gb:.2f}GB)"); ok = False' >> /tmp/verify_models.py && \
+#     echo '    else:' >> /tmp/verify_models.py && \
+#     echo '        print(f"OK: {path} ({gb:.2f}GB)")' >> /tmp/verify_models.py && \
+#     echo 'if not ok: sys.exit(1)' >> /tmp/verify_models.py && \
+#     echo 'print("All LTX-2.3 model files verified!")' >> /tmp/verify_models.py && \
+#     python3 /tmp/verify_models.py && rm /tmp/verify_models.py
 
 # Final cleanup
 RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
@@ -164,12 +190,12 @@ RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null 
 WORKDIR /opt/ComfyUI
 
 # LTX-2.3 LAUNCH FLAGS:
-# --lowvram: Required - offloads 46.1GB model to CPU RAM during generation
-#            (very slow on 16GB VRAM due to heavy CPU offloading)
-# --reserve-vram 1.0: Reserve 1GB for system overhead
+# --novram: Workaround for offloading memory conflicts with text encoder nodes
+#           (very slow on 16GB VRAM due to heavy CPU offloading)
+# --reserve-vram 2.0: Reserve 2GB for system overhead
 # --use-pytorch-cross-attention: Native PyTorch attention (less VRAM than xformers split)
 #
 # SYSTEM RAM NOTE: Requires 64GB+ system RAM to hold 46.1GB model in CPU RAM
 # GENERATION SPEED on 16GB with offloading: ~30-90 min per clip (very heavy swapping)
 # GENERATION SPEED on 24GB with offloading: ~10-30 min per clip
-CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1.0", "--use-pytorch-cross-attention"]
+CMD ["python", "main.py", "--listen", "--novram", "--reserve-vram", "2.0", "--use-pytorch-cross-attention"]
