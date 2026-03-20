@@ -6,9 +6,10 @@
       },
       "class_type": "CheckpointLoaderSimple",
       "_meta": {
-        "title": "LTX-2.3 22B Dev Checkpoint"
+        "title": "Load LTX-2.3 Checkpoint (provides model + video VAE)"
       }
     },
+
     "2": {
       "inputs": {
         "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
@@ -16,30 +17,27 @@
         "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
-      "_meta": {
-        "title": "Load Gemma-3 12B FP4 Mixed Text Encoder (cpu)"
-      }
+      "_meta": { "title": "Load Text Encoder (Gemma FP4, CPU offload)" }
     },
+
     "3": {
       "inputs": {
         "text": "A cinematic video prompt placeholder",
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
-      "_meta": {
-        "title": "Positive Prompt"
-      }
+      "_meta": { "title": "Positive Prompt" }
     },
+
     "4": {
       "inputs": {
         "text": "",
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
-      "_meta": {
-        "title": "Negative Prompt"
-      }
+      "_meta": { "title": "Negative Prompt" }
     },
+
     "5": {
       "inputs": {
         "positive": ["3", 0],
@@ -47,31 +45,32 @@
         "frame_rate": 24
       },
       "class_type": "LTXVConditioning",
-      "_meta": {
-        "title": "LTX-V Conditioning"
-      }
+      "_meta": { "title": "LTX-V Conditioning" }
     },
+
     "6": {
       "inputs": {
-        "width": 768,
-        "height": 432,
+        "width": 384,
+        "height": 224,
         "length": 121,
         "batch_size": 1
       },
       "class_type": "EmptyLTXVLatentVideo",
       "_meta": {
-        "title": "Empty Video Latent (768x432, 121 frames = ~5s @ 24fps)"
+        "title": "Stage 1: Empty Video Latent (384x224 half-res, 121 frames ~5s@24fps)"
       }
     },
+
     "7": {
       "inputs": {
         "ckpt_name": "ltx-2.3-22b-dev.safetensors"
       },
       "class_type": "LTXVAudioVAELoader",
       "_meta": {
-        "title": "Load Audio VAE — used ONLY for audio decode in node 19, NOT video decode"
+        "title": "Load Audio VAE (audio latent init + final audio decode)"
       }
     },
+
     "8": {
       "inputs": {
         "audio_vae": ["7", 0],
@@ -80,20 +79,18 @@
         "batch_size": 1
       },
       "class_type": "LTXVEmptyLatentAudio",
-      "_meta": {
-        "title": "Empty Audio Latent (121 frames @ 24fps)"
-      }
+      "_meta": { "title": "Stage 1: Empty Audio Latent" }
     },
+
     "9": {
       "inputs": {
         "video_latent": ["6", 0],
         "audio_latent": ["8", 0]
       },
       "class_type": "LTXVConcatAVLatent",
-      "_meta": {
-        "title": "Concat Audio+Video Latents"
-      }
+      "_meta": { "title": "Stage 1: Concat AV Latents" }
     },
+
     "10": {
       "inputs": {
         "modality": "AUDIO",
@@ -106,10 +103,9 @@
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
-      "_meta": {
-        "title": "Audio Guider Parameters"
-      }
+      "_meta": { "title": "Stage 1: Audio Guider Params" }
     },
+
     "11": {
       "inputs": {
         "parameters": ["10", 0],
@@ -123,10 +119,9 @@
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
-      "_meta": {
-        "title": "Video Guider Parameters"
-      }
+      "_meta": { "title": "Stage 1: Video Guider Params" }
     },
+
     "12": {
       "inputs": {
         "model": ["22", 0],
@@ -136,10 +131,9 @@
         "skip_blocks": "28"
       },
       "class_type": "MultimodalGuider",
-      "_meta": {
-        "title": "Multimodal Guider (Audio+Video)"
-      }
+      "_meta": { "title": "Stage 1: Multimodal Guider (Audio+Video)" }
     },
+
     "13": {
       "inputs": {
         "latent": ["9", 0],
@@ -150,28 +144,25 @@
         "terminal": 0.1
       },
       "class_type": "LTXVScheduler",
-      "_meta": {
-        "title": "LTX-V Scheduler (15 steps, official full path)"
-      }
+      "_meta": { "title": "Stage 1: Scheduler (15 steps)" }
     },
+
     "14": {
       "inputs": {
         "sampler_name": "euler_ancestral_cfg_pp"
       },
       "class_type": "KSamplerSelect",
-      "_meta": {
-        "title": "Sampler Select"
-      }
+      "_meta": { "title": "Stage 1: Sampler" }
     },
+
     "15": {
       "inputs": {
         "noise_seed": 0
       },
       "class_type": "RandomNoise",
-      "_meta": {
-        "title": "Random Noise (Seed)"
-      }
+      "_meta": { "title": "Stage 1: Noise Seed" }
     },
+
     "16": {
       "inputs": {
         "noise": ["15", 0],
@@ -181,22 +172,140 @@
         "latent_image": ["9", 0]
       },
       "class_type": "SamplerCustomAdvanced",
-      "_meta": {
-        "title": "Sampler (Audio+Video)"
-      }
+      "_meta": { "title": "Stage 1: Generate (half-res)" }
     },
+
     "17": {
       "inputs": {
         "av_latent": ["16", 0]
       },
       "class_type": "LTXVSeparateAVLatent",
       "_meta": {
-        "title": "Separate Audio+Video Latents"
+        "title": "Stage 1: Separate AV (extract video latent for upscaling)"
       }
     },
-    "18": {
+
+    "22": {
       "inputs": {
-        "samples": ["17", 0],
+        "model": ["1", 0],
+        "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+        "strength_model": 1.0
+      },
+      "class_type": "LoraLoaderModelOnly",
+      "_meta": { "title": "Apply Distilled LoRA (used in both stages)" }
+    },
+
+    "30": {
+      "inputs": {
+        "model_name": "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"
+      },
+      "class_type": "LatentUpscaleModelLoader",
+      "_meta": { "title": "Stage 2: Load Spatial Upscaler x2" }
+    },
+
+    "31": {
+      "inputs": {
+        "upscale_model": ["30", 0],
+        "latent": ["17", 0]
+      },
+      "class_type": "LTXVLatentUpsampler",
+      "_meta": {
+        "title": "Stage 2: Upsample Video Latent 2x (384x224 -> 768x448)"
+      }
+    },
+
+    "32": {
+      "inputs": {
+        "audio_vae": ["7", 0],
+        "frames_number": 121,
+        "frame_rate": 24,
+        "batch_size": 1
+      },
+      "class_type": "LTXVEmptyLatentAudio",
+      "_meta": { "title": "Stage 2: Fresh Audio Latent (for refinement pass)" }
+    },
+
+    "33": {
+      "inputs": {
+        "video_latent": ["31", 0],
+        "audio_latent": ["32", 0]
+      },
+      "class_type": "LTXVConcatAVLatent",
+      "_meta": { "title": "Stage 2: Concat Upscaled Video + Fresh Audio" }
+    },
+
+    "34": {
+      "inputs": {
+        "positive": ["5", 0],
+        "negative": ["5", 1],
+        "latent": ["33", 0]
+      },
+      "class_type": "LTXVCropGuides",
+      "_meta": {
+        "title": "Stage 2: Crop Guides (align conditioning to upscaled latent shape)"
+      }
+    },
+
+    "35": {
+      "inputs": {
+        "model": ["22", 0],
+        "positive": ["34", 0],
+        "negative": ["34", 1],
+        "cfg": 1.0
+      },
+      "class_type": "CFGGuider",
+      "_meta": { "title": "Stage 2: CFG Guider (cfg=1 for distilled LoRA)" }
+    },
+
+    "36": {
+      "inputs": {
+        "sampler_name": "euler"
+      },
+      "class_type": "KSamplerSelect",
+      "_meta": { "title": "Stage 2: Sampler (euler)" }
+    },
+
+    "37": {
+      "inputs": {
+        "sigmas": "0.909375, 0.725, 0.421875, 0.0"
+      },
+      "class_type": "ManualSigmas",
+      "_meta": {
+        "title": "Stage 2: Manual Sigmas (4-step distilled refinement)"
+      }
+    },
+
+    "38": {
+      "inputs": {
+        "noise_seed": 0
+      },
+      "class_type": "RandomNoise",
+      "_meta": { "title": "Stage 2: Noise Seed" }
+    },
+
+    "39": {
+      "inputs": {
+        "noise": ["38", 0],
+        "guider": ["35", 0],
+        "sampler": ["36", 0],
+        "sigmas": ["37", 0],
+        "latent_image": ["33", 0]
+      },
+      "class_type": "SamplerCustomAdvanced",
+      "_meta": { "title": "Stage 2: Refine at full-res (4 distilled steps)" }
+    },
+
+    "40": {
+      "inputs": {
+        "av_latent": ["39", 0]
+      },
+      "class_type": "LTXVSeparateAVLatent",
+      "_meta": { "title": "Stage 2: Separate final AV Latents for decode" }
+    },
+
+    "41": {
+      "inputs": {
+        "samples": ["40", 0],
         "vae": ["1", 2],
         "tile_size": 512,
         "overlap": 64,
@@ -205,52 +314,40 @@
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video (Tiled VAE) — vae from CheckpointLoaderSimple [1,2] (video VAE), temporal_size 64, temporal_overlap 8"
+        "title": "Decode Video — uses video VAE from CheckpointLoaderSimple [1,2]"
       }
     },
-    "19": {
+
+    "42": {
       "inputs": {
-        "samples": ["17", 1],
+        "samples": ["40", 1],
         "audio_vae": ["7", 0]
       },
       "class_type": "LTXVAudioVAEDecode",
       "_meta": {
-        "title": "Decode Audio"
+        "title": "Decode Audio — uses AudioVAE from LTXVAudioVAELoader [7,0]"
       }
     },
-    "20": {
+
+    "43": {
       "inputs": {
-        "images": ["18", 0],
+        "images": ["41", 0],
         "fps": 24,
-        "audio": ["19", 0]
+        "audio": ["42", 0]
       },
       "class_type": "CreateVideo",
-      "_meta": {
-        "title": "Create Video"
-      }
+      "_meta": { "title": "Create Video (mux frames + audio @ 24fps)" }
     },
-    "21": {
+
+    "44": {
       "inputs": {
-        "video": ["20", 0],
+        "video": ["43", 0],
         "filename_prefix": "ltx23_t2v",
         "format": "auto",
         "codec": "auto"
       },
       "class_type": "SaveVideo",
-      "_meta": {
-        "title": "Save Video"
-      }
-    },
-    "22": {
-      "inputs": {
-        "model": ["1", 0],
-        "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
-        "strength_model": 1.0
-      },
-      "class_type": "LoraLoaderModelOnly",
-      "_meta": {
-        "title": "Apply Distilled LoRA"
-      }
+      "_meta": { "title": "Save Video" }
     }
   }
 }
