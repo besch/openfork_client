@@ -5,9 +5,7 @@
         "ckpt_name": "ltx-2.3-22b-dev.safetensors"
       },
       "class_type": "CheckpointLoaderSimple",
-      "_meta": {
-        "title": "Load LTX-2.3 Checkpoint (provides model + video VAE)"
-      }
+      "_meta": { "title": "Load LTX-2.3 Checkpoint (model + video VAE)" }
     },
 
     "2": {
@@ -205,12 +203,13 @@
 
     "31": {
       "inputs": {
+        "samples": ["17", 0],
         "upscale_model": ["30", 0],
-        "latent": ["17", 0]
+        "vae": ["1", 2]
       },
       "class_type": "LTXVLatentUpsampler",
       "_meta": {
-        "title": "Stage 2: Upsample Video Latent 2x (384x224 -> 768x448)"
+        "title": "Stage 2: Upsample Video Latent 2x (384x224 -> 768x448) — samples+upscale_model+vae all required"
       }
     },
 
@@ -307,14 +306,15 @@
       "inputs": {
         "samples": ["40", 0],
         "vae": ["1", 2],
-        "tile_size": 512,
-        "overlap": 64,
-        "temporal_size": 64,
-        "temporal_overlap": 8
+        "tile_sample_min_height": 240,
+        "tile_sample_min_width": 360,
+        "tile_overlap_factor_height": 0.2,
+        "tile_overlap_factor_width": 0.2,
+        "auto_tile_size": true
       },
-      "class_type": "VAEDecodeTiled",
+      "class_type": "LTXVTiledVAEDecode",
       "_meta": {
-        "title": "Decode Video — uses video VAE from CheckpointLoaderSimple [1,2]"
+        "title": "Decode Video — LTX-native tiled decoder (correct color, no AudioVAE conflict)"
       }
     },
 
@@ -325,7 +325,7 @@
       },
       "class_type": "LTXVAudioVAEDecode",
       "_meta": {
-        "title": "Decode Audio — uses AudioVAE from LTXVAudioVAELoader [7,0]"
+        "title": "Decode Audio — AudioVAE from LTXVAudioVAELoader [7,0]"
       }
     },
 
