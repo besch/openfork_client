@@ -2,8 +2,9 @@
 # LTX-2.3 is a DiT-based audio-video foundation model - generates synchronized video + audio
 #
 # ARCHITECTURE:
-#   - Checkpoint:  ltx-2.3-22b-distilled.safetensors  (46.1GB BF16, standalone distilled)
-#   - Encoder:     gemma_3_12B_it_fp8_scaled.safetensors (13.2GB, Comfy-Org/ltx-2)
+#   - Checkpoint:  ltx-2.3-22b-dev.safetensors  (46.1GB BF16)
+#   - LoRA:        ltx-2.3-22b-distilled-lora-384.safetensors  (7.1GB)
+#   - Encoder:     gemma_3_12B_it_fp4_mixed.safetensors (9.4GB, Comfy-Org/ltx-2)
 #                  → models/text_encoders/  (required by LTXAVTextEncoderLoader)
 #   - Upscaler:    ltx-2.3-spatial-upscaler-x2-1.0.safetensors
 #   - Upscaler:    ltx-2.3-temporal-upscaler-x2-1.0.safetensors (262MB)
@@ -92,27 +93,36 @@ ENV LTX23_TIER=24gb
 # MODEL DOWNLOADS
 # ============================================================================
 
-# LTX-2.3 22B Distilled checkpoint (46.1GB BF16)
-# Standalone distilled model - no LoRA needed
-RUN echo "Downloading LTX-2.3 22B Distilled checkpoint (46.1GB)..." && \
+# LTX-2.3 22B Dev checkpoint (46.1GB BF16)
+RUN echo "Downloading LTX-2.3 22B Dev checkpoint (46.1GB)..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled.safetensors', \
+    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-dev.safetensors', \
     local_dir='/tmp/ckpt', token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/ckpt/ltx-2.3-22b-distilled.safetensors models/checkpoints/ && \
+    mv /tmp/ckpt/ltx-2.3-22b-dev.safetensors models/checkpoints/ && \
     rm -rf /tmp/ckpt && \
-    python -c "import os; size=os.path.getsize('models/checkpoints/ltx-2.3-22b-distilled.safetensors')/(1024**3); print(f'Checkpoint: {size:.2f}GB'); assert size > 40, 'Too small'" && \
+    python -c "import os; size=os.path.getsize('models/checkpoints/ltx-2.3-22b-dev.safetensors')/(1024**3); print(f'Checkpoint: {size:.2f}GB'); assert size > 40, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Gemma-3 12B FP8 scaled text encoder (13.2GB)
-# Source: Comfy-Org/ltx-2 - confirmed working with LTXAVTextEncoderLoader
-# Goes in models/text_encoders/ (NOT models/clip/)
-RUN echo "Downloading Gemma-3 12B FP8 scaled encoder (13.2GB)..." && \
+# LTX-2.3 Distilled LoRA (7.1GB)
+RUN echo "Downloading distilled LoRA..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='Comfy-Org/ltx-2', filename='split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors', \
+    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled-lora-384.safetensors', \
+    local_dir='/tmp/lora', token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/lora/ltx-2.3-22b-distilled-lora-384.safetensors models/loras/ && \
+    rm -rf /tmp/lora && \
+    python -c "import os; size=os.path.getsize('models/loras/ltx-2.3-22b-distilled-lora-384.safetensors')/(1024**3); print(f'Distilled LoRA: {size:.2f}GB'); assert size > 6, 'Too small'" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Gemma-3 12B FP4 mixed text encoder (9.4GB)
+# Source: Comfy-Org/ltx-2 - current ComfyUI docs recommend the FP4 mixed variant
+# Goes in models/text_encoders/ (NOT models/clip/)
+RUN echo "Downloading Gemma-3 12B FP4 mixed encoder (9.4GB)..." && \
+    python -c "import os; from huggingface_hub import hf_hub_download; \
+    hf_hub_download(repo_id='Comfy-Org/ltx-2', filename='split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors', \
     local_dir='/tmp/enc', token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/enc/split_files/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors models/text_encoders/ && \
+    mv /tmp/enc/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors models/text_encoders/ && \
     rm -rf /tmp/enc && \
-    python -c "import os; size=os.path.getsize('models/text_encoders/gemma_3_12B_it_fp8_scaled.safetensors')/(1024**3); print(f'Gemma FP8 scaled: {size:.2f}GB'); assert size > 10, 'Too small'" && \
+    python -c "import os; size=os.path.getsize('models/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors')/(1024**3); print(f'Gemma FP4 mixed: {size:.2f}GB'); assert size > 8, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Spatial Upscaler x2 v1.0 (~1GB)

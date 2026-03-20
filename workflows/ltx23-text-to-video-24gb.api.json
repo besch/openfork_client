@@ -2,22 +2,22 @@
   "prompt": {
     "1": {
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+        "ckpt_name": "ltx-2.3-22b-dev.safetensors"
       },
       "class_type": "CheckpointLoaderSimple",
       "_meta": {
-        "title": "LTX-2.3 22B Distilled Checkpoint"
+        "title": "LTX-2.3 22B Dev Checkpoint"
       }
     },
     "2": {
       "inputs": {
-        "text_encoder": "gemma_3_12B_it_fp8_scaled.safetensors",
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors",
+        "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+        "ckpt_name": "ltx-2.3-22b-dev.safetensors",
         "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B FP8 Text Encoder (cpu)"
+        "title": "Load Gemma-3 12B FP4 Mixed Text Encoder (cpu)"
       }
     },
     "3": {
@@ -65,7 +65,7 @@
     },
     "7": {
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+        "ckpt_name": "ltx-2.3-22b-dev.safetensors"
       },
       "class_type": "LTXVAudioVAELoader",
       "_meta": {
@@ -129,7 +129,7 @@
     },
     "12": {
       "inputs": {
-        "model": ["1", 0],
+        "model": ["22", 0],
         "positive": ["5", 0],
         "negative": ["5", 1],
         "parameters": ["11", 0],
@@ -151,7 +151,7 @@
       },
       "class_type": "LTXVScheduler",
       "_meta": {
-        "title": "LTX-V Scheduler (15 steps, distilled)"
+        "title": "LTX-V Scheduler (15 steps, official full path)"
       }
     },
     "14": {
@@ -239,6 +239,17 @@
       "class_type": "SaveVideo",
       "_meta": {
         "title": "Save Video"
+      }
+    },
+    "22": {
+      "inputs": {
+        "model": ["1", 0],
+        "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+        "strength_model": 0.2
+      },
+      "class_type": "LoraLoaderModelOnly",
+      "_meta": {
+        "title": "Apply Distilled LoRA"
       }
     }
   }
