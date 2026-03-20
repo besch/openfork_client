@@ -1,13 +1,12 @@
 # LTX-2.3 22B Docker Image (24GB+ VRAM)
-# LTX-2.3 is a DiT-based audio-video foundation model - generates synchronized video + audio
+# Uses LTXVBaseSampler (high-level node) which handles NestedTensor latent format
+# internally — avoids 'NestedTensor has no attribute clone' crash from VAEDecodeTiled.
 #
 # ARCHITECTURE:
 #   - Checkpoint:  ltx-2.3-22b-dev.safetensors  (46.1GB BF16)
-#   - LoRA:        ltx-2.3-22b-distilled-lora-384.safetensors  (7.1GB)
-#   - Encoder:     gemma_3_12B_it_fp4_mixed.safetensors (9.4GB, Comfy-Org/ltx-2)
-#                  → models/text_encoders/  (required by LTXAVTextEncoderLoader)
+#   - LoRA:        ltx-2.3-22b-distilled-lora-384.safetensors
+#   - Encoder:     gemma_3_12B_it_fp4_mixed.safetensors
 #   - Upscaler:    ltx-2.3-spatial-upscaler-x2-1.0.safetensors
-#   - Upscaler:    ltx-2.3-temporal-upscaler-x2-1.0.safetensors (262MB)
 #
 # Minimum: 24GB VRAM | Recommended: 48GB+ VRAM
 # System RAM: 64GB+ required for CPU offloading
@@ -21,7 +20,6 @@ ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
 ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# HuggingFace token
 ARG HF_TOKEN
 ENV HF_TOKEN=${HF_TOKEN}
 
@@ -39,13 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m pip install --no-cache-dir --upgrade pip
 
-# Install PyTorch (CUDA 12.8)
 RUN python -m pip install --no-cache-dir \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/cu128 \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install remaining dependencies
 RUN python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg \
         GitPython PyGithub matrix-client==0.4.0 transformers \
@@ -57,29 +53,34 @@ WORKDIR /opt/ComfyUI
 
 ARG CACHEBUST=1
 
-# Clone ComfyUI
-RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
-    && rm -rf .git \
+# Clone latest ComfyUI (nightly — required for LTX-2.3 NestedTensor support in core nodes)
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install ComfyUI-Manager
+# ComfyUI-Manager
 RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
     && rm -rf custom_nodes/ComfyUI-Manager/.git \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install ComfyUI-LTXVideo (provides all LTX-2.3 audio-video nodes)
-RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
-    && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
-    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
+# ComfyUI-LTXVideo — full clone (not --depth=1) so we get the full history
+# and can pin to a specific commit that has LTXVBaseSampler + LTX-2.3 audio support.
+# Commit pinned to latest master as of 2026-03-20 which includes:
+#   - LTXVBaseSampler with NestedTensor-aware decode
+#   - LTXVAudioVAELoader / LTXVAudioVAEDecode for LTX-2.3
+#   - LTXVLatentUpsampler with correct (samples, upscale_model, vae) signature
+RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
+    && cd custom_nodes/ComfyUI-LTXVideo \
+    && git checkout master \
+    && (python -m pip install --no-cache-dir -r requirements.txt || true) \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install VideoHelperSuite (VHS_VideoCombine with audio output)
+# VideoHelperSuite
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
     && rm -rf custom_nodes/VideoHelperSuite/.git \
     && rm -rf /tmp/* /var/tmp/*
 
-# Create model directories
+# Model directories
 RUN mkdir -p models/checkpoints \
     models/clip \
     models/vae \
@@ -103,7 +104,7 @@ RUN echo "Downloading LTX-2.3 22B Dev checkpoint (46.1GB)..." && \
     python -c "import os; size=os.path.getsize('models/checkpoints/ltx-2.3-22b-dev.safetensors')/(1024**3); print(f'Checkpoint: {size:.2f}GB'); assert size > 40, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# LTX-2.3 Distilled LoRA (7.1GB)
+# LTX-2.3 Distilled LoRA
 RUN echo "Downloading distilled LoRA..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled-lora-384.safetensors', \
@@ -113,9 +114,7 @@ RUN echo "Downloading distilled LoRA..." && \
     python -c "import os; size=os.path.getsize('models/loras/ltx-2.3-22b-distilled-lora-384.safetensors')/(1024**3); print(f'Distilled LoRA: {size:.2f}GB'); assert size > 6, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Gemma-3 12B FP4 mixed text encoder (9.4GB)
-# Source: Comfy-Org/ltx-2 - current ComfyUI docs recommend the FP4 mixed variant
-# Goes in models/text_encoders/ (NOT models/clip/)
+# Gemma-3 12B FP4 mixed text encoder
 RUN echo "Downloading Gemma-3 12B FP4 mixed encoder (9.4GB)..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Comfy-Org/ltx-2', filename='split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors', \
@@ -125,7 +124,7 @@ RUN echo "Downloading Gemma-3 12B FP4 mixed encoder (9.4GB)..." && \
     python -c "import os; size=os.path.getsize('models/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors')/(1024**3); print(f'Gemma FP4 mixed: {size:.2f}GB'); assert size > 8, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Spatial Upscaler x2 v1.0 (~1GB)
+# Spatial Upscaler x2
 RUN echo "Downloading spatial upscaler..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-spatial-upscaler-x2-1.0.safetensors', \
@@ -135,7 +134,7 @@ RUN echo "Downloading spatial upscaler..." && \
     python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Spatial upscaler: {size:.2f}GB'); assert size > 0.5, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Temporal Upscaler x2 (262MB)
+# Temporal Upscaler x2
 RUN echo "Downloading temporal upscaler..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-temporal-upscaler-x2-1.0.safetensors', \
@@ -145,15 +144,13 @@ RUN echo "Downloading temporal upscaler..." && \
     python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Temporal upscaler: {size:.2f}GB'); assert size > 0.2, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Final cleanup
 RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
     && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
     && rm -rf /root/.cache/* /tmp/* /var/tmp/* ~/.cache/*
 
 WORKDIR /opt/ComfyUI
 
-# FIX: Removed --novram flag.
-# --novram is designed for <8GB cards and forces aggressive weight unloading that
-# degrades VAE decode precision on 24GB cards, causing muted/grey color output.
-# --reserve-vram 2.0 provides sufficient headroom without the precision penalty.
+# --reserve-vram 2.0: keep 2GB headroom on 24GB card
+# --use-split-cross-attention: memory efficient attention
+# NOTE: --novram removed — it degrades VAE precision on 24GB cards
 CMD ["python", "main.py", "--listen", "--reserve-vram", "2.0", "--use-split-cross-attention"]
