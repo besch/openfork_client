@@ -436,6 +436,12 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       # LTX-2.3 22B is 46GB; use --lowvram + pytorch cross-attention for best performance
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention --cache-none"
       ;;
+    *ltx23*24gb*)
+      log "Applying LTX-2.3 24GB VRAM optimizations (BF16 full model + distilled LoRA)"
+      # Match the Dockerfile defaults for the 24GB tier so we do not fall back to generic
+      # lowvram behavior for this audio-video workflow.
+      COMFY_FLAGS="$COMFY_FLAGS --novram --reserve-vram 2.0 --use-split-cross-attention"
+      ;;
     *ltx2*-16gb*|*16gb*)
       log "Applying 16GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"
       # IMPORTANT: Use --lowvram because total model size (~29.5GB) far exceeds 16GB VRAM
