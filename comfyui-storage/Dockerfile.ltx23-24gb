@@ -152,7 +152,8 @@ RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null 
 
 WORKDIR /opt/ComfyUI
 
-# --novram: required for LTXAVTextEncoderLoader offloading compatibility
-# --reserve-vram 2.0: reserve 2GB headroom on 24GB card
-# --use-split-cross-attention: memory efficient attention for Ampere
-CMD ["python", "main.py", "--listen", "--novram", "--reserve-vram", "2.0", "--use-split-cross-attention"]
+# FIX: Removed --novram flag.
+# --novram is designed for <8GB cards and forces aggressive weight unloading that
+# degrades VAE decode precision on 24GB cards, causing muted/grey color output.
+# --reserve-vram 2.0 provides sufficient headroom without the precision penalty.
+CMD ["python", "main.py", "--listen", "--reserve-vram", "2.0", "--use-split-cross-attention"]

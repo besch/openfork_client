@@ -69,7 +69,7 @@
       },
       "class_type": "LTXVAudioVAELoader",
       "_meta": {
-        "title": "Load Audio VAE (from LTX-2.3 checkpoint)"
+        "title": "Load Audio+Video VAE (from LTX-2.3 checkpoint) — also used for video decode"
       }
     },
     "8": {
@@ -197,15 +197,15 @@
     "18": {
       "inputs": {
         "samples": ["17", 0],
-        "vae": ["1", 2],
+        "vae": ["7", 0],
         "tile_size": 512,
         "overlap": 64,
-        "temporal_size": 512,
-        "temporal_overlap": 64
+        "temporal_size": 64,
+        "temporal_overlap": 8
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video (Tiled VAE)"
+        "title": "Decode Video (Tiled VAE) — FIX: vae from LTXVAudioVAELoader, temporal_size 64, temporal_overlap 8"
       }
     },
     "19": {
