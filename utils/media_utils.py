@@ -7,6 +7,34 @@ import json
 from services.docker_utils import get_subprocess_hidden_kwargs
 from config import THUMBNAIL_WIDTH
 
+VIDEO_EXTENSIONS = ('.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v')
+
+
+def _extract_output_entries(node_output: dict, key: str) -> list[dict]:
+    """Collect file entries from both direct history outputs and websocket UI payloads."""
+    entries: list[dict] = []
+    if not isinstance(node_output, dict):
+        return entries
+
+    value = node_output.get(key)
+    if isinstance(value, list):
+        entries.extend(item for item in value if isinstance(item, dict))
+
+    ui_payload = node_output.get('ui')
+    if isinstance(ui_payload, dict):
+        ui_value = ui_payload.get(key)
+        if isinstance(ui_value, list):
+            entries.extend(item for item in ui_value if isinstance(item, dict))
+
+    return entries
+
+
+def _is_video_entry(item: dict) -> bool:
+    """Best-effort detection for video files across legacy and current ComfyUI nodes."""
+    filename = str(item.get('filename', '')).lower()
+    media_format = str(item.get('format', '')).lower()
+    return media_format.startswith('video/') or filename.endswith(VIDEO_EXTENSIONS)
+
 def get_audio_duration(file_path: str) -> float:
     """Gets the duration of an audio file using ffprobe."""
     command = [
@@ -73,22 +101,16 @@ def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = THUMBN
 
 def find_video_in_output(outputs: dict) -> Union[tuple[str, str], None]:
     """Finds the output video details from the ComfyUI workflow output."""
-    # Look for legacy "gifs" output from VideoCombine, and also the newer
-    # "videos" output emitted by core SaveVideo nodes.
+    # Legacy VideoHelperSuite outputs surface as "gifs", while current core
+    # SaveVideo nodes return PreviewVideo UI payloads serialized under "images"
+    # with an animated flag. We key off the saved filename/format instead of the
+    # container key so both generations are supported.
     for node_id, node_output in outputs.items():
-        if 'gifs' in node_output:
-            for item in node_output['gifs']:
+        for key in ('gifs', 'videos', 'images'):
+            for item in _extract_output_entries(node_output, key):
                 filename = item.get('filename')
                 subfolder = item.get('subfolder', '')
-                if filename and (item.get('format') == 'video/h264-mp4' or filename.endswith('.mp4')):
-                     return filename, subfolder
-    # Fallback for older formats or other nodes
-    for node_id, node_output in outputs.items():
-        if 'videos' in node_output:
-            for video in node_output['videos']:
-                filename = video.get('filename')
-                subfolder = video.get('subfolder')
-                if filename:
+                if filename and _is_video_entry(item):
                     return filename, subfolder
     return None
 

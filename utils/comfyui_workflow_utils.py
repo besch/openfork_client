@@ -1239,6 +1239,27 @@ def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_
     """Process the workflow output, upload the generated files, and return the first successful upload path."""
     logging.info(f"Processing workflow outputs for job {job_id}. Outputs received: {json.dumps(outputs, indent=2)}")
 
+    video_extensions = ('.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v')
+
+    def iter_entries(payload: dict, key: str) -> list[dict]:
+        entries = []
+        if not isinstance(payload, dict):
+            return entries
+        value = payload.get(key)
+        if isinstance(value, list):
+            entries.extend(item for item in value if isinstance(item, dict))
+        ui_payload = payload.get('ui')
+        if isinstance(ui_payload, dict):
+            ui_value = ui_payload.get(key)
+            if isinstance(ui_value, list):
+                entries.extend(item for item in ui_value if isinstance(item, dict))
+        return entries
+
+    def is_video_entry(item: dict) -> bool:
+        filename = str(item.get('filename', '')).lower()
+        media_format = str(item.get('format', '')).lower()
+        return media_format.startswith('video/') or filename.endswith(video_extensions)
+
     for node_id, node_output in outputs.items():
         logging.info(f"Checking node_id: {node_id}, node_output keys: {node_output.keys()}")
 
@@ -1251,15 +1272,15 @@ def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_
                 for img_info in node_output['ui']['images']:
                     if 'filename' in img_info:
                         filename = img_info['filename']
-                        file_path = os.path.join(output_dir, filename)
-                        logging.info(f"Checking image file: {file_path}")
+                        file_path = os.path.join(output_dir, img_info.get('subfolder', ''), filename)
+                        logging.info(f"Checking image/media file: {file_path}")
                         if os.path.exists(file_path):
-                            logging.info(f"Image file found: {file_path}. Attempting upload.")
+                            logging.info(f"Image/media file found: {file_path}. Attempting upload.")
                             storage_path = upload_output_func(file_path, job_id)
                             if storage_path:
                                 return storage_path
                         else:
-                            logging.warning(f"Output image file not found: {file_path}")
+                            logging.warning(f"Output image/media file not found: {file_path}")
                     else:
                         logging.warning(f"Image info missing 'filename' for node {node_id}: {img_info}")
             else:
@@ -1270,7 +1291,7 @@ def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_
                 for video_info in node_output['ui']['videos']:
                     if 'filename' in video_info:
                         filename = video_info['filename']
-                        file_path = os.path.join(output_dir, filename)
+                        file_path = os.path.join(output_dir, video_info.get('subfolder', ''), filename)
                         logging.info(f"Checking video file: {file_path}")
                         if os.path.exists(file_path):
                             logging.info(f"Video file found: {file_path}. Attempting upload.")
@@ -1302,8 +1323,50 @@ def process_workflow_output(outputs: dict, job_id: str, output_dir: str, upload_
                         logging.warning(f"Output gif/video file not found: {file_path}")
                 else:
                     logging.warning(f"Gif info missing 'filename' for node {node_id}: {gif_info}")
+        elif 'images' in node_output and isinstance(node_output['images'], list):
+            logging.info(f"Found 'images' in node_output for node {node_id}. Number of images: {len(node_output['images'])}")
+            for image_info in node_output['images']:
+                if 'filename' not in image_info:
+                    logging.warning(f"Image info missing 'filename' for node {node_id}: {image_info}")
+                    continue
+                if not is_video_entry(image_info):
+                    continue
+                filename = image_info['filename']
+                file_path = os.path.join(output_dir, image_info.get('subfolder', ''), filename)
+                logging.info(f"Checking video file from animated image/history payload: {file_path}")
+                if os.path.exists(file_path):
+                    logging.info(f"Animated image/history video file found: {file_path}. Attempting upload.")
+                    storage_path = upload_output_func(file_path, job_id)
+                    if storage_path:
+                        return storage_path
+                else:
+                    logging.warning(f"Output animated image/history video file not found: {file_path}")
+        elif any(iter_entries(node_output, key) for key in ('gifs', 'videos', 'images')):
+            for key in ('gifs', 'videos', 'images'):
+                entries = iter_entries(node_output, key)
+                if not entries:
+                    continue
+                logging.info(f"Found '{key}' entries via flexible payload parsing for node {node_id}. Number of entries: {len(entries)}")
+                for entry in entries:
+                    if 'filename' not in entry:
+                        logging.warning(f"Entry missing 'filename' for node {node_id}: {entry}")
+                        continue
+                    if key != 'images' and not is_video_entry(entry):
+                        continue
+                    if key == 'images' and not is_video_entry(entry):
+                        continue
+                    filename = entry['filename']
+                    file_path = os.path.join(output_dir, entry.get('subfolder', ''), filename)
+                    logging.info(f"Checking video file from flexible payload parser: {file_path}")
+                    if os.path.exists(file_path):
+                        logging.info(f"Flexible payload parser found video file: {file_path}. Attempting upload.")
+                        storage_path = upload_output_func(file_path, job_id)
+                        if storage_path:
+                            return storage_path
+                    else:
+                        logging.warning(f"Flexible payload parser video file not found: {file_path}")
         else:
-            logging.info(f"No 'ui' or 'gifs' found or not a dict/list in node_output for node {node_id}.")
+            logging.info(f"No 'ui', 'gifs', or compatible media payloads found in node_output for node {node_id}.")
 
     # Check for audio files in output directory (for workflows that save directly to disk)
     audio_extensions = ['.wav', '.flac', '.mp3', '.ogg', '.m4a']
