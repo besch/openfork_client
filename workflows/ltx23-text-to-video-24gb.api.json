@@ -271,21 +271,21 @@
     },
     "41": {
       "inputs": {
+        "samples": ["40", 0],
         "vae": ["1", 2],
-        "latents": ["40", 0],
-        "horizontal_tiles": 2,
-        "vertical_tiles": 2,
-        "overlap": 4,
-        "last_frame_fix": false
+        "tile_size": 512,
+        "overlap": 64,
+        "temporal_size": 64,
+        "temporal_overlap": 8
       },
-      "class_type": "LTXVTiledVAEDecode",
+      "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video — LTX-native tiled decoder (2x2 tiles, overlap 4)"
+        "title": "Decode Video — standard tiled VAE, video VAE from CheckpointLoaderSimple [1,2]"
       }
     },
     "42": {
       "inputs": {
-        "latents": ["40", 1],
+        "samples": ["40", 1],
         "audio_vae": ["7", 0]
       },
       "class_type": "LTXVAudioVAEDecode",
