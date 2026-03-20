@@ -73,7 +73,8 @@ def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = THUMBN
 
 def find_video_in_output(outputs: dict) -> Union[tuple[str, str], None]:
     """Finds the output video details from the ComfyUI workflow output."""
-    # Look for 'gifs' which is what VideoCombine nodes output
+    # Look for legacy "gifs" output from VideoCombine, and also the newer
+    # "videos" output emitted by core SaveVideo nodes.
     for node_id, node_output in outputs.items():
         if 'gifs' in node_output:
             for item in node_output['gifs']:

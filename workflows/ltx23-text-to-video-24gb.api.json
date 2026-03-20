@@ -221,21 +221,24 @@
     "20": {
       "inputs": {
         "images": ["18", 0],
-        "audio": ["19", 0],
-        "frame_rate": 24,
-        "loop_count": 0,
-        "filename_prefix": "ltx23_t2v",
-        "format": "video/h264-mp4",
-        "pix_fmt": "yuv420p",
-        "crf": 19,
-        "save_metadata": true,
-        "trim_to_audio": true,
-        "pingpong": false,
-        "save_output": true
+        "fps": 24,
+        "audio": ["19", 0]
       },
-      "class_type": "VHS_VideoCombine",
+      "class_type": "CreateVideo",
       "_meta": {
-        "title": "Save Video + Audio (VHS)"
+        "title": "Create Video"
+      }
+    },
+    "21": {
+      "inputs": {
+        "video": ["20", 0],
+        "filename_prefix": "ltx23_t2v",
+        "format": "auto",
+        "codec": "auto"
+      },
+      "class_type": "SaveVideo",
+      "_meta": {
+        "title": "Save Video"
       }
     }
   }

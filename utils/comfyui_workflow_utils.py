@@ -1903,9 +1903,9 @@ def inject_prompt_into_ltx23_video_workflow(
         api_graph['11']['inputs']['cfg'] = cfg_scale
         logging.info(f"Injected video cfg={cfg_scale} into LTX-2.3 GuiderParameters node 11")
 
-    # Replace date token in VHS_VideoCombine filename prefix
+    # Replace date token in video save node filename prefix
     for node in api_graph.values():
-        if node.get("class_type") == "VHS_VideoCombine":
+        if node.get("class_type") in {"VHS_VideoCombine", "SaveVideo"}:
             prefix = node["inputs"].get("filename_prefix", "")
             if "%date:yyyy-MM-dd%" in prefix:
                 from datetime import datetime
