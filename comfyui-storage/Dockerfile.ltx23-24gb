@@ -53,8 +53,12 @@ WORKDIR /opt/ComfyUI
 
 ARG CACHEBUST=1
 
-# Clone latest ComfyUI (nightly — required for LTX-2.3 NestedTensor support in core nodes)
+# Clone ComfyUI pinned to v0.9.6 which contains PR #12773:
+# "Support the LTXAV 2.3 model" — fixes NestedTensor.clone() crash in
+# comfy_extras/nodes_lt.py that breaks all LTX-2.3 sampling/decode.
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && cd /opt/ComfyUI \
+    && git checkout v0.9.6 \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/* /var/tmp/*
 
