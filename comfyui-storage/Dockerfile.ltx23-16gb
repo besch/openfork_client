@@ -59,6 +59,7 @@ ARG CACHEBUST=1
 # Clone ComfyUI
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && rm -rf .git \
+    && git checkout v0.16.0 \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/* /var/tmp/*
 
