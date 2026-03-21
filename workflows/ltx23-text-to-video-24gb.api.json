@@ -302,16 +302,16 @@
 
     "41": {
       "inputs": {
+        "samples": ["40", 0],
         "vae": ["1", 2],
-        "latents": ["40", 0],
-        "horizontal_tiles": 2,
-        "vertical_tiles": 2,
-        "overlap": 4,
-        "last_frame_fix": false
+        "tile_size": 512,
+        "overlap": 64,
+        "temporal_size": 64,
+        "temporal_overlap": 8
       },
-      "class_type": "LTXVTiledVAEDecode",
+      "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video -> IMAGE (LTX-native decoder handles NestedTensor)"
+        "title": "Decode Video — works correctly in ComfyUI v0.16.0+ with NestedTensor support"
       }
     },
 
