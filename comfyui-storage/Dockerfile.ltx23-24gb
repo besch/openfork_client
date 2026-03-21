@@ -53,12 +53,10 @@ WORKDIR /opt/ComfyUI
 
 ARG CACHEBUST=1
 
-# Clone ComfyUI pinned to v0.16.0 — minimum version required for LTX-2.3 22B.
-# v0.15.0 loads the wrong (13B) architecture causing shape mismatches on all layers.
-# v0.16.0 adds the correct LTXAVModel 22B config AND NestedTensor support in nodes_lt.py.
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
-    && cd /opt/ComfyUI \
-    && git checkout v0.16.0 \
+# Clone latest ComfyUI master — LTX-2.3 requires ComfyUI v0.10.0+ for
+# LTXVSeparateAVLatent to output plain LATENT (not NestedTensor).
+# Do NOT pin to v0.15.0 or v0.16.0 — those tags do not exist or lack support.
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/* /var/tmp/*
 

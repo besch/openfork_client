@@ -300,10 +300,18 @@
       }
     },
 
+    "45": {
+      "inputs": {
+        "vae": ["1", 2]
+      },
+      "class_type": "LTXVPatcherVAE",
+      "_meta": { "title": "Patch VAE for LTX-2.3 NestedTensor compatibility" }
+    },
+
     "41": {
       "inputs": {
         "samples": ["40", 0],
-        "vae": ["1", 2],
+        "vae": ["45", 0],
         "tile_size": 512,
         "overlap": 64,
         "temporal_size": 64,
@@ -311,7 +319,7 @@
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video — works correctly in ComfyUI v0.16.0+ with NestedTensor support"
+        "title": "Decode Video — patched VAE handles LTX-2.3 NestedTensor correctly"
       }
     },
 
