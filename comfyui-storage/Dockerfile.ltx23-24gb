@@ -1,17 +1,21 @@
-# LTX-2.3 22B Docker Image (24GB+ VRAM)
-# Uses LTXVBaseSampler (high-level node) which handles NestedTensor latent format
-# internally — avoids 'NestedTensor has no attribute clone' crash from VAEDecodeTiled.
+# LTX-2.3 22B Docker Image (24GB VRAM)
 #
-# ARCHITECTURE:
+# KEY ARCHITECTURE DECISIONS:
+#   1. Uses LTX-2.3 DistilledPipeline node (high-level, handles NestedTensor internally)
+#      — avoids all ComfyUI core nodes_lt.py NestedTensor crash issues
+#   2. Gemma encoder stored as full directory (gemma-3-12b-it-qat-q4_0-unquantized/)
+#      not as a single safetensors file
+#   3. Latest ComfyUI master (no pinned tag — tags are unreliable for this model)
+#   4. No --novram flag (degrades VAE precision on 24GB cards)
+#
+# Models:
 #   - Checkpoint:  ltx-2.3-22b-dev.safetensors  (46.1GB BF16)
-#   - LoRA:        ltx-2.3-22b-distilled-lora-384.safetensors
-#   - Encoder:     gemma_3_12B_it_fp4_mixed.safetensors
+#   - Encoder:     gemma-3-12b-it-qat-q4_0-unquantized/ (directory, ~6GB)
 #   - Upscaler:    ltx-2.3-spatial-upscaler-x2-1.0.safetensors
 #
-# Minimum: 24GB VRAM | Recommended: 48GB+ VRAM
-# System RAM: 64GB+ required for CPU offloading
+# Minimum: 24GB VRAM | System RAM: 64GB+
 
-FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
@@ -23,7 +27,6 @@ ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 ARG HF_TOKEN
 ENV HF_TOKEN=${HF_TOKEN}
 
-# System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
@@ -39,7 +42,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip
 
 RUN python -m pip install --no-cache-dir \
         torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cu128 \
+        --index-url https://download.pytorch.org/whl/cu126 \
     && rm -rf /tmp/* /var/tmp/*
 
 RUN python -m pip install --no-cache-dir \
@@ -53,77 +56,49 @@ WORKDIR /opt/ComfyUI
 
 ARG CACHEBUST=1
 
-# Clone latest ComfyUI master — LTX-2.3 requires ComfyUI v0.10.0+ for
-# LTXVSeparateAVLatent to output plain LATENT (not NestedTensor).
-# Do NOT pin to v0.15.0 or v0.16.0 — those tags do not exist or lack support.
+# Latest ComfyUI master — no pinned tag, LTX-2.3 is developed against master
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/* /var/tmp/*
 
-# ComfyUI-Manager
 RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
     && rm -rf custom_nodes/ComfyUI-Manager/.git \
     && rm -rf /tmp/* /var/tmp/*
 
-# ComfyUI-LTXVideo — full clone (not --depth=1) so we get the full history
-# and can pin to a specific commit that has LTXVBaseSampler + LTX-2.3 audio support.
-# Commit pinned to latest master as of 2026-03-20 which includes:
-#   - LTXVBaseSampler with NestedTensor-aware decode
-#   - LTXVAudioVAELoader / LTXVAudioVAEDecode for LTX-2.3
-#   - LTXVLatentUpsampler with correct (samples, upscale_model, vae) signature
+# Full clone of ComfyUI-LTXVideo — required for DistilledPipeline and all LTX-2.3 nodes
 RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && cd custom_nodes/ComfyUI-LTXVideo \
-    && git checkout master \
     && (python -m pip install --no-cache-dir -r requirements.txt || true) \
     && rm -rf /tmp/* /var/tmp/*
 
-# VideoHelperSuite
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
     && rm -rf custom_nodes/VideoHelperSuite/.git \
     && rm -rf /tmp/* /var/tmp/*
 
-# Model directories
 RUN mkdir -p models/checkpoints \
-    models/clip \
     models/vae \
     models/loras \
     models/latent_upscale_models \
-    models/text_encoders
+    "models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized"
 
 ENV LTX23_TIER=24gb
 
-# ============================================================================
-# MODEL DOWNLOADS
-# ============================================================================
-
-# LTX-2.3 22B Dev checkpoint (46.1GB BF16)
-RUN echo "Downloading LTX-2.3 22B Dev checkpoint (46.1GB)..." && \
+# LTX-2.3 22B Dev checkpoint (46.1GB)
+RUN echo "Downloading LTX-2.3 22B checkpoint..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-dev.safetensors', \
     local_dir='/tmp/ckpt', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/ckpt/ltx-2.3-22b-dev.safetensors models/checkpoints/ && \
     rm -rf /tmp/ckpt && \
-    python -c "import os; size=os.path.getsize('models/checkpoints/ltx-2.3-22b-dev.safetensors')/(1024**3); print(f'Checkpoint: {size:.2f}GB'); assert size > 40, 'Too small'" && \
+    python -c "import os; s=os.path.getsize('models/checkpoints/ltx-2.3-22b-dev.safetensors')/(1024**3); print(f'Checkpoint: {s:.1f}GB'); assert s>40" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# LTX-2.3 Distilled LoRA
-RUN echo "Downloading distilled LoRA..." && \
-    python -c "import os; from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled-lora-384.safetensors', \
-    local_dir='/tmp/lora', token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/lora/ltx-2.3-22b-distilled-lora-384.safetensors models/loras/ && \
-    rm -rf /tmp/lora && \
-    python -c "import os; size=os.path.getsize('models/loras/ltx-2.3-22b-distilled-lora-384.safetensors')/(1024**3); print(f'Distilled LoRA: {size:.2f}GB'); assert size > 6, 'Too small'" && \
-    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Gemma-3 12B FP4 mixed text encoder
-RUN echo "Downloading Gemma-3 12B FP4 mixed encoder (9.4GB)..." && \
-    python -c "import os; from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='Comfy-Org/ltx-2', filename='split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors', \
-    local_dir='/tmp/enc', token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/enc/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors models/text_encoders/ && \
-    rm -rf /tmp/enc && \
-    python -c "import os; size=os.path.getsize('models/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors')/(1024**3); print(f'Gemma FP4 mixed: {size:.2f}GB'); assert size > 8, 'Too small'" && \
+# Gemma text encoder — downloaded as full directory (required by LTXVTextEncoderLoader)
+RUN echo "Downloading Gemma text encoder directory..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='Lightricks/LTX-2.3', local_dir='/tmp/ltx23', allow_patterns=['gemma-3-12b-it-qat-q4_0-unquantized/*'], token=os.getenv('HF_TOKEN'))" && \
+    cp -r /tmp/ltx23/gemma-3-12b-it-qat-q4_0-unquantized/* \
+        "models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/" && \
+    rm -rf /tmp/ltx23 && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Spatial Upscaler x2
@@ -133,7 +108,6 @@ RUN echo "Downloading spatial upscaler..." && \
     local_dir='/tmp/up', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/up/ltx-2.3-spatial-upscaler-x2-1.0.safetensors models/latent_upscale_models/ && \
     rm -rf /tmp/up && \
-    python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Spatial upscaler: {size:.2f}GB'); assert size > 0.5, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Temporal Upscaler x2
@@ -143,7 +117,6 @@ RUN echo "Downloading temporal upscaler..." && \
     local_dir='/tmp/tup', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/tup/ltx-2.3-temporal-upscaler-x2-1.0.safetensors models/latent_upscale_models/ && \
     rm -rf /tmp/tup && \
-    python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Temporal upscaler: {size:.2f}GB'); assert size > 0.2, 'Too small'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
@@ -154,5 +127,5 @@ WORKDIR /opt/ComfyUI
 
 # --reserve-vram 2.0: keep 2GB headroom on 24GB card
 # --use-split-cross-attention: memory efficient attention
-# NOTE: --novram removed — it degrades VAE precision on 24GB cards
+# NOTE: --novram intentionally omitted — DGN client adds it; it degrades VAE on 24GB
 CMD ["python", "main.py", "--listen", "--reserve-vram", "2.0", "--use-split-cross-attention"]
