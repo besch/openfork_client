@@ -32,7 +32,7 @@
     },
     "4": {
       "inputs": {
-        "text": "",
+        "text": "low quality, blurry, distorted, watermarks, text overlay, low contrast, washed out colors, desaturated, flat colors, overexposed, underexposed, jittery, flickering, artifacts",
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
@@ -147,7 +147,7 @@
       "inputs": {
         "parameters": ["10", 0],
         "modality": "VIDEO",
-        "cfg": 3.0,
+        "cfg": 4.5,
         "stg": 1.0,
         "perturb_attn": true,
         "rescale": 0.9,
@@ -166,7 +166,7 @@
         "positive": ["5", 0],
         "negative": ["5", 1],
         "parameters": ["11", 0],
-        "skip_blocks": "28"
+        "skip_blocks": "19"
       },
       "class_type": "MultimodalGuider",
       "_meta": {

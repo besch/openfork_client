@@ -327,6 +327,26 @@ fi
 
   # Start ComfyUI
 
+# Fix VHS h264-mp4.json: force full PC color range to prevent washed-out colors
+VHS_FMT="/opt/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite/video_formats/h264-mp4.json"
+if [ -f "$VHS_FMT" ]; then
+    python3 -c "
+import json
+with open('$VHS_FMT') as f: d = json.load(f)
+mp = d.get('main_pass', [])
+color_flags = ['-color_range','2','-colorspace','1','-color_primaries','1','-color_trc','1']
+if '-color_range' not in mp:
+    mp.extend(color_flags)
+    d['main_pass'] = mp
+    with open('$VHS_FMT','w') as f: json.dump(d, f, indent=2)
+    print('Patched h264-mp4.json: full color range enabled')
+else:
+    print('h264-mp4.json already patched')
+" || log "WARNING: Failed to patch h264-mp4.json"
+else
+    log "INFO: VHS h264-mp4.json not found at $VHS_FMT (skipping color range patch)"
+fi
+
 # CRITICAL FIX for PyTorch 2.4+ / CUDA 12 mismatch errors
 # We must prioritize the pip-installed nvidia libraries over system libraries
 export LD_LIBRARY_PATH=$(python -c "import site; print(site.getsitepackages()[0] + '/nvidia/nvjitlink/lib:' + site.getsitepackages()[0] + '/nvidia/cusparse/lib:' + site.getsitepackages()[0] + '/nvidia/cublas/lib:' + site.getsitepackages()[0] + '/nvidia/cuda_runtime/lib')"):$LD_LIBRARY_PATH
