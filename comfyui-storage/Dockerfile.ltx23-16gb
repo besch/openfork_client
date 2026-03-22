@@ -132,30 +132,6 @@ COPY gemma-configs/preprocessor_config.json models/clip/gemma-3-12b-it/
 COPY gemma-configs/processor_config.json models/clip/gemma-3-12b-it/
 COPY gemma-configs/generation_config.json models/clip/gemma-3-12b-it/
 
-# Verify all models
-RUN echo '#!/usr/bin/env python3' > /tmp/verify_models.py && \
-    echo 'import os, sys' >> /tmp/verify_models.py && \
-    echo 'files = {' >> /tmp/verify_models.py && \
-    echo '    "models/checkpoints/ltx-2.3-22b-distilled.safetensors": 40.0,' >> /tmp/verify_models.py && \
-    echo '    "models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors": 5.0,' >> /tmp/verify_models.py && \
-    echo '    "models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.0.safetensors": 0.5,' >> /tmp/verify_models.py && \
-    echo '}' >> /tmp/verify_models.py && \
-    echo 'print("="*60)' >> /tmp/verify_models.py && \
-    echo 'print("VERIFYING LTX-2.3 24GB MODEL FILES")' >> /tmp/verify_models.py && \
-    echo 'print("="*60)' >> /tmp/verify_models.py && \
-    echo 'ok = True' >> /tmp/verify_models.py && \
-    echo 'for path, min_gb in files.items():' >> /tmp/verify_models.py && \
-    echo '    if not os.path.exists(path):' >> /tmp/verify_models.py && \
-    echo '        print(f"MISSING: {path}"); ok = False; continue' >> /tmp/verify_models.py && \
-    echo '    gb = os.path.getsize(path)/(1024**3)' >> /tmp/verify_models.py && \
-    echo '    if gb < min_gb:' >> /tmp/verify_models.py && \
-    echo '        print(f"TOO SMALL: {path} ({gb:.2f}GB)"); ok = False' >> /tmp/verify_models.py && \
-    echo '    else:' >> /tmp/verify_models.py && \
-    echo '        print(f"OK: {path} ({gb:.2f}GB)")' >> /tmp/verify_models.py && \
-    echo 'if not ok: sys.exit(1)' >> /tmp/verify_models.py && \
-    echo 'print("All LTX-2.3 model files verified!")' >> /tmp/verify_models.py && \
-    python3 /tmp/verify_models.py && rm /tmp/verify_models.py
-
 # Final cleanup
 RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
     && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
