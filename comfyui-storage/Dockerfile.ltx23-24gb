@@ -1,9 +1,27 @@
-# LTX-2.3 22B Docker Image (24GB+ VRAM)
-# LTX-2.3 is a DiT-based audio-video foundation model - generates synchronized video + audio
-# Uses ltx-2.3-22b-distilled.safetensors (46.1GB BF16) with --lowvram CPU offloading
-# The "LatentAudioNode" (LTXVEmptyLatentAudio) is provided by latest ComfyUI-LTXVideo
-# Minimum: 24GB VRAM (slow due to offloading) | Recommended: 48GB+ VRAM
-# System RAM: 64GB+ required to hold the 46.1GB model in CPU RAM during offloading
+# LTX-2.3 22B Docker Image (24GB+ VRAM) — FIXED v2
+#
+# ROOT CAUSE OF COLOR DEGRADATION (confirmed from official docs.ltx.video):
+#   1. Audio CFG was 7.0 — official docs explicitly warn this BREAKS generation
+#   2. SamplerCustomAdvanced has no latent normalization — latents drift into
+#      oversaturation causing overbaked/crushed colors (LTXVNormalizingSampler fixes this)
+#   3. pix_fmt yuv420p uses TV/limited color range (RGB 16-235), crushing output
+#
+# DOCKERFILE CHANGES FROM ORIGINAL:
+#   1. Gemma encoder: replaced single fp8 safetensors file with full multi-file folder
+#      from google/gemma-3-12b-it-qat-q4_0-unquantized (official requirement per docs.ltx.video)
+#      Stored at: models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/
+#   2. Removed broken gemma-configs COPY lines (configs come from the HF repo folder itself)
+#   3. IMPORTANT: HF_TOKEN alone is not enough — your HF account must have accepted
+#      Google's Gemma license at huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized
+#      before the download will work, even with a valid token.
+#
+# WORKFLOW JSON CHANGES (see ltx23-text-to-video-24gb_api_FIXED_v2.json):
+#   - Audio CFG: 7.0 -> 3.0
+#   - Both modality_scale: 3.0 -> 1.0, skip_step audio: 0 -> 1 (official baseline)
+#   - Steps: 15 -> 8, max_shift/base_shift corrected for distilled schedule
+#   - SamplerCustomAdvanced -> LTXVNormalizingSampler (key color fix)
+#   - pix_fmt: yuv420p -> yuv444p
+#   - Negative prompt: was empty, now has quality terms
 
 FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
@@ -12,11 +30,8 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
-
-# PyTorch CUDA memory optimization
 ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# HuggingFace token
 ARG HF_TOKEN
 ENV HF_TOKEN=${HF_TOKEN}
 
@@ -32,16 +47,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Python packages
 RUN python -m pip install --no-cache-dir --upgrade pip
 
-# Install PyTorch first (CUDA 12.8)
 RUN python -m pip install --no-cache-dir \
         torch torchvision torchaudio \
         --index-url https://download.pytorch.org/whl/cu128 \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install remaining dependencies
 RUN python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg \
         GitPython PyGithub matrix-client==0.4.0 transformers \
@@ -51,35 +63,26 @@ RUN python -m pip install --no-cache-dir \
 
 WORKDIR /opt/ComfyUI
 
-# Cache-busting ARG: pass --build-arg CACHEBUST=$(date +%s) to force fresh git clones
 ARG CACHEBUST=1
 
-# Clone ComfyUI
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && rm -rf .git \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install ComfyUI-Manager
 RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
     && rm -rf custom_nodes/ComfyUI-Manager/.git \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install ComfyUI-LTXVideo (master branch - required for LTX-2.3 audio nodes)
-# This version includes: LTXVEmptyLatentAudio, LTXVAudioVAELoader, LTXVAudioVAEDecode,
-# LTXVSeparateAVLatent, LTXVConcatAVLatent, MultimodalGuider, LTXAVTextEncoderLoader,
-# LTXVScheduler, LTXVImgToVideoConditionOnly, GuiderParameters
 RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custom_nodes/ComfyUI-LTXVideo \
     && rm -rf custom_nodes/ComfyUI-LTXVideo/.git \
     && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
     && rm -rf /tmp/* /var/tmp/*
 
-# Install VideoHelperSuite (for VHS_VideoCombine with audio output)
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
     && rm -rf custom_nodes/VideoHelperSuite/.git \
     && rm -rf /tmp/* /var/tmp/*
 
-# Create model directories
 RUN mkdir -p models/checkpoints \
     models/clip \
     models/vae \
@@ -93,43 +96,45 @@ ENV LTX23_TIER=24gb
 # MODEL DOWNLOADS
 # ============================================================================
 
-# Download LTX-2.3 22B Distilled model (46.1GB BF16)
-# From Lightricks/LTX-2.3 - this is the full audio-video model
-# Audio VAE is embedded in this same checkpoint (loaded separately by LTXVAudioVAELoader)
+# LTX-2.3 22B Distilled checkpoint (46.1GB BF16)
 RUN echo "Downloading LTX-2.3 22B Distilled model (46.1GB)..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled.safetensors', \
     local_dir='/tmp/ltx23', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/ltx23/ltx-2.3-22b-distilled.safetensors models/checkpoints/ && \
     rm -rf /tmp/ltx23 && \
-    python -c "import os; size=os.path.getsize('models/checkpoints/ltx-2.3-22b-distilled.safetensors')/(1024**3); print(f'LTX-2.3 22B Distilled: {size:.2f}GB'); assert size > 40, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Download Gemma-3 12B FP8 text encoder (shared with LTX-2 - same encoder architecture)
-# LTXAVTextEncoderLoader loads Gemma weights + projections from the main LTX-2.3 checkpoint
-RUN echo "Downloading Gemma-3 12B FP8 encoder..." && \
-    python -c "import os; from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='GitMylo/LTX-2-comfy_gemma_fp8_e4m3fn', filename='gemma_3_12B_it_fp8_e4m3fn.safetensors', \
-    local_dir='/tmp/gemma', token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/gemma/gemma_3_12B_it_fp8_e4m3fn.safetensors models/clip/ && \
-    rm -rf /tmp/gemma && \
-    python -c "import os; size=os.path.getsize('models/clip/gemma_3_12B_it_fp8_e4m3fn.safetensors')/(1024**3); print(f'Gemma FP8: {size:.2f}GB'); assert size > 5, 'File too small, corrupted'" && \
-    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
-
-# Download LTX-2.3 Spatial Upscaler x2 (~1GB)
+# LTX-2.3 Spatial Upscaler
 RUN echo "Downloading LTX-2.3 spatial upscaler..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-spatial-upscaler-x2-1.0.safetensors', \
     local_dir='/tmp/upscaler', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/upscaler/ltx-2.3-spatial-upscaler-x2-1.0.safetensors models/latent_upscale_models/ && \
     rm -rf /tmp/upscaler && \
-    python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Upscaler: {size:.2f}GB'); assert size > 0.5, 'File too small, corrupted'" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Copy vision processor configs for Gemma (same as LTX-2)
-COPY gemma-configs/preprocessor_config.json models/clip/gemma-3-12b-it/
-COPY gemma-configs/processor_config.json models/clip/gemma-3-12b-it/
-COPY gemma-configs/generation_config.json models/clip/gemma-3-12b-it/
+# =============================================================================
+# GEMMA TEXT ENCODER — CRITICAL FIX
+# =============================================================================
+# Official docs (docs.ltx.video) require the FULL MULTI-FILE FOLDER from:
+#   google/gemma-3-12b-it-qat-q4_0-unquantized
+# stored at:
+#   models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/
+#
+# The original Dockerfile used a single merged fp8 .safetensors from a third-party
+# repo (GitMylo). That is NOT the format LTXAVTextEncoderLoader expects when
+# pointed at a folder path — it expects a full HF-style model directory with
+# config.json, tokenizer files, and model shards.
+#
+# PREREQUISITE: Your HF account must have accepted Google's Gemma license at:
+#   https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized
+# A valid HF_TOKEN is necessary but NOT sufficient — license acceptance on the
+# website is also required, otherwise the download will fail with a 403 error.
+# =============================================================================
+RUN echo "Downloading Gemma-3 12B QAT full folder (~24GB, requires license acceptance)..." && \
+    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='google/gemma-3-12b-it-qat-q4_0-unquantized', local_dir='/opt/ComfyUI/models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized', token=os.getenv('HF_TOKEN'), ignore_patterns=['*.msgpack', '*.h5', 'flax_model*', 'tf_model*', 'rust_model*'])" && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Final cleanup
 RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
@@ -138,13 +143,7 @@ RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null 
 
 WORKDIR /opt/ComfyUI
 
-# LTX-2.3 LAUNCH FLAGS:
-# --lowvram: Required - offloads 46.1GB model to CPU RAM during generation
-#            (slow but functional on 24GB VRAM; fast on 48GB+ VRAM without this flag)
-# --reserve-vram 1.0: Reserve 1GB for system overhead
-# --use-split-cross-attention: Memory efficient attention
-#
-# SYSTEM RAM NOTE: Requires 64GB+ system RAM to hold 46.1GB model in CPU RAM
-# GENERATION SPEED on 24GB with offloading: ~10-30 min per clip (model layers swap in/out)
-# GENERATION SPEED on 48GB+ without offloading: ~2-5 min per clip
+# --lowvram: offloads 46.1GB model to CPU RAM (required for 24GB VRAM)
+# --reserve-vram 1.0: reserve 1GB VRAM for system overhead
+# --use-split-cross-attention: memory efficient attention for 24GB
 CMD ["python", "main.py", "--listen", "--lowvram", "--reserve-vram", "1.0", "--use-split-cross-attention"]

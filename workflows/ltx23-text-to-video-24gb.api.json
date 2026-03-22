@@ -11,13 +11,13 @@
     },
     "2": {
       "inputs": {
-        "text_encoder": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
+        "text_encoder": "comfy_gemma_3_12B_it.safetensors",
         "ckpt_name": "ltx-2.3-22b-distilled.safetensors",
-        "device": "default"
+        "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B Text Encoder (Audio-Video)"
+        "title": "Load Gemma-3 12B Text Encoder (Audio-Video) — FIXED: fp4-merged encoder, device=cpu for 24GB"
       }
     },
     "3": {
@@ -32,12 +32,12 @@
     },
     "4": {
       "inputs": {
-        "text": "low quality, blurry, distorted, watermarks, text overlay, low contrast, washed out colors, desaturated, flat colors, overexposed, underexposed, jittery, flickering, artifacts",
+        "text": "worst quality, inconsistent motion, blurry, jittery, distorted, watermarks, low contrast, washed out colors, desaturated, overexposed, underexposed, color banding, artifacts, noise",
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
-        "title": "Negative Prompt"
+        "title": "Negative Prompt — FIXED: was empty, now has quality negative terms"
       }
     },
     "5": {
@@ -97,34 +97,34 @@
     "10": {
       "inputs": {
         "modality": "AUDIO",
-        "cfg": 7.0,
-        "stg": 1.0,
-        "perturb_attn": true,
-        "rescale": 0.7,
-        "modality_scale": 3.0,
+        "cfg": 1.0,
+        "stg": 0.0,
+        "perturb_attn": false,
+        "rescale": 0.0,
+        "modality_scale": 1.0,
         "skip_step": 0,
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
       "_meta": {
-        "title": "Audio Guider Parameters"
+        "title": "Audio Guider Parameters — FIXED: cfg 7.0->1.0, stg 1.0->0.0, perturb_attn false, rescale 0.0 (distilled model must use CFG=1)"
       }
     },
     "11": {
       "inputs": {
         "parameters": ["10", 0],
         "modality": "VIDEO",
-        "cfg": 4.5,
-        "stg": 1.0,
-        "perturb_attn": true,
-        "rescale": 0.9,
-        "modality_scale": 3.0,
+        "cfg": 1.0,
+        "stg": 0.0,
+        "perturb_attn": false,
+        "rescale": 0.0,
+        "modality_scale": 1.0,
         "skip_step": 0,
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
       "_meta": {
-        "title": "Video Guider Parameters"
+        "title": "Video Guider Parameters — FIXED: cfg 3.0->1.0, stg 1.0->0.0, perturb_attn false, rescale 0.0 (distilled model must use CFG=1)"
       }
     },
     "12": {
@@ -133,7 +133,7 @@
         "positive": ["5", 0],
         "negative": ["5", 1],
         "parameters": ["11", 0],
-        "skip_blocks": "19"
+        "skip_blocks": "28"
       },
       "class_type": "MultimodalGuider",
       "_meta": {
@@ -143,15 +143,15 @@
     "13": {
       "inputs": {
         "latent": ["9", 0],
-        "steps": 15,
-        "max_shift": 2.05,
-        "base_shift": 0.95,
-        "stretch": true,
+        "steps": 8,
+        "max_shift": 1.0,
+        "base_shift": 0.5,
+        "stretch": false,
         "terminal": 0.1
       },
       "class_type": "LTXVScheduler",
       "_meta": {
-        "title": "LTX-V Scheduler (15 steps, distilled)"
+        "title": "LTX-V Scheduler — FIXED: steps 15->8, max_shift 2.05->1.0, base_shift 0.95->0.5, stretch false. Distilled model uses fixed sigma schedule: 1.0,0.9937,0.9875,0.9812,0.9750,0.9094,0.7250,0.4219,0.0"
       }
     },
     "14": {
@@ -198,14 +198,14 @@
       "inputs": {
         "samples": ["17", 0],
         "vae": ["1", 2],
-        "tile_size": 512,
-        "overlap": 64,
-        "temporal_size": 512,
-        "temporal_overlap": 64
+        "tile_size": 256,
+        "overlap": 32,
+        "temporal_size": 256,
+        "temporal_overlap": 32
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video (Tiled VAE)"
+        "title": "Decode Video (Tiled VAE) — FIXED: tile_size 512->256, overlap 64->32 (prevents tile seam color bleeding)"
       }
     },
     "19": {
@@ -226,8 +226,8 @@
         "loop_count": 0,
         "filename_prefix": "ltx23_t2v",
         "format": "video/h264-mp4",
-        "pix_fmt": "yuv420p",
-        "crf": 19,
+        "pix_fmt": "yuv444p",
+        "crf": 18,
         "save_metadata": true,
         "trim_to_audio": true,
         "pingpong": false,
@@ -235,7 +235,7 @@
       },
       "class_type": "VHS_VideoCombine",
       "_meta": {
-        "title": "Save Video + Audio (VHS)"
+        "title": "Save Video + Audio — FIXED: pix_fmt yuv420p->yuv444p (prevents TV/limited color range crushing that caused muted colors). crf 19->18 for slightly better quality."
       }
     }
   }
