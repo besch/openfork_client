@@ -1,0 +1,218 @@
+{
+  "_README": {
+    "tier": "32GB VRAM",
+    "model": "ltx-2.3-22b-distilled.safetensors",
+    "encoder": "gemma_3_12B_it_fp4_mixed.safetensors (cpu)",
+    "resolution": "1024x576 (16:9 default) — 32GB allows ~1.8x more pixels than 24GB tier",
+    "frames": "153 frames = ~6.4s @ 24fps (vs 121 = 5s on 24GB)",
+    "scheduler": "distilled: 8 steps, max_shift=1.0, base_shift=0.5, stretch=false",
+    "audio": "native audio+video via LTX-2.3 joint latent space",
+    "output": "VHS_VideoCombine with yuv444p full-color-range encoding",
+    "notes": [
+      "Gemma stays on CPU even at 32GB — saves VRAM for activation budget at higher resolution",
+      "Distilled model: exactly 8 steps, do NOT use stretch=true or high shift values",
+      "Audio cfg must stay ≤3.0 — values above 5 break generation (official docs warning)",
+      "yuv444p prevents TV/limited color range (RGB 16-235) crush from yuv420p"
+    ]
+  },
+  "prompt": {
+    "1": {
+      "inputs": {
+        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+      },
+      "class_type": "CheckpointLoaderSimple",
+      "_meta": { "title": "LTX-2.3 22B Distilled Checkpoint" }
+    },
+    "2": {
+      "inputs": {
+        "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
+        "ckpt_name": "ltx-2.3-22b-distilled.safetensors",
+        "device": "cpu"
+      },
+      "class_type": "LTXAVTextEncoderLoader",
+      "_meta": { "title": "Load Gemma-3 12B FP4 Text Encoder (cpu — saves VRAM for 1024x576 activations)" }
+    },
+    "3": {
+      "inputs": {
+        "text": "A cinematic video prompt placeholder",
+        "clip": ["2", 0]
+      },
+      "class_type": "CLIPTextEncode",
+      "_meta": { "title": "Positive Prompt" }
+    },
+    "4": {
+      "inputs": {
+        "text": "worst quality, inconsistent motion, blurry, jittery, distorted, watermarks, low contrast, washed out colors, desaturated, overexposed, color banding, artifacts, noise, overbaked, oversaturated",
+        "clip": ["2", 0]
+      },
+      "class_type": "CLIPTextEncode",
+      "_meta": { "title": "Negative Prompt" }
+    },
+    "5": {
+      "inputs": {
+        "positive": ["3", 0],
+        "negative": ["4", 0],
+        "frame_rate": 24
+      },
+      "class_type": "LTXVConditioning",
+      "_meta": { "title": "LTX-V Conditioning" }
+    },
+    "6": {
+      "inputs": {
+        "width": 1024,
+        "height": 576,
+        "length": 153,
+        "batch_size": 1
+      },
+      "class_type": "EmptyLTXVLatentVideo",
+      "_meta": { "title": "Empty Video Latent (1024x576, 153 frames = ~6.4s @ 24fps)" }
+    },
+    "7": {
+      "inputs": {
+        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+      },
+      "class_type": "LTXVAudioVAELoader",
+      "_meta": { "title": "Load Audio VAE (from LTX-2.3 checkpoint)" }
+    },
+    "8": {
+      "inputs": {
+        "audio_vae": ["7", 0],
+        "frames_number": 153,
+        "frame_rate": 24,
+        "batch_size": 1
+      },
+      "class_type": "LTXVEmptyLatentAudio",
+      "_meta": { "title": "Empty Audio Latent (153 frames @ 24fps)" }
+    },
+    "9": {
+      "inputs": {
+        "video_latent": ["6", 0],
+        "audio_latent": ["8", 0]
+      },
+      "class_type": "LTXVConcatAVLatent",
+      "_meta": { "title": "Concat Audio+Video Latents" }
+    },
+    "10": {
+      "inputs": {
+        "modality": "AUDIO",
+        "cfg": 3.0,
+        "stg": 0.5,
+        "perturb_attn": true,
+        "rescale": 0.7,
+        "modality_scale": 1.0,
+        "skip_step": 1,
+        "cross_attn": true
+      },
+      "class_type": "GuiderParameters",
+      "_meta": { "title": "Audio Guider Parameters (cfg=3.0 max — above 5 breaks generation)" }
+    },
+    "11": {
+      "inputs": {
+        "parameters": ["10", 0],
+        "modality": "VIDEO",
+        "cfg": 3.0,
+        "stg": 0.5,
+        "perturb_attn": true,
+        "rescale": 0.9,
+        "modality_scale": 1.0,
+        "skip_step": 0,
+        "cross_attn": true
+      },
+      "class_type": "GuiderParameters",
+      "_meta": { "title": "Video Guider Parameters (skip_step=0 for video quality)" }
+    },
+    "12": {
+      "inputs": {
+        "model": ["1", 0],
+        "positive": ["5", 0],
+        "negative": ["5", 1],
+        "parameters": ["11", 0],
+        "skip_blocks": "28"
+      },
+      "class_type": "MultimodalGuider",
+      "_meta": { "title": "Multimodal Guider (Audio+Video)" }
+    },
+    "13": {
+      "inputs": {
+        "latent": ["9", 0],
+        "steps": 8,
+        "max_shift": 1.0,
+        "base_shift": 0.5,
+        "stretch": false,
+        "terminal": 0.1
+      },
+      "class_type": "LTXVScheduler",
+      "_meta": { "title": "LTX-V Scheduler — distilled: 8 steps, no stretch" }
+    },
+    "14": {
+      "inputs": {
+        "sampler_name": "euler_ancestral_cfg_pp"
+      },
+      "class_type": "KSamplerSelect",
+      "_meta": { "title": "Sampler Select" }
+    },
+    "15": {
+      "inputs": {
+        "noise_seed": 0
+      },
+      "class_type": "RandomNoise",
+      "_meta": { "title": "Random Noise (Seed)" }
+    },
+    "16": {
+      "inputs": {
+        "noise": ["15", 0],
+        "guider": ["12", 0],
+        "sampler": ["14", 0],
+        "sigmas": ["13", 0],
+        "latent_image": ["9", 0]
+      },
+      "class_type": "SamplerCustomAdvanced",
+      "_meta": { "title": "Sampler (Audio+Video)" }
+    },
+    "17": {
+      "inputs": {
+        "av_latent": ["16", 0]
+      },
+      "class_type": "LTXVSeparateAVLatent",
+      "_meta": { "title": "Separate Audio+Video Latents" }
+    },
+    "18": {
+      "inputs": {
+        "samples": ["17", 0],
+        "vae": ["1", 2],
+        "tile_size": 512,
+        "overlap": 64,
+        "temporal_size": 512,
+        "temporal_overlap": 64
+      },
+      "class_type": "VAEDecodeTiled",
+      "_meta": { "title": "Decode Video (Tiled VAE — tile_size=512 for 1024x576)" }
+    },
+    "19": {
+      "inputs": {
+        "samples": ["17", 1],
+        "audio_vae": ["7", 0]
+      },
+      "class_type": "LTXVAudioVAEDecode",
+      "_meta": { "title": "Decode Audio" }
+    },
+    "20": {
+      "inputs": {
+        "images": ["18", 0],
+        "audio": ["19", 0],
+        "frame_rate": 24,
+        "loop_count": 0,
+        "filename_prefix": "ltx23_t2v_32gb",
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv444p",
+        "crf": 18,
+        "save_metadata": true,
+        "trim_to_audio": true,
+        "pingpong": false,
+        "save_output": true
+      },
+      "class_type": "VHS_VideoCombine",
+      "_meta": { "title": "Save Video + Audio (yuv444p = full RGB 0-255, no color crush)" }
+    }
+  }
+}

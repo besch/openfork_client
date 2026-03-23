@@ -1858,6 +1858,7 @@ def get_ltx23_dimensions(aspect_ratio: str, tier: str = "24gb") -> tuple[int, in
     """
     Returns (width, height) for LTX-2.3 - dimensions must be divisible by 32.
     16GB tier uses lower resolution to stay within VRAM activation budget.
+    32GB tier uses higher resolution (~1.8x more pixels than 24GB).
     """
     if tier == "16gb":
         if aspect_ratio == "16:9":
@@ -1874,6 +1875,23 @@ def get_ltx23_dimensions(aspect_ratio: str, tier: str = "24gb") -> tuple[int, in
             return 672, 288
         else:
             return 576, 320
+    if tier == "32gb":
+        # 1024x576 = ~590k pixels vs 768x432 = ~332k pixels (24GB) — 1.78x more
+        # All dimensions divisible by 32 (LTX requirement)
+        if aspect_ratio == "16:9":
+            return 1024, 576
+        elif aspect_ratio == "9:16":
+            return 576, 1024
+        elif aspect_ratio == "1:1":
+            return 768, 768
+        elif aspect_ratio == "4:3":
+            return 832, 640
+        elif aspect_ratio == "3:4":
+            return 640, 832
+        elif aspect_ratio == "21:9":
+            return 1152, 480
+        else:
+            return 1024, 576
     # 24gb (default)
     if aspect_ratio == "16:9":
         return 768, 432
@@ -2019,5 +2037,65 @@ def inject_prompt_and_image_into_ltx23_video_workflow(
     if strength is not None and '23' in api_graph and api_graph['23'].get("class_type") == "LTXVImgToVideoConditionOnly":
         api_graph['23']['inputs']['strength'] = strength
         logging.info(f"Injected image strength={strength} into LTX-2.3 i2v node 23")
+
+    return api_graph
+
+
+def inject_prompt_and_images_into_ltx23_multiframe_workflow(
+    workflow_api_data: Dict,
+    prompt: str,
+    negative_prompt: str,
+    start_image_filename: str,
+    end_image_filename: str,
+    aspect_ratio: str = "16:9",
+    seed: Optional[int] = None,
+    steps: Optional[int] = None,
+    cfg_scale: Optional[float] = None,
+    start_strength: Optional[float] = None,
+    end_strength: Optional[float] = None,
+    tier: str = "32gb",
+) -> Dict:
+    """
+    Injects prompts, start image, end image, and parameters into an LTX-2.3
+    multi-frame image-to-video workflow.
+
+    Multi-frame I2V workflow adds vs single I2V:
+    - Node 21: LoadImage (start image)
+    - Node 22: LTXVPreprocess (start image)
+    - Node 23: LTXVImgToVideoConditionOnly (start frame — conditions first frame)
+    - Node 26: LoadImage (end image)
+    - Node 27: LTXVPreprocess (end image)
+    - Node 29: LatentFlip (reverse temporal order of latent)
+    - Node 28: LTXVImgToVideoConditionOnly (end frame — conditions what is now the "first" frame in reversed latent)
+    - Node 30: LatentFlip (restore temporal order)
+
+    The LatentFlip trick: reversing the latent temporally before applying
+    LTXVImgToVideoConditionOnly means the node conditions what will become
+    the LAST frame once the latent is flipped back, anchoring the end image.
+    """
+    api_graph = inject_prompt_into_ltx23_video_workflow(
+        workflow_api_data, prompt, negative_prompt, aspect_ratio,
+        seed=seed, steps=steps, cfg_scale=cfg_scale, tier=tier
+    )
+
+    # Inject start image (Node 21 = LoadImage for start)
+    if '21' in api_graph and api_graph['21'].get("class_type") == "LoadImage":
+        api_graph['21']['inputs']['image'] = start_image_filename
+        logging.info(f"Injected start image into multiframe node 21: {start_image_filename}")
+
+    # Inject start strength (Node 23 = LTXVImgToVideoConditionOnly for start frame)
+    if start_strength is not None and '23' in api_graph and api_graph['23'].get("class_type") == "LTXVImgToVideoConditionOnly":
+        api_graph['23']['inputs']['strength'] = start_strength
+        logging.info(f"Injected start_strength={start_strength} into multiframe node 23")
+
+    # Inject end image (Node 26 = LoadImage for end)
+    if '26' in api_graph and api_graph['26'].get("class_type") == "LoadImage":
+        api_graph['26']['inputs']['image'] = end_image_filename
+        logging.info(f"Injected end image into multiframe node 26: {end_image_filename}")
+
+    # Inject end strength (Node 28 = LTXVImgToVideoConditionOnly for end frame on reversed latent)
+    if end_strength is not None and '28' in api_graph and api_graph['28'].get("class_type") == "LTXVImgToVideoConditionOnly":
+        api_graph['28']['inputs']['strength'] = end_strength
+        logging.info(f"Injected end_strength={end_strength} into multiframe node 28")
 
     return api_graph

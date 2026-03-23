@@ -1,0 +1,188 @@
+# syntax=docker/dockerfile:1.4
+# Dockerfile.ltx23-32gb
+# LTX-2.3 Audio-Video Model — 32GB VRAM tier
+#
+# KEY DIFFERENCES from ltx23-24gb:
+#   - Resolution: 1024x576 (vs 768x432) — ~1.8x more pixels
+#   - Frames:     153 (vs 121) — ~6.4s vs 5s at 24fps
+#   - VRAM flags: --lowvram (vs --novram) — 32GB headroom allows partial in-VRAM inference
+#   - Models:     BOTH distilled (T2V) AND dev (I2V) — requires ~120GB disk
+#   - No reserve-vram: keep default 2GB reservation for stability
+#
+# MODELS INCLUDED:
+#   ltx-2.3-22b-distilled.safetensors         (46.1 GB) — T2V, 8-step fast generation
+#   ltx-2.3-22b-dev.safetensors               (46.1 GB) — I2V, 15-step quality generation
+#   ltx-2.3-22b-distilled-lora-384.safetensors (~0.5 GB) — speed LoRA for I2V
+#   gemma_3_12B_it_fp4_mixed.safetensors       (~6 GB)  — Gemma-3 12B FP4 text encoder
+#
+# SYSTEM REQUIREMENTS:
+#   GPU:  32GB+ VRAM (CUDA)
+#   RAM:  64GB+ system RAM (model CPU offloads during inference)
+#   Disk: ~120GB (both checkpoints + encoder + OS/ComfyUI)
+#   Swap: 128GB recommended (LTX-2.3 22B = 46GB weights, CPU offload needs RAM)
+#
+# LAUNCH FLAGS (set in start_cloud.sh for ltx23-32gb service type):
+#   --lowvram --reserve-vram 2.0 --use-split-cross-attention
+#
+# Based on ltx23-24gb Dockerfile — extended for higher resolution inference
+
+ARG PYTORCH_VERSION=2.5.1
+ARG CUDA_VERSION=12.4
+ARG BASE_IMAGE=pytorch/pytorch:${PYTORCH_VERSION}-cuda${CUDA_VERSION}-cudnn9-devel
+
+FROM ${BASE_IMAGE}
+
+LABEL maintainer="OpenFork"
+LABEL description="LTX-2.3 22B Audio-Video Model — 32GB VRAM tier"
+LABEL version="1.0"
+
+# Prevent interactive prompts during apt-get
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    wget \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install huggingface-cli for model downloads
+RUN pip install --quiet --no-cache-dir "huggingface_hub[cli]>=0.26.0"
+
+# ============================================================
+# Install ComfyUI
+# ============================================================
+WORKDIR /opt
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
+WORKDIR /opt/ComfyUI
+RUN pip install --quiet --no-cache-dir -r requirements.txt
+
+# Create model directories
+RUN mkdir -p \
+    /opt/ComfyUI/models/checkpoints \
+    /opt/ComfyUI/models/loras \
+    /opt/ComfyUI/models/text_encoders \
+    /opt/ComfyUI/models/vae \
+    /opt/ComfyUI/models/upscale_models \
+    /opt/ComfyUI/models/latent_upscale_models \
+    /opt/ComfyUI/input \
+    /opt/ComfyUI/output
+
+# ============================================================
+# Install Custom Nodes
+# ============================================================
+
+# ComfyUI-LTXVideo — MUST use master branch for LTX-2.3 audio nodes:
+#   LTXVEmptyLatentAudio, LTXVAudioVAELoader, LTXVAudioVAEDecode,
+#   LTXVSeparateAVLatent, LTXVConcatAVLatent, MultimodalGuider,
+#   LTXAVTextEncoderLoader, LTXVScheduler, GuiderParameters
+RUN git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git \
+    /opt/ComfyUI/custom_nodes/ComfyUI-LTXVideo \
+    && pip install --quiet --no-cache-dir \
+        -r /opt/ComfyUI/custom_nodes/ComfyUI-LTXVideo/requirements.txt
+
+# ComfyUI-VideoHelperSuite — for VHS_VideoCombine with audio support
+RUN git clone --depth=1 \
+    https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
+    /opt/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite \
+    && pip install --quiet --no-cache-dir \
+        -r /opt/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
+
+# ============================================================
+# Download Models
+# ============================================================
+
+# LTX-2.3 22B Distilled — for T2V (fast, 8-step, distilled schedule)
+RUN huggingface-cli download Lightricks/LTX-2.3 \
+    --include "ltx-2.3-22b-distilled.safetensors" \
+    --local-dir /opt/ComfyUI/models/checkpoints \
+    --local-dir-use-symlinks False
+
+# LTX-2.3 22B Dev — for I2V (quality, 15-step, standard schedule)
+RUN huggingface-cli download Lightricks/LTX-2.3 \
+    --include "ltx-2.3-22b-dev.safetensors" \
+    --local-dir /opt/ComfyUI/models/checkpoints \
+    --local-dir-use-symlinks False
+
+# Distilled LoRA — applied to dev model for I2V speed boost (strength=0.2)
+RUN huggingface-cli download Lightricks/LTX-2.3 \
+    --include "ltx-2.3-22b-distilled-lora-384.safetensors" \
+    --local-dir /opt/ComfyUI/models/loras \
+    --local-dir-use-symlinks False
+
+# Gemma-3 12B FP4 Mixed Text Encoder
+# Source: Same encoder as ltx23-24gb tier (FP4 mixed quantization, ~6GB)
+# Note: LTXAVTextEncoderLoader expects this file in models/text_encoders/
+# The ckpt_name parameter in the workflow links it to the checkpoint projections
+RUN huggingface-cli download Lightricks/LTX-2.3 \
+    --include "gemma_3_12B_it_fp4_mixed.safetensors" \
+    --local-dir /opt/ComfyUI/models/text_encoders \
+    --local-dir-use-symlinks False
+
+# ============================================================
+# Encoder Path Fix
+# LTXAVTextEncoderLoader in some versions looks for the encoder
+# relative to the checkpoint directory. Create a symlink so it
+# finds the file regardless of which path it checks.
+# ============================================================
+RUN ln -sf \
+    /opt/ComfyUI/models/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors \
+    /opt/ComfyUI/models/checkpoints/gemma_3_12B_it_fp4_mixed.safetensors
+
+# ============================================================
+# Color Range Fix for VHS VideoCombine (yuv444p full range)
+# Without this patch, h264-mp4 uses limited RGB 16-235
+# causing washed-out colors on most players
+# ============================================================
+RUN python3 <<'EOF'
+import json, os
+vhs_path = '/opt/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite/video_formats/h264-mp4.json'
+if os.path.exists(vhs_path):
+    with open(vhs_path) as f:
+        d = json.load(f)
+    mp = d.get('main_pass', [])
+    color_flags = ['-color_range', '2', '-colorspace', '1', '-color_primaries', '1', '-color_trc', '1']
+    if '-color_range' not in mp:
+        mp.extend(color_flags)
+        d['main_pass'] = mp
+        with open(vhs_path, 'w') as f:
+            json.dump(d, f, indent=2)
+        print('Patched h264-mp4.json for full color range')
+    else:
+        print('h264-mp4.json already patched')
+else:
+    print('WARNING: h264-mp4.json not found, skipping color patch')
+EOF
+
+# ============================================================
+# Environment Setup
+# ============================================================
+
+# Set PYTORCH_CUDA_ALLOC_CONF for large model inference
+# max_split_size_mb=512 prevents memory fragmentation at 1024x576
+ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512,garbage_collection_threshold:0.8"
+
+# Optimize for large model inference
+ENV PYTORCH_NO_CUDA_MEMORY_CACHING=0
+ENV TRANSFORMERS_CACHE=/opt/ComfyUI/models/.cache/transformers
+ENV HF_HOME=/opt/ComfyUI/models/.cache/huggingface
+
+# Default ComfyUI launch flags for 32GB tier
+# --lowvram: Keep partial model chunks in VRAM (more efficient than --novram for 32GB)
+# --reserve-vram 2.0: Reserve 2GB for activation overhead
+# --use-split-cross-attention: Memory-efficient attention for large sequences
+ENV COMFYUI_FLAGS="--listen 0.0.0.0 --port 8188 --lowvram --reserve-vram 2.0 --use-split-cross-attention"
+
+WORKDIR /opt/ComfyUI
+EXPOSE 8188
+
+CMD ["bash", "-c", "python main.py $COMFYUI_FLAGS"]
