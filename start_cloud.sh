@@ -359,6 +359,7 @@ START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
 START_QWEN3TTS="false"
 START_DIAGDISTILL="false"
+START_WAN2GP="false"
 START_COMFYUI="true"
 ENABLE_4BIT="false"
 
@@ -395,6 +396,11 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="diagdistill-16gb"
           log "Auto-selected 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -d "/opt/wan2gp" ]; then
+      log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
+      START_WAN2GP="true"
+      SERVICE_TYPE="ltx23-video-24gb"
+      log "Auto-selected Wan2GP backend (LTX-2.3 Audio-Video 24GB)"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -404,6 +410,11 @@ else
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
+  # Wan2GP backend (LTX-2.3 Audio-Video 24GB)
+  if [[ "$SERVICE_TYPE" == *"wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"ltx23-video-24gb"* ]]; then
+      START_WAN2GP="true"
+      log "Wan2GP backend detected (LTX-2.3 Audio-Video)."
+  fi
 fi
 
 # Resource constraints and VRAM management
@@ -439,6 +450,26 @@ if [ "$START_QWEN3TTS" = "true" ]; then
       export QWEN_MODEL_SIZE="0.6B"
       log "Selecting Qwen3-TTS 0.6B model for 8GB VRAM (Capacity: ${TOTAL_VRAM_MB}MB)"
   fi
+fi
+
+# Wan2GP backend (LTX-2.3 Audio-Video 24GB)
+if [ "$START_WAN2GP" = "true" ]; then
+    # Wan2GP replaces ComfyUI for this service type
+    log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
+    START_COMFYUI="false"
+    
+    # Set Wan2GP environment variables
+    export WAN2GP_ROOT="/opt/wan2gp"
+    export WAN2GP_OUTPUT="/opt/wan2gp/outputs"
+    
+    # Verify Wan2GP is installed
+    if [ ! -d "$WAN2GP_ROOT" ]; then
+        log "ERROR: Wan2GP not found at $WAN2GP_ROOT. Cannot start Wan2GP backend."
+        log "Please ensure the container image includes Wan2GP installation."
+        exit 1
+    fi
+    
+    log "Wan2GP environment configured (WAN2GP_ROOT=$WAN2GP_ROOT)"
 fi
 
 # Start ComfyUI
