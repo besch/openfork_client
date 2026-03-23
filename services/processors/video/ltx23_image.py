@@ -1,114 +1,70 @@
 """
-LTX-2.3 Image-to-Video Processor
+LTX-2.3 Image-to-Video Processor (Wan2GP backend)
 
-LTX-2.3 is a DiT-based audio-video foundation model - generates synchronized
-video AND audio conditioned on a start image.
-
-Uses LTXVImgToVideoConditionOnly for image conditioning, combined with the
-audio-video joint latent space for synchronized audio-video output.
+Wan2GP accepts a PIL Image via the "image_start" settings key for I2V.
+No ComfyUI workflow is required; the image is loaded locally and passed
+directly to the Wan2GP session.
 """
 
 import os
 import logging
+from typing import Optional
+from PIL import Image
 
 from config import DEV_MODE, SUPABASE_URL
-from services.docker_manager import docker_manager
-from services.processors.comfyui_processor import ComfyUIProcessor
-from services.processors.output_handlers import VideoOutputHandler
-from utils.comfyui_workflow_utils import (
-    inject_prompt_and_image_into_ltx23_video_workflow,
-    materialize_start_image,
-)
+from services.processors.wan2gp_processor import Wan2GPProcessor
+from utils.comfyui_workflow_utils import materialize_start_image
+
+_MODEL_TYPE = "ltx2_22B_distilled"
+_DEFAULT_STEPS = 8
+_DEFAULT_CFG = 3.0
+_VIDEO_LENGTH = 121   # ~5 s @ 24 fps
+_FPS = 24
 
 
-class LTX23ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
-    """Processor for LTX-2.3 image-to-video + audio generation."""
+class LTX23ImageToVideoJobProcessor(Wan2GPProcessor):
+    """LTX-2.3 image-to-video via Wan2GP."""
 
     def process(self):
         if DEV_MODE:
             return
 
         if not self.job:
-            self._fail_job(f"Job object is None for LTX23ImageToVideoJobProcessor. Cannot proceed.")
-            return
-
-        workflow_data = self._get_workflow_payload()
-        if not workflow_data:
+            self._fail_job("Job object is None.")
             return
 
         inputs = self.job.get("inputs", {})
-        start_image_url = inputs.get("start_image_url")
-        start_image_filename = None
-
-        if start_image_url:
-            logging.info(f"Downloading start image from signed URL: {start_image_url}")
-            downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.input_dir)
-            if downloaded_path:
-                start_image_filename = os.path.basename(downloaded_path)
-
-        if not start_image_filename:
-            start_image_filename = materialize_start_image(self.job, self.input_dir)
-
-        if not start_image_filename:
-            input_storage_path = self.job.get("input_storage_path")
-
-            if not input_storage_path:
-                possible_path = self.job.get('start_image_base64')
-                if possible_path and isinstance(possible_path, str) and not possible_path.startswith('data:') and len(possible_path) < 2048:
-                    input_storage_path = possible_path
-
-            if input_storage_path:
-                bucket = self.job.get("bucket", "projects_public")
-                supabase_url = os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))
-                if supabase_url:
-                    source_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{input_storage_path}"
-                    logging.info(f"Downloading start image from: {source_url}")
-                    downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.input_dir)
-                    if downloaded_path:
-                        start_image_filename = os.path.basename(downloaded_path)
-                else:
-                    logging.warning("SUPABASE_URL not found in environment or config. Cannot download input image.")
-
-        if not start_image_filename:
-            self._fail_job(f"Failed to materialize start image for job {self.job_id}.")
+        image_path = self._resolve_start_image(inputs)
+        if not image_path:
+            self._fail_job(f"Could not resolve start image for job {self.job_id}")
             return
-
-        start_image_full_path = os.path.join(self.input_dir, start_image_filename)
 
         try:
-            container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
-            if docker_manager:
-                docker_manager.copy_file_to_container(
-                    service_type=self.client.active_service_type,
-                    source_on_host=start_image_full_path,
-                    dest_in_container=container_input_path,
-                    shutdown_event=self.shutdown_event,
-                )
-            else:
-                import shutil
-                os.makedirs(os.path.dirname(container_input_path), exist_ok=True)
-                shutil.copy2(start_image_full_path, container_input_path)
-                logging.info(f"Copied start image to {container_input_path} (Headless)")
+            start_image = Image.open(image_path).convert("RGB")
         except Exception as e:
-            self._fail_job(f"Failed to copy start image to container for job {self.job_id}: {e}")
+            self._fail_job(f"Failed to open start image for job {self.job_id}: {e}")
             return
 
-        aspect_ratio = inputs.get("aspect_ratio", "16:9")
-        steps = inputs.get("steps")
-        cfg_scale = inputs.get("cfg_scale")
-        strength = inputs.get("strength")
+        settings = {
+            "model_type": _MODEL_TYPE,
+            "prompt": self.positive_prompt,
+            "negative_prompt": self.negative_prompt,
+            "image_start": start_image,
+            "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9")),
+            "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
+            "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
+            "video_length": _VIDEO_LENGTH,
+            "force_fps": _FPS,
+        }
 
-        wf_ready = inject_prompt_and_image_into_ltx23_video_workflow(
-            workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename,
-            aspect_ratio, steps=steps, cfg_scale=cfg_scale, strength=strength
-        )
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
+        files = self._run_task(settings)
+        if not files:
+            self._fail_job(f"Wan2GP produced no output for job {self.job_id}")
             return
 
-        result = self.handle_video_output(outputs)
+        result = self._handle_video_output(files[0])
         if not result:
+            self._fail_job(f"Failed to process video output for job {self.job_id}")
             return
 
         video_storage_path, thumbnail_storage_path, duration = result
@@ -120,3 +76,40 @@ class LTX23ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             duration_seconds=duration,
             prompt=self.positive_prompt,
         )
+
+    def _resolve_start_image(self, inputs: dict) -> Optional[str]:
+        """Return a local file path for the start image, trying multiple sources."""
+        # 1. Signed URL from inputs
+        url = inputs.get("start_image_url")
+        if url:
+            path = self.orchestrator_service.download_asset_by_url(url, self.input_dir)
+            if path:
+                return path
+
+        # 2. materialize_start_image handles base64 / embedded payloads
+        filename = materialize_start_image(self.job, self.input_dir)
+        if filename:
+            return os.path.join(self.input_dir, filename)
+
+        # 3. Supabase storage path
+        storage_path = self.job.get("input_storage_path")
+        if not storage_path:
+            maybe = self.job.get("start_image_base64")
+            if (
+                maybe
+                and isinstance(maybe, str)
+                and not maybe.startswith("data:")
+                and len(maybe) < 2048
+            ):
+                storage_path = maybe
+
+        if storage_path:
+            supabase_url = os.environ.get("SUPABASE_URL", SUPABASE_URL)
+            if supabase_url:
+                bucket = self.job.get("bucket", "projects_public")
+                src = f"{supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
+                path = self.orchestrator_service.download_asset_by_url(src, self.input_dir)
+                if path:
+                    return path
+
+        return None

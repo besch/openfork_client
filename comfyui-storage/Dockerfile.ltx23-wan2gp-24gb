@@ -1,0 +1,70 @@
+# LTX-2.3 22B — Wan2GP backend — 24 GB VRAM
+#
+# Wan2GP replaces ComfyUI for this tier. The Python client imports
+# shared.api from /opt/wan2gp directly (via WAN2GP_ROOT env var).
+#
+# Model directory: Wan2GP discovers checkpoints via its internal
+# files_locator. Models are pre-downloaded to /opt/wan2gp/models/.
+# If Wan2GP cannot find the model on first run, check its
+# `default_checkpoints_paths` in shared/files_locator.py and adjust
+# the COPY/RUN paths below accordingly.
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV WAN2GP_ROOT=/opt/wan2gp
+ENV WAN2GP_OUTPUT=/opt/wan2gp/outputs
+
+# ── System packages ────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3-pip \
+    git git-lfs \
+    ffmpeg \
+    wget curl \
+    libgl1-mesa-glx libglib2.0-0 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+ && update-alternatives --install /usr/bin/python  python  /usr/bin/python3.11 1
+
+# ── Wan2GP ─────────────────────────────────────────────────────────
+RUN git clone https://github.com/deepbeepmeep/Wan2GP /opt/wan2gp
+
+WORKDIR /opt/wan2gp
+
+# Install PyTorch first (CUDA 12.4) so Wan2GP deps pick up the right build
+RUN pip3 install --no-cache-dir \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# Install Wan2GP requirements
+# The extra-index-url is required for the onnxruntime-gpu nightly build
+RUN pip3 install --no-cache-dir \
+    --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
+    -r requirements.txt
+
+# ── Model weights ──────────────────────────────────────────────────
+# Models are placed in /opt/wan2gp/models/ — adjust the subdirectory
+# if Wan2GP's files_locator expects a different layout (e.g. models/ltx/).
+RUN pip3 install --no-cache-dir huggingface-hub
+
+# LTX-2.3 22B distilled (46.1 GB BF16) — requires ~64 GB system RAM at runtime
+RUN mkdir -p /opt/wan2gp/models && \
+    huggingface-cli download Lightricks/LTX-Video \
+        ltx-2.3-22b-distilled.safetensors \
+        --local-dir /opt/wan2gp/models
+
+# Gemma-3 12B FP4 mixed text encoder
+RUN huggingface-cli download Lightricks/LTX-Video \
+        gemma_3_12B_it_fp4_mixed.safetensors \
+        --local-dir /opt/wan2gp/models
+
+# ── Runtime directories ────────────────────────────────────────────
+RUN mkdir -p /opt/wan2gp/outputs
+
+# ── Client code ────────────────────────────────────────────────────
+# The DGN Python client is fetched at container start via start_cloud.sh.
+# Wan2GP is imported by the client through sys.path (WAN2GP_ROOT above).
+
+WORKDIR /workspace
