@@ -55,9 +55,6 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install huggingface-cli for model downloads
-RUN pip install --quiet --no-cache-dir "huggingface_hub[cli]>=0.26.0"
-
 # ============================================================
 # Install ComfyUI
 # ============================================================
@@ -101,32 +98,24 @@ RUN git clone --depth=1 \
 # Download Models
 # ============================================================
 
-# LTX-2.3 22B Distilled — for T2V (fast, 8-step, distilled schedule)
-RUN huggingface-cli download Lightricks/LTX-2.3 \
-    --include "ltx-2.3-22b-distilled.safetensors" \
-    --local-dir /opt/ComfyUI/models/checkpoints \
-    --local-dir-use-symlinks False
+# Force-reinstall huggingface_hub AFTER all custom node pip installs,
+# which downgrade it to versions that break the CLI entry point.
+# We use hf_hub_download (Python API) instead of huggingface-cli
+# to avoid all entry-point / PATH issues entirely.
+RUN pip install --quiet --no-cache-dir --force-reinstall 'huggingface_hub>=0.26.0'
 
-# LTX-2.3 22B Dev — for I2V (quality, 15-step, standard schedule)
-RUN huggingface-cli download Lightricks/LTX-2.3 \
-    --include "ltx-2.3-22b-dev.safetensors" \
-    --local-dir /opt/ComfyUI/models/checkpoints \
-    --local-dir-use-symlinks False
+# LTX-2.3 22B Distilled — T2V (fast, 8-step, distilled schedule)
+RUN python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled.safetensors', local_dir='/opt/ComfyUI/models/checkpoints', local_dir_use_symlinks=False)"
+
+# LTX-2.3 22B Dev — I2V (quality, 15-step, standard schedule)
+RUN python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-dev.safetensors', local_dir='/opt/ComfyUI/models/checkpoints', local_dir_use_symlinks=False)"
 
 # Distilled LoRA — applied to dev model for I2V speed boost (strength=0.2)
-RUN huggingface-cli download Lightricks/LTX-2.3 \
-    --include "ltx-2.3-22b-distilled-lora-384.safetensors" \
-    --local-dir /opt/ComfyUI/models/loras \
-    --local-dir-use-symlinks False
+RUN python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled-lora-384.safetensors', local_dir='/opt/ComfyUI/models/loras', local_dir_use_symlinks=False)"
 
-# Gemma-3 12B FP4 Mixed Text Encoder
-# Source: Same encoder as ltx23-24gb tier (FP4 mixed quantization, ~6GB)
-# Note: LTXAVTextEncoderLoader expects this file in models/text_encoders/
-# The ckpt_name parameter in the workflow links it to the checkpoint projections
-RUN huggingface-cli download Lightricks/LTX-2.3 \
-    --include "gemma_3_12B_it_fp4_mixed.safetensors" \
-    --local-dir /opt/ComfyUI/models/text_encoders \
-    --local-dir-use-symlinks False
+# Gemma-3 12B FP4 Mixed Text Encoder (~6GB)
+# LTXAVTextEncoderLoader expects this file in models/text_encoders/
+RUN python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='gemma_3_12B_it_fp4_mixed.safetensors', local_dir='/opt/ComfyUI/models/text_encoders', local_dir_use_symlinks=False)"
 
 # ============================================================
 # Encoder Path Fix
