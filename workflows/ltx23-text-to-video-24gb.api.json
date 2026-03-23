@@ -1,14 +1,14 @@
 {
   "_README": {
     "source": "Fixed based on official docs at docs.ltx.video/open-source-model/integration-tools/ltx-2-comfy-ui-nodes",
-    "root_cause_of_color_degradation": "Audio CFG was 7.0 — official docs warn high values BREAK generation. Combined with no latent normalization, latents drift into oversaturation causing overbaked/crushed colors.",
+    "root_cause_of_color_degradation": "Audio CFG was 7.0 \u2014 official docs warn high values BREAK generation. Combined with no latent normalization, latents drift into oversaturation causing overbaked/crushed colors.",
     "changes": [
-      "NODE 4: Negative prompt — was empty string, now has proper quality negative terms",
+      "NODE 4: Negative prompt \u2014 was empty string, now has proper quality negative terms",
       "NODE 10 (Audio GuiderParameters): cfg 7.0 -> 3.0, stg 1.0 -> 0.5, rescale 0.7 -> 0.7, modality_scale 3.0 -> 1.0, skip_step 0 -> 1 (official baseline: modality_scale=1, skip_step=1)",
       "NODE 11 (Video GuiderParameters): cfg 3.0 stays, stg 1.0 -> 0.5, modality_scale 3.0 -> 1.0, skip_step 0 -> 0 (video processes every step for quality)",
-      "NODE 13 (LTXVScheduler): steps 15 -> 8, max_shift 2.05 -> 1.0, base_shift 0.95 -> 0.5, stretch true -> false — distilled model requires exactly 8 steps with this sigma schedule",
-      "NODE 16: SamplerCustomAdvanced REPLACED with LTXVNormalizingSampler — official fix for overbaked/oversaturated colors and audio clipping. Drop-in replacement, same inputs.",
-      "NODE 20 (VHS_VideoCombine): pix_fmt yuv420p -> yuv444p — prevents TV/limited color range (RGB 16-235 instead of 0-255)"
+      "NODE 13 (LTXVScheduler): steps 15 -> 8, max_shift 2.05 -> 1.0, base_shift 0.95 -> 0.5, stretch true -> false \u2014 distilled model requires exactly 8 steps with this sigma schedule",
+      "NODE 20 (VHS_VideoCombine): pix_fmt yuv420p -> yuv444p \u2014 prevents TV/limited color range (RGB 16-235 instead of 0-255)",
+      "NODE 16: kept as SamplerCustomAdvanced \u2014 LTXVNormalizingSampler requires extra inputs (sampler, video_normalization_factors, audio_normalization_factors) not available in this pipeline"
     ]
   },
   "prompt": {
@@ -29,7 +29,7 @@
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B Text Encoder — device changed to cpu for 24GB VRAM. See Dockerfile for encoder path fix."
+        "title": "Load Gemma-3 12B Text Encoder \u2014 device changed to cpu for 24GB VRAM. See Dockerfile for encoder path fix."
       }
     },
     "3": {
@@ -49,7 +49,7 @@
       },
       "class_type": "CLIPTextEncode",
       "_meta": {
-        "title": "Negative Prompt — FIXED: was empty string. Empty negative = no anchor for color/quality guidance."
+        "title": "Negative Prompt \u2014 FIXED: was empty string. Empty negative = no anchor for color/quality guidance."
       }
     },
     "5": {
@@ -119,7 +119,7 @@
       },
       "class_type": "GuiderParameters",
       "_meta": {
-        "title": "Audio Guider Parameters — FIXED: cfg 7.0->3.0 (7.0 BREAKS generation per official docs), stg 1.0->0.5, modality_scale 3.0->1.0 (official baseline), skip_step 0->1 (official baseline = performance + stability)"
+        "title": "Audio Guider Parameters \u2014 FIXED: cfg 7.0->3.0 (7.0 BREAKS generation per official docs), stg 1.0->0.5, modality_scale 3.0->1.0 (official baseline), skip_step 0->1 (official baseline = performance + stability)"
       }
     },
     "11": {
@@ -136,7 +136,7 @@
       },
       "class_type": "GuiderParameters",
       "_meta": {
-        "title": "Video Guider Parameters — FIXED: stg 1.0->0.5, modality_scale 3.0->1.0 (official baseline). skip_step stays 0 for video (process every step for visual quality)."
+        "title": "Video Guider Parameters \u2014 FIXED: stg 1.0->0.5, modality_scale 3.0->1.0 (official baseline). skip_step stays 0 for video (process every step for visual quality)."
       }
     },
     "12": {
@@ -163,7 +163,7 @@
       },
       "class_type": "LTXVScheduler",
       "_meta": {
-        "title": "LTX-V Scheduler — FIXED: steps 15->8, max_shift 2.05->1.0, base_shift 0.95->0.5, stretch false. Official docs confirm distilled model requires 8-step schedule. LTXVNormalizingSampler below also only works with 8-step distilled schedule."
+        "title": "LTX-V Scheduler \u2014 FIXED: steps 15->8, max_shift 2.05->1.0, base_shift 0.95->0.5, stretch false. Official docs confirm distilled model requires 8-step schedule. LTXVNormalizingSampler below also only works with 8-step distilled schedule."
       }
     },
     "14": {
@@ -172,7 +172,7 @@
       },
       "class_type": "KSamplerSelect",
       "_meta": {
-        "title": "Sampler Select — NOTE: LTXVNormalizingSampler (node 16) does NOT use this node. It has its own built-in sampler. This node is now unused but kept for reference."
+        "title": "Sampler Select"
       }
     },
     "15": {
@@ -188,12 +188,13 @@
       "inputs": {
         "noise": ["15", 0],
         "guider": ["12", 0],
+        "sampler": ["14", 0],
         "sigmas": ["13", 0],
         "latent_image": ["9", 0]
       },
-      "class_type": "LTXVNormalizingSampler",
+      "class_type": "SamplerCustomAdvanced",
       "_meta": {
-        "title": "*** KEY FIX *** LTXVNormalizingSampler — REPLACES SamplerCustomAdvanced. Official docs: prevents overbaked/oversaturated colors and audio clipping by keeping latent statistics in optimal ranges during denoising. Root cause of your color degradation. Drop-in replacement — same inputs minus 'sampler' pin (has built-in sampler). ONLY use for first stage. Do NOT use with masks/inpainting."
+        "title": "Sampler (Audio+Video)"
       }
     },
     "17": {
@@ -216,7 +217,7 @@
       },
       "class_type": "VAEDecodeTiled",
       "_meta": {
-        "title": "Decode Video (Tiled VAE) — kept original values. Change tile_size to 256/overlap 32 if you see seam artifacts."
+        "title": "Decode Video (Tiled VAE) \u2014 kept original values. Change tile_size to 256/overlap 32 if you see seam artifacts."
       }
     },
     "19": {
@@ -246,7 +247,7 @@
       },
       "class_type": "VHS_VideoCombine",
       "_meta": {
-        "title": "Save Video + Audio — FIXED: pix_fmt yuv420p->yuv444p (yuv420p uses TV/limited RGB 16-235 range, crushing black point and white point = washed out output). crf 19->18."
+        "title": "Save Video + Audio \u2014 FIXED: pix_fmt yuv420p->yuv444p (yuv420p uses TV/limited RGB 16-235 range, crushing black point and white point = washed out output). crf 19->18."
       }
     }
   }
