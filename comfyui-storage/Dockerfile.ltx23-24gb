@@ -7,13 +7,11 @@
 #   3. pix_fmt yuv420p uses TV/limited color range (RGB 16-235), crushing output
 #
 # DOCKERFILE CHANGES FROM ORIGINAL:
-#   1. Gemma encoder: replaced single fp8 safetensors file with full multi-file folder
-#      from google/gemma-3-12b-it-qat-q4_0-unquantized (official requirement per docs.ltx.video)
-#      Stored at: models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/
-#   2. Removed broken gemma-configs COPY lines (configs come from the HF repo folder itself)
-#   3. IMPORTANT: HF_TOKEN alone is not enough — your HF account must have accepted
-#      Google's Gemma license at huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized
-#      before the download will work, even with a valid token.
+#   1. Gemma encoder: single merged fp4 file from Comfy-Org/ltx-2
+#      gemma_3_12B_it_fp4_mixed.safetensors -> models/text_encoders/
+#      (folder approach causes "invalid tokenizer" — SPieceTokenizer needs tokenizer.model
+#      which is absent from the google/gemma-3-12b-it-qat-q4_0-unquantized QAT repo)
+#   2. Removed broken gemma-configs COPY lines (not needed with single-file encoder)
 #
 # WORKFLOW JSON CHANGES (see ltx23-text-to-video-24gb_api_FIXED_v2.json):
 #   - Audio CFG: 7.0 -> 3.0
@@ -114,26 +112,15 @@ RUN echo "Downloading LTX-2.3 spatial upscaler..." && \
     rm -rf /tmp/upscaler && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# =============================================================================
-# GEMMA TEXT ENCODER — CRITICAL FIX
-# =============================================================================
-# Official docs (docs.ltx.video) require the FULL MULTI-FILE FOLDER from:
-#   google/gemma-3-12b-it-qat-q4_0-unquantized
-# stored at:
-#   models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized/
-#
-# The original Dockerfile used a single merged fp8 .safetensors from a third-party
-# repo (GitMylo). That is NOT the format LTXAVTextEncoderLoader expects when
-# pointed at a folder path — it expects a full HF-style model directory with
-# config.json, tokenizer files, and model shards.
-#
-# PREREQUISITE: Your HF account must have accepted Google's Gemma license at:
-#   https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized
-# A valid HF_TOKEN is necessary but NOT sufficient — license acceptance on the
-# website is also required, otherwise the download will fail with a 403 error.
-# =============================================================================
-RUN echo "Downloading Gemma-3 12B QAT full folder (~24GB, requires license acceptance)..." && \
-    python -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id='google/gemma-3-12b-it-qat-q4_0-unquantized', local_dir='/opt/ComfyUI/models/text_encoders/gemma-3-12b-it-qat-q4_0-unquantized', token=os.getenv('HF_TOKEN'), ignore_patterns=['*.msgpack', '*.h5', 'flax_model*', 'tf_model*', 'rust_model*'])" && \
+# Gemma text encoder — single merged fp4 file from Comfy-Org
+# LTXAVTextEncoderLoader requires a single merged safetensors, NOT a folder.
+# The HuggingFace multi-shard folder causes "invalid tokenizer" errors because
+# ComfyUI SPieceTokenizer cannot find tokenizer.model in the QAT repo.
+# Comfy-Org pre-merged and packaged the encoder specifically for this node.
+RUN echo "Downloading Gemma-3 12B fp4 merged encoder from Comfy-Org..." && \
+    python -c "import os; from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Comfy-Org/ltx-2', filename='split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors', local_dir='/tmp/gemma', token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/gemma/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors models/text_encoders/ && \
+    rm -rf /tmp/gemma && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # Final cleanup
