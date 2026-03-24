@@ -15,7 +15,7 @@ import logging
 from config import DEV_MODE
 from services.processors.wan2gp_processor import Wan2GPProcessor
 
-_MODEL_TYPE = "ltx2_22B_distilled"
+_MODEL_TYPE = "ltx2_22B"
 _DEFAULT_STEPS = 8
 _DEFAULT_CFG = 3.0
 _VIDEO_LENGTH = 121   # ~5 s @ 24 fps

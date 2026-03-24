@@ -1,74 +1,104 @@
-# LTX-2.3 22B — Wan2GP backend — 24 GB VRAM
+# OpenFork — LTX-2.3 22B Audio-Video on Wan2GP (24 GB VRAM)
 #
-# Wan2GP replaces ComfyUI for this tier. The Python client imports
-# shared.api from /opt/wan2gp directly (via WAN2GP_ROOT env var).
+# What this image provides:
+#   - Wan2GP (deepbeepmeep/Wan2GP) at /opt/wan2gp
+#   - LTX-2.3 22B Q8_0 GGUF transformer (~20.6 GB) in ckpts/
+#   - Gemma-3 12B QAT text encoder in ckpts/
+#   - All LTX-2.3 support files (VAE, audio VAE, vocoder, upscalers, LoRAs)
 #
-# Model directory: Wan2GP expects checkpoints in ckpts/ (not models/).
-# Gemma text encoder must live in ckpts/gemma-3-12b-it-qat-q4_0-unquantized/.
+# Build:
+#   docker build \
+#     --build-arg HF_TOKEN=<token> \
+#     --build-arg CUDA_ARCHITECTURES="8.0;8.6;8.9" \
+#     -t beschiak/openfork-ltx23-wan2gp-24gb:latest \
+#     -f Dockerfile.ltx23-wan2gp-24gb .
+#
+# Notes:
+#   - HF_TOKEN is required to download from DeepBeepMeep/LTX-2 (gated repo)
+#   - CUDA 12.1 + PyTorch 2.4 keeps parity with other OpenFork images
+#   - ComfyUI is NOT installed — this image uses the Wan2GP Python library directly
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+ARG CUDA_ARCHITECTURES="8.0;8.6;8.9"
+ARG HF_TOKEN
+
+FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+
+ARG CUDA_ARCHITECTURES
+ARG HF_TOKEN
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
 ENV WAN2GP_ROOT=/opt/wan2gp
 ENV WAN2GP_OUTPUT=/opt/wan2gp/outputs
 
-# ── System packages ────────────────────────────────────────────────
+# ── System dependencies ──────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-dev python3-pip \
-    build-essential \
-    git git-lfs \
-    ffmpeg \
-    wget curl \
-    libgl1-mesa-glx libglib2.0-0 \
-    libsndfile1 \
-    libgomp1 \
+        python3 python3-pip python3-dev \
+        git wget curl cmake ninja-build \
+        libgl1 libglib2.0-0 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
- && update-alternatives --install /usr/bin/python  python  /usr/bin/python3.11 1
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+RUN pip3 install --upgrade pip setuptools wheel
 
-# ── Wan2GP ─────────────────────────────────────────────────────────
+# ── PyTorch (CUDA 12.1) ──────────────────────────────────────────────────────
+RUN pip3 install \
+        torch==2.4.0+cu121 \
+        torchvision==0.19.0+cu121 \
+        torchaudio==2.4.0+cu121 \
+        --index-url https://download.pytorch.org/whl/cu121
+
+# ── Wan2GP source ─────────────────────────────────────────────────────────────
 RUN git clone https://github.com/deepbeepmeep/Wan2GP /opt/wan2gp
 
-WORKDIR /opt/wan2gp
+# ── Wan2GP Python dependencies ────────────────────────────────────────────────
+# Try with the custom ort-nightly index first; fall back to PyPI only on failure
+RUN pip3 install \
+        --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
+        -r /opt/wan2gp/requirements.txt \
+    || pip3 install -r /opt/wan2gp/requirements.txt
 
-# Install PyTorch first (CUDA 12.4) so Wan2GP deps pick up the right build
-RUN pip3 install --no-cache-dir \
-    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# ── SageAttention (GPU-accelerated attention — compile against target arches) ─
+# FORCE_CUDA=1 + TORCH_CUDA_ARCH_LIST allows compilation without a live GPU.
+ENV TORCH_CUDA_ARCH_LIST="${CUDA_ARCHITECTURES}"
+ENV FORCE_CUDA="1"
+ENV MAX_JOBS="8"
+RUN git clone https://github.com/thu-ml/SageAttention.git /tmp/sageattention \
+    && cd /tmp/sageattention \
+    && pip3 install --no-build-isolation . \
+    && rm -rf /tmp/sageattention
 
-# Install Wan2GP requirements
-# The extra-index-url is required for the onnxruntime-gpu nightly build
-RUN pip3 install --no-cache-dir \
-    --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
-    -r requirements.txt
+# ── Pre-create directories ────────────────────────────────────────────────────
+RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
 
-# ── Model weights ──────────────────────────────────────────────────
-# Wan2GP expects all checkpoints in ckpts/ (not models/).
-# Gemma encoder must be in ckpts/gemma-3-12b-it-qat-q4_0-unquantized/ subfolder.
-RUN pip3 install --no-cache-dir huggingface-hub
-
-# LTX-2.3 22B base model (46.1 GB BF16) — from Lightricks/LTX-2.3
-RUN mkdir -p /opt/wan2gp/ckpts && \
-    huggingface-cli download Lightricks/LTX-2.3 \
-        ltx-2.3-22b-dev.safetensors \
-        --local-dir /opt/wan2gp/ckpts
-
-# LTX-2.3 distilled LoRA (7.6 GB) — required for two-stage pipeline
-RUN huggingface-cli download Lightricks/LTX-2.3 \
+# ── Download LTX-2.3 22B model files (DeepBeepMeep/LTX-2) ────────────────────
+# Transformer: Q8_0 GGUF (~20.6 GB) — fits entirely in 24 GB VRAM
+RUN pip3 install -q "huggingface_hub[cli]" \
+    && huggingface-cli download DeepBeepMeep/LTX-2 \
+        ltx-2.3-22b-distilled-Q8_0_light.gguf \
+        ltx-2.3-22b_vae.safetensors \
+        ltx-2.3-22b_audio_vae.safetensors \
+        ltx-2.3-22b_vocoder.safetensors \
+        ltx-2.3-22b_text_embedding_projection.safetensors \
+        ltx-2.3-22b_embeddings_connector.safetensors \
         ltx-2.3-22b-distilled-lora-384.safetensors \
-        --local-dir /opt/wan2gp/ckpts
+        ltx-2.3-spatial-upscaler-x2-1.1.safetensors \
+        ltx-2.3-temporal-upscaler-x2-1.0.safetensors \
+        ltx2_22b_config.json \
+        --local-dir /opt/wan2gp/ckpts \
+        --token "${HF_TOKEN}"
 
-# Gemma-3 12B text encoder — from DeepBeepMeep/LTX-2, entire subfolder
+# ── Download Gemma-3 12B QAT text encoder ─────────────────────────────────────
 RUN huggingface-cli download DeepBeepMeep/LTX-2 \
         --include "gemma-3-12b-it-qat-q4_0-unquantized/*" \
-        --local-dir /opt/wan2gp/ckpts
+        --local-dir /opt/wan2gp/ckpts \
+        --token "${HF_TOKEN}"
 
-# ── Runtime directories ────────────────────────────────────────────
-RUN mkdir -p /opt/wan2gp/outputs
+# ── Verify critical files are present ────────────────────────────────────────
+RUN test -f /opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf \
+    && test -f /opt/wan2gp/ckpts/ltx-2.3-22b_vae.safetensors \
+    && test -f /opt/wan2gp/ckpts/ltx-2.3-22b_audio_vae.safetensors \
+    && test -f /opt/wan2gp/ckpts/ltx2_22b_config.json \
+    && python3 -c "import sys; sys.path.insert(0,'/opt/wan2gp'); from shared.api import init; print('shared.api import OK')" \
+    && echo "All Wan2GP checks passed."
 
-# ── Client code ────────────────────────────────────────────────────
-# The DGN Python client is fetched at container start via start_cloud.sh.
-# Wan2GP is imported by the client through sys.path (WAN2GP_ROOT above).
-
-WORKDIR /workspace
+WORKDIR /opt/wan2gp
