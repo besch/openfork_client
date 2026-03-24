@@ -3,11 +3,8 @@
 # Wan2GP replaces ComfyUI for this tier. The Python client imports
 # shared.api from /opt/wan2gp directly (via WAN2GP_ROOT env var).
 #
-# Model directory: Wan2GP discovers checkpoints via its internal
-# files_locator. Models are pre-downloaded to /opt/wan2gp/models/.
-# If Wan2GP cannot find the model on first run, check its
-# `default_checkpoints_paths` in shared/files_locator.py and adjust
-# the COPY/RUN paths below accordingly.
+# Model directory: Wan2GP expects checkpoints in ckpts/ (not models/).
+# Gemma text encoder must live in ckpts/gemma-3-12b-it-qat-q4_0-unquantized/.
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
@@ -47,20 +44,25 @@ RUN pip3 install --no-cache-dir \
     -r requirements.txt
 
 # ── Model weights ──────────────────────────────────────────────────
-# Models are placed in /opt/wan2gp/models/ — adjust the subdirectory
-# if Wan2GP's files_locator expects a different layout (e.g. models/ltx/).
+# Wan2GP expects all checkpoints in ckpts/ (not models/).
+# Gemma encoder must be in ckpts/gemma-3-12b-it-qat-q4_0-unquantized/ subfolder.
 RUN pip3 install --no-cache-dir huggingface-hub
 
-# LTX-2.3 22B distilled (46.1 GB BF16) — requires ~64 GB system RAM at runtime
-RUN mkdir -p /opt/wan2gp/models && \
-    huggingface-cli download Lightricks/LTX-Video \
-        ltx-2.3-22b-distilled.safetensors \
-        --local-dir /opt/wan2gp/models
+# LTX-2.3 22B base model (46.1 GB BF16) — from Lightricks/LTX-2.3
+RUN mkdir -p /opt/wan2gp/ckpts && \
+    huggingface-cli download Lightricks/LTX-2.3 \
+        ltx-2.3-22b-dev.safetensors \
+        --local-dir /opt/wan2gp/ckpts
 
-# Gemma-3 12B FP4 mixed text encoder
-RUN huggingface-cli download Lightricks/LTX-Video \
-        gemma_3_12B_it_fp4_mixed.safetensors \
-        --local-dir /opt/wan2gp/models
+# LTX-2.3 distilled LoRA (7.6 GB) — required for two-stage pipeline
+RUN huggingface-cli download Lightricks/LTX-2.3 \
+        ltx-2.3-22b-distilled-lora-384.safetensors \
+        --local-dir /opt/wan2gp/ckpts
+
+# Gemma-3 12B text encoder — from DeepBeepMeep/LTX-2, entire subfolder
+RUN huggingface-cli download DeepBeepMeep/LTX-2 \
+        --include "gemma-3-12b-it-qat-q4_0-unquantized/*" \
+        --local-dir /opt/wan2gp/ckpts
 
 # ── Runtime directories ────────────────────────────────────────────
 RUN mkdir -p /opt/wan2gp/outputs

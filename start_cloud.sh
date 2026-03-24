@@ -462,10 +462,33 @@ if [ "$START_WAN2GP" = "true" ]; then
     export WAN2GP_ROOT="/opt/wan2gp"
     export WAN2GP_OUTPUT="/opt/wan2gp/outputs"
     
-    # Verify Wan2GP is installed
+    # Detailed diagnostics for Wan2GP installation
+    log "Checking Wan2GP installation at $WAN2GP_ROOT..."
     if [ ! -d "$WAN2GP_ROOT" ]; then
-        log "ERROR: Wan2GP not found at $WAN2GP_ROOT. Cannot start Wan2GP backend."
-        log "Please ensure the container image includes Wan2GP installation."
+        log "ERROR: Wan2GP directory not found at $WAN2GP_ROOT."
+        log "This container image does not include Wan2GP installation."
+        log "Please rebuild the image using:"
+        log "  python client/comfyui-storage/build_and_push.py --build --push --hf-token <your-hf-token>"
+        exit 1
+    fi
+    
+    # Check for critical Wan2GP files/directories
+    WAN2GP_CHECK_FAILED=0
+    if [ ! -f "$WAN2GP_ROOT/run.py" ] && [ ! -f "$WAN2GP_ROOT/app.py" ] && [ ! -f "$WAN2GP_ROOT/main.py" ]; then
+        log "WARNING: Wan2GP directory exists but main entry point not found."
+        log "Expected one of: run.py, app.py, main.py in $WAN2GP_ROOT"
+        WAN2GP_CHECK_FAILED=1
+    fi
+    
+    if [ ! -d "$WAN2GP_ROOT/ckpts" ]; then
+        log "WARNING: Wan2GP checkpoints directory not found at $WAN2GP_ROOT/ckpts."
+        log "Models may not have been downloaded during build."
+        WAN2GP_CHECK_FAILED=1
+    fi
+    
+    if [ "$WAN2GP_CHECK_FAILED" = "1" ]; then
+        log "ERROR: Wan2GP installation is incomplete."
+        log "Please rebuild the image with proper HF_TOKEN for model downloads."
         exit 1
     fi
     
