@@ -10,6 +10,7 @@ comfyui-storage/qwen3_tts_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/temp_handler.py
 comfyui-storage/turbodiffusion_api_server.py
+comfyui-storage/verify_wan2gp.py
 config.py
 dgn_client.py
 exceptions.py
