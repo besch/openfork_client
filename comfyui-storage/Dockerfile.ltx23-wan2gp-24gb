@@ -18,13 +18,17 @@
 #   - CUDA 12.1 + PyTorch 2.4 keeps parity with other OpenFork images
 #   - ComfyUI is NOT installed — this image uses the Wan2GP Python library directly
 
-ARG CUDA_ARCHITECTURES="8.0;8.6;8.9"
+ARG CUDA_ARCHITECTURES="8.0;8.6"
 ARG HF_TOKEN
 
 FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
 
 ARG CUDA_ARCHITECTURES
 ARG HF_TOKEN
+
+# Compute capability notes:
+#   8.0 = A100  |  8.6 = RTX 30xx  |  8.9 = RTX 40xx (needs CUDA 12.4+, use separate build)
+#   Pass --build-arg CUDA_ARCHITECTURES="8.9" with a cuda:12.4 base for RTX 4090 support.
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV WAN2GP_ROOT=/opt/wan2gp
@@ -69,7 +73,8 @@ ENV MAX_JOBS="8"
 RUN git clone https://github.com/thu-ml/SageAttention.git /tmp/sageattention \
     && cd /tmp/sageattention \
     && pip3 install --no-build-isolation . \
-    && rm -rf /tmp/sageattention
+    && rm -rf /tmp/sageattention \
+    || echo "WARNING: SageAttention build failed (non-fatal — Wan2GP will use fallback attention)"
 
 # ── Pre-create directories ────────────────────────────────────────────────────
 RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
