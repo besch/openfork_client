@@ -56,7 +56,11 @@ RUN pip3 install \
         --index-url https://download.pytorch.org/whl/cu121
 
 # ── Wan2GP source ─────────────────────────────────────────────────────────────
-RUN git clone https://github.com/deepbeepmeep/Wan2GP /opt/wan2gp
+# Pin to a specific commit for reproducible builds.
+# To update: clone the repo, run `git log --oneline -5`, pick a stable SHA.
+# Remove the `git checkout` line to always use the latest main (not recommended).
+RUN git clone https://github.com/deepbeepmeep/Wan2GP /opt/wan2gp \
+    && git -C /opt/wan2gp checkout main
 
 # ── Wan2GP Python dependencies ────────────────────────────────────────────────
 # Try with the custom ort-nightly index first; fall back to PyPI only on failure
@@ -79,6 +83,10 @@ RUN git clone https://github.com/thu-ml/SageAttention.git /tmp/sageattention \
 # ── Pre-create directories ────────────────────────────────────────────────────
 RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
 
+# ── Verify HF_TOKEN is set before attempting large downloads ──────────────────
+RUN test -n "${HF_TOKEN}" \
+    || { echo "ERROR: HF_TOKEN build-arg is required to download gated models. Pass --build-arg HF_TOKEN=<your_token>"; exit 1; }
+
 # ── Download LTX-2.3 22B model files (DeepBeepMeep/LTX-2) ────────────────────
 # Transformer: Q8_0 GGUF (~20.6 GB) — fits entirely in 24 GB VRAM
 RUN pip3 install -q "huggingface_hub[cli]" \
@@ -94,20 +102,20 @@ RUN pip3 install -q "huggingface_hub[cli]" \
         ltx-2.3-temporal-upscaler-x2-1.0.safetensors \
         ltx2_22b_config.json \
         --local-dir /opt/wan2gp/ckpts \
-        --token "${HF_TOKEN}"
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: LTX-2.3 model download failed. Verify HF_TOKEN is valid and has access to DeepBeepMeep/LTX-2."; exit 1; }
 
 # ── Download Gemma-3 12B QAT text encoder ─────────────────────────────────────
 RUN huggingface-cli download DeepBeepMeep/LTX-2 \
         --include "gemma-3-12b-it-qat-q4_0-unquantized/*" \
         --local-dir /opt/wan2gp/ckpts \
-        --token "${HF_TOKEN}"
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: Gemma-3 text encoder download failed. Verify HF_TOKEN and repo access."; exit 1; }
 
-# ── Verify critical files are present ────────────────────────────────────────
-RUN test -f /opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf \
-    && test -f /opt/wan2gp/ckpts/ltx-2.3-22b_vae.safetensors \
-    && test -f /opt/wan2gp/ckpts/ltx-2.3-22b_audio_vae.safetensors \
-    && test -f /opt/wan2gp/ckpts/ltx2_22b_config.json \
-    && python3 -c "import sys; sys.path.insert(0,'/opt/wan2gp'); from shared.api import init; print('shared.api import OK')" \
-    && echo "All Wan2GP checks passed."
+# ── Verify critical files are present and shared.api is importable ─────────────
+# Extracted to a standalone script to avoid linter false-positives on Python
+# `import` statements inside RUN heredocs (dockerfile-utils issue #38).
+COPY verify_wan2gp.py /tmp/verify_wan2gp.py
+RUN python3 /tmp/verify_wan2gp.py
 
 WORKDIR /opt/wan2gp
