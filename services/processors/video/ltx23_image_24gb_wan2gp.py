@@ -11,7 +11,6 @@ directly to the Wan2GP session.
 import os
 import logging
 from typing import Optional
-from PIL import Image
 
 from config import DEV_MODE, SUPABASE_URL
 from services.processors.wan2gp_processor import Wan2GPProcessor
@@ -41,17 +40,11 @@ class LTX23ImageToVideo24GBWan2GPProcessor(Wan2GPProcessor):
             self._fail_job(f"Could not resolve start image for job {self.job_id}")
             return
 
-        try:
-            start_image = Image.open(image_path).convert("RGB")
-        except Exception as e:
-            self._fail_job(f"Failed to open start image for job {self.job_id}: {e}")
-            return
-
         settings = {
             "model_type": _MODEL_TYPE,
             "prompt": self.positive_prompt,
             "negative_prompt": self.negative_prompt,
-            "image_start": start_image,
+            "image_start": image_path,
             "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9")),
             "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
