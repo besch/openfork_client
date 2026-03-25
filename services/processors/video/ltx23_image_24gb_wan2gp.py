@@ -1,9 +1,9 @@
 """
 LTX-2.3 Image-to-Video Processor (Wan2GP backend - 24GB VRAM tier)
 
-Wan2GP accepts a PIL Image via the "image_start" settings key for I2V.
-No ComfyUI workflow is required; the image is loaded locally and passed
-directly to the Wan2GP session.
+Wan2GP requires BOTH "image_start" (file path) AND "image_prompt_type": "S"
+for I2V. Without "image_prompt_type" containing "S", validate_settings()
+explicitly sets image_start = None regardless of what was provided.
 
 24GB tier: Uses Q8_0 GGUF model (~20.6 GB) which fits entirely in 24GB VRAM.
 """
@@ -45,6 +45,7 @@ class LTX23ImageToVideo24GBWan2GPProcessor(Wan2GPProcessor):
             "prompt": self.positive_prompt,
             "negative_prompt": self.negative_prompt,
             "image_start": image_path,
+            "image_prompt_type": "S",  # Required: tells Wan2GP to use image_start for I2V
             "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9")),
             "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
