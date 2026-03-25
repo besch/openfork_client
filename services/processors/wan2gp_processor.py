@@ -52,29 +52,27 @@ def _get_session():
                     _torch.nn.Buffer = lambda data=None, persistent=True: data
 
                 # PyTorch < 2.2 compat: torch.unique not implemented for BFloat16.
-                # Wan2GP's RoPE cache builder calls it on BFloat16 position tensors.
-                # Monkey-patching torch.unique is unreliable — PyTorch's JIT overload
-                # dispatch resolves to the original via an internal closure, bypassing
-                # any module-attribute replacement.  Patch the source file instead,
-                # before shared.api (and therefore rope.py) is imported.
+                # rope.py has multiple call sites (lines 505, 653, …).  Replace ALL
+                # of them by appending a compat wrapper and rewriting every call site.
+                # The helper is appended so it runs after torch is already in scope;
+                # replacing call sites first avoids touching the helper itself.
                 _rope_py = os.path.join(
                     WAN2GP_ROOT, "models", "ltx2", "ltx_core",
                     "model", "transformer", "rope.py",
                 )
-                if os.path.isfile(_rope_py):
+                if os.path.isfile(_rope_py) and "_uniq_bf16_compat(" not in open(_rope_py).read():
                     with open(_rope_py) as _f:
                         _src = _f.read()
-                    _old = "axis_values = torch.unique(positions_mid[0, axis], sorted=True)"
-                    _new = (
-                        "_pmd = positions_mid[0, axis]; "
-                        "axis_values = torch.unique("
-                        "_pmd.float() if _pmd.dtype == torch.bfloat16 else _pmd, "
-                        "sorted=True).to(_pmd.dtype)"
+                    _src = _src.replace("torch.unique(", "_uniq_bf16_compat(")
+                    _src += (
+                        "\n\n# BFloat16 compatibility shim injected by OpenFork DGN client\n"
+                        "def _uniq_bf16_compat(t, **kw):\n"
+                        "    _t = t.float() if t.dtype == torch.bfloat16 else t\n"
+                        "    return torch.unique(_t, **kw).to(t.dtype)\n"
                     )
-                    if _old in _src:
-                        with open(_rope_py, "w") as _f:
-                            _f.write(_src.replace(_old, _new))
-                        logging.info("Patched Wan2GP rope.py for BFloat16 torch.unique")
+                    with open(_rope_py, "w") as _f:
+                        _f.write(_src)
+                    logging.info("Patched Wan2GP rope.py: all torch.unique calls wrapped for BFloat16")
 
                 if WAN2GP_ROOT not in sys.path:
                     sys.path.insert(0, WAN2GP_ROOT)
