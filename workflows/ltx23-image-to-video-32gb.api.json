@@ -31,7 +31,9 @@
         "strength_model": 0.2
       },
       "class_type": "LoraLoaderModelOnly",
-      "_meta": { "title": "Apply Distilled LoRA (strength=0.2 — adds speed without sacrificing I2V quality)" }
+      "_meta": {
+        "title": "Apply Distilled LoRA (strength=0.2 — adds speed without sacrificing I2V quality)"
+      }
     },
     "2": {
       "inputs": {
@@ -119,7 +121,9 @@
         "bypass_i2v": false
       },
       "class_type": "LTXVImgToVideoConditionOnly",
-      "_meta": { "title": "Image-to-Video Conditioning (start frame, strength=0.7)" }
+      "_meta": {
+        "title": "Image-to-Video Conditioning (start frame, strength=0.7)"
+      }
     },
     "9": {
       "inputs": {
@@ -156,7 +160,9 @@
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
-      "_meta": { "title": "Video Guider Parameters (cfg=4.5 for I2V, stronger guidance)" }
+      "_meta": {
+        "title": "Video Guider Parameters (cfg=4.5 for I2V, stronger guidance)"
+      }
     },
     "12": {
       "inputs": {
@@ -179,7 +185,9 @@
         "terminal": 0.1
       },
       "class_type": "LTXVScheduler",
-      "_meta": { "title": "LTX-V Scheduler — dev model: 15 steps, stretch=true" }
+      "_meta": {
+        "title": "LTX-V Scheduler — dev model: 15 steps, stretch=true"
+      }
     },
     "14": {
       "inputs": {

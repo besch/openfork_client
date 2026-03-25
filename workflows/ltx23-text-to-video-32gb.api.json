@@ -30,7 +30,9 @@
         "device": "cpu"
       },
       "class_type": "LTXAVTextEncoderLoader",
-      "_meta": { "title": "Load Gemma-3 12B FP4 Text Encoder (cpu — saves VRAM for 1024x576 activations)" }
+      "_meta": {
+        "title": "Load Gemma-3 12B FP4 Text Encoder (cpu — saves VRAM for 1024x576 activations)"
+      }
     },
     "3": {
       "inputs": {
@@ -65,7 +67,9 @@
         "batch_size": 1
       },
       "class_type": "EmptyLTXVLatentVideo",
-      "_meta": { "title": "Empty Video Latent (1024x576, 153 frames = ~6.4s @ 24fps)" }
+      "_meta": {
+        "title": "Empty Video Latent (1024x576, 153 frames = ~6.4s @ 24fps)"
+      }
     },
     "7": {
       "inputs": {
@@ -104,7 +108,9 @@
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
-      "_meta": { "title": "Audio Guider Parameters (cfg=3.0 max — above 5 breaks generation)" }
+      "_meta": {
+        "title": "Audio Guider Parameters (cfg=3.0 max — above 5 breaks generation)"
+      }
     },
     "11": {
       "inputs": {
@@ -119,7 +125,9 @@
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
-      "_meta": { "title": "Video Guider Parameters (skip_step=0 for video quality)" }
+      "_meta": {
+        "title": "Video Guider Parameters (skip_step=0 for video quality)"
+      }
     },
     "12": {
       "inputs": {
@@ -186,7 +194,9 @@
         "temporal_overlap": 64
       },
       "class_type": "VAEDecodeTiled",
-      "_meta": { "title": "Decode Video (Tiled VAE — tile_size=512 for 1024x576)" }
+      "_meta": {
+        "title": "Decode Video (Tiled VAE — tile_size=512 for 1024x576)"
+      }
     },
     "19": {
       "inputs": {
@@ -212,7 +222,9 @@
         "save_output": true
       },
       "class_type": "VHS_VideoCombine",
-      "_meta": { "title": "Save Video + Audio (yuv444p = full RGB 0-255, no color crush)" }
+      "_meta": {
+        "title": "Save Video + Audio (yuv444p = full RGB 0-255, no color crush)"
+      }
     }
   }
 }

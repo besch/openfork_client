@@ -399,7 +399,7 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
-      SERVICE_TYPE="ltx23-video-24gb"
+      SERVICE_TYPE="ltx23-video-24gb-wan2gp"
       log "Auto-selected Wan2GP backend (LTX-2.3 Audio-Video 24GB)"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
@@ -411,7 +411,7 @@ else
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
   # Wan2GP backend (LTX-2.3 Audio-Video 24GB)
-  if [[ "$SERVICE_TYPE" == *"wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"ltx23-video-24gb"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"wan2gp"* ]]; then
       START_WAN2GP="true"
       log "Wan2GP backend detected (LTX-2.3 Audio-Video)."
   fi

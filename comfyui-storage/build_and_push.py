@@ -36,15 +36,16 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.ltx23-16gb", "beschiak/openfork-ltx23-16gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.ltx23-24gb", "beschiak/openfork-ltx23-24gb:latest", build=True, push=True),
     ImageConfig("Dockerfile.ltx23-wan2gp-24gb", "beschiak/openfork-ltx23-wan2gp-24gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx23-16gb", "beschiak/openfork-ltx23-16gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx23-24gb", "beschiak/openfork-ltx23-24gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx23-32gb", "beschiak/openfork-ltx23-32gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-8gb", "beschiak/openfork-mmaudio-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-16gb", "beschiak/openfork-mmaudio-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.lavasr", "beschiak/openfork-lavasr:latest", build=True, push=True),
 ]
 
-PUSH_ATTEMPTS = 2
+PUSH_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 1200  # 20 minutes
 
 

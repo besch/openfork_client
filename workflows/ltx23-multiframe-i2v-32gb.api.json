@@ -14,7 +14,10 @@
     ],
     "scheduler": "dev model: 15 steps, max_shift=2.05, base_shift=0.95, stretch=true",
     "audio": "native audio+video generation in one pass",
-    "output": "VHS_VideoCombine with yuv444p"
+    "output": "VHS_VideoCombine with yuv444p",
+    "fixes": [
+      "NODE 29 & 30 (LatentFlip): flip_method 'x' -> 't' — 'x' flips spatially (horizontal mirror), 't' reverses temporal frame order which is required for the end-frame pinning trick to work"
+    ]
   },
   "prompt": {
     "1": {
@@ -119,7 +122,9 @@
         "bypass_i2v": false
       },
       "class_type": "LTXVImgToVideoConditionOnly",
-      "_meta": { "title": "Condition Start Frame (anchors first frame to start image)" }
+      "_meta": {
+        "title": "Condition Start Frame (anchors first frame to start image)"
+      }
     },
     "26": {
       "inputs": {
@@ -140,10 +145,12 @@
     "29": {
       "inputs": {
         "samples": ["23", 0],
-        "flip_method": "x"
+        "flip_method": "t"
       },
       "class_type": "LatentFlip",
-      "_meta": { "title": "Flip Latent Temporally (reverse frame order so end-frame node pins last frame)" }
+      "_meta": {
+        "title": "Flip Latent Temporally (flip_method='t' reverses frame order — FIXED from 'x' which was a spatial/horizontal mirror)"
+      }
     },
     "28": {
       "inputs": {
@@ -154,15 +161,19 @@
         "bypass_i2v": false
       },
       "class_type": "LTXVImgToVideoConditionOnly",
-      "_meta": { "title": "Condition End Frame (on reversed latent, so this pins the LAST frame)" }
+      "_meta": {
+        "title": "Condition End Frame (on reversed latent, so this pins the LAST frame)"
+      }
     },
     "30": {
       "inputs": {
         "samples": ["28", 0],
-        "flip_method": "x"
+        "flip_method": "t"
       },
       "class_type": "LatentFlip",
-      "_meta": { "title": "Flip Latent Back to Normal Temporal Order" }
+      "_meta": {
+        "title": "Flip Latent Back to Normal Temporal Order (flip_method='t' — FIXED from 'x')"
+      }
     },
     "9": {
       "inputs": {
@@ -170,7 +181,9 @@
         "audio_latent": ["8", 0]
       },
       "class_type": "LTXVConcatAVLatent",
-      "_meta": { "title": "Concat Audio+Video Latents (start+end conditioned video + empty audio)" }
+      "_meta": {
+        "title": "Concat Audio+Video Latents (start+end conditioned video + empty audio)"
+      }
     },
     "10": {
       "inputs": {

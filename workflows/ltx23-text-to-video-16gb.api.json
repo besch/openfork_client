@@ -17,7 +17,7 @@
       },
       "class_type": "LTXAVTextEncoderLoader",
       "_meta": {
-        "title": "Load Gemma-3 12B FP8 Text Encoder (cpu)"
+        "title": "Load Gemma-3 12B FP8 Scaled Text Encoder (cpu)"
       }
     },
     "3": {
@@ -32,7 +32,7 @@
     },
     "4": {
       "inputs": {
-        "text": "low quality, blurry, distorted, watermarks, text overlay, low contrast, washed out colors, desaturated, flat colors, overexposed, underexposed, jittery, flickering, artifacts",
+        "text": "worst quality, inconsistent motion, blurry, jittery, distorted, watermarks, low contrast, washed out colors, desaturated, overexposed, color banding, artifacts, noise, overbaked, oversaturated",
         "clip": ["2", 0]
       },
       "class_type": "CLIPTextEncode",
@@ -97,34 +97,34 @@
     "10": {
       "inputs": {
         "modality": "AUDIO",
-        "cfg": 7.0,
-        "stg": 1.0,
+        "cfg": 3.0,
+        "stg": 0.5,
         "perturb_attn": true,
         "rescale": 0.7,
-        "modality_scale": 3.0,
-        "skip_step": 0,
+        "modality_scale": 1.0,
+        "skip_step": 1,
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
       "_meta": {
-        "title": "Audio Guider Parameters"
+        "title": "Audio Guider Parameters (cfg=3.0 max — above 5 breaks generation per official docs)"
       }
     },
     "11": {
       "inputs": {
         "parameters": ["10", 0],
         "modality": "VIDEO",
-        "cfg": 4.5,
-        "stg": 1.0,
+        "cfg": 3.0,
+        "stg": 0.5,
         "perturb_attn": true,
         "rescale": 0.9,
-        "modality_scale": 3.0,
+        "modality_scale": 1.0,
         "skip_step": 0,
         "cross_attn": true
       },
       "class_type": "GuiderParameters",
       "_meta": {
-        "title": "Video Guider Parameters"
+        "title": "Video Guider Parameters (skip_step=0 for video quality)"
       }
     },
     "12": {
@@ -133,7 +133,7 @@
         "positive": ["5", 0],
         "negative": ["5", 1],
         "parameters": ["11", 0],
-        "skip_blocks": "19"
+        "skip_blocks": "28"
       },
       "class_type": "MultimodalGuider",
       "_meta": {
@@ -143,15 +143,15 @@
     "13": {
       "inputs": {
         "latent": ["9", 0],
-        "steps": 15,
-        "max_shift": 2.05,
-        "base_shift": 0.95,
-        "stretch": true,
+        "steps": 8,
+        "max_shift": 1.0,
+        "base_shift": 0.5,
+        "stretch": false,
         "terminal": 0.1
       },
       "class_type": "LTXVScheduler",
       "_meta": {
-        "title": "LTX-V Scheduler (15 steps, distilled)"
+        "title": "LTX-V Scheduler — distilled model: 8 steps, no stretch"
       }
     },
     "14": {
@@ -221,24 +221,21 @@
     "20": {
       "inputs": {
         "images": ["18", 0],
-        "fps": 24,
-        "audio": ["19", 0]
-      },
-      "class_type": "CreateVideo",
-      "_meta": {
-        "title": "Create Video"
-      }
-    },
-    "21": {
-      "inputs": {
-        "video": ["20", 0],
+        "audio": ["19", 0],
+        "frame_rate": 24,
+        "loop_count": 0,
         "filename_prefix": "ltx23_t2v_16gb",
-        "format": "auto",
-        "codec": "auto"
+        "format": "video/h264-mp4",
+        "pix_fmt": "yuv444p",
+        "crf": 18,
+        "save_metadata": true,
+        "trim_to_audio": true,
+        "pingpong": false,
+        "save_output": true
       },
-      "class_type": "SaveVideo",
+      "class_type": "VHS_VideoCombine",
       "_meta": {
-        "title": "Save Video"
+        "title": "Save Video + Audio (yuv444p = full RGB 0-255, no color crush)"
       }
     }
   }

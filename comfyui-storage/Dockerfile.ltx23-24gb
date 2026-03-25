@@ -1,23 +1,23 @@
-# LTX-2.3 22B Docker Image (24GB+ VRAM) — FIXED v2
+# LTX-2.3 22B Docker Image (24GB+ VRAM) — FIXED
 #
 # ROOT CAUSE OF COLOR DEGRADATION (confirmed from official docs.ltx.video):
 #   1. Audio CFG was 7.0 — official docs explicitly warn this BREAKS generation
 #   2. SamplerCustomAdvanced has no latent normalization — latents drift into
-#      oversaturation causing overbaked/crushed colors (LTXVNormalizingSampler fixes this)
+#      oversaturation causing overbaked/crushed colors
 #   3. pix_fmt yuv420p uses TV/limited color range (RGB 16-235), crushing output
 #
-# DOCKERFILE CHANGES FROM ORIGINAL:
-#   1. Gemma encoder: single merged fp4 file from Comfy-Org/ltx-2
+# DOCKERFILE FIXES vs original:
+#   1. Spatial upscaler: 1.0 -> 1.1 (v1.0 had known artifact/color-overlay bug, hotfixed by Lightricks)
+#   2. Gemma encoder: single merged fp4 file from Comfy-Org/ltx-2
 #      gemma_3_12B_it_fp4_mixed.safetensors -> models/text_encoders/
 #      (folder approach causes "invalid tokenizer" — SPieceTokenizer needs tokenizer.model
 #      which is absent from the google/gemma-3-12b-it-qat-q4_0-unquantized QAT repo)
-#   2. Removed broken gemma-configs COPY lines (not needed with single-file encoder)
+#   3. Removed broken gemma-configs/ COPY lines (not needed with single-file encoder)
 #
-# WORKFLOW JSON CHANGES (see ltx23-text-to-video-24gb_api_FIXED_v2.json):
+# WORKFLOW JSON CHANGES (see ltx23-text-to-video-24gb_api.json):
 #   - Audio CFG: 7.0 -> 3.0
 #   - Both modality_scale: 3.0 -> 1.0, skip_step audio: 0 -> 1 (official baseline)
 #   - Steps: 15 -> 8, max_shift/base_shift corrected for distilled schedule
-#   - SamplerCustomAdvanced -> LTXVNormalizingSampler (key color fix)
 #   - pix_fmt: yuv420p -> yuv444p
 #   - Negative prompt: was empty, now has quality terms
 
@@ -33,7 +33,6 @@ ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 ARG HF_TOKEN
 ENV HF_TOKEN=${HF_TOKEN}
 
-# System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
@@ -82,7 +81,6 @@ RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.
     && rm -rf /tmp/* /var/tmp/*
 
 RUN mkdir -p models/checkpoints \
-    models/clip \
     models/vae \
     models/loras \
     models/latent_upscale_models \
@@ -94,7 +92,7 @@ ENV LTX23_TIER=24gb
 # MODEL DOWNLOADS
 # ============================================================================
 
-# LTX-2.3 22B Distilled checkpoint (46.1GB BF16)
+# LTX-2.3 22B Distilled checkpoint (46.1GB BF16) — used by T2V workflows
 RUN echo "Downloading LTX-2.3 22B Distilled model (46.1GB)..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled.safetensors', \
@@ -103,27 +101,46 @@ RUN echo "Downloading LTX-2.3 22B Distilled model (46.1GB)..." && \
     rm -rf /tmp/ltx23 && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# LTX-2.3 Spatial Upscaler
-RUN echo "Downloading LTX-2.3 spatial upscaler..." && \
+# LTX-2.3 22B Dev checkpoint (46.1GB BF16) — used by I2V workflows (dev + distilled LoRA)
+RUN echo "Downloading LTX-2.3 22B Dev model (46.1GB)..." && \
     python -c "import os; from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-spatial-upscaler-x2-1.0.safetensors', \
+    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-dev.safetensors', \
+    local_dir='/tmp/ltx23dev', token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/ltx23dev/ltx-2.3-22b-dev.safetensors models/checkpoints/ && \
+    rm -rf /tmp/ltx23dev && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# Distilled LoRA — applied to dev model for I2V speed boost (strength=0.2)
+RUN echo "Downloading distilled LoRA..." && \
+    python -c "import os; from huggingface_hub import hf_hub_download; \
+    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-22b-distilled-lora-384.safetensors', \
+    local_dir='/tmp/lora', token=os.getenv('HF_TOKEN'))" && \
+    mv /tmp/lora/ltx-2.3-22b-distilled-lora-384.safetensors models/loras/ && \
+    rm -rf /tmp/lora && \
+    rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
+
+# LTX-2.3 Spatial Upscaler x2 v1.1
+# FIXED: was downloading v1.0 which had a known artifact/color-overlay bug (hotfixed by Lightricks)
+RUN echo "Downloading LTX-2.3 spatial upscaler v1.1..." && \
+    python -c "import os; from huggingface_hub import hf_hub_download; \
+    hf_hub_download(repo_id='Lightricks/LTX-2.3', filename='ltx-2.3-spatial-upscaler-x2-1.1.safetensors', \
     local_dir='/tmp/upscaler', token=os.getenv('HF_TOKEN'))" && \
-    mv /tmp/upscaler/ltx-2.3-spatial-upscaler-x2-1.0.safetensors models/latent_upscale_models/ && \
+    mv /tmp/upscaler/ltx-2.3-spatial-upscaler-x2-1.1.safetensors models/latent_upscale_models/ && \
     rm -rf /tmp/upscaler && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Gemma text encoder — single merged fp4 file from Comfy-Org
+# Gemma-3 12B FP4 Mixed text encoder — from Comfy-Org/ltx-2, into models/text_encoders/
 # LTXAVTextEncoderLoader requires a single merged safetensors, NOT a folder.
 # The HuggingFace multi-shard folder causes "invalid tokenizer" errors because
 # ComfyUI SPieceTokenizer cannot find tokenizer.model in the QAT repo.
-# Comfy-Org pre-merged and packaged the encoder specifically for this node.
-RUN echo "Downloading Gemma-3 12B fp4 merged encoder from Comfy-Org..." && \
-    python -c "import os; from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Comfy-Org/ltx-2', filename='split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors', local_dir='/tmp/gemma', token=os.getenv('HF_TOKEN'))" && \
+RUN echo "Downloading Gemma-3 12B FP4 Mixed encoder from Comfy-Org/ltx-2..." && \
+    python -c "import os; from huggingface_hub import hf_hub_download; \
+    hf_hub_download(repo_id='Comfy-Org/ltx-2', filename='split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors', \
+    local_dir='/tmp/gemma', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/gemma/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors models/text_encoders/ && \
     rm -rf /tmp/gemma && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
-# Final cleanup
 RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
     && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
     && rm -rf /root/.cache/* /tmp/* /var/tmp/* ~/.cache/*
