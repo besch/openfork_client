@@ -52,27 +52,45 @@ def _get_session():
                     _torch.nn.Buffer = lambda data=None, persistent=True: data
 
                 # PyTorch < 2.2 compat: torch.unique not implemented for BFloat16.
-                # rope.py has multiple call sites (lines 505, 653, …).  Replace ALL
-                # of them by appending a compat wrapper and rewriting every call site.
-                # The helper is appended so it runs after torch is already in scope;
-                # replacing call sites first avoids touching the helper itself.
+                # rope.py has multiple call sites.  Replace ALL of them with a compat
+                # wrapper appended to the file (appended so torch is in scope; replacing
+                # call sites first avoids touching the helper itself).
+                # When return_inverse/return_counts are True, torch.unique returns a
+                # tuple — only cast the first element (unique values) back to the
+                # original dtype; leave index tensors as-is.
                 _rope_py = os.path.join(
                     WAN2GP_ROOT, "models", "ltx2", "ltx_core",
                     "model", "transformer", "rope.py",
                 )
-                if os.path.isfile(_rope_py) and "_uniq_bf16_compat(" not in open(_rope_py).read():
+                _NEW_HELPER = (
+                    "\n\n# BFloat16 compat shim — OpenFork DGN client v2\n"
+                    "def _uniq_bf16_compat(t, **kw):\n"
+                    "    _t = t.float() if t.dtype == torch.bfloat16 else t\n"
+                    "    result = torch.unique(_t, **kw)\n"
+                    "    if isinstance(result, tuple):\n"
+                    "        return (result[0].to(t.dtype),) + result[1:]\n"
+                    "    return result.to(t.dtype)\n"
+                )
+                if os.path.isfile(_rope_py):
                     with open(_rope_py) as _f:
                         _src = _f.read()
-                    _src = _src.replace("torch.unique(", "_uniq_bf16_compat(")
-                    _src += (
-                        "\n\n# BFloat16 compatibility shim injected by OpenFork DGN client\n"
-                        "def _uniq_bf16_compat(t, **kw):\n"
-                        "    _t = t.float() if t.dtype == torch.bfloat16 else t\n"
-                        "    return torch.unique(_t, **kw).to(t.dtype)\n"
-                    )
-                    with open(_rope_py, "w") as _f:
-                        _f.write(_src)
-                    logging.info("Patched Wan2GP rope.py: all torch.unique calls wrapped for BFloat16")
+                    if "_uniq_bf16_compat(" not in _src:
+                        # First time: replace all call sites and append helper
+                        _src = _src.replace("torch.unique(", "_uniq_bf16_compat(")
+                        _src += _NEW_HELPER
+                        with open(_rope_py, "w") as _f:
+                            _f.write(_src)
+                        logging.info("Patched Wan2GP rope.py: wrapped all torch.unique calls for BFloat16")
+                    elif "OpenFork DGN client v2" not in _src:
+                        # Call sites already replaced but helper is the old broken version
+                        # (missing tuple handling) — strip old helper and append fixed one
+                        _old_marker = "\n\n# BFloat16 compatibility shim injected by OpenFork DGN client\n"
+                        if _old_marker in _src:
+                            _src = _src[: _src.find(_old_marker)]
+                        _src += _NEW_HELPER
+                        with open(_rope_py, "w") as _f:
+                            _f.write(_src)
+                        logging.info("Updated Wan2GP rope.py BFloat16 patch: fixed tuple return handling")
 
                 if WAN2GP_ROOT not in sys.path:
                     sys.path.insert(0, WAN2GP_ROOT)
