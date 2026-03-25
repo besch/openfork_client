@@ -43,6 +43,14 @@ def _get_session():
     if _session is None:
         with _session_lock:
             if _session is None:
+                # PyTorch < 2.4 compat: torch.nn.Buffer was added in 2.4 and is
+                # used by mmgp (Memory Management for the GPU Poor).  The shim
+                # returns the tensor unchanged — nn.Buffer's only role is to mark
+                # a tensor as a non-parameter buffer, which is safe to skip here.
+                import torch as _torch
+                if not hasattr(_torch.nn, "Buffer"):
+                    _torch.nn.Buffer = lambda data=None, persistent=True: data
+
                 if WAN2GP_ROOT not in sys.path:
                     sys.path.insert(0, WAN2GP_ROOT)
                 from shared.api import init  # noqa: PLC0415 — deferred import
