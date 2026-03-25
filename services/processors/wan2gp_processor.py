@@ -51,6 +51,25 @@ def _get_session():
                 if not hasattr(_torch.nn, "Buffer"):
                     _torch.nn.Buffer = lambda data=None, persistent=True: data
 
+                # PyTorch < 2.2 compat: torch.unique is not implemented for
+                # BFloat16.  Wan2GP's RoPE cache builder calls it on BFloat16
+                # position tensors.  Cast to float32, compute, cast back.
+                _orig_unique = _torch.unique
+                def _unique_bf16(input, sorted=True, return_inverse=False,
+                                 return_counts=False, dim=None,
+                                 _orig=_orig_unique):
+                    if input.dtype == _torch.bfloat16:
+                        result = _orig(input.float(), sorted=sorted,
+                                       return_inverse=return_inverse,
+                                       return_counts=return_counts, dim=dim)
+                        if isinstance(result, tuple):
+                            return (result[0].bfloat16(),) + result[1:]
+                        return result.bfloat16()
+                    return _orig(input, sorted=sorted,
+                                 return_inverse=return_inverse,
+                                 return_counts=return_counts, dim=dim)
+                _torch.unique = _unique_bf16
+
                 if WAN2GP_ROOT not in sys.path:
                     sys.path.insert(0, WAN2GP_ROOT)
                 from shared.api import init  # noqa: PLC0415 — deferred import
