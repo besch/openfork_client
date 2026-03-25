@@ -474,9 +474,9 @@ if [ "$START_WAN2GP" = "true" ]; then
     
     # Check for critical Wan2GP files/directories
     WAN2GP_CHECK_FAILED=0
-    if [ ! -f "$WAN2GP_ROOT/run.py" ] && [ ! -f "$WAN2GP_ROOT/app.py" ] && [ ! -f "$WAN2GP_ROOT/main.py" ]; then
-        log "WARNING: Wan2GP directory exists but main entry point not found."
-        log "Expected one of: run.py, app.py, main.py in $WAN2GP_ROOT"
+    if [ ! -f "$WAN2GP_ROOT/shared/api.py" ] && [ ! -f "$WAN2GP_ROOT/shared/api/__init__.py" ]; then
+        log "WARNING: Wan2GP shared.api module not found in $WAN2GP_ROOT/shared/."
+        log "The processor imports 'from shared.api import init' — this path is required."
         WAN2GP_CHECK_FAILED=1
     fi
     
