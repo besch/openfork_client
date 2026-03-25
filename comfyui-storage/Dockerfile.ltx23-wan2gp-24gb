@@ -1,4 +1,4 @@
-# OpenFork — LTX-2.3 22B Audio-Video on Wan2GP (24 GB VRAM)
+# OpenFork — LTX-2.3 22B Audio-Video on Wan2GP (multi-GPU)
 #
 # What this image provides:
 #   - Wan2GP (deepbeepmeep/Wan2GP) at /opt/wan2gp
@@ -9,26 +9,23 @@
 # Build:
 #   docker build \
 #     --build-arg HF_TOKEN=<token> \
-#     --build-arg CUDA_ARCHITECTURES="8.0;8.6;8.9" \
 #     -t beschiak/openfork-ltx23-wan2gp-24gb:latest \
 #     -f Dockerfile.ltx23-wan2gp-24gb .
 #
 # Notes:
 #   - HF_TOKEN is required to download from DeepBeepMeep/LTX-2 (gated repo)
-#   - CUDA 12.1 + PyTorch 2.4 keeps parity with other OpenFork images
+#   - CUDA 12.4 + PyTorch 2.5 cu124 wheel covers sm_75–sm_90 out of the box
 #   - ComfyUI is NOT installed — this image uses the Wan2GP Python library directly
 
-ARG CUDA_ARCHITECTURES="8.0;8.6"
 ARG HF_TOKEN
 
-FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
 
-ARG CUDA_ARCHITECTURES
 ARG HF_TOKEN
 
-# Compute capability notes:
-#   8.0 = A100  |  8.6 = RTX 30xx  |  8.9 = RTX 40xx (needs CUDA 12.4+, use separate build)
-#   Pass --build-arg CUDA_ARCHITECTURES="8.9" with a cuda:12.4 base for RTX 4090 support.
+# Supported GPU compute capabilities (via pre-built PyTorch cu124 wheel):
+#   7.5 = T4, RTX 20xx  |  8.0 = A100  |  8.6 = RTX 30xx, A10G
+#   8.9 = RTX 40xx, L40, L40S  |  9.0 = H100
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV WAN2GP_ROOT=/opt/wan2gp
@@ -48,17 +45,16 @@ RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.lis
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 RUN pip3 install --upgrade pip setuptools wheel
 
-# ── PyTorch (CUDA 12.1) ──────────────────────────────────────────────────────
+# ── PyTorch (CUDA 12.4) ──────────────────────────────────────────────────────
+# Pre-built cu124 wheel includes kernels for sm_75/8.0/8.6/8.9/9.0 —
+# no CUDA compilation needed at image build time.
 RUN pip3 install \
-        torch==2.4.0+cu121 \
-        torchvision==0.19.0+cu121 \
-        torchaudio==2.4.0+cu121 \
-        --index-url https://download.pytorch.org/whl/cu121
+        torch==2.5.1+cu124 \
+        torchvision==0.20.1+cu124 \
+        torchaudio==2.5.1+cu124 \
+        --index-url https://download.pytorch.org/whl/cu124
 
 # ── Wan2GP source ─────────────────────────────────────────────────────────────
-# Pin to a specific commit for reproducible builds.
-# To update: clone the repo, run `git log --oneline -5`, pick a stable SHA.
-# Remove the `git checkout` line to always use the latest main (not recommended).
 RUN git clone https://github.com/deepbeepmeep/Wan2GP /opt/wan2gp \
     && git -C /opt/wan2gp checkout main
 
@@ -68,17 +64,6 @@ RUN pip3 install \
         --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
         -r /opt/wan2gp/requirements.txt \
     || pip3 install -r /opt/wan2gp/requirements.txt
-
-# ── SageAttention (GPU-accelerated attention — compile against target arches) ─
-# FORCE_CUDA=1 + TORCH_CUDA_ARCH_LIST allows compilation without a live GPU.
-ENV TORCH_CUDA_ARCH_LIST="${CUDA_ARCHITECTURES}"
-ENV FORCE_CUDA="1"
-ENV MAX_JOBS="8"
-RUN git clone https://github.com/thu-ml/SageAttention.git /tmp/sageattention \
-    && cd /tmp/sageattention \
-    && pip3 install --no-build-isolation . \
-    && rm -rf /tmp/sageattention \
-    || echo "WARNING: SageAttention build failed (non-fatal — Wan2GP will use fallback attention)"
 
 # ── Pre-create directories ────────────────────────────────────────────────────
 RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
@@ -113,8 +98,6 @@ RUN huggingface-cli download DeepBeepMeep/LTX-2 \
     || { echo "ERROR: Gemma-3 text encoder download failed. Verify HF_TOKEN and repo access."; exit 1; }
 
 # ── Verify critical files are present and shared.api is importable ─────────────
-# Extracted to a standalone script to avoid linter false-positives on Python
-# `import` statements inside RUN heredocs (dockerfile-utils issue #38).
 COPY verify_wan2gp.py /tmp/verify_wan2gp.py
 RUN python3 /tmp/verify_wan2gp.py
 

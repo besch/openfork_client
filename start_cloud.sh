@@ -493,6 +493,55 @@ if [ "$START_WAN2GP" = "true" ]; then
     fi
     
     log "Wan2GP environment configured (WAN2GP_ROOT=$WAN2GP_ROOT)"
+
+    # ── GPU compute-capability check ─────────────────────────────────────────
+    # PyTorch cu121 (baked into the Docker image) omits sm_89 kernels, so
+    # RTX 40xx / L40 / L40S workers fail with "no kernel image" at inference.
+    # cu124 wheel covers: 7.5 (T4/20xx)  8.0 (A100)  8.6 (30xx/A10G)
+    #                     8.9 (40xx/L40/L40S)  9.0 (H100)
+    log "Checking GPU compute capability vs PyTorch CUDA arch support..."
+    GPU_SM_STATUS=$(python3 - <<'PYEOF' 2>/dev/null || echo "error 0.0"
+import torch
+cap = torch.cuda.get_device_capability()
+sm  = cap[0] * 10 + cap[1]
+arch_list = torch.cuda.get_arch_list()
+target = 'sm_%d' % sm
+if target in arch_list:
+    print('ok %d.%d' % cap)
+elif any('ptx' in a for a in arch_list):
+    print('ptx %d.%d' % cap)
+else:
+    print('missing %d.%d' % cap)
+PYEOF
+)
+    SM_STATE="${GPU_SM_STATUS%% *}"
+    SM_VER="${GPU_SM_STATUS##* }"
+    SM_NORM="${SM_VER/./}"
+    log "GPU sm_${SM_NORM}: arch check → ${SM_STATE}"
+
+    if [ "$SM_STATE" = "missing" ]; then
+        log "sm_${SM_NORM} not in PyTorch arch list — upgrading to cu124 (covers 7.5–9.0)..."
+        pip3 install \
+            "torch==2.5.1+cu124" \
+            "torchvision==0.20.1+cu124" \
+            "torchaudio==2.5.1+cu124" \
+            --index-url https://download.pytorch.org/whl/cu124 \
+            --quiet 2>&1 | tail -3 \
+            || log "WARNING: cu124 upgrade failed — generation will likely error on first job"
+        # Refresh CUDA library paths for the newly-installed PyTorch wheel
+        NEW_LD=$(python3 - <<'PYEOF' 2>/dev/null
+import site
+sp = site.getsitepackages()[0]
+parts = ['nvjitlink/lib', 'cusparse/lib', 'cublas/lib', 'cuda_runtime/lib']
+print(':'.join(sp + '/nvidia/' + p for p in parts))
+PYEOF
+)
+        [ -n "$NEW_LD" ] && export LD_LIBRARY_PATH="${NEW_LD}:${LD_LIBRARY_PATH}"
+        log "PyTorch cu124 upgrade complete."
+    elif [ "$SM_STATE" = "ptx" ]; then
+        log "WARNING: sm_${SM_NORM} only via PTX JIT — first inference will be slow (kernel compilation)."
+    fi
+    # ── end GPU check ────────────────────────────────────────────────────────
 fi
 
 # Start ComfyUI
