@@ -51,24 +51,30 @@ def _get_session():
                 if not hasattr(_torch.nn, "Buffer"):
                     _torch.nn.Buffer = lambda data=None, persistent=True: data
 
-                # PyTorch < 2.2 compat: torch.unique is not implemented for
-                # BFloat16.  Wan2GP's RoPE cache builder calls it on BFloat16
-                # position tensors.  Cast to float32, compute, cast back.
-                _orig_unique = _torch.unique
-                def _unique_bf16(input, sorted=True, return_inverse=False,
-                                 return_counts=False, dim=None,
-                                 _orig=_orig_unique):
-                    if input.dtype == _torch.bfloat16:
-                        result = _orig(input.float(), sorted=sorted,
-                                       return_inverse=return_inverse,
-                                       return_counts=return_counts, dim=dim)
-                        if isinstance(result, tuple):
-                            return (result[0].bfloat16(),) + result[1:]
-                        return result.bfloat16()
-                    return _orig(input, sorted=sorted,
-                                 return_inverse=return_inverse,
-                                 return_counts=return_counts, dim=dim)
-                _torch.unique = _unique_bf16
+                # PyTorch < 2.2 compat: torch.unique not implemented for BFloat16.
+                # Wan2GP's RoPE cache builder calls it on BFloat16 position tensors.
+                # Monkey-patching torch.unique is unreliable — PyTorch's JIT overload
+                # dispatch resolves to the original via an internal closure, bypassing
+                # any module-attribute replacement.  Patch the source file instead,
+                # before shared.api (and therefore rope.py) is imported.
+                _rope_py = os.path.join(
+                    WAN2GP_ROOT, "models", "ltx2", "ltx_core",
+                    "model", "transformer", "rope.py",
+                )
+                if os.path.isfile(_rope_py):
+                    with open(_rope_py) as _f:
+                        _src = _f.read()
+                    _old = "axis_values = torch.unique(positions_mid[0, axis], sorted=True)"
+                    _new = (
+                        "_pmd = positions_mid[0, axis]; "
+                        "axis_values = torch.unique("
+                        "_pmd.float() if _pmd.dtype == torch.bfloat16 else _pmd, "
+                        "sorted=True).to(_pmd.dtype)"
+                    )
+                    if _old in _src:
+                        with open(_rope_py, "w") as _f:
+                            _f.write(_src.replace(_old, _new))
+                        logging.info("Patched Wan2GP rope.py for BFloat16 torch.unique")
 
                 if WAN2GP_ROOT not in sys.path:
                     sys.path.insert(0, WAN2GP_ROOT)
