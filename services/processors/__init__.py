@@ -16,17 +16,8 @@ from .video.hunyuan_text import HunyuanTextToVideoJobProcessor
 from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
 from .video.ltx2_text import LTX2TextToVideoJobProcessor
 from .video.ltx2_image import LTX2ImageToVideoJobProcessor
-from .video.ltx23_text import LTX23TextToVideoJobProcessor
-from .video.ltx23_image import LTX23ImageToVideoJobProcessor
-from .video.ltx23_text_16gb import LTX23TextToVideo16GBJobProcessor
-from .video.ltx23_image_16gb import LTX23ImageToVideo16GBJobProcessor
-from .video.ltx23_text_32gb import LTX23TextToVideo32GBJobProcessor
-from .video.ltx23_image_32gb import LTX23ImageToVideo32GBJobProcessor
-from .video.ltx23_text_24gb import LTX23TextToVideo24GBJobProcessor
-from .video.ltx23_image_24gb import LTX23ImageToVideo24GBJobProcessor
-from .video.ltx23_text_24gb_wan2gp import LTX23TextToVideo24GBWan2GPProcessor
-from .video.ltx23_image_24gb_wan2gp import LTX23ImageToVideo24GBWan2GPProcessor
-from .video.ltx23_multiframe_32gb import LTX23MultiFrameImageToVideo32GBJobProcessor
+from .video.ltx23_text import LTX23TextToVideoWan2GPProcessor
+from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
 from .video.diagdistill import DiagDistillJobProcessor
@@ -67,17 +58,8 @@ __all__ = [
     "HunyuanImageToVideoJobProcessor",
     "LTX2TextToVideoJobProcessor",
     "LTX2ImageToVideoJobProcessor",
-    "LTX23TextToVideoJobProcessor",
-    "LTX23ImageToVideoJobProcessor",
-    "LTX23TextToVideo16GBJobProcessor",
-    "LTX23ImageToVideo16GBJobProcessor",
-    "LTX23TextToVideo32GBJobProcessor",
-    "LTX23ImageToVideo32GBJobProcessor",
-    "LTX23TextToVideo24GBJobProcessor",
-    "LTX23ImageToVideo24GBJobProcessor",
-    "LTX23TextToVideo24GBWan2GPProcessor",
-    "LTX23ImageToVideo24GBWan2GPProcessor",
-    "LTX23MultiFrameImageToVideo32GBJobProcessor",
+    "LTX23TextToVideoWan2GPProcessor",
+    "LTX23ImageToVideoWan2GPProcessor",
     "VideoUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",

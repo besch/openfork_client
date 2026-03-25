@@ -399,7 +399,7 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
-      SERVICE_TYPE="ltx23-video-24gb-wan2gp"
+      SERVICE_TYPE="ltx23-video-24gb"
       log "Auto-selected Wan2GP backend (LTX-2.3 Audio-Video 24GB)"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
@@ -410,10 +410,10 @@ else
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
-  # Wan2GP backend (LTX-2.3 Audio-Video 24GB)
-  if [[ "$SERVICE_TYPE" == *"wan2gp"* ]]; then
+  # Wan2GP backend for all LTX-2.3 Audio-Video services
+  if [[ "$SERVICE_TYPE" == *"ltx23"* ]]; then
       START_WAN2GP="true"
-      log "Wan2GP backend detected (LTX-2.3 Audio-Video)."
+      log "LTX-2.3 service requested. Using Wan2GP backend."
   fi
 fi
 
@@ -504,24 +504,6 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
-      ;;
-    *ltx23*16gb*)
-      log "Applying LTX-2.3 16GB VRAM optimizations (46GB model via CPU offloading)"
-      # LTX-2.3 22B is 46GB; use --lowvram + pytorch cross-attention for best performance
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention --cache-none"
-      ;;
-    *ltx23*32gb*)
-      log "Applying LTX-2.3 32GB VRAM optimizations (1024x576 HD, 153 frames)"
-      # 32GB gives more activation budget than 24GB — use --lowvram instead of --novram
-      # so ComfyUI can keep more chunks in VRAM for faster inference at higher resolution.
-      # reserve-vram 2.0 leaves headroom for activation tensors during 1024x576 forward passes.
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 2.0 --use-split-cross-attention"
-      ;;
-    *ltx23*24gb*)
-      log "Applying LTX-2.3 24GB VRAM optimizations (BF16 full model + distilled LoRA)"
-      # Match the Dockerfile defaults for the 24GB tier so we do not fall back to generic
-      # lowvram behavior for this audio-video workflow.
-      COMFY_FLAGS="$COMFY_FLAGS --novram --reserve-vram 2.0 --use-split-cross-attention"
       ;;
     *ltx2*-16gb*|*16gb*)
       log "Applying 16GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"

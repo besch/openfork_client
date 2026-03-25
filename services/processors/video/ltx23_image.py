@@ -18,12 +18,11 @@ from utils.comfyui_workflow_utils import materialize_start_image
 _MODEL_TYPE = "ltx2_22B"
 _DEFAULT_STEPS = 8
 _DEFAULT_CFG = 3.0
-_VIDEO_LENGTH = 121   # ~5 s @ 24 fps
 _FPS = 24
 
 
-class LTX23ImageToVideoJobProcessor(Wan2GPProcessor):
-    """LTX-2.3 image-to-video via Wan2GP."""
+class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
+    """LTX-2.3 image-to-video via Wan2GP (Supports multiple tiers dynamically)."""
 
     def process(self):
         if DEV_MODE:
@@ -34,6 +33,25 @@ class LTX23ImageToVideoJobProcessor(Wan2GPProcessor):
             return
 
         inputs = self.job.get("inputs", {})
+        service_type = self.job.get("service_type", "")
+        
+        # Determine dynamic constraints based on the service tier
+        if "16gb" in service_type:
+            duration_max = 5
+            duration_default = 4
+        elif "32gb" in service_type:
+            duration_max = 10
+            duration_default = 7
+        else:
+            # 24GB fallback
+            duration_max = 7
+            duration_default = 5
+
+        # Calculate exact frame count based on requested duration
+        requested_duration = float(inputs.get("duration", duration_default))
+        duration = max(1.0, min(requested_duration, float(duration_max)))
+        video_length = int(duration * _FPS) + 1
+
         image_path = self._resolve_start_image(inputs)
         if not image_path:
             self._fail_job(f"Could not resolve start image for job {self.job_id}")
@@ -45,15 +63,21 @@ class LTX23ImageToVideoJobProcessor(Wan2GPProcessor):
             self._fail_job(f"Failed to open start image for job {self.job_id}: {e}")
             return
 
+        # Handle image_prompt_type dynamically based on settings
+        image_prompt_type = "S"
+        if "image_prompt_type" in inputs:
+            image_prompt_type = inputs["image_prompt_type"]
+
         settings = {
             "model_type": _MODEL_TYPE,
             "prompt": self.positive_prompt,
             "negative_prompt": self.negative_prompt,
             "image_start": start_image,
+            "image_prompt_type": image_prompt_type,
             "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9")),
             "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
-            "video_length": _VIDEO_LENGTH,
+            "video_length": video_length,
             "force_fps": _FPS,
         }
 
