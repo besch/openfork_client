@@ -458,19 +458,58 @@ if [ "$START_WAN2GP" = "true" ]; then
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires CUDA compute
-    # capability 8.9+ (Ada Lovelace / Hopper).  Running on CC 8.6 or older GPUs
-    # (RTX 3080 Ti, A4000, A100 …) crashes with "no kernel image available".
-    GPU_CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 || echo "0.0")
-    GPU_CC_MAJOR=$(echo "$GPU_CC" | cut -d. -f1)
-    GPU_CC_MINOR=$(echo "$GPU_CC" | cut -d. -f2)
-    log "GPU compute capability: ${GPU_CC}"
-    if [ "$GPU_CC_MAJOR" -lt 8 ] || { [ "$GPU_CC_MAJOR" -eq 8 ] && [ "$GPU_CC_MINOR" -lt 9 ]; }; then
-        log "ERROR: LTX-2.3 requires compute capability 8.9+ (detected: ${GPU_CC})."
-        log "Supported GPUs: RTX 4090/4080/4070, RTX 4000/5000 Ada, L40S, H100, H200."
-        log "FP8 Gemma 3 encoder cannot run on CC ${GPU_CC}. Aborting."
-        exit 1
-    fi
+    # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires:
+    #   1. CC >= 8.9 for FP8 support (RTX 40xx / Ada Lovelace, Hopper)
+    #   2. The GPU's SM version must be in this PyTorch build's arch list.
+    #      Blackwell GPUs (RTX 5060 Ti = SM 12.0) crash with "no kernel image"
+    #      if PyTorch was compiled only up to SM 9.0.
+    # Use Python (which has the actual PyTorch build info) rather than a raw CC check.
+    WAN2GP_GPU_CHECK=$("$PYTHON_EXE" -c "
+import sys
+try:
+    import torch
+    if not torch.cuda.is_available():
+        print('NO_CUDA')
+        sys.exit(0)
+    major, minor = torch.cuda.get_device_capability()
+    cc_str = 'sm_{}{}'.format(major, minor)
+    gpu_name = torch.cuda.get_device_name(0)
+    supported = torch.cuda.get_arch_list()
+    if cc_str not in supported:
+        print('UNSUPPORTED:{}:{}'.format(major, minor, gpu_name))
+    elif major < 8 or (major == 8 and minor < 9):
+        print('NO_FP8:{}.{}'.format(major, minor))
+    else:
+        print('OK:{}.{}:{}'.format(major, minor, gpu_name))
+except Exception as e:
+    print('ERROR:{}'.format(e))
+" 2>/dev/null || echo "CHECK_FAILED")
+
+    case "$WAN2GP_GPU_CHECK" in
+        OK:*)
+            _cc="${WAN2GP_GPU_CHECK#OK:}"
+            log "GPU ${_cc} — compute capability and PyTorch arch OK for LTX-2.3."
+            ;;
+        NO_FP8:*)
+            _cc="${WAN2GP_GPU_CHECK#NO_FP8:}"
+            log "ERROR: LTX-2.3 requires compute capability 8.9+ for FP8 (detected: ${_cc})."
+            log "Supported GPUs: RTX 4090/4080/4070, RTX 4000/5000 Ada, L40S, H100, H200."
+            exit 1
+            ;;
+        UNSUPPORTED:*)
+            _cc=$(echo "$WAN2GP_GPU_CHECK" | cut -d: -f2-3)
+            log "ERROR: GPU CC ${_cc} is not supported by the installed PyTorch build."
+            log "Rebuild the Docker image with a PyTorch version that supports this GPU,"
+            log "or use a supported GPU: RTX 4090/4080/4070, L40S, H100."
+            exit 1
+            ;;
+        NO_CUDA)
+            log "WARNING: No CUDA device detected — skipping GPU CC check."
+            ;;
+        *)
+            log "WARNING: GPU compatibility check failed (${WAN2GP_GPU_CHECK}) — proceeding anyway."
+            ;;
+    esac
 
     # Set Wan2GP environment variables
     export WAN2GP_ROOT="/opt/wan2gp"

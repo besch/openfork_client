@@ -43,13 +43,26 @@ def _get_session():
     if _session is None:
         with _session_lock:
             if _session is None:
-                # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires
-                # CUDA compute capability 8.9+ (Ada Lovelace / Hopper).
-                # Check early so the error is clear and the job fails immediately
-                # rather than crashing inside Wan2GP after model loading.
+                # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires:
+                #   1. CC >= 8.9 (Ada Lovelace / Hopper) for FP8 tensor-core support
+                #   2. The GPU's SM version must be in this PyTorch build's arch list.
+                #      Newer GPUs (e.g. RTX 5060 Ti SM 12.0 / Blackwell) crash with
+                #      "no kernel image available" if PyTorch was compiled for SM <= 9.0.
                 import torch as _torch_cc
                 if _torch_cc.cuda.is_available():
                     _cc_major, _cc_minor = _torch_cc.cuda.get_device_capability()
+                    _cc_str = f"sm_{_cc_major}{_cc_minor}"
+                    _gpu_name = _torch_cc.cuda.get_device_name(0)
+                    _supported = _torch_cc.cuda.get_arch_list()
+                    if _cc_str not in _supported:
+                        raise RuntimeError(
+                            f"GPU '{_gpu_name}' (CC {_cc_major}.{_cc_minor} / {_cc_str}) "
+                            f"is not supported by this PyTorch build "
+                            f"(compiled for: {', '.join(_supported)}). "
+                            f"Rebuild the Docker image with a PyTorch version that "
+                            f"includes {_cc_str} support, or use a supported GPU: "
+                            f"RTX 4090/4080/4070, L40S, H100."
+                        )
                     if _cc_major < 8 or (_cc_major == 8 and _cc_minor < 9):
                         raise RuntimeError(
                             f"LTX-2.3 requires CUDA compute capability 8.9+ "
@@ -58,7 +71,7 @@ def _get_session():
                             f"L40S, H100, H200. "
                             f"FP8 Gemma 3 encoder cannot run on CC {_cc_major}.{_cc_minor}."
                         )
-                    logging.info(f"GPU compute capability {_cc_major}.{_cc_minor} — FP8 OK")
+                    logging.info(f"GPU '{_gpu_name}' CC {_cc_major}.{_cc_minor} — FP8 and PyTorch arch OK")
 
                 # PyTorch < 2.4 compat: torch.nn.Buffer was added in 2.4 and is
                 # used by mmgp (Memory Management for the GPU Poor).  The shim

@@ -36,7 +36,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-8gb", "beschiak/openfork-ltx2-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx23-wan2gp-24gb", "beschiak/openfork-ltx23-wan2gp-24gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True),
     # Redundant tier-specific images (Consolidated into -24gb)
     # ImageConfig("Dockerfile.ltx23-16gb", "beschiak/openfork-ltx23-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-24gb", "beschiak/openfork-ltx23-24gb:latest", build=True, push=True),
