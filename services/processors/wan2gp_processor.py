@@ -43,6 +43,23 @@ def _get_session():
     if _session is None:
         with _session_lock:
             if _session is None:
+                # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires
+                # CUDA compute capability 8.9+ (Ada Lovelace / Hopper).
+                # Check early so the error is clear and the job fails immediately
+                # rather than crashing inside Wan2GP after model loading.
+                import torch as _torch_cc
+                if _torch_cc.cuda.is_available():
+                    _cc_major, _cc_minor = _torch_cc.cuda.get_device_capability()
+                    if _cc_major < 8 or (_cc_major == 8 and _cc_minor < 9):
+                        raise RuntimeError(
+                            f"LTX-2.3 requires CUDA compute capability 8.9+ "
+                            f"(this GPU: {_cc_major}.{_cc_minor}). "
+                            f"Supported: RTX 4090/4080/4070, RTX 4000/5000 Ada, "
+                            f"L40S, H100, H200. "
+                            f"FP8 Gemma 3 encoder cannot run on CC {_cc_major}.{_cc_minor}."
+                        )
+                    logging.info(f"GPU compute capability {_cc_major}.{_cc_minor} — FP8 OK")
+
                 # PyTorch < 2.4 compat: torch.nn.Buffer was added in 2.4 and is
                 # used by mmgp (Memory Management for the GPU Poor).  The shim
                 # returns the tensor unchanged — nn.Buffer's only role is to mark
