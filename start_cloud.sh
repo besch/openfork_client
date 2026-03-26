@@ -457,7 +457,21 @@ if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
-    
+
+    # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires CUDA compute
+    # capability 8.9+ (Ada Lovelace / Hopper).  Running on CC 8.6 or older GPUs
+    # (RTX 3080 Ti, A4000, A100 …) crashes with "no kernel image available".
+    GPU_CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 || echo "0.0")
+    GPU_CC_MAJOR=$(echo "$GPU_CC" | cut -d. -f1)
+    GPU_CC_MINOR=$(echo "$GPU_CC" | cut -d. -f2)
+    log "GPU compute capability: ${GPU_CC}"
+    if [ "$GPU_CC_MAJOR" -lt 8 ] || { [ "$GPU_CC_MAJOR" -eq 8 ] && [ "$GPU_CC_MINOR" -lt 9 ]; }; then
+        log "ERROR: LTX-2.3 requires compute capability 8.9+ (detected: ${GPU_CC})."
+        log "Supported GPUs: RTX 4090/4080/4070, RTX 4000/5000 Ada, L40S, H100, H200."
+        log "FP8 Gemma 3 encoder cannot run on CC ${GPU_CC}. Aborting."
+        exit 1
+    fi
+
     # Set Wan2GP environment variables
     export WAN2GP_ROOT="/opt/wan2gp"
     export WAN2GP_OUTPUT="/opt/wan2gp/outputs"
