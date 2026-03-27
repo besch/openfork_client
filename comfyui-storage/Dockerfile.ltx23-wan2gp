@@ -9,8 +9,8 @@
 # Build:
 #   docker build \
 #     --build-arg HF_TOKEN=<token> \
-#     -t beschiak/openfork-ltx23-wan2gp-24gb:latest \
-#     -f Dockerfile.ltx23-wan2gp-24gb .
+#     -t beschiak/openfork-ltx23-wan2gp:latest \
+#     -f Dockerfile.ltx23-wan2gp .
 #
 # Notes:
 #   - HF_TOKEN is required to download from DeepBeepMeep/LTX-2 (gated repo)
@@ -65,6 +65,16 @@ RUN pip3 install \
         --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
         -r /opt/wan2gp/requirements.txt \
     || pip3 install -r /opt/wan2gp/requirements.txt
+
+# ── Re-pin PyTorch cu128 (wan2gp requirements.txt may downgrade it) ──────────
+# Wan2GP's requirements.txt can overwrite the cu128 build with a cpu/cu118 wheel
+# that lacks sm_89 in get_arch_list(), causing the GPU CC check to fail at startup.
+# Re-installing after requirements ensures the correct cu128 build is active.
+RUN pip3 install \
+        torch==2.7.0+cu128 \
+        torchvision==0.22.0+cu128 \
+        torchaudio==2.7.0+cu128 \
+        --index-url https://download.pytorch.org/whl/cu128
 
 # ── Pre-create directories ────────────────────────────────────────────────────
 RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
