@@ -476,7 +476,7 @@ try:
     gpu_name = torch.cuda.get_device_name(0)
     supported = torch.cuda.get_arch_list()
     if cc_str not in supported:
-        print('UNSUPPORTED:{}:{}'.format(major, minor, gpu_name))
+        print('UNSUPPORTED:{}:{}:{}'.format(major, minor, gpu_name))
     elif major < 8 or (major == 8 and minor < 9):
         print('NO_FP8:{}.{}'.format(major, minor))
     else:
@@ -498,7 +498,8 @@ except Exception as e:
             ;;
         UNSUPPORTED:*)
             _cc=$(echo "$WAN2GP_GPU_CHECK" | cut -d: -f2-3)
-            log "ERROR: GPU CC ${_cc} is not supported by the installed PyTorch build."
+            _gpu=$(echo "$WAN2GP_GPU_CHECK" | cut -d: -f4-)
+            log "ERROR: GPU '${_gpu}' (CC ${_cc}) is not supported by the installed PyTorch build."
             log "Rebuild the Docker image with a PyTorch version that supports this GPU,"
             log "or use a supported GPU: RTX 4090/4080/4070, L40S, H100."
             exit 1
