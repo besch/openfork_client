@@ -74,7 +74,7 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             "negative_prompt": self.negative_prompt,
             "image_start": start_image,
             "image_prompt_type": image_prompt_type,
-            "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9")),
+            "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9"), service_type),
             "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
             "video_length": video_length,

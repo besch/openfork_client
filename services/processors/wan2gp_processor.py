@@ -33,6 +33,17 @@ _ASPECT_RESOLUTIONS = {
     "2:1":  "1280x640",
 }
 
+# Lower resolution for 16GB tier (reduces VRAM by ~55% vs 720p)
+_ASPECT_RESOLUTIONS_16GB = {
+    "16:9": "768x432",
+    "9:16": "432x768",
+    "1:1":  "640x640",
+    "4:3":  "640x480",
+    "3:4":  "480x640",
+    "21:9": "768x320",
+    "2:1":  "768x384",
+}
+
 _session = None
 _session_lock = threading.Lock()
 
@@ -136,7 +147,9 @@ class Wan2GPProcessor(BaseJobProcessor):
     MAX_GENERATION_SECONDS = 7200  # 2 hours
 
     @staticmethod
-    def aspect_to_resolution(aspect_ratio: str) -> str:
+    def aspect_to_resolution(aspect_ratio: str, vram_tier: str = "") -> str:
+        if "16gb" in vram_tier:
+            return _ASPECT_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
         return _ASPECT_RESOLUTIONS.get(aspect_ratio, "1280x720")
 
     def _run_task(self, settings: dict) -> list:

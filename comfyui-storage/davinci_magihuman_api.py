@@ -28,7 +28,6 @@ Endpoints:
 import gc
 import logging
 import os
-import queue
 import shutil
 import sys
 import threading
@@ -74,7 +73,7 @@ _jobs: dict = {}
 _jobs_lock = threading.Lock()
 
 # Serialize inference (one job at a time — GPU is fully saturated)
-_inference_queue: queue.Queue = queue.Queue(maxsize=1)
+_inference_semaphore = threading.Semaphore(1)
 _pipeline = None
 _pipeline_lock = threading.Lock()
 
@@ -161,6 +160,7 @@ def _run_t2v(job_id: str, prompt: str, negative_prompt: str,
              duration_seconds: float, height: int, width: int,
              num_steps: int, seed: int, use_distilled: bool):
     """Run T2V inference in background thread."""
+    _inference_semaphore.acquire()
     try:
         _set_job(job_id, status="processing")
         pipeline = _load_pipeline()
@@ -196,6 +196,7 @@ def _run_t2v(job_id: str, prompt: str, negative_prompt: str,
         logger.error("T2V [%s] failed: %s", job_id, exc, exc_info=True)
         _set_job(job_id, status="failed", error=str(exc))
     finally:
+        _inference_semaphore.release()
         # Release GPU cache between jobs
         torch.cuda.empty_cache()
         gc.collect()
@@ -205,6 +206,7 @@ def _run_i2v(job_id: str, image_path: str, prompt: str, negative_prompt: str,
              duration_seconds: float, height: int, width: int,
              num_steps: int, seed: int, use_distilled: bool):
     """Run I2V inference in background thread."""
+    _inference_semaphore.acquire()
     try:
         _set_job(job_id, status="processing")
         pipeline = _load_pipeline()
@@ -244,6 +246,7 @@ def _run_i2v(job_id: str, image_path: str, prompt: str, negative_prompt: str,
         logger.error("I2V [%s] failed: %s", job_id, exc, exc_info=True)
         _set_job(job_id, status="failed", error=str(exc))
     finally:
+        _inference_semaphore.release()
         if os.path.exists(image_path):
             try:
                 os.remove(image_path)

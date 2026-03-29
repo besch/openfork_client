@@ -391,13 +391,21 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
-      SERVICE_TYPE="ltx23-video-24gb"
-      log "Auto-selected Wan2GP backend (LTX-2.3 Audio-Video 24GB)"
+      if [ "$TOTAL_VRAM_MB" -gt 28000 ]; then
+          SERVICE_TYPE="ltx23-video-32gb"
+          log "Auto-selected LTX-2.3 32GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -gt 18000 ]; then
+          SERVICE_TYPE="ltx23-video-24gb"
+          log "Auto-selected LTX-2.3 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="ltx23-video-16gb"
+          log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/app/davinci_magihuman_api.py" ]; then
       log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman service."
       START_DAVINCI="true"
-      SERVICE_TYPE="davinci-magihuman"
-      log "Auto-selected daVinci-MagiHuman (avatar video+audio, 40GB VRAM)"
+      SERVICE_TYPE="davinci-magihuman-48gb"
+      log "Auto-selected daVinci-MagiHuman (avatar video+audio, 40GB+ VRAM)"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
