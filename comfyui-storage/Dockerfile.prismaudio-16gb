@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1.4
+# Prism Audio (PRiSM) 16GB Docker Image
+# High-performance video-to-audio generation with Multi-dimensional CoT
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-distutils \
+    curl git wget ffmpeg libsm6 libxext6 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+# Clone PRiSM repo (ThinkSound branch prismaudio)
+RUN git clone -b prismaudio https://github.com/liuhuadai/ThinkSound.git /app \
+    && rm -rf .git
+
+# Install Python dependencies
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+    torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install --no-cache-dir \
+    transformers accelerate diffusers peft \
+    gradio opencv-python imageio imageio-ffmpeg \
+    librosa soundfile scipy \
+    fastapi uvicorn[standard] python-multipart huggingface_hub
+
+# Create directories
+RUN mkdir -p /app/input /app/output /app/ckpts
+
+# Download model weights
+ARG HF_TOKEN
+RUN HF_TOKEN=$HF_TOKEN python -c "\
+from huggingface_hub import snapshot_download; \
+import os; \
+os.makedirs('/app/ckpts', exist_ok=True); \
+snapshot_download('FunAudioLLM/PrismAudio', local_dir='/app/ckpts'); \
+print('PRiSM weights downloaded successfully')" \
+    && rm -rf ~/.cache/pip
+
+# Copy the API script locally
+COPY prismaudio_api.py /app/prismaudio_api.py
+
+# Expose API port
+EXPOSE 8000
+
+# Run the API server
+ENV HF_HUB_OFFLINE=1
+CMD ["/bin/bash", "-c", "curl -s -L -o prismaudio_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/prismaudio_api.py && python prismaudio_api.py"]

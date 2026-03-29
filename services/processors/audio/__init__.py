@@ -8,6 +8,7 @@ from .chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProces
 from .qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
 from .mmaudio import MMAudioJobProcessor
 from .lavasr import LavaSRJobProcessor
+from .prismaudio import PrismAudioJobProcessor
 
 __all__ = [
     "StableAudioJobProcessor",
@@ -22,5 +23,6 @@ __all__ = [
     "Qwen3VoiceCloneJobProcessor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
+    "PrismAudioJobProcessor",
 ]
 

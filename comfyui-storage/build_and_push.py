@@ -24,7 +24,7 @@ class ImageConfig:
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-image-8gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.qwen-turbo-8 ngb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.heartmula-16gb", "beschiak/openfork-heartmula-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.heartmula-24gb", "beschiak/openfork-heartmula-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb:latest", build=True, build_args={"MODEL_SIZE": "0.6B"}),
@@ -44,6 +44,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.mmaudio-8gb", "beschiak/openfork-mmaudio-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-16gb", "beschiak/openfork-mmaudio-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.lavasr", "beschiak/openfork-lavasr:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.prismaudio-8gb", "beschiak/openfork-prismaudio-8gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.prismaudio-16gb", "beschiak/openfork-prismaudio-16gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4
