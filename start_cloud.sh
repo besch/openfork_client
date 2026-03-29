@@ -464,13 +464,17 @@ if [ "$START_WAN2GP" = "true" ]; then
     # Re-pin cu128 here at runtime as a safety net for containers built before the
     # Dockerfile re-pin step was added (avoids needing an immediate image rebuild).
     log "Ensuring PyTorch cu128 build is active for Wan2GP (sm_89 / Ada Lovelace support)..."
-    "$PYTHON_EXE" -m pip install --quiet --upgrade \
+    # Use --force-reinstall --no-cache-dir to guarantee the CUDA-capable wheel bytes
+    # are written to disk. --upgrade alone exits with "Requirement already satisfied"
+    # when the version string matches but the installed wheel is a CPU/cu118 build
+    # (which lacks sm_89 in get_arch_list()), causing the GPU check below to fail.
+    "$PYTHON_EXE" -m pip install --quiet --force-reinstall --no-cache-dir \
         "torch==2.7.0+cu128" \
         "torchvision==0.22.0+cu128" \
         "torchaudio==2.7.0+cu128" \
         --index-url https://download.pytorch.org/whl/cu128 2>/dev/null \
-    && log "✓ PyTorch cu128 re-pinned successfully" \
-    || log "WARNING: PyTorch cu128 re-pin failed (network issue?). GPU check may still fail on old images."
+    && log "✓ PyTorch cu128 force-reinstalled successfully" \
+    || log "WARNING: PyTorch cu128 reinstall failed (network issue?). GPU check may still fail on old images."
 
     # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires:
     #   1. CC >= 8.9 for FP8 support (RTX 40xx / Ada Lovelace, Hopper)
