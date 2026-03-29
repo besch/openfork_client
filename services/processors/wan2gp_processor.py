@@ -51,18 +51,13 @@ def _get_session():
                 import torch as _torch_cc
                 if _torch_cc.cuda.is_available():
                     _cc_major, _cc_minor = _torch_cc.cuda.get_device_capability()
-                    _cc_str = f"sm_{_cc_major}{_cc_minor}"
                     _gpu_name = _torch_cc.cuda.get_device_name(0)
-                    _supported = _torch_cc.cuda.get_arch_list()
-                    if _cc_str not in _supported:
-                        raise RuntimeError(
-                            f"GPU '{_gpu_name}' (CC {_cc_major}.{_cc_minor} / {_cc_str}) "
-                            f"is not in the arch list of this PyTorch build "
-                            f"(compiled for: {', '.join(_supported)}). "
-                            f"This is usually caused by Wan2GP requirements.txt downgrading "
-                            f"the cu128 wheel to a CPU/cu118 build. "
-                            f"Rebuild the Docker image to fix permanently, or re-pin PyTorch cu128 at runtime."
-                        )
+                    # NOTE: We intentionally skip get_arch_list() here.
+                    # cu128 wheels use PTX intermediate code for forward-compat
+                    # architectures (e.g. sm_89 / RTX 40xx), so sm_89 may not
+                    # appear in the SASS arch list even though the GPU and
+                    # PyTorch build are fully compatible.
+                    # The only meaningful gate for LTX-2.3 is CC >= 8.9 (FP8).
                     if _cc_major < 8 or (_cc_major == 8 and _cc_minor < 9):
                         raise RuntimeError(
                             f"LTX-2.3 requires CUDA compute capability 8.9+ "
@@ -71,7 +66,7 @@ def _get_session():
                             f"L40S, H100, H200. "
                             f"FP8 Gemma 3 encoder cannot run on CC {_cc_major}.{_cc_minor}."
                         )
-                    logging.info(f"GPU '{_gpu_name}' CC {_cc_major}.{_cc_minor} — FP8 and PyTorch arch OK")
+                    logging.info(f"GPU '{_gpu_name}' CC {_cc_major}.{_cc_minor} — FP8 OK for LTX-2.3")
 
                 # PyTorch < 2.4 compat: torch.nn.Buffer was added in 2.4 and is
                 # used by mmgp (Memory Management for the GPU Poor).  The shim

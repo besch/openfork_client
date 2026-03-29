@@ -458,25 +458,7 @@ if [ "$START_WAN2GP" = "true" ]; then
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    # SELF-HEALING: Wan2GP's requirements.txt can overwrite the cu128 PyTorch build
-    # with a cpu/cu118 wheel that lacks sm_89 in get_arch_list(), causing the GPU CC
-    # check below to fail on RTX 40xx even though the Dockerfile re-pins cu128.
-    # Re-pin cu128 here at runtime as a safety net for containers built before the
-    # Dockerfile re-pin step was added (avoids needing an immediate image rebuild).
-    log "Ensuring PyTorch cu128 build is active for Wan2GP (sm_89 / Ada Lovelace support)..."
-    # Use --force-reinstall --no-cache-dir to guarantee the CUDA-capable wheel bytes
-    # are written to disk. --upgrade alone exits with "Requirement already satisfied"
-    # when the version string matches but the installed wheel is a CPU/cu118 build
-    # (which lacks sm_89 in get_arch_list()), causing the GPU check below to fail.
-    "$PYTHON_EXE" -m pip install --quiet --force-reinstall --no-cache-dir \
-        "torch==2.7.0+cu128" \
-        "torchvision==0.22.0+cu128" \
-        "torchaudio==2.7.0+cu128" \
-        --index-url https://download.pytorch.org/whl/cu128 2>/dev/null \
-    && log "✓ PyTorch cu128 force-reinstalled successfully" \
-    || log "WARNING: PyTorch cu128 reinstall failed (network issue?). GPU check may still fail on old images."
-
-    # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires:
+    # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires CC >= 8.9.
     #   1. CC >= 8.9 for FP8 support (RTX 40xx / Ada Lovelace, Hopper)
     #   2. The GPU's SM version must be in this PyTorch build's arch list.
     #      Blackwell GPUs (RTX 5060 Ti = SM 12.0) crash with "no kernel image"
@@ -490,12 +472,13 @@ try:
         print('NO_CUDA')
         sys.exit(0)
     major, minor = torch.cuda.get_device_capability()
-    cc_str = 'sm_{}{}'.format(major, minor)
     gpu_name = torch.cuda.get_device_name(0)
-    supported = torch.cuda.get_arch_list()
-    if cc_str not in supported:
-        print('UNSUPPORTED:{}:{}:{}'.format(major, minor, gpu_name))
-    elif major < 8 or (major == 8 and minor < 9):
+    # NOTE: We intentionally do NOT check get_arch_list() here.
+    # cu128 wheels use PTX intermediate code for forward-compat architectures
+    # (e.g. sm_89 / RTX 40xx), so sm_89 may not appear in the SASS arch list
+    # even though the GPU and PyTorch build are fully compatible.
+    # The only meaningful gate for LTX-2.3 is CC >= 8.9 (FP8 tensor cores).
+    if major < 8 or (major == 8 and minor < 9):
         print('NO_FP8:{}.{}'.format(major, minor))
     else:
         print('OK:{}.{}:{}'.format(major, minor, gpu_name))
@@ -505,23 +488,15 @@ except Exception as e:
 
     case "$WAN2GP_GPU_CHECK" in
         OK:*)
-            _cc="${WAN2GP_GPU_CHECK#OK:}"
-            log "GPU ${_cc} — compute capability and PyTorch arch OK for LTX-2.3."
+            _info="${WAN2GP_GPU_CHECK#OK:}"
+            _cc=$(echo "$_info" | cut -d: -f1-2)
+            _gpu=$(echo "$_info" | cut -d: -f3-)
+            log "GPU '${_gpu}' CC ${_cc} — FP8 compute capability OK for LTX-2.3."
             ;;
         NO_FP8:*)
             _cc="${WAN2GP_GPU_CHECK#NO_FP8:}"
             log "ERROR: LTX-2.3 requires compute capability 8.9+ for FP8 (detected: ${_cc})."
-            log "Supported GPUs: RTX 4090/4080/4070, RTX 4000/5000 Ada, L40S, H100, H200."
-            exit 1
-            ;;
-        UNSUPPORTED:*)
-            _cc=$(echo "$WAN2GP_GPU_CHECK" | cut -d: -f2-3)
-            _gpu=$(echo "$WAN2GP_GPU_CHECK" | cut -d: -f4-)
-            log "ERROR: GPU '${_gpu}' (CC ${_cc}) is not in the arch list of the installed PyTorch build."
-            log "This typically means Wan2GP's requirements.txt downgraded PyTorch from cu128 to a CPU/cu118 wheel."
-            log "Expected PyTorch to include sm_${_cc//:} — the runtime re-pin may have failed (check network)."
             log "Supported GPUs: RTX 4090/4080/4070 Ti Super/4070/4060 Ti (Ada Lovelace, CC 8.9+), L40S, H100, H200."
-            log "To fix: rebuild the image (python client/comfyui-storage/build_and_push.py --rebuild --hf-token <token>)"
             exit 1
             ;;
         NO_CUDA)
