@@ -458,6 +458,20 @@ if [ "$START_WAN2GP" = "true" ]; then
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
+    # SELF-HEALING: Wan2GP's requirements.txt can overwrite the cu128 PyTorch build
+    # with a cpu/cu118 wheel that lacks sm_89 in get_arch_list(), causing the GPU CC
+    # check below to fail on RTX 40xx even though the Dockerfile re-pins cu128.
+    # Re-pin cu128 here at runtime as a safety net for containers built before the
+    # Dockerfile re-pin step was added (avoids needing an immediate image rebuild).
+    log "Ensuring PyTorch cu128 build is active for Wan2GP (sm_89 / Ada Lovelace support)..."
+    "$PYTHON_EXE" -m pip install --quiet --upgrade \
+        "torch==2.7.0+cu128" \
+        "torchvision==0.22.0+cu128" \
+        "torchaudio==2.7.0+cu128" \
+        --index-url https://download.pytorch.org/whl/cu128 2>/dev/null \
+    && log "✓ PyTorch cu128 re-pinned successfully" \
+    || log "WARNING: PyTorch cu128 re-pin failed (network issue?). GPU check may still fail on old images."
+
     # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires:
     #   1. CC >= 8.9 for FP8 support (RTX 40xx / Ada Lovelace, Hopper)
     #   2. The GPU's SM version must be in this PyTorch build's arch list.
@@ -499,9 +513,11 @@ except Exception as e:
         UNSUPPORTED:*)
             _cc=$(echo "$WAN2GP_GPU_CHECK" | cut -d: -f2-3)
             _gpu=$(echo "$WAN2GP_GPU_CHECK" | cut -d: -f4-)
-            log "ERROR: GPU '${_gpu}' (CC ${_cc}) is not supported by the installed PyTorch build."
-            log "Rebuild the Docker image with a PyTorch version that supports this GPU,"
-            log "or use a supported GPU: RTX 4090/4080/4070, L40S, H100."
+            log "ERROR: GPU '${_gpu}' (CC ${_cc}) is not in the arch list of the installed PyTorch build."
+            log "This typically means Wan2GP's requirements.txt downgraded PyTorch from cu128 to a CPU/cu118 wheel."
+            log "Expected PyTorch to include sm_${_cc//:} — the runtime re-pin may have failed (check network)."
+            log "Supported GPUs: RTX 4090/4080/4070 Ti Super/4070/4060 Ti (Ada Lovelace, CC 8.9+), L40S, H100, H200."
+            log "To fix: rebuild the image (python client/comfyui-storage/build_and_push.py --rebuild --hf-token <token>)"
             exit 1
             ;;
         NO_CUDA)

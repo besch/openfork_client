@@ -57,17 +57,17 @@ def _get_session():
                     if _cc_str not in _supported:
                         raise RuntimeError(
                             f"GPU '{_gpu_name}' (CC {_cc_major}.{_cc_minor} / {_cc_str}) "
-                            f"is not supported by this PyTorch build "
+                            f"is not in the arch list of this PyTorch build "
                             f"(compiled for: {', '.join(_supported)}). "
-                            f"Rebuild the Docker image with a PyTorch version that "
-                            f"includes {_cc_str} support, or use a supported GPU: "
-                            f"RTX 4090/4080/4070, L40S, H100."
+                            f"This is usually caused by Wan2GP requirements.txt downgrading "
+                            f"the cu128 wheel to a CPU/cu118 build. "
+                            f"Rebuild the Docker image to fix permanently, or re-pin PyTorch cu128 at runtime."
                         )
                     if _cc_major < 8 or (_cc_major == 8 and _cc_minor < 9):
                         raise RuntimeError(
                             f"LTX-2.3 requires CUDA compute capability 8.9+ "
-                            f"(this GPU: {_cc_major}.{_cc_minor}). "
-                            f"Supported: RTX 4090/4080/4070, RTX 4000/5000 Ada, "
+                            f"(this GPU: {_gpu_name}, CC {_cc_major}.{_cc_minor}). "
+                            f"Supported: RTX 4090/4080/4070 Ti Super/4070/4060 Ti (Ada Lovelace), "
                             f"L40S, H100, H200. "
                             f"FP8 Gemma 3 encoder cannot run on CC {_cc_major}.{_cc_minor}."
                         )

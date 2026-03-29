@@ -146,7 +146,7 @@ fi
          }
 
          # Ensure wsl.conf has systemd=true and default user openfork
-         $desiredWslConf = "[boot]`nsystemd=true[user]`ndefault=openfork`n"
+         $desiredWslConf = "[boot]`nsystemd=true`n[user]`ndefault=openfork`n"
          $currentWslConf = wsl -d $DistroName --user root -e bash -c "cat /etc/wsl.conf 2>$null"
          if ($currentWslConf -ne $desiredWslConf) {
              Write-Log "Updating wsl.conf to desired state..."
