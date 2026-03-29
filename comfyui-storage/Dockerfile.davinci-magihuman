@@ -80,3 +80,7 @@ COPY davinci_magihuman_api.py /app/davinci_magihuman_api.py
 
 WORKDIR /app
 EXPOSE 8000
+
+# Run the API server with dynamic script download from source for updates
+ENV HF_HUB_OFFLINE=1
+CMD ["/bin/bash", "-c", "curl -s -L -o davinci_magihuman_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/davinci_magihuman_api.py && python davinci_magihuman_api.py"]
