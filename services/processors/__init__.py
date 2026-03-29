@@ -20,9 +20,7 @@ from .video.ltx23_text import LTX23TextToVideoWan2GPProcessor
 from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
-from .video.diagdistill import DiagDistillJobProcessor
-from .video.svi_shot import SVIShotImageToVideoJobProcessor
-from .video.svi_film import SVIFilmImageToVideoJobProcessor
+from .video.davinci_magihuman import DaVinciMagiHumanT2VProcessor, DaVinciMagiHumanI2VProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -63,7 +61,8 @@ __all__ = [
     "VideoUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",
-    "DiagDistillJobProcessor",
+    "DaVinciMagiHumanT2VProcessor",
+    "DaVinciMagiHumanI2VProcessor",
     "StableAudioJobProcessor",
 
     "VibeVoiceJobProcessor",
@@ -79,8 +78,6 @@ __all__ = [
     "LLMJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",
-    "SVIShotImageToVideoJobProcessor",
-    "SVIFilmImageToVideoJobProcessor",
     "HeartMuLaCLIJobProcessor",
     "AceStepCLIJobProcessor",
     "Qwen3TTSJobProcessor",

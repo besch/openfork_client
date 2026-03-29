@@ -68,6 +68,8 @@ from services.processors import (
     MMAudioJobProcessor,
     LavaSRJobProcessor,
     DiagDistillJobProcessor,
+    DaVinciMagiHumanT2VProcessor,
+    DaVinciMagiHumanI2VProcessor,
 )
 
 __all__ = [
@@ -116,6 +118,8 @@ __all__ = [
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
     "DiagDistillJobProcessor",
+    "DaVinciMagiHumanT2VProcessor",
+    "DaVinciMagiHumanI2VProcessor",
 ]
 
 

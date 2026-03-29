@@ -312,6 +312,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/davinci_magihuman_api.py" ] && cp -v "$DGN_SOURCE_DIR/davinci_magihuman_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
       fi
       
@@ -360,6 +361,7 @@ START_DIFFRHYTHM="false"
 START_QWEN3TTS="false"
 START_DIAGDISTILL="false"
 START_WAN2GP="false"
+START_DAVINCI="false"
 START_COMFYUI="true"
 ENABLE_4BIT="false"
 
@@ -386,21 +388,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
       START_QWEN3TTS="true"
       SERVICE_TYPE="qwen3-tts"
-  elif [ -f "/app/diagdistill_api.py" ]; then
-      log "Auto-mode: Detected DiagDistill image. Selecting DiagDistill service."
-      START_DIAGDISTILL="true"
-      if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
-          SERVICE_TYPE="diagdistill-24gb"
-          log "Auto-selected 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      else
-          SERVICE_TYPE="diagdistill-16gb"
-          log "Auto-selected 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      fi
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
       SERVICE_TYPE="ltx23-video-24gb"
       log "Auto-selected Wan2GP backend (LTX-2.3 Audio-Video 24GB)"
+  elif [ -f "/app/davinci_magihuman_api.py" ]; then
+      log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman service."
+      START_DAVINCI="true"
+      SERVICE_TYPE="davinci-magihuman"
+      log "Auto-selected daVinci-MagiHuman (avatar video+audio, 40GB VRAM)"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -414,6 +411,11 @@ else
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]]; then
       START_WAN2GP="true"
       log "LTX-2.3 service requested. Using Wan2GP backend."
+  fi
+  # daVinci-MagiHuman REST backend
+  if [[ "$SERVICE_TYPE" == *"davinci"* ]]; then
+      START_DAVINCI="true"
+      log "daVinci-MagiHuman service requested. Using REST backend."
   fi
 fi
 
@@ -437,6 +439,12 @@ fi
 if [ "$START_DIAGDISTILL" = "true" ]; then
   # DiagDistill (HunyuanVideo) needs full VRAM — always disable ComfyUI
   log "DiagDistill selected. Disabling ComfyUI to reserve VRAM for HunyuanVideo."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_DAVINCI" = "true" ]; then
+  # daVinci-MagiHuman needs 64GB+ VRAM — always disable ComfyUI
+  log "daVinci-MagiHuman selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
 fi
 
@@ -700,6 +708,17 @@ if [ "$START_DIAGDISTILL" != "true" ] && [ -f "/opt/TurboDiffusion/api_server.py
   log "Found TurboDiffusion API script. Starting..."
   (cd /opt/TurboDiffusion && "$PYTHON_EXE" api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
   wait_for_url "TurboDiffusion API" "http://127.0.0.1:8000/health" 120 "/tmp/turbodiffusion_api.log"
+fi
+
+# Start daVinci-MagiHuman REST API
+if [ "$START_DAVINCI" = "true" ] && [ -f "/app/davinci_magihuman_api.py" ]; then
+  log "Found daVinci-MagiHuman API script. Starting..."
+  log "Note: First run may take several minutes for model load + MagiCompiler graph compilation."
+  (cd /app && "$PYTHON_EXE" davinci_magihuman_api.py > /tmp/davinci_magihuman_api.log 2>&1) &
+  wait_for_url "daVinci-MagiHuman API" "http://127.0.0.1:8000/health" 600 "/tmp/davinci_magihuman_api.log"
+elif [ "$START_DAVINCI" = "true" ]; then
+  log "WARNING: daVinci-MagiHuman API not found at /app/davinci_magihuman_api.py"
+  log "Ensure the Docker image was built with Dockerfile.davinci-magihuman"
 fi
 
 # Start Ollama server
