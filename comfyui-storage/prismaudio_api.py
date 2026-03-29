@@ -10,7 +10,8 @@ import sys
 import uuid
 import logging
 import shutil
-import time
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -38,10 +39,15 @@ CKPT_DIR = WORK_DIR / "ckpts"
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
+# Read 16GB-variant env vars (set in Dockerfile.prismaudio-16gb)
+MAX_DURATION = float(os.environ.get("PRISMAUDIO_MAX_DURATION", "10"))
+BATCH_SIZE = int(os.environ.get("PRISMAUDIO_BATCH_SIZE", "1"))
+
+# Thread pool for blocking GPU inference (keeps FastAPI event loop free)
+_executor = ThreadPoolExecutor(max_workers=1)
+
 # Globals for loaded model
 _model = None
-_tokenizer = None
-_processor = None
 
 
 def wrap_cot(prompt: str) -> str:
@@ -49,98 +55,158 @@ def wrap_cot(prompt: str) -> str:
     tags = ["<Semantic>", "<Temporal>", "<Aesthetic>", "<Spatial>"]
     if any(tag in prompt for tag in tags):
         return prompt
-    
-    # Basic wrapping for single-line prompts
+
     return (
         f"<Semantic>{prompt}</Semantic>"
-        f"<Temporal>Natural flow synchronous with video video events.</Temporal>"
+        f"<Temporal>Natural flow synchronous with video events.</Temporal>"
         f"<Aesthetic>Professional quality, clear audio, natural ambiance.</Aesthetic>"
         f"<Spatial>Centered spatial placement.</Spatial>"
     )
 
 
 def load_model():
-    """Load PRiSM model at startup."""
-    global _model, _tokenizer, _processor
+    """Load PRiSM model at startup using ThinkSound's public API."""
+    global _model
 
     logger.info("Loading PRiSM (Prism Audio) model...")
-    
-    # Note: This logic depends on the specific PRiSM implementation.
-    # We follow the common pattern found in ThinkSound/PrismAudio.
+
+    # The cloned repo exposes create_model_from_config_path and get_pretrained_model
+    # via ThinkSound/__init__.py → models/factory.py + models/pretrained.py
+    # Checkpoint layout in /app/ckpts/ mirrors what snapshot_download places there:
+    #   ckpts/prismaudio.ckpt  — main diffusion weights
+    #   ckpts/vae.ckpt         — pretransform / VAE weights
+    #   ckpts/model_config.json — architecture config
+    sys.path.insert(0, str(WORK_DIR))
+
     try:
-        # Assuming the repo structure provides a high-level API or we use the underlying classes
-        # In a real environment, we'd import from the cloned repo.
-        # Here we prepare the structure for the Docker environment.
-        
-        # Add app to path if needed (if predict logic is nested)
-        sys.path.append(str(WORK_DIR))
-        
-        # Placeholder for actual model loading logic from PRiSM repo
-        # Example:
-        # from model.PrismAudio import load_prismaudio
-        # _model, _processor = load_prismaudio(CKPT_DIR, device=DEVICE)
-        
-        logger.info("PRiSM model loaded successfully (Placeholder logic for now)")
-        
+        from ThinkSound import create_model_from_config_path
+        from ThinkSound.models.utils import load_ckpt_state_dict
+
+        config_path = CKPT_DIR / "model_config.json"
+        if not config_path.exists():
+            raise FileNotFoundError(f"Model config not found: {config_path}")
+
+        model = create_model_from_config_path(str(config_path))
+
+        # Load main diffusion weights
+        main_ckpt = CKPT_DIR / "prismaudio.ckpt"
+        if main_ckpt.exists():
+            load_ckpt_state_dict(model, str(main_ckpt), prefix="diffusion.")
+            logger.info(f"Loaded diffusion weights from {main_ckpt}")
+
+        # Load VAE / pretransform weights
+        vae_ckpt = CKPT_DIR / "vae.ckpt"
+        if vae_ckpt.exists():
+            load_ckpt_state_dict(model, str(vae_ckpt), prefix="autoencoder.")
+            logger.info(f"Loaded VAE weights from {vae_ckpt}")
+
+        model = model.to(DEVICE, dtype=DTYPE)
+        model.eval()
+        _model = model
+        logger.info(f"PRiSM model loaded on {DEVICE} ({DTYPE})")
+
     except Exception as e:
-        logger.error(f"Failed to load PRiSM model: {e}")
-        # In Docker, we might want to exit if the model fails to load
-        # sys.exit(1)
+        logger.error(f"Failed to load PRiSM model: {e}", exc_info=True)
+        # Raise so the lifespan handler can surface the failure clearly
+        raise
 
 
-@torch.inference_mode()
-def generate_audio_sync(
+def _run_inference(
     job_id: str,
     video_path: str,
     prompt: str,
+    negative_prompt: str,
     duration: float,
     seed: int,
     cfg_strength: float,
     num_steps: int,
 ):
-    """Run PRiSM generation synchronously."""
+    """Run PRiSM generation (blocking — called inside ThreadPoolExecutor)."""
     try:
         jobs[job_id]["status"] = "processing"
-        
-        cot_prompt = wrap_cot(prompt)
-        logger.info(f"Generating audio for job {job_id}: prompt='{prompt}', duration={duration}s")
-        logger.info(f"CoT Prompt: {cot_prompt}")
 
-        # PRiSM Inference logic implementation
-        # 1. Prepare video features
-        # 2. Run model inference
-        # 3. Save output to job folder
-        
-        # Simulated delay for now
-        time.sleep(2)
-        
-        # Save output (Simulated result for now - actual PRiSM logic goes here)
+        cot_prompt = wrap_cot(prompt)
+        logger.info(f"[{job_id}] Generating audio: prompt='{prompt}', duration={duration}s, seed={seed}")
+        logger.info(f"[{job_id}] CoT prompt: {cot_prompt}")
+
+        # Clamp duration to the VRAM envelope for this image variant
+        duration = min(duration, MAX_DURATION)
+
+        from ThinkSound.inference.generation import generate_diffusion_cond
+
+        sample_rate = 44100
+        sample_size = int(sample_rate * duration)
+
+        conditioning = {
+            "video_path": video_path,
+            "prompt": cot_prompt,
+        }
+        if negative_prompt:
+            conditioning["negative_prompt"] = negative_prompt
+
+        with torch.inference_mode():
+            audio = generate_diffusion_cond(
+                model=_model,
+                steps=num_steps,
+                cfg_scale=cfg_strength,
+                conditioning=conditioning,
+                sample_size=sample_size,
+                seed=seed,
+                device=DEVICE,
+                batch_size=BATCH_SIZE,
+            )
+
+        # audio shape: [batch, channels, samples] — take first item
+        if audio.dim() == 3:
+            audio = audio[0]
+
         output_path = OUTPUT_DIR / f"{job_id}.wav"
-        
-        # Dummy wav for structure verification
-        # import numpy as np
-        # audio_data = np.zeros((1, 48000 * 5))
-        # torchaudio.save(str(output_path), torch.from_numpy(audio_data).float(), 48000)
+        torchaudio.save(str(output_path), audio.cpu().float(), sample_rate)
 
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["output_path"] = str(output_path)
-        logger.info(f"Job {job_id} completed: {output_path}")
+        logger.info(f"[{job_id}] Completed → {output_path}")
 
     except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}", exc_info=True)
+        logger.error(f"[{job_id}] Failed: {e}", exc_info=True)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
     finally:
-        # Clean up input video
         try:
             Path(video_path).unlink(missing_ok=True)
         except Exception:
             pass
 
 
+async def generate_audio_async(
+    job_id: str,
+    video_path: str,
+    prompt: str,
+    negative_prompt: str,
+    duration: float,
+    seed: int,
+    cfg_strength: float,
+    num_steps: int,
+):
+    """Dispatch blocking inference to the thread pool without blocking the event loop."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        _executor,
+        _run_inference,
+        job_id,
+        video_path,
+        prompt,
+        negative_prompt,
+        duration,
+        seed,
+        cfg_strength,
+        num_steps,
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model on startup and clean up on shutdown."""
+    """Load model on startup."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -149,6 +215,7 @@ async def lifespan(app: FastAPI):
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         logger.info(f"GPU: {props.name} | VRAM: {props.total_memory / 1024**3:.1f} GB")
+    logger.info(f"MAX_DURATION={MAX_DURATION}s  BATCH_SIZE={BATCH_SIZE}")
 
     load_model()
     yield
@@ -164,6 +231,7 @@ async def health_check():
         "status": "healthy",
         "service": "prismaudio",
         "cuda_available": torch.cuda.is_available(),
+        "model_loaded": _model is not None,
     }
 
 
@@ -172,17 +240,18 @@ async def generate_endpoint(
     background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
     prompt: str = Form(""),
+    negative_prompt: str = Form(""),
     duration: str = Form("8"),
     seed: str = Form("42"),
     cfg_strength: str = Form("4.5"),
     num_steps: str = Form("25"),
 ):
-    """
-    Start video-to-audio generation via PRiSM.
-    """
+    """Start video-to-audio generation via PRiSM."""
+    if _model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
     job_id = str(uuid.uuid4())
 
-    # Save uploaded video
     video_path = INPUT_DIR / f"{job_id}_{video.filename}"
     with open(video_path, "wb") as f:
         shutil.copyfileobj(video.file, f)
@@ -194,10 +263,11 @@ async def generate_endpoint(
     }
 
     background_tasks.add_task(
-        generate_audio_sync,
+        generate_audio_async,
         job_id,
         str(video_path),
         prompt,
+        negative_prompt,
         float(duration),
         int(seed),
         float(cfg_strength),
@@ -224,7 +294,7 @@ async def get_status(job_id: str):
 
 @app.get("/download/{job_id}")
 async def download(job_id: str):
-    """Download the generated audio file."""
+    """Download the generated audio file (.wav)."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -250,7 +320,6 @@ async def delete_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = jobs.pop(job_id)
-
     if job.get("output_path"):
         Path(job["output_path"]).unlink(missing_ok=True)
 

@@ -11,12 +11,14 @@ ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
 
 # System dependencies
+# python3-distutils used instead of python3.10-distutils (removed in Ubuntu 22.04)
+# ffmpeg is NOT installed via apt — build_env.sh installs 'ffmpeg<7' via conda-forge
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-venv python3.10-distutils \
-    curl git wget ffmpeg libsm6 libxext6 \
+    python3.10 python3.10-venv python3-distutils \
+    curl git wget libsm6 libxext6 \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && apt-get clean \
@@ -24,28 +26,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Clone PRiSM repo (ThinkSound branch prismaudio)
-RUN git clone -b prismaudio https://github.com/liuhuadai/ThinkSound.git /app \
+# Clone PRiSM repo — canonical org is FunAudioLLM, branch prismaudio
+RUN git clone -b prismaudio https://github.com/FunAudioLLM/ThinkSound.git /app \
     && rm -rf .git
 
-# Install Python dependencies
-# We adapt from build_env.sh logic but for standard pip in Docker
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir \
-    torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124 \
-    && python -m pip install --no-cache-dir \
-    transformers accelerate diffusers peft \
-    gradio opencv-python imageio imageio-ffmpeg \
-    librosa soundfile scipy \
-    fastapi uvicorn[standard] python-multipart huggingface_hub
+# Run the official setup script — this installs conda, ffmpeg<7, and all deps
+# Mirrors: conda create -n prismaudio python=3.10 && ./scripts/PrismAudio/setup/build_env.sh
+RUN chmod +x scripts/PrismAudio/setup/build_env.sh \
+    && bash scripts/PrismAudio/setup/build_env.sh \
+    && rm -rf ~/.cache/pip /tmp/*
 
-# Install the package if needed
-# RUN python -m pip install -e .
-
-# Create directories
+# Create working directories
 RUN mkdir -p /app/input /app/output /app/ckpts
 
-# Download model weights
+# Download model weights from HuggingFace
 ARG HF_TOKEN
 RUN HF_TOKEN=$HF_TOKEN python -c "\
 from huggingface_hub import snapshot_download; \
@@ -55,12 +49,14 @@ snapshot_download('FunAudioLLM/PrismAudio', local_dir='/app/ckpts'); \
 print('PRiSM weights downloaded successfully')" \
     && rm -rf ~/.cache/pip
 
-# Copy the API script locally
+# Copy the API script at build time (used as fallback if curl fails at runtime)
 COPY prismaudio_api.py /app/prismaudio_api.py
 
 # Expose API port
 EXPOSE 8000
 
-# Run the API server with dynamic script download from source for updates
-ENV HF_HUB_OFFLINE=1
-CMD ["/bin/bash", "-c", "curl -s -L -o prismaudio_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/prismaudio_api.py && python prismaudio_api.py"]
+# At runtime: attempt to pull the latest API script; fail loudly if unreachable.
+# HF_HUB_OFFLINE is set here (not as ENV) so it does not interfere with build-time downloads.
+CMD ["/bin/bash", "-c", \
+    "curl -fsSL -o /app/prismaudio_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/prismaudio_api.py || { echo 'WARNING: Could not update prismaudio_api.py, using built-in copy'; }; \
+    HF_HUB_OFFLINE=1 python /app/prismaudio_api.py"]

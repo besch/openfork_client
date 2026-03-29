@@ -33,6 +33,7 @@ from .audio.chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJob
 from .audio.qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
 from .audio.mmaudio import MMAudioJobProcessor
 from .audio.lavasr import LavaSRJobProcessor
+from .audio.prismaudio import PrismAudioJobProcessor
 
 # Image processors
 from .image.text_to_image import TextToImageJobProcessor
@@ -88,6 +89,7 @@ __all__ = [
     "QwenImageT2ITurboProcessor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
+    "PrismAudioJobProcessor",
 ]
 
 
