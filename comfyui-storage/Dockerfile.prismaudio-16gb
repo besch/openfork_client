@@ -30,14 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Install Miniconda — required by build_env.sh
+RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh \
+    && bash /tmp/miniconda.sh -b -p /opt/conda \
+    && rm /tmp/miniconda.sh \
+    && /opt/conda/bin/conda clean -afy
+
+ENV PATH=/opt/conda/bin:$PATH
+
 # Clone PRiSM repo — canonical org is FunAudioLLM, branch prismaudio
 RUN git clone -b prismaudio https://github.com/FunAudioLLM/ThinkSound.git /app \
     && rm -rf .git
 
-# Run the official setup script — this installs conda, ffmpeg<7, and all deps
-# Mirrors: conda create -n prismaudio python=3.10 && ./scripts/PrismAudio/setup/build_env.sh
-RUN chmod +x scripts/PrismAudio/setup/build_env.sh \
-    && bash scripts/PrismAudio/setup/build_env.sh \
+# Create the conda env then run the official setup script (ffmpeg<7, all deps)
+RUN conda create -n prismaudio python=3.10 -y \
+    && chmod +x scripts/PrismAudio/setup/build_env.sh \
+    && conda run -n prismaudio bash scripts/PrismAudio/setup/build_env.sh \
+    && conda clean -afy \
     && rm -rf ~/.cache/pip /tmp/*
 
 # Create working directories
@@ -45,7 +54,7 @@ RUN mkdir -p /app/input /app/output /app/ckpts
 
 # Download model weights from HuggingFace
 ARG HF_TOKEN
-RUN HF_TOKEN=$HF_TOKEN python -c "\
+RUN HF_TOKEN=$HF_TOKEN conda run -n prismaudio python -c "\
 from huggingface_hub import snapshot_download; \
 import os; \
 os.makedirs('/app/ckpts', exist_ok=True); \
@@ -63,4 +72,4 @@ EXPOSE 8000
 # HF_HUB_OFFLINE is set here (not as ENV) so it does not interfere with build-time downloads.
 CMD ["/bin/bash", "-c", \
     "curl -fsSL -o /app/prismaudio_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/prismaudio_api.py || { echo 'WARNING: Could not update prismaudio_api.py, using built-in copy'; }; \
-    HF_HUB_OFFLINE=1 python /app/prismaudio_api.py"]
+    HF_HUB_OFFLINE=1 conda run -n prismaudio python /app/prismaudio_api.py"]
