@@ -34,6 +34,10 @@ RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.s
 
 ENV PATH=/opt/conda/bin:$PATH
 
+# Accept Anaconda ToS for the default channels (required since Miniconda 24.x)
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main \
+    && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
 # Clone PRiSM repo — canonical org is FunAudioLLM, branch prismaudio
 RUN git clone -b prismaudio https://github.com/FunAudioLLM/ThinkSound.git /app \
     && rm -rf .git
