@@ -64,7 +64,13 @@ class JobListener:
 
             import time as _time
             _job_start_time = _time.monotonic()
+            
+            # Get processor and set up cancellation check
             processor = self.client._get_job_processor(job, self.shutdown_event)
+            
+            # Check periodically during processing
+            self._monitor_job_cancellation(job.get('id'), processor)
+            
             processor.process()
             _job_duration = int(_time.monotonic() - _job_start_time)
 
@@ -118,6 +124,65 @@ class JobListener:
         finally:
             self.client.current_job = None
 
+    def _monitor_job_cancellation(self, job_id: str, processor) -> None:
+        """
+        Monitor a job for cancellation during processing.
+        
+        This runs in a background thread and checks periodically if the job
+        has been cancelled/deleted. If so, it interrupts the workflow and stops
+        any running containers.
+        
+        Args:
+            job_id: The ID of the job being processed
+            processor: The job processor instance
+        """
+        import threading
+        from services.docker_manager import docker_manager
+        
+        def _monitor_loop():
+            check_interval = 5  # Check every 5 seconds
+            while not self.shutdown_event.is_set():
+                try:
+                    job_details = self.orchestrator_service.get_job(job_id)
+                    if not job_details or job_details.get('status') in ('cancelled', 'deleted'):
+                        logging.warning(f"Job {job_id} was cancelled/deleted. Interrupting processing.")
+                        
+                        # Signal the shutdown event to stop processing
+                        self.shutdown_event.set()
+                        
+                        # Stop any running Docker container for this job
+                        if docker_manager and hasattr(self.client, 'active_service_type') and self.client.active_service_type:
+                            try:
+                                logging.info(f"Stopping Docker container for service '{self.client.active_service_type}' due to job cancellation...")
+                                docker_manager.stop_container(service_type=self.client.active_service_type)
+                                self.client.active_service_type = None
+                            except Exception as e:
+                                logging.debug(f"Could not stop container: {e}")
+                        
+                        # Try to interrupt ComfyUI if available (for ComfyUI-based workflows)
+                        if hasattr(self.client, 'comfyui_client'):
+                            try:
+                                self.client.comfyui_client.interrupt_workflow()
+                            except Exception as e:
+                                logging.debug(f"Could not interrupt workflow: {e}")
+                        
+                        # Update job status to cancelled
+                        try:
+                            self.orchestrator_service.update_job_status(job_id, 'cancelled')
+                        except Exception as e:
+                            logging.debug(f"Could not update job status: {e}")
+                        
+                        logging.info(f"Job {job_id} cancelled and resources cleaned up.")
+                        return
+                except Exception as e:
+                    logging.debug(f"Error checking job status: {e}")
+                
+                # Wait for next check interval
+                self.shutdown_event.wait(timeout=check_interval)
+        
+        monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
+        monitor_thread.start()
+
     def listen_for_jobs(self) -> None:
         """Listen for jobs from the orchestrator (for dedicated providers)."""
         while not self.shutdown_event.is_set():
@@ -139,6 +204,13 @@ class JobListener:
                     )
 
                     if job and job.get('id'):
+                        # Check if job was cancelled/deleted before processing
+                        job_check = self.orchestrator_service.get_job(job.get('id'))
+                        if not job_check or job_check.get('status') in ('cancelled', 'deleted'):
+                            logging.info(f"Job {job.get('id')} was cancelled/deleted before processing. Skipping.")
+                            self.client.current_job = None
+                            continue
+                        
                         self.client.current_job = job
                         logging.info(f"Received job: {job['id']}")
                         
