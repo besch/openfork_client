@@ -14,8 +14,6 @@ from .video.wan22_text import WAN22TextToVideoJobProcessor
 from .video.wan22_image import WAN22ImageToVideoJobProcessor, ImageToVideoFromLastFrameJobProcessor
 from .video.hunyuan_text import HunyuanTextToVideoJobProcessor
 from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
-from .video.ltx2_text import LTX2TextToVideoJobProcessor
-from .video.ltx2_image import LTX2ImageToVideoJobProcessor
 from .video.ltx23_text import LTX23TextToVideoWan2GPProcessor
 from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
@@ -55,8 +53,6 @@ __all__ = [
     "ImageToVideoFromLastFrameJobProcessor",
     "HunyuanTextToVideoJobProcessor",
     "HunyuanImageToVideoJobProcessor",
-    "LTX2TextToVideoJobProcessor",
-    "LTX2ImageToVideoJobProcessor",
     "LTX23TextToVideoWan2GPProcessor",
     "LTX23ImageToVideoWan2GPProcessor",
     "VideoUpscalerJobProcessor",
