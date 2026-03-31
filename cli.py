@@ -52,6 +52,20 @@ def listen_for_ipc_commands(client: DGNClient):
                 logging.error("Received AUTH_FAILED_PERMANENTLY command from main process.")
                 client.orchestrator_service.mark_auth_failed_permanently()
                 SHUTDOWN_EVENT.set()
+            elif cmd_type == "REQUEST_STOP":
+                logging.info("Received REQUEST_STOP command from main process.")
+                client.stop_requested = True
+
+                if client.current_job:
+                    job_id = client.current_job.get("id")
+                    if job_id:
+                        client.interrupted_job_id = job_id
+                        logging.info(
+                            f"Stop requested while job {job_id} is in progress. "
+                            "It will be reset to 'pending' during shutdown cleanup."
+                        )
+
+                SHUTDOWN_EVENT.set()
             elif cmd_type == "CANCEL_DOWNLOAD":
                 service_type = payload.get("service_type")
                 logging.info(f"Received CANCEL_DOWNLOAD command for {service_type}.")
@@ -204,15 +218,40 @@ def run_client(client, provider_id, service_mode):
 
 def cleanup(client, provider_id, service_mode):
     logging.info("DGN Client: Initiating shutdown sequence.")
-    
-    if client and client.current_job:
-        job_id = client.current_job.get('id')
-        if job_id:
-            logging.info(f"A job ({job_id}) was in progress. Attempting to reset its status to 'pending'.")
-            try:
-                client.orchestrator_service.reset_interrupted_job(job_id)
-            except Exception as e:
-                logging.error(f"Failed to reset job {job_id}: {e}", exc_info=True)
+
+    interrupted_job_id = None
+    if client:
+        if client.current_job:
+            interrupted_job_id = client.current_job.get("id")
+        elif getattr(client, "interrupted_job_id", None):
+            interrupted_job_id = client.interrupted_job_id
+
+    if interrupted_job_id:
+        should_reset = True
+        try:
+            job_details = client.orchestrator_service.get_job(interrupted_job_id)
+            if isinstance(job_details, dict):
+                current_status = job_details.get("status")
+                if current_status and current_status != "processing":
+                    should_reset = False
+                    logging.info(
+                        f"Job {interrupted_job_id} is already in terminal/non-processing state "
+                        f"('{current_status}'). Skipping reset."
+                    )
+        except Exception as e:
+            logging.warning(
+                f"Could not verify current status for job {interrupted_job_id} before reset: {e}"
+            )
+
+    if interrupted_job_id and should_reset:
+        logging.info(
+            f"Job {interrupted_job_id} was interrupted during shutdown. "
+            "Attempting to reset its status to 'pending'."
+        )
+        try:
+            client.orchestrator_service.reset_interrupted_job(interrupted_job_id)
+        except Exception as e:
+            logging.error(f"Failed to reset job {interrupted_job_id}: {e}", exc_info=True)
 
     if provider_id and client:
         logging.info("DGN Client: Attempting to deregister from orchestrator.")

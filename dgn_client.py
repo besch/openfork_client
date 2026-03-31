@@ -41,6 +41,8 @@ class DGNClient:
         os.makedirs(self.cache_dir, exist_ok=True)
         self.active_service_type = None
         self.current_job = None
+        self.interrupted_job_id = None
+        self.stop_requested = False
         self.config = {}
         self.docker_image_map = {}
         self.accept_policy = accept_policy

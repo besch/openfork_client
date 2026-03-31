@@ -22,6 +22,22 @@ class JobListener:
         self.provider_id = provider_id
         self.shutdown_event = shutdown_event
 
+    def _job_has_terminal_status(self, job_id: Optional[str]) -> bool:
+        """Check whether a job has already reached a terminal status."""
+        if not job_id:
+            return False
+
+        try:
+            job_details = self.orchestrator_service.get_job(job_id)
+        except Exception as e:
+            logging.warning(f"Could not verify terminal status for job {job_id}: {e}")
+            return False
+
+        if not isinstance(job_details, dict):
+            return False
+
+        return job_details.get("status") in ("completed", "failed", "cancelled", "deleted")
+
     def _process_job_safely(self, job: Dict[str, Any]) -> bool:
         """
         Process a job with proper error handling.
@@ -33,6 +49,8 @@ class JobListener:
             True if processing completed (success or handled failure),
             False if a critical auth error occurred that should stop the listener.
         """
+        job_id = job.get("id") if job else None
+
         try:
             # Safety check: Validate hardware requirements before processing
             # This is a belt-and-suspenders check in addition to server-side filtering
@@ -72,6 +90,20 @@ class JobListener:
             self._monitor_job_cancellation(job.get('id'), processor)
             
             processor.process()
+
+            if (
+                self.shutdown_event.is_set()
+                and getattr(self.client, "stop_requested", False)
+                and not self._job_has_terminal_status(job_id)
+            ):
+                if job_id:
+                    self.client.interrupted_job_id = job_id
+                logging.info(
+                    f"Shutdown interrupted job {job_id}. "
+                    "Skipping completion event and deferring reset to cleanup."
+                )
+                return True
+
             _job_duration = int(_time.monotonic() - _job_start_time)
 
             # Emit JOB_COMPLETE event
@@ -104,6 +136,19 @@ class JobListener:
             logging.warning(f"Auth expired during processing of job {job.get('id')}.")
             raise  # Re-raise to be caught by outer exception handler
         except Exception as e:
+            if (
+                self.shutdown_event.is_set()
+                and getattr(self.client, "stop_requested", False)
+                and not self._job_has_terminal_status(job_id)
+            ):
+                if job_id:
+                    self.client.interrupted_job_id = job_id
+                logging.info(
+                    f"Shutdown interrupted job {job_id} with in-flight error: {e}. "
+                    "Deferring reset to cleanup."
+                )
+                return True
+
             logging.error(
                 f"An error occurred while processing job {job.get('id')}: {e}",
                 exc_info=True,
@@ -122,6 +167,14 @@ class JobListener:
                 self.orchestrator_service.update_job_status(job.get('id'), 'failed')
             return True
         finally:
+            if (
+                self.shutdown_event.is_set()
+                and getattr(self.client, "stop_requested", False)
+                and job_id
+                and not self.client.interrupted_job_id
+                and not self._job_has_terminal_status(job_id)
+            ):
+                self.client.interrupted_job_id = job_id
             self.client.current_job = None
 
     def _monitor_job_cancellation(self, job_id: str, processor) -> None:
