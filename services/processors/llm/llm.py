@@ -7,6 +7,7 @@ Uses Ollama for LLM-based text generation.
 import os
 import time
 import logging
+import math
 import random
 import requests
 
@@ -96,6 +97,9 @@ class LLMJobProcessor(BaseJobProcessor):
     ):
         """Generate text using Ollama with structured output for reliable JSON."""
         try:
+            inputs = self.job.get("inputs", {})
+            num_scenes = inputs.get("num_scenes")
+
             # JSON schema for script scenes - forces Ollama to output valid JSON
             json_schema = {
                 "type": "array",
@@ -112,6 +116,19 @@ class LLMJobProcessor(BaseJobProcessor):
                 }
             }
 
+            # Enforce exact scene count via JSON schema constraints
+            if num_scenes is not None:
+                json_schema["minItems"] = num_scenes
+                json_schema["maxItems"] = num_scenes
+
+            # Dynamically size the context window to fit the requested output.
+            # num_ctx must be >= (input tokens + max_tokens).  We add a 2048-token
+            # buffer for the system/user prompts and round up to the next power-of-two
+            # for efficiency in the attention implementation.
+            raw_ctx = max_tokens + 2048
+            num_ctx = max(8192, int(2 ** math.ceil(math.log2(raw_ctx))))
+            logging.info(f"Context window sizing: max_tokens={max_tokens}, num_ctx={num_ctx}, num_scenes={num_scenes}")
+
             # Use chat API with format parameter for structured output
             payload = {
                 "model": model_name,
@@ -121,7 +138,7 @@ class LLMJobProcessor(BaseJobProcessor):
                 ],
                 "stream": False,
                 "format": json_schema,
-                "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed, "num_ctx": 8192},
+                "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed, "num_ctx": num_ctx},
             }
 
             logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
