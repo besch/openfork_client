@@ -19,7 +19,7 @@ class ImageConfig:
     build: bool = False
     push: bool = False
     build_args: dict = None
-    direct_push: bool = False  # Stream layers directly to registry during build (bypasses local image store)
+    direct_push: bool = True  # Stream layers directly to registry during build (bypasses local image store)
 
 
 # Define the images to build and push
@@ -37,7 +37,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True),
-    ImageConfig("Dockerfile.davinci-magihuman", "beschiak/openfork-davinci-magihuman:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.davinci-magihuman", "beschiak/openfork-davinci-magihuman:latest", build=True, push=True),
     # Redundant tier-specific images (Consolidated into -24gb)
     # ImageConfig("Dockerfile.ltx23-16gb", "beschiak/openfork-ltx23-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-24gb", "beschiak/openfork-ltx23-24gb:latest", build=True, push=True),
