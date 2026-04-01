@@ -19,6 +19,7 @@ class ImageConfig:
     build: bool = False
     push: bool = False
     build_args: dict = None
+    direct_push: bool = False  # Stream layers directly to registry during build (bypasses local image store)
 
 
 # Define the images to build and push
@@ -36,7 +37,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-16gb", "beschiak/openfork-ltx2-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx2-24gb", "beschiak/openfork-ltx2-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True),
-    ImageConfig("Dockerfile.davinci-magihuman", "beschiak/openfork-davinci-magihuman:latest", build=True, push=True),
+    ImageConfig("Dockerfile.davinci-magihuman", "beschiak/openfork-davinci-magihuman:latest", build=True, push=True, direct_push=True),
     # Redundant tier-specific images (Consolidated into -24gb)
     # ImageConfig("Dockerfile.ltx23-16gb", "beschiak/openfork-ltx23-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-24gb", "beschiak/openfork-ltx23-24gb:latest", build=True, push=True),
@@ -77,9 +78,16 @@ def run_command(command: List[str], description: str) -> bool:
         return False
 
 
-def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False, build_args: dict = None, fresh_clone: bool = False) -> bool:
+def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool = False, build_args: dict = None, fresh_clone: bool = False, direct_push: bool = False) -> bool:
     """
     Build a Docker image. No retry logic for builds - failure is ignored.
+
+    direct_push=True uses --output type=registry to stream layers directly to
+    the registry during the build step, completely bypassing the local containerd
+    image store export.  This avoids the BuildKit lease-expiry crash that occurs
+    when exporting very large images (≥100 GB) on Docker Desktop for Windows.
+    When direct_push is used the separate push step must be skipped (the image
+    is already in the registry).
     """
     command = ["docker", "build"]
     
@@ -98,10 +106,19 @@ def build_image(dockerfile: str, tag: str, hf_token: str = None, rebuild: bool =
     if build_args:
         for key, value in build_args.items():
             command.extend(["--build-arg", f"{key}={value}"])
-        
-    command.extend(["-f", dockerfile, "-t", tag, "."])
-    
-    print(f"\n📦 Building {tag} (single attempt)")
+
+    command.extend(["-f", dockerfile])
+
+    if direct_push:
+        # Stream layers straight to the registry — no local export needed.
+        # Requires `docker login` to have been run beforehand.
+        command.extend(["--output", f"type=registry", "--tag", tag])
+        print(f"\n📦 Building {tag} with direct registry push (--output type=registry)")
+    else:
+        command.extend(["-t", tag])
+        print(f"\n📦 Building {tag} (single attempt)")
+
+    command.append(".")
     return run_command(command, f"Building {tag}")
 
 
@@ -124,25 +141,36 @@ def push_image(tag: str) -> bool:
     return False
 
 
-def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False, global_push: bool = False, global_build: bool = False, fresh_clone: bool = False) -> str:
+def build_and_push_image(config: ImageConfig, hf_token: str = None, rebuild: bool = False, global_push: bool = False, global_build: bool = False, fresh_clone: bool = False, force_direct_push: bool = False) -> str:
     """
     Build and push a single image based on its configuration and global flags.
     Returns: "success", "build_failed", or "push_failed"
     """
+    use_direct_push = config.direct_push or force_direct_push
+
     print(f"\n{'#'*60}")
     print(f"# Processing: {config.dockerfile} -> {config.tag}")
-    print(f"# Config: build={config.build}, push={config.push}")
+    print(f"# Config: build={config.build}, push={config.push}, direct_push={use_direct_push}")
     print('#'*60)
+
+    if use_direct_push:
+        print("ℹ️  direct_push mode: layers will be streamed to the registry during build.")
+        print("   Ensure you are logged in (`docker login`) before proceeding.")
     
     # Build the image if configured (per-image or global)
     should_build = config.build or global_build
     if should_build:
-        if not build_image(config.dockerfile, config.tag, hf_token, rebuild, config.build_args, fresh_clone):
+        if not build_image(config.dockerfile, config.tag, hf_token, rebuild, config.build_args, fresh_clone, direct_push=use_direct_push):
             print(f"\n⚠️ FAILED to build {config.tag}. Ignoring build failure as requested.")
             return "build_failed"
     else:
         print(f"⏭️ Skipping build for {config.tag} as configured")
     
+    # In direct_push mode the image is already in the registry — skip the push step.
+    if use_direct_push:
+        print(f"\n🎉 {config.tag} was pushed to the registry during build (direct_push mode).")
+        return "success"
+
     # Push the image if configured (per-image or global)
     should_push = config.push or global_push
     if should_push:
@@ -211,9 +239,20 @@ def main():
     parser.add_argument("--hf-token", type=str, help="Hugging Face token for gated models")
     parser.add_argument("--build", action="store_true", help="Build images (overrides per-image config)")
     parser.add_argument("--rebuild", action="store_true", help="Force rebuild by using --no-cache")
-
     parser.add_argument("--fresh-clone", dest="fresh_clone", action="store_true", help="Bust cache only at git clone layers (ensures latest ComfyUI/extensions without full rebuild)")
     parser.add_argument("--push", action="store_true", help="Push images (overrides per-image config)")
+    parser.add_argument(
+        "--direct-push",
+        dest="direct_push",
+        action="store_true",
+        help=(
+            "Stream layers directly to the registry during build using "
+            "'--output type=registry'. Bypasses the local containerd image store "
+            "export step, which fixes the BuildKit lease-expiry crash on Docker "
+            "Desktop for Windows when building very large images (≥100 GB). "
+            "Requires prior `docker login`. Overrides per-image direct_push setting."
+        ),
+    )
     
     args = parser.parse_args()
     
@@ -251,7 +290,7 @@ def main():
     push_failed = []
     
     for config in IMAGES:
-        result = build_and_push_image(config, args.hf_token, args.rebuild, args.push, args.build, getattr(args, "fresh_clone", False))
+        result = build_and_push_image(config, args.hf_token, args.rebuild, args.push, args.build, getattr(args, "fresh_clone", False), force_direct_push=getattr(args, "direct_push", False))
         if result == "success":
             successful.append(config.tag)
         elif result == "build_failed":
