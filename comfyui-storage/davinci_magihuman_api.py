@@ -284,7 +284,7 @@ def health():
 async def generate_t2v(req: T2VRequest, background_tasks: BackgroundTasks):
     """Submit a text-to-video generation job."""
     job_id = str(uuid.uuid4())
-    _set_job(job_id, status="pending", job_id=job_id)
+    _set_job(job_id, status="pending")
 
     background_tasks.add_task(
         _run_t2v,
@@ -324,7 +324,7 @@ async def generate_i2v(
     with open(image_path, "wb") as f:
         f.write(contents)
 
-    _set_job(job_id, status="pending", job_id=job_id)
+    _set_job(job_id, status="pending")
     background_tasks.add_task(
         _run_i2v,
         job_id=job_id,

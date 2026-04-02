@@ -404,8 +404,13 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -f "/app/davinci_magihuman_api.py" ]; then
       log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman service."
       START_DAVINCI="true"
-      SERVICE_TYPE="davinci-magihuman-48gb"
-      log "Auto-selected daVinci-MagiHuman (avatar video+audio, 40GB+ VRAM)"
+      if [ "$TOTAL_VRAM_MB" -gt 60000 ]; then
+          SERVICE_TYPE="davinci-magihuman-80gb"
+          log "Auto-selected daVinci-MagiHuman 80GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="davinci-magihuman-48gb"
+          log "Auto-selected daVinci-MagiHuman 48GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
