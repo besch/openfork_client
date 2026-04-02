@@ -131,16 +131,28 @@ class DockerDownloadManager:
                 self._download_status.pop(service_type, None)
                 return False
             
-            # Check for sufficient disk space before starting/queuing
+            # Check for sufficient disk space before starting/queuing.
+            # Prefer disk_required_gb from services_config (authoritative, from services.json)
+            # over the hardcoded estimate map, which can be significantly off (e.g. wan22-24gb:
+            # estimate=120 GB, actual disk_required_gb=220 GB).
             image_name = self.docker_manager.get_image_name(service_type)
-            estimated_size = estimate_image_size_bytes(image_name)
-            has_space, available, required = check_sufficient_space(estimated_size)
-            
+            service_config = (self.docker_manager.services_config or {}).get(service_type, {})
+            disk_required_gb = service_config.get("disk_required_gb")
+            if disk_required_gb:
+                required_bytes = int(disk_required_gb * 1024 ** 3)
+            else:
+                # Fallback to name-based heuristic when config is unavailable
+                required_bytes = estimate_image_size_bytes(image_name)
+            has_space, available, required = check_sufficient_space(required_bytes)
+
             if not has_space:
+                available_gb = available / 1024 ** 3
+                required_gb = required / 1024 ** 3
                 logging.error(
                     f"Insufficient disk space for {service_type}: "
-                    f"Need ~{required / 1024**3:.1f} GB, have {available / 1024**3:.1f} GB"
+                    f"Need ~{required_gb:.1f} GB, have {available_gb:.1f} GB"
                 )
+                self._emit_disk_space_error(image_name, required_gb, available_gb)
                 self._download_status[service_type] = DownloadStatus.FAILED
                 return False
             
@@ -204,6 +216,24 @@ class DockerDownloadManager:
                 self._active_downloads.discard(service_type)
                 self._download_status[service_type] = DownloadStatus.FAILED
     
+    def _emit_disk_space_error(self, image_name: str, required_gb: float, available_gb: float):
+        """Emit a DISK_SPACE_ERROR JSON event so the Electron UI can show an actionable alert."""
+        import json, sys
+        message = (
+            f"Insufficient disk space for '{image_name}'. "
+            f"Required: {required_gb:.1f} GB (including 5 GB buffer), "
+            f"Available: {available_gb:.1f} GB"
+        )
+        print(json.dumps({
+            "type": "DISK_SPACE_ERROR",
+            "payload": {
+                "image_name": image_name,
+                "required_gb": round(required_gb, 1),
+                "available_gb": round(available_gb, 1),
+                "message": message,
+            }
+        }), flush=True)
+
     def _download_worker(self, service_type: str, cancel_event: threading.Event):
         """Worker function that runs in a background thread to download an image.
         
@@ -242,8 +272,40 @@ class DockerDownloadManager:
             logging.error(f"Background download failed for {service_type}: {e}")
             with self._lock:
                 self._download_status[service_type] = DownloadStatus.FAILED
+
             # Report download failure to server (removes from downloading)
             self._report_download_state(service_type, "cancel")
+
+            # Case 2 — disk full MID-DOWNLOAD: Docker raises APIError with "no space left".
+            # The pre-download check passes but the disk fills up during the long pull.
+            # Emit DISK_SPACE_ERROR so the UI surfaces an actionable alert (not a silent failure).
+            err_str = str(e).lower()
+            is_disk_full = (
+                "no space left" in err_str
+                or "disk quota exceeded" in err_str
+                or (isinstance(e, OSError) and getattr(e, "errno", None) == 28)
+            )
+            if is_disk_full:
+                try:
+                    image_name = self.docker_manager.get_image_name(service_type)
+                    from .disk_space_utils import get_available_disk_space
+                    available_gb = get_available_disk_space() / 1024 ** 3
+                    service_config = (self.docker_manager.services_config or {}).get(service_type, {})
+                    required_gb = service_config.get("disk_required_gb", 0)
+                    self._emit_disk_space_error(image_name, required_gb, available_gb)
+                except Exception:
+                    pass
+
+                # Case 4 — prune dangling partial layers to recover the space Docker
+                # already wrote before running out. Without this, orphaned overlay2
+                # entries stay on disk until the user manually runs "docker image prune".
+                try:
+                    if self.docker_manager and self.docker_manager.client:
+                        logging.info(f"Disk-full failure for {service_type} — pruning dangling layers to recover space")
+                        self.docker_manager.client.images.prune()
+                except Exception as prune_err:
+                    logging.warning(f"Could not prune after disk-full failure: {prune_err}")
+
         finally:
             # Clean up and start next queued download
             self._finish_download(service_type)
@@ -300,24 +362,51 @@ class DockerDownloadManager:
                 del self._cancellation_events[service_type]
                 logging.debug(f"Cleaned up cancellation event for {service_type}")
             
-            # Start next queued download if any
+            # Start next queued download if any.
+            # Case 3: re-check disk space here — the active download may have consumed
+            # significant space since the queued item passed its initial check.
             if self._download_queue and not self._shutdown:
                 next_service = self._download_queue.pop(0)
-                self._active_downloads.add(next_service)
-                self._download_status[next_service] = DownloadStatus.DOWNLOADING
-                
-                # Create and store a cancellation event for this download
-                cancel_event = threading.Event()
-                self._cancellation_events[next_service] = cancel_event
 
-                thread = threading.Thread(
-                    target=self._download_worker,
-                    args=(next_service, cancel_event),
-                    daemon=True,
-                    name=f"docker-download-{next_service}"
-                )
-                thread.start()
-                logging.info(f"Started next queued download for {next_service}")
+                # Re-check disk space before starting (outside lock would be cleaner but
+                # shutil.disk_usage is fast, so keeping it inside is safe in practice).
+                next_image_name = self.docker_manager.get_image_name(next_service)
+                next_config = (self.docker_manager.services_config or {}).get(next_service, {})
+                next_disk_gb = next_config.get("disk_required_gb")
+                if next_disk_gb:
+                    next_required_bytes = int(next_disk_gb * 1024 ** 3)
+                else:
+                    from .disk_space_utils import estimate_image_size_bytes
+                    next_required_bytes = estimate_image_size_bytes(next_image_name)
+
+                from .disk_space_utils import check_sufficient_space
+                has_space, available, required = check_sufficient_space(next_required_bytes)
+                if not has_space:
+                    avail_gb = available / 1024 ** 3
+                    req_gb = required / 1024 ** 3
+                    logging.error(
+                        f"Insufficient disk space for queued download {next_service}: "
+                        f"need ~{req_gb:.1f} GB, have {avail_gb:.1f} GB"
+                    )
+                    self._emit_disk_space_error(next_image_name, req_gb, avail_gb)
+                    self._download_status[next_service] = DownloadStatus.FAILED
+                    self._report_download_state(next_service, "cancel")
+                else:
+                    self._active_downloads.add(next_service)
+                    self._download_status[next_service] = DownloadStatus.DOWNLOADING
+
+                    # Create and store a cancellation event for this download
+                    cancel_event = threading.Event()
+                    self._cancellation_events[next_service] = cancel_event
+
+                    thread = threading.Thread(
+                        target=self._download_worker,
+                        args=(next_service, cancel_event),
+                        daemon=True,
+                        name=f"docker-download-{next_service}"
+                    )
+                    thread.start()
+                    logging.info(f"Started next queued download for {next_service}")
     
     def get_all_statuses(self) -> Dict[str, str]:
         """Get download status for all tracked service types."""

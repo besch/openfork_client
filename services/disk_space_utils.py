@@ -6,15 +6,44 @@ estimating Docker image sizes before download.
 """
 
 import os
+import re
 import shutil
 import logging
 import platform
-from typing import Tuple
+import subprocess
+from typing import Optional, Tuple
+
+
+def _get_wsl_distro_base_path() -> Optional[str]:
+    """
+    Get the WSL distro base path from Windows registry.
+    Returns the path where the WSL VHDX is stored (e.g., D:\\WSL\\OpenFork).
+    Returns None if not found.
+    """
+    if platform.system() != "win32":
+        return None
+    
+    distro = os.environ.get("OPENFORK_WSL_DISTRO") or "Ubuntu"
+    
+    try:
+        ps_command = f"Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\*' | Where-Object DistributionName -eq '{distro}' | Select-Object -ExpandProperty BasePath"
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception as e:
+        logging.debug(f"Could not get WSL distro base path: {e}")
+    
+    return None
 
 
 def get_docker_storage_path() -> str:
     """
-    Get the Docker storage directory path based on the platform.
+    Get the Docker storage directory path based on the platform and mode.
     
     Returns:
         str: Path to Docker storage directory
@@ -22,8 +51,21 @@ def get_docker_storage_path() -> str:
     system = platform.system()
     
     if system == "Windows":
-        # Docker Desktop on Windows stores data in ProgramData
-        return "C:\\ProgramData\\Docker"
+        # Check if we're using WSL Docker (OPENFORK_DOCKER_HOST is set by electron.cjs)
+        if os.environ.get("OPENFORK_DOCKER_HOST"):
+            # WSL Docker mode - get the VHDX location from registry
+            wsl_base = _get_wsl_distro_base_path()
+            if wsl_base:
+                # Extract drive letter from base path (e.g., D:\WSL\OpenFork -> D:)
+                match = re.match(r"([a-zA-Z]):", wsl_base)
+                if match:
+                    drive = match.group(1).upper()
+                    return f"{drive}:\\"
+            # Fallback: check C: drive
+            return "C:\\"
+        else:
+            # Docker Desktop on Windows stores data in ProgramData
+            return "C:\\ProgramData\\Docker"
     elif system == "Darwin":  # macOS
         # Docker Desktop on macOS uses a VM disk image
         return os.path.expanduser("~/Library/Containers/com.docker.docker/Data")
@@ -32,7 +74,7 @@ def get_docker_storage_path() -> str:
         return "/var/lib/docker"
 
 
-def get_available_disk_space(path: str = None) -> int:
+def get_available_disk_space(path: Optional[str] = None) -> int:
     """
     Get available disk space in bytes for the given path.
     
@@ -127,7 +169,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
 def check_sufficient_space(
     required_bytes: int, 
     buffer_gb: float = 5.0,
-    path: str = None
+    path: Optional[str] = None
 ) -> Tuple[bool, int, int]:
     """
     Check if there is sufficient disk space for a Docker image download.
@@ -160,7 +202,7 @@ def check_sufficient_space(
     return has_space, available_bytes, required_with_buffer
 
 
-def get_disk_space_info(path: str = None) -> dict:
+def get_disk_space_info(path: Optional[str] = None) -> dict:
     """
     Get comprehensive disk space information.
     

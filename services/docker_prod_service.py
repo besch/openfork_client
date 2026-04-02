@@ -208,6 +208,30 @@ class DockerProdManager:
                 stream_pull_with_progress(self.client, image_name, throttle_interval=0.5, shutdown_event=shutdown_event, service_type=service_type)
                 logging.info(f"Successfully pulled image: {image_name}")
             except docker.errors.APIError as e:
+                # Case 2: Docker raises APIError mid-pull when the disk fills up.
+                # The pre-download check passed but space ran out during the long pull.
+                # Emit DISK_SPACE_ERROR so the Electron UI surfaces an actionable alert
+                # rather than a silent failure.
+                err_str = str(e).lower()
+                if "no space left" in err_str or "disk quota exceeded" in err_str:
+                    from .disk_space_utils import get_available_disk_space
+                    available_gb = get_available_disk_space() / (1024 ** 3)
+                    required_gb = estimated_size / (1024 ** 3)  # from pre-check above
+                    disk_error_msg = (
+                        f"Ran out of disk space while downloading '{image_name}'. "
+                        f"Available: {available_gb:.1f} GB"
+                    )
+                    logging.error(disk_error_msg)
+                    print(json.dumps({
+                        "type": "DISK_SPACE_ERROR",
+                        "payload": {
+                            "image_name": image_name,
+                            "required_gb": round(required_gb, 1),
+                            "available_gb": round(available_gb, 1),
+                            "message": disk_error_msg,
+                        }
+                    }), flush=True)
+                    raise OSError(disk_error_msg)
                 logging.error(f"Failed to pull image '{image_name}': {e}")
                 raise
 
