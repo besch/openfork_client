@@ -719,14 +719,34 @@ if [ "$START_DIAGDISTILL" != "true" ] && [ -f "/opt/TurboDiffusion/api_server.py
 fi
 
 # Start daVinci-MagiHuman REST API
-if [ "$START_DAVINCI" = "true" ] && [ -f "/app/davinci_magihuman_api.py" ]; then
-  log "Found daVinci-MagiHuman API script. Starting..."
-  log "Note: First run may take several minutes for model load + MagiCompiler graph compilation."
-  (cd /app && "$PYTHON_EXE" davinci_magihuman_api.py > /tmp/davinci_magihuman_api.log 2>&1) &
-  wait_for_url "daVinci-MagiHuman API" "http://127.0.0.1:8000/health" 600 "/tmp/davinci_magihuman_api.log"
-elif [ "$START_DAVINCI" = "true" ]; then
-  log "WARNING: daVinci-MagiHuman API not found at /app/davinci_magihuman_api.py"
-  log "Ensure the Docker image was built with Dockerfile.davinci-magihuman"
+if [ "$START_DAVINCI" = "true" ]; then
+  # Check if models are already present (from volume mount or previous run)
+  DAVINCI_MODEL_DIR="/models/davinci-magihuman"
+  WAN_MODEL_DIR="${DAVINCI_MODEL_DIR}/Wan2.2-TI2V-5B"
+  
+  if [ ! -d "${DAVINCI_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
+    log "daVinci-MagiHuman models not found. Downloading..."
+    huggingface-cli download GAIR/daVinci-MagiHuman --local-dir "${DAVINCI_MODEL_DIR}" || true
+  else
+    log "daVinci-MagiHuman models found at ${DAVINCI_MODEL_DIR}"
+  fi
+  
+  if [ ! -d "${WAN_MODEL_DIR}" ] || [ $(ls -A "${WAN_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
+    log "Wan2.2-TI2V-5B not found. Downloading for I2V support..."
+    huggingface-cli download Wan-AI/Wan2.2-TI2V-5B --local-dir "${WAN_MODEL_DIR}" || true
+  else
+    log "Wan2.2-TI2V-5B found at ${WAN_MODEL_DIR}"
+  fi
+  
+  if [ -f "/app/davinci_magihuman_api.py" ]; then
+    log "Found daVinci-MagiHuman API script. Starting..."
+    log "Note: First run may take several minutes for model load + MagiCompiler graph compilation."
+    (cd /app && "$PYTHON_EXE" davinci_magihuman_api.py > /tmp/davinci_magihuman_api.log 2>&1) &
+    wait_for_url "daVinci-MagiHuman API" "http://127.0.0.1:8000/health" 600 "/tmp/davinci_magihuman_api.log"
+  else
+    log "WARNING: daVinci-MagiHuman API not found at /app/davinci_magihuman_api.py"
+    log "Ensure the Docker image was built with Dockerfile.davinci-magihuman"
+  fi
 fi
 
 # Start Ollama server

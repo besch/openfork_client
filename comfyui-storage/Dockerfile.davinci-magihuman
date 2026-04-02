@@ -3,16 +3,26 @@
 # What this image provides:
 #   - sandai/magi-human base (CUDA 12 + PyTorch 2.10)
 #   - MagiCompiler (fuses Transformer layers for ~1.2x speedup)
-#   - daVinci-MagiHuman model weights from GAIR/daVinci-MagiHuman (public HF)
+#   - daVinci-MagiHuman code but NOT model weights (download at runtime)
 #   - FastAPI REST wrapper at port 8000
 #
 # Build:
 #   docker build \
-#     -t beschiak/openfork-davinci-magihuman-80gb:latest \
+#     -t beschiak/openfork-davinci-magihuman:latest \
 #     -f Dockerfile.davinci-magihuman .
+#
+# Run on cloud (RunPod/Vast.ai):
+#   The cloud platform runs start_cloud.sh which handles:
+#   - Model download on first run (if not in volume)
+#   - API startup with dynamic script download
+#
+# Local run (for testing):
+#   docker run -v davinci-models:/models beschiak/openfork-davinci-magihuman:latest \
+#     bash -c "curl -sL -o davinci_magihuman_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/davinci_magihuman_api.py && python davinci_magihuman_api.py"
 #
 # Notes:
 #   - Requires 64GB+ VRAM (H100/A100 80GB recommended)
+#   - Models are downloaded at runtime if not present in mounted volume
 #   - No HF_TOKEN needed — model is publicly accessible
 #   - Flash Attention (Hopper variant) is pre-installed in the base image
 #   - ComfyUI is NOT used — this image uses the daVinci Python library via REST
@@ -61,18 +71,8 @@ RUN pip install fastapi uvicorn python-multipart
 # ── Pre-create directories ────────────────────────────────────────────────────
 RUN mkdir -p ${DAVINCI_MODELS} ${DAVINCI_OUTPUT}
 
-# ── Download daVinci-MagiHuman model weights ─────────────────────────────────
-# The GAIR/daVinci-MagiHuman repo is public — no HF_TOKEN needed.
-# Expected: base model, distilled model, SR models, VAE
-RUN pip install -q "huggingface_hub[cli]" \
-    && huggingface-cli download GAIR/daVinci-MagiHuman \
-        --local-dir ${DAVINCI_MODELS} \
-    || { echo "ERROR: daVinci-MagiHuman model download from GAIR/daVinci-MagiHuman failed."; exit 1; }
-
-# ── Also download Wan2.2-TI2V-5B (required by daVinci for I2V) ──────────────
-RUN huggingface-cli download Wan-AI/Wan2.2-TI2V-5B \
-        --local-dir ${DAVINCI_MODELS}/Wan2.2-TI2V-5B \
-    || { echo "WARNING: Wan2.2-TI2V-5B download failed — I2V mode may not work."; }
+# ── Install HuggingFace CLI for runtime model downloads ────────────────────────
+RUN pip install -q "huggingface_hub[cli]"
 
 # ── Copy API wrapper ──────────────────────────────────────────────────────────
 RUN mkdir -p /app
@@ -81,6 +81,6 @@ COPY davinci_magihuman_api.py /app/davinci_magihuman_api.py
 WORKDIR /app
 EXPOSE 8000
 
-# Run the API server with dynamic script download from source for updates
-ENV HF_HUB_OFFLINE=1
-CMD ["/bin/bash", "-c", "curl -s -L -o davinci_magihuman_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/davinci_magihuman_api.py && python davinci_magihuman_api.py"]
+# DefaultCMD - cloud platform will override with start_cloud.sh
+# For local testing, use: docker run ... bash -c "curl .../davinci_magihuman_api.py && python davinci_magihuman_api.py"
+CMD ["bash"]
