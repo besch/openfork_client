@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.4
+# SparkVSR Docker Image (Optimized for 24GB)
+# Diffusion Transformer-based Video Super-Resolution (CogVideoX1.5-5B-I2V base)
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils \
+    curl git wget ffmpeg \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+# Clone SparkVSR and install dependencies
+RUN git clone --depth=1 https://github.com/taco-group/SparkVSR.git /app \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests moviepy pydantic
+
+# Pre-download base weights (CogVideoX1.5-5B-I2V and SparkVSR modules)
+RUN python -c "from huggingface_hub import snapshot_download; \
+    snapshot_download('THUDM/CogVideoX1.5-5B-I2V', ignore_patterns=['*.bin']); \
+    snapshot_download('taco-group/SparkVSR'); \
+    print('Weights downloaded successfully')"
+
+# Copy the API script locally
+COPY sparkvsr_api.py /app/sparkvsr_api.py
+
+# Create working directories
+RUN mkdir -p /app/input /app/output
+
+# Expose API port
+EXPOSE 8000
+
+# Run the API server with dynamic script download fall-back
+ENV HF_HUB_OFFLINE=1
+CMD ["/bin/bash", "-c", "curl -s -L -o sparkvsr_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/sparkvsr_api.py && python sparkvsr_api.py"]

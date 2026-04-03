@@ -17,6 +17,7 @@ from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
 from .video.ltx23_text import LTX23TextToVideoWan2GPProcessor
 from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
 from .video.upscaler import VideoUpscalerJobProcessor
+from .video.sparkvsr import SparkVSRUpscalerJobProcessor
 from .video.turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
 from .video.davinci_magihuman import DaVinciMagiHumanT2VProcessor, DaVinciMagiHumanI2VProcessor
 
@@ -56,6 +57,7 @@ __all__ = [
     "LTX23TextToVideoWan2GPProcessor",
     "LTX23ImageToVideoWan2GPProcessor",
     "VideoUpscalerJobProcessor",
+    "SparkVSRUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",
     "DaVinciMagiHumanT2VProcessor",
