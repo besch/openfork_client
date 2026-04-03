@@ -55,6 +55,14 @@ DAVINCI_MODELS = os.environ.get("DAVINCI_MODELS", "/models/davinci-magihuman")
 DAVINCI_OUTPUT = os.environ.get("DAVINCI_OUTPUT", "/tmp/davinci_outputs")
 WAN22_TI2V_PATH = os.environ.get("WAN22_TI2V_PATH", f"{DAVINCI_MODELS}/Wan2.2-TI2V-5B")
 
+# VRAM mode — set by Dockerfile / start_cloud.sh:
+#   "32gb"  FP8 weights + sequential CPU offloading (RTX 5090, 32GB VRAM, 64GB+ RAM)
+#   "48gb"  BF16 weights, full VRAM (A6000 48GB, RTX 4090)
+#   "64gb"  BF16 weights, full VRAM — default (H100/A100 40–80GB)
+VRAM_MODE = os.environ.get("VRAM_MODE", "64gb")
+# Path to FP8-quantized weights (downloaded by start_cloud.sh for 32GB tier)
+DAVINCI_FP8_DIR = os.environ.get("DAVINCI_FP8_DIR", f"{DAVINCI_MODELS}/fp8")
+
 # Fixed inference parameters for the distilled model
 _DEFAULT_STEPS = 8          # distilled — only valid value
 _DEFAULT_FPS = 16           # daVinci-MagiHuman default
@@ -142,8 +150,41 @@ def _load_pipeline():
             )
 
         logger.info("Loading pipeline from config: %s", config_file)
-        _pipeline = MagiHumanPipeline.from_config(str(config_file), model_dir=DAVINCI_MODELS)
-        logger.info("daVinci-MagiHuman pipeline loaded ✓")
+        # For 32GB tier use FP8 model directory if it exists, otherwise fall back to BF16
+        model_dir = DAVINCI_MODELS
+        if VRAM_MODE == "32gb" and os.path.isdir(DAVINCI_FP8_DIR) and os.listdir(DAVINCI_FP8_DIR):
+            model_dir = DAVINCI_FP8_DIR
+            logger.info("32GB mode: using FP8 weights from %s", model_dir)
+        else:
+            if VRAM_MODE == "32gb":
+                logger.warning(
+                    "32GB mode: FP8 weights not found at %s, falling back to BF16. "
+                    "Generation may OOM on 32GB VRAM.",
+                    DAVINCI_FP8_DIR,
+                )
+
+        _pipeline = MagiHumanPipeline.from_config(str(config_file), model_dir=model_dir)
+
+        if VRAM_MODE == "32gb":
+            logger.info("32GB mode: enabling CPU offloading for low-VRAM inference")
+            # Try model-level offloading first (faster than sequential)
+            _offload_ok = False
+            for _method in ("enable_model_cpu_offload", "enable_sequential_cpu_offload"):
+                if hasattr(_pipeline, _method):
+                    try:
+                        getattr(_pipeline, _method)()
+                        logger.info("32GB mode: %s() applied", _method)
+                        _offload_ok = True
+                        break
+                    except Exception as _exc:
+                        logger.warning("32GB mode: %s() failed: %s", _method, _exc)
+            if not _offload_ok:
+                logger.warning(
+                    "32GB mode: pipeline exposes no CPU offload API. "
+                    "Generation may OOM on 32GB VRAM."
+                )
+
+        logger.info("daVinci-MagiHuman pipeline loaded ✓ (VRAM_MODE=%s)", VRAM_MODE)
         return _pipeline
 
 
@@ -277,6 +318,7 @@ def health():
         "gpu_name": gpu_name,
         "vram_free_mb": vram_free_mb,
         "model_loaded": _pipeline is not None,
+        "vram_mode": VRAM_MODE,
     }
 
 

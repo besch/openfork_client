@@ -36,7 +36,7 @@ RUN git clone --depth=1 https://github.com/taco-group/SparkVSR.git /app \
 # Pre-download base weights (CogVideoX1.5-5B-I2V and SparkVSR modules)
 RUN python -c "from huggingface_hub import snapshot_download; \
     snapshot_download('THUDM/CogVideoX1.5-5B-I2V', ignore_patterns=['*.bin']); \
-    snapshot_download('taco-group/SparkVSR'); \
+    snapshot_download('JiongzeYu/SparkVSR'); \
     print('Weights downloaded successfully')"
 
 # Copy the API script locally

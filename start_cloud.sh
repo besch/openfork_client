@@ -402,15 +402,9 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
   elif [ -f "/app/davinci_magihuman_api.py" ]; then
-      log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman service."
+      log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman 32GB service."
       START_DAVINCI="true"
-      if [ "$TOTAL_VRAM_MB" -gt 60000 ]; then
-          SERVICE_TYPE="davinci-magihuman-80gb"
-          log "Auto-selected daVinci-MagiHuman 80GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      else
-          SERVICE_TYPE="davinci-magihuman-48gb"
-          log "Auto-selected daVinci-MagiHuman 48GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      fi
+      SERVICE_TYPE="davinci-magihuman-32gb"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -456,9 +450,12 @@ if [ "$START_DIAGDISTILL" = "true" ]; then
 fi
 
 if [ "$START_DAVINCI" = "true" ]; then
-  # daVinci-MagiHuman needs 64GB+ VRAM — always disable ComfyUI
+  # daVinci-MagiHuman needs full VRAM — always disable ComfyUI
   log "daVinci-MagiHuman selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
+  export VRAM_MODE="32gb"
+  export DAVINCI_FP8_DIR="/models/davinci-magihuman/fp8"
+  log "daVinci-MagiHuman: VRAM_MODE=32gb (FP8 weights + CPU offloading)"
 fi
 
 if [ "$START_QWEN3TTS" = "true" ]; then
@@ -729,11 +726,29 @@ if [ "$START_DAVINCI" = "true" ]; then
   DAVINCI_MODEL_DIR="/models/davinci-magihuman"
   WAN_MODEL_DIR="${DAVINCI_MODEL_DIR}/Wan2.2-TI2V-5B"
   
-  if [ ! -d "${DAVINCI_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
-    log "daVinci-MagiHuman models not found. Downloading..."
-    huggingface-cli download GAIR/daVinci-MagiHuman --local-dir "${DAVINCI_MODEL_DIR}" || true
+  if [[ "${VRAM_MODE:-64gb}" == "32gb" ]]; then
+    # 32GB tier: download FP8-quantized weights (~14.3 GB vs 28.5 GB BF16)
+    DAVINCI_FP8_MODEL_DIR="${DAVINCI_MODEL_DIR}/fp8"
+    if [ ! -d "${DAVINCI_FP8_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_FP8_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
+      log "daVinci-MagiHuman FP8 weights not found. Downloading from SanDiegoDude/daVinci-MagiHuman-FP8..."
+      huggingface-cli download SanDiegoDude/daVinci-MagiHuman-FP8 --local-dir "${DAVINCI_FP8_MODEL_DIR}" || true
+    else
+      log "daVinci-MagiHuman FP8 weights found at ${DAVINCI_FP8_MODEL_DIR}"
+    fi
+    # Still need the base repo for config files, VAE, text encoder, etc.
+    if [ ! -d "${DAVINCI_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_MODEL_DIR}" 2>/dev/null | grep -v "^fp8$" | wc -l) -eq 0 ]; then
+      log "daVinci-MagiHuman base repo (config/VAE) not found. Downloading..."
+      huggingface-cli download GAIR/daVinci-MagiHuman --local-dir "${DAVINCI_MODEL_DIR}" --ignore-patterns "*.safetensors" || true
+    else
+      log "daVinci-MagiHuman base repo found at ${DAVINCI_MODEL_DIR}"
+    fi
   else
-    log "daVinci-MagiHuman models found at ${DAVINCI_MODEL_DIR}"
+    if [ ! -d "${DAVINCI_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
+      log "daVinci-MagiHuman models not found. Downloading..."
+      huggingface-cli download GAIR/daVinci-MagiHuman --local-dir "${DAVINCI_MODEL_DIR}" || true
+    else
+      log "daVinci-MagiHuman models found at ${DAVINCI_MODEL_DIR}"
+    fi
   fi
   
   if [ ! -d "${WAN_MODEL_DIR}" ] || [ $(ls -A "${WAN_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
