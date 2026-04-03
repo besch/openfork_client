@@ -8,6 +8,7 @@ comfyui-storage/lavasr_api.py
 comfyui-storage/mmaudio_api.py
 comfyui-storage/prismaudio_api.py
 comfyui-storage/qwen3_tts_api.py
+comfyui-storage/sparkvsr_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/temp_handler.py
 comfyui-storage/turbodiffusion_api_server.py
@@ -59,6 +60,7 @@ services/processors/video/hunyuan_image.py
 services/processors/video/hunyuan_text.py
 services/processors/video/ltx23_image.py
 services/processors/video/ltx23_text.py
+services/processors/video/sparkvsr.py
 services/processors/video/turbodiffusion.py
 services/processors/video/upscaler.py
 services/processors/video/wan22_image.py
