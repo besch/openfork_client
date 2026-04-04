@@ -30,9 +30,12 @@ class LTX23TextToVideoWan2GPProcessor(Wan2GPProcessor):
 
         inputs = self.job.get("inputs", {})
         service_type = self.job.get("service_type", "")
-        
+
         # Determine dynamic constraints based on the service tier
-        if "16gb" in service_type:
+        if "8gb" in service_type:
+            duration_max = 3
+            duration_default = 2
+        elif "16gb" in service_type:
             duration_max = 5
             duration_default = 4
         elif "32gb" in service_type:
@@ -52,7 +55,9 @@ class LTX23TextToVideoWan2GPProcessor(Wan2GPProcessor):
             "model_type": _MODEL_TYPE,
             "prompt": self.positive_prompt,
             "negative_prompt": self.negative_prompt,
-            "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9"), service_type),
+            "resolution": self.aspect_to_resolution(
+                inputs.get("aspect_ratio", "16:9"), service_type
+            ),
             "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
             "video_length": video_length,

@@ -26,22 +26,33 @@ WAN2GP_OUTPUT = os.environ.get("WAN2GP_OUTPUT", "/opt/wan2gp/outputs")
 _ASPECT_RESOLUTIONS = {
     "16:9": "1280x720",
     "9:16": "720x1280",
-    "1:1":  "1024x1024",
-    "4:3":  "1024x768",
-    "3:4":  "768x1024",
+    "1:1": "1024x1024",
+    "4:3": "1024x768",
+    "3:4": "768x1024",
     "21:9": "1280x544",
-    "2:1":  "1280x640",
+    "2:1": "1280x640",
 }
 
 # Lower resolution for 16GB tier (reduces VRAM by ~55% vs 720p)
 _ASPECT_RESOLUTIONS_16GB = {
     "16:9": "768x432",
     "9:16": "432x768",
-    "1:1":  "640x640",
-    "4:3":  "640x480",
-    "3:4":  "480x640",
+    "1:1": "640x640",
+    "4:3": "640x480",
+    "3:4": "480x640",
     "21:9": "768x320",
-    "2:1":  "768x384",
+    "2:1": "768x384",
+}
+
+# Lower resolution for 8GB tier (reduces VRAM by ~75% vs 720p, optimized for Q4 quantized model)
+_ASPECT_RESOLUTIONS_8GB = {
+    "16:9": "512x288",
+    "9:16": "288x512",
+    "1:1": "448x448",
+    "4:3": "448x336",
+    "3:4": "336x448",
+    "21:9": "512x224",
+    "2:1": "512x256",
 }
 
 _session = None
@@ -60,6 +71,7 @@ def _get_session():
                 #      Newer GPUs (e.g. RTX 5060 Ti SM 12.0 / Blackwell) crash with
                 #      "no kernel image available" if PyTorch was compiled for SM <= 9.0.
                 import torch as _torch_cc
+
                 if _torch_cc.cuda.is_available():
                     _cc_major, _cc_minor = _torch_cc.cuda.get_device_capability()
                     _gpu_name = _torch_cc.cuda.get_device_name(0)
@@ -77,13 +89,16 @@ def _get_session():
                             f"L40S, H100, H200. "
                             f"FP8 Gemma 3 encoder cannot run on CC {_cc_major}.{_cc_minor}."
                         )
-                    logging.info(f"GPU '{_gpu_name}' CC {_cc_major}.{_cc_minor} — FP8 OK for LTX-2.3")
+                    logging.info(
+                        f"GPU '{_gpu_name}' CC {_cc_major}.{_cc_minor} — FP8 OK for LTX-2.3"
+                    )
 
                 # PyTorch < 2.4 compat: torch.nn.Buffer was added in 2.4 and is
                 # used by mmgp (Memory Management for the GPU Poor).  The shim
                 # returns the tensor unchanged — nn.Buffer's only role is to mark
                 # a tensor as a non-parameter buffer, which is safe to skip here.
                 import torch as _torch
+
                 if not hasattr(_torch.nn, "Buffer"):
                     _torch.nn.Buffer = lambda data=None, persistent=True: data
 
@@ -95,8 +110,13 @@ def _get_session():
                 # tuple — only cast the first element (unique values) back to the
                 # original dtype; leave index tensors as-is.
                 _rope_py = os.path.join(
-                    WAN2GP_ROOT, "models", "ltx2", "ltx_core",
-                    "model", "transformer", "rope.py",
+                    WAN2GP_ROOT,
+                    "models",
+                    "ltx2",
+                    "ltx_core",
+                    "model",
+                    "transformer",
+                    "rope.py",
                 )
                 _NEW_HELPER = (
                     "\n\n# BFloat16 compat shim — OpenFork DGN client v2\n"
@@ -116,7 +136,9 @@ def _get_session():
                         _src += _NEW_HELPER
                         with open(_rope_py, "w") as _f:
                             _f.write(_src)
-                        logging.info("Patched Wan2GP rope.py: wrapped all torch.unique calls for BFloat16")
+                        logging.info(
+                            "Patched Wan2GP rope.py: wrapped all torch.unique calls for BFloat16"
+                        )
                     elif "OpenFork DGN client v2" not in _src:
                         # Call sites already replaced but helper is the old broken version
                         # (missing tuple handling) — strip old helper and append fixed one
@@ -126,11 +148,14 @@ def _get_session():
                         _src += _NEW_HELPER
                         with open(_rope_py, "w") as _f:
                             _f.write(_src)
-                        logging.info("Updated Wan2GP rope.py BFloat16 patch: fixed tuple return handling")
+                        logging.info(
+                            "Updated Wan2GP rope.py BFloat16 patch: fixed tuple return handling"
+                        )
 
                 if WAN2GP_ROOT not in sys.path:
                     sys.path.insert(0, WAN2GP_ROOT)
                 from shared.api import init  # noqa: PLC0415 — deferred import
+
                 os.makedirs(WAN2GP_OUTPUT, exist_ok=True)
                 _session = init(
                     root=Path(WAN2GP_ROOT),
@@ -148,6 +173,8 @@ class Wan2GPProcessor(BaseJobProcessor):
 
     @staticmethod
     def aspect_to_resolution(aspect_ratio: str, vram_tier: str = "") -> str:
+        if "8gb" in vram_tier:
+            return _ASPECT_RESOLUTIONS_8GB.get(aspect_ratio, "512x288")
         if "16gb" in vram_tier:
             return _ASPECT_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
         return _ASPECT_RESOLUTIONS.get(aspect_ratio, "1280x720")

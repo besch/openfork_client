@@ -34,9 +34,12 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
 
         inputs = self.job.get("inputs", {})
         service_type = self.job.get("service_type", "")
-        
+
         # Determine dynamic constraints based on the service tier
-        if "16gb" in service_type:
+        if "8gb" in service_type:
+            duration_max = 3
+            duration_default = 2
+        elif "16gb" in service_type:
             duration_max = 5
             duration_default = 4
         elif "32gb" in service_type:
@@ -74,7 +77,9 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             "negative_prompt": self.negative_prompt,
             "image_start": start_image,
             "image_prompt_type": image_prompt_type,
-            "resolution": self.aspect_to_resolution(inputs.get("aspect_ratio", "16:9"), service_type),
+            "resolution": self.aspect_to_resolution(
+                inputs.get("aspect_ratio", "16:9"), service_type
+            ),
             "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
             "video_length": video_length,
@@ -132,7 +137,9 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             if supabase_url:
                 bucket = self.job.get("bucket", "projects_public")
                 src = f"{supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
-                path = self.orchestrator_service.download_asset_by_url(src, self.input_dir)
+                path = self.orchestrator_service.download_asset_by_url(
+                    src, self.input_dir
+                )
                 if path:
                     return path
 
