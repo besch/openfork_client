@@ -64,11 +64,11 @@ VRAM_MODE = os.environ.get("VRAM_MODE", "64gb")
 DAVINCI_FP8_DIR = os.environ.get("DAVINCI_FP8_DIR", f"{DAVINCI_MODELS}/fp8")
 
 # Fixed inference parameters for the distilled model
-_DEFAULT_STEPS = 8          # distilled — only valid value
-_DEFAULT_FPS = 16           # daVinci-MagiHuman default
-_DEFAULT_HEIGHT = 256       # distilled baseline resolution
+_DEFAULT_STEPS = 8  # distilled — only valid value
+_DEFAULT_FPS = 16  # daVinci-MagiHuman default
+_DEFAULT_HEIGHT = 256  # distilled baseline resolution
 _DEFAULT_WIDTH = 256
-_DEFAULT_DURATION_S = 5     # seconds
+_DEFAULT_DURATION_S = 5  # seconds
 
 os.makedirs(DAVINCI_OUTPUT, exist_ok=True)
 
@@ -88,6 +88,7 @@ _pipeline_lock = threading.Lock()
 
 # ─── Pydantic Models ──────────────────────────────────────────────────────────
 
+
 class T2VRequest(BaseModel):
     prompt: str
     negative_prompt: str = ""
@@ -100,6 +101,7 @@ class T2VRequest(BaseModel):
 
 
 # ─── Model Loading ────────────────────────────────────────────────────────────
+
 
 def _ensure_davinci_root_in_path():
     if DAVINCI_ROOT not in sys.path:
@@ -123,13 +125,13 @@ def _load_pipeline():
             # daVinci-MagiHuman exposes its pipeline through the inference package.
             # The exact import path depends on the repo structure.
             # We try the most likely paths in order.
-            from inference.pipeline.pipeline import MagiHumanPipeline  # type: ignore
+            from inference.pipeline.pipeline import MagiPipeline  # type: ignore
         except ImportError:
             try:
-                from inference.pipeline import MagiHumanPipeline  # type: ignore
+                from inference.pipeline import MagiPipeline  # type: ignore
             except ImportError:
                 logger.error(
-                    "Could not import MagiHumanPipeline from daVinci-MagiHuman. "
+                    "Could not import MagiPipeline from daVinci-MagiHuman. "
                     "Ensure the repo is at DAVINCI_ROOT=%s and installed correctly.",
                     DAVINCI_ROOT,
                 )
@@ -152,7 +154,11 @@ def _load_pipeline():
         logger.info("Loading pipeline from config: %s", config_file)
         # For 32GB tier use FP8 model directory if it exists, otherwise fall back to BF16
         model_dir = DAVINCI_MODELS
-        if VRAM_MODE == "32gb" and os.path.isdir(DAVINCI_FP8_DIR) and os.listdir(DAVINCI_FP8_DIR):
+        if (
+            VRAM_MODE == "32gb"
+            and os.path.isdir(DAVINCI_FP8_DIR)
+            and os.listdir(DAVINCI_FP8_DIR)
+        ):
             model_dir = DAVINCI_FP8_DIR
             logger.info("32GB mode: using FP8 weights from %s", model_dir)
         else:
@@ -163,13 +169,16 @@ def _load_pipeline():
                     DAVINCI_FP8_DIR,
                 )
 
-        _pipeline = MagiHumanPipeline.from_config(str(config_file), model_dir=model_dir)
+        _pipeline = MagiPipeline.from_config(str(config_file), model_dir=model_dir)
 
         if VRAM_MODE == "32gb":
             logger.info("32GB mode: enabling CPU offloading for low-VRAM inference")
             # Try model-level offloading first (faster than sequential)
             _offload_ok = False
-            for _method in ("enable_model_cpu_offload", "enable_sequential_cpu_offload"):
+            for _method in (
+                "enable_model_cpu_offload",
+                "enable_sequential_cpu_offload",
+            ):
                 if hasattr(_pipeline, _method):
                     try:
                         getattr(_pipeline, _method)()
@@ -190,6 +199,7 @@ def _load_pipeline():
 
 # ─── Inference Helpers ────────────────────────────────────────────────────────
 
+
 def _set_job(job_id: str, **kwargs):
     with _jobs_lock:
         if job_id not in _jobs:
@@ -197,9 +207,17 @@ def _set_job(job_id: str, **kwargs):
         _jobs[job_id].update(kwargs)
 
 
-def _run_t2v(job_id: str, prompt: str, negative_prompt: str,
-             duration_seconds: float, height: int, width: int,
-             num_steps: int, seed: int, use_distilled: bool):
+def _run_t2v(
+    job_id: str,
+    prompt: str,
+    negative_prompt: str,
+    duration_seconds: float,
+    height: int,
+    width: int,
+    num_steps: int,
+    seed: int,
+    use_distilled: bool,
+):
     """Run T2V inference in background thread."""
     _inference_semaphore.acquire()
     try:
@@ -212,7 +230,12 @@ def _run_t2v(job_id: str, prompt: str, negative_prompt: str,
 
         logger.info(
             "T2V [%s]: prompt=%r | frames=%d | steps=%d | %dx%d",
-            job_id, prompt[:80], num_frames, num_steps, width, height,
+            job_id,
+            prompt[:80],
+            num_frames,
+            num_steps,
+            width,
+            height,
         )
 
         pipeline.generate_video(
@@ -243,9 +266,18 @@ def _run_t2v(job_id: str, prompt: str, negative_prompt: str,
         gc.collect()
 
 
-def _run_i2v(job_id: str, image_path: str, prompt: str, negative_prompt: str,
-             duration_seconds: float, height: int, width: int,
-             num_steps: int, seed: int, use_distilled: bool):
+def _run_i2v(
+    job_id: str,
+    image_path: str,
+    prompt: str,
+    negative_prompt: str,
+    duration_seconds: float,
+    height: int,
+    width: int,
+    num_steps: int,
+    seed: int,
+    use_distilled: bool,
+):
     """Run I2V inference in background thread."""
     _inference_semaphore.acquire()
     try:
@@ -257,11 +289,17 @@ def _run_i2v(job_id: str, image_path: str, prompt: str, negative_prompt: str,
         generator = torch.Generator(device="cuda").manual_seed(seed) if seed else None
 
         from PIL import Image  # noqa: PLC0415
+
         ref_image = Image.open(image_path).convert("RGB")
 
         logger.info(
             "I2V [%s]: prompt=%r | frames=%d | steps=%d | %dx%d",
-            job_id, prompt[:80], num_frames, num_steps, width, height,
+            job_id,
+            prompt[:80],
+            num_frames,
+            num_steps,
+            width,
+            height,
         )
 
         pipeline.generate_video(
@@ -299,15 +337,14 @@ def _run_i2v(job_id: str, image_path: str, prompt: str, negative_prompt: str,
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
+
 @app.get("/health")
 def health():
     """Liveness probe — also returns GPU info."""
     try:
         cuda_ok = torch.cuda.is_available()
         gpu_name = torch.cuda.get_device_name(0) if cuda_ok else "None"
-        vram_free_mb = (
-            torch.cuda.mem_get_info(0)[0] // (1024 * 1024) if cuda_ok else 0
-        )
+        vram_free_mb = torch.cuda.mem_get_info(0)[0] // (1024 * 1024) if cuda_ok else 0
     except Exception as exc:
         logger.warning("Health check GPU query failed: %s", exc)
         cuda_ok, gpu_name, vram_free_mb = False, "Error", 0

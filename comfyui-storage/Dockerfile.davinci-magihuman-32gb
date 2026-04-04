@@ -72,11 +72,11 @@ RUN mkdir -p ${DAVINCI_MODELS} ${DAVINCI_OUTPUT} ${DAVINCI_FP8_DIR}
 # ── Install HuggingFace CLI for runtime model downloads ────────────────────────
 RUN pip install -q "huggingface_hub[cli]"
 
-# ── Copy API wrapper ──────────────────────────────────────────────────────────
+# ── API wrapper ──────────────────────────────────────────────────────────
 RUN mkdir -p /app
-COPY davinci_magihuman_api.py /app/davinci_magihuman_api.py
 
 WORKDIR /app
 EXPOSE 8000
 
-CMD ["bash"]
+# Always download latest API wrapper at runtime
+CMD ["/bin/bash", "-c", "curl -s -L -o davinci_magihuman_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/davinci_magihuman_api.py && python davinci_magihuman_api.py"]
