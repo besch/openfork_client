@@ -23,7 +23,7 @@ from services.processors.base import BaseJobProcessor
 from services.processors.output_handlers import VideoOutputHandler
 from config import THUMBNAIL_WIDTH
 from utils.media_utils import (
-    find_video_in_directory,
+    find_video_in_output,
     generate_thumbnail,
     get_video_duration,
     get_video_dimensions,
