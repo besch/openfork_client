@@ -405,6 +405,10 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman 32GB service."
       START_DAVINCI="true"
       SERVICE_TYPE="davinci-magihuman-32gb"
+  elif [ -f "/app/sparkvsr_api.py" ] || [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
+      log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
+      START_SPARKVSR="true"
+      SERVICE_TYPE="sparkvsr-upscaler"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -414,6 +418,7 @@ else
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
+  if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
   # Wan2GP backend for all LTX-2.3 Audio-Video services
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]]; then
       START_WAN2GP="true"
@@ -456,6 +461,12 @@ if [ "$START_DAVINCI" = "true" ]; then
   export VRAM_MODE="32gb"
   export DAVINCI_FP8_DIR="/models/davinci-magihuman/fp8"
   log "daVinci-MagiHuman: VRAM_MODE=32gb (FP8 weights + CPU offloading)"
+fi
+
+if [ "$START_SPARKVSR" = "true" ]; then
+  # SparkVSR needs full 24GB VRAM — always disable ComfyUI
+  log "SparkVSR selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
 fi
 
 if [ "$START_QWEN3TTS" = "true" ]; then
@@ -766,6 +777,27 @@ if [ "$START_DAVINCI" = "true" ]; then
   else
     log "WARNING: daVinci-MagiHuman API not found at /app/davinci_magihuman_api.py"
     log "Ensure the Docker image was built with Dockerfile.davinci-magihuman"
+  fi
+fi
+
+# Start SparkVSR REST API
+if [ "$START_SPARKVSR" = "true" ]; then
+  log "Starting SparkVSR API service..."
+  SPARKVSR_API=""
+  if [ -f "/app/sparkvsr_api.py" ]; then
+    SPARKVSR_API="/app/sparkvsr_api.py"
+    SPARKVSR_CD="/app"
+  elif [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
+    SPARKVSR_API="/opt/SparkVSR/sparkvsr_api.py"
+    SPARKVSR_CD="/opt/SparkVSR"
+  fi
+
+  if [ -n "$SPARKVSR_API" ]; then
+    log "Found SparkVSR API at $SPARKVSR_API. Starting..."
+    (cd "$SPARKVSR_CD" && "$PYTHON_EXE" sparkvsr_api.py > /tmp/sparkvsr_api.log 2>&1) &
+    wait_for_url "SparkVSR API" "http://127.0.0.1:8000/health" 300 "/tmp/sparkvsr_api.log"
+  else
+    log "ERROR: SparkVSR API not found at /app/sparkvsr_api.py or /opt/SparkVSR/sparkvsr_api.py"
   fi
 fi
 
