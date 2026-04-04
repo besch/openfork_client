@@ -46,6 +46,7 @@ RUN git clone -b prismaudio https://github.com/FunAudioLLM/ThinkSound.git /app \
 RUN conda create -n prismaudio python=3.10 -y \
     && chmod +x scripts/PrismAudio/setup/build_env.sh \
     && conda run -n prismaudio bash scripts/PrismAudio/setup/build_env.sh \
+    && conda run -n prismaudio pip install -e /app \
     && conda clean -afy \
     && rm -rf ~/.cache/pip /tmp/*
 

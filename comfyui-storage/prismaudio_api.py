@@ -23,7 +23,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Job storage
@@ -36,7 +38,7 @@ INPUT_DIR = WORK_DIR / "input"
 CKPT_DIR = WORK_DIR / "ckpts"
 
 # Configuration
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
 # Read 16GB-variant env vars (set in Dockerfile.prismaudio-16gb)
@@ -79,8 +81,8 @@ def load_model():
     sys.path.insert(0, str(WORK_DIR))
 
     try:
-        from ThinkSound import create_model_from_config_path
-        from ThinkSound.models.utils import load_ckpt_state_dict
+        from PrismAudio import create_model_from_config_path
+        from PrismAudio.models.utils import load_ckpt_state_dict
 
         config_path = CKPT_DIR / "model_config.json"
         if not config_path.exists():
@@ -126,13 +128,15 @@ def _run_inference(
         jobs[job_id]["status"] = "processing"
 
         cot_prompt = wrap_cot(prompt)
-        logger.info(f"[{job_id}] Generating audio: prompt='{prompt}', duration={duration}s, seed={seed}")
+        logger.info(
+            f"[{job_id}] Generating audio: prompt='{prompt}', duration={duration}s, seed={seed}"
+        )
         logger.info(f"[{job_id}] CoT prompt: {cot_prompt}")
 
         # Clamp duration to the VRAM envelope for this image variant
         duration = min(duration, MAX_DURATION)
 
-        from ThinkSound.inference.generation import generate_diffusion_cond
+        from PrismAudio.inference.generation import generate_diffusion_cond
 
         sample_rate = 44100
         sample_size = int(sample_rate * duration)
@@ -300,7 +304,9 @@ async def download(job_id: str):
 
     job = jobs[job_id]
     if job["status"] != "completed":
-        raise HTTPException(status_code=400, detail=f"Job not completed. Status: {job['status']}")
+        raise HTTPException(
+            status_code=400, detail=f"Job not completed. Status: {job['status']}"
+        )
 
     output_path = job.get("output_path")
     if not output_path or not Path(output_path).exists():
@@ -328,4 +334,5 @@ async def delete_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
