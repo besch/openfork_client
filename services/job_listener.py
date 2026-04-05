@@ -70,31 +70,6 @@ class JobListener:
                     )
                     service_config = self.client.services_config.get(service_type, {})
 
-                    if service_config.get("disabled", False):
-                        error_msg = (
-                            f"Job requires service '{service_type}' which is disabled."
-                        )
-                        logging.error(error_msg)
-
-                        # Emit JOB_FAILED event
-                        print(
-                            json.dumps(
-                                {
-                                    "type": "JOB_FAILED",
-                                    "payload": {
-                                        "id": job.get("id"),
-                                        "error": error_msg,
-                                    },
-                                }
-                            ),
-                            flush=True,
-                        )
-
-                        self.orchestrator_service.update_job_status(
-                            job.get("id"), "failed"
-                        )
-                        return True
-
                     if service_config and not can_run_service(
                         service_config, self.client.available_vram
                     ):
@@ -465,11 +440,6 @@ class JobListener:
                 for service_type in suggestions[
                     :2
                 ]:  # Limit to 2 to avoid queue buildup
-                    # Skip disabled services
-                    service_config = self.client.services_config.get(service_type, {})
-                    if service_config.get("disabled", False):
-                        continue
-
                     if (
                         not download_manager.has_image(service_type)
                         and not download_manager.is_downloading(service_type)
@@ -524,13 +494,6 @@ class JobListener:
                                     peeked_job
                                 )
                                 if not service_type:
-                                    continue
-
-                                # Skip disabled services
-                                service_config = self.client.services_config.get(
-                                    service_type, {}
-                                )
-                                if service_config.get("disabled", False):
                                     continue
 
                                 # Check if Docker image is available
