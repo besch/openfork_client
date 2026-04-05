@@ -13,6 +13,7 @@ comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/temp_handler.py
 comfyui-storage/turbodiffusion_api_server.py
 comfyui-storage/verify_wan2gp.py
+comfyui-storage/wan2gp_server.py
 config.py
 dgn_client.py
 exceptions.py
