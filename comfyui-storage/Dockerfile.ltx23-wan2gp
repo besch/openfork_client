@@ -108,8 +108,16 @@ RUN huggingface-cli download DeepBeepMeep/LTX-2 \
         --token "${HF_TOKEN}" \
     || { echo "ERROR: Gemma-3 text encoder download failed. Verify HF_TOKEN and repo access."; exit 1; }
 
+# ── FastAPI + uvicorn for the Wan2GP HTTP server ──────────────────────────────
+RUN pip3 install fastapi "uvicorn[standard]"
+
 # ── Verify critical files are present and shared.api is importable ─────────────
 COPY verify_wan2gp.py /tmp/verify_wan2gp.py
 RUN python3 /tmp/verify_wan2gp.py
 
 WORKDIR /opt/wan2gp
+
+# ── HTTP server that wraps shared.api (port 8188) ─────────────────────────────
+COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
+
+CMD ["python3", "/opt/wan2gp/wan2gp_server.py"]

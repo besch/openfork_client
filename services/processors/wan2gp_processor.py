@@ -1,26 +1,30 @@
 """
 Wan2GP Processor Base
 
-Wan2GP is used as a Python library (not an HTTP server). The shared.api
-module from the Wan2GP installation is imported directly at runtime.
+Wan2GP runs as an HTTP server (wan2gp_server.py) inside the Docker container.
+The host client communicates with it via a simple REST API on port 8188.
 
-A single WanGPSession is kept alive across jobs so the loaded model is
-reused without reloading on each request.
+On first call, _run_task() waits up to WAN2GP_READY_TIMEOUT seconds for the
+server to become available — the model can take 5-15 minutes to load.
 """
 
-import os
-import sys
+import base64
+import io
 import logging
-import threading
+import os
+import tempfile
+import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+
+import requests
 
 from config import THUMBNAIL_WIDTH
 from services.processors.base import BaseJobProcessor
 from utils.media_utils import generate_thumbnail, get_video_duration
 
-WAN2GP_ROOT = os.environ.get("WAN2GP_ROOT", "/opt/wan2gp")
-WAN2GP_OUTPUT = os.environ.get("WAN2GP_OUTPUT", "/opt/wan2gp/outputs")
+WAN2GP_HTTP_URL = os.environ.get("WAN2GP_HTTP_URL", "http://127.0.0.1:8188")
+WAN2GP_READY_TIMEOUT = int(os.environ.get("WAN2GP_READY_TIMEOUT", "1800"))  # 30 min
 
 # Aspect ratio → "WIDTHxHEIGHT" strings required by Wan2GP
 _ASPECT_RESOLUTIONS = {
@@ -33,7 +37,6 @@ _ASPECT_RESOLUTIONS = {
     "2:1": "1280x640",
 }
 
-# Lower resolution for 16GB tier (reduces VRAM by ~55% vs 720p)
 _ASPECT_RESOLUTIONS_16GB = {
     "16:9": "768x432",
     "9:16": "432x768",
@@ -44,7 +47,6 @@ _ASPECT_RESOLUTIONS_16GB = {
     "2:1": "768x384",
 }
 
-# Lower resolution for 8GB tier (reduces VRAM by ~75% vs 720p, optimized for Q4 quantized model)
 _ASPECT_RESOLUTIONS_8GB = {
     "16:9": "512x288",
     "9:16": "288x512",
@@ -55,119 +57,17 @@ _ASPECT_RESOLUTIONS_8GB = {
     "2:1": "512x256",
 }
 
-_session = None
-_session_lock = threading.Lock()
 
-
-def _get_session():
-    """Return the module-level WanGPSession, initialising it on first call."""
-    global _session
-    if _session is None:
-        with _session_lock:
-            if _session is None:
-                # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires:
-                #   1. CC >= 8.9 (Ada Lovelace / Hopper) for FP8 tensor-core support
-                #   2. The GPU's SM version must be in this PyTorch build's arch list.
-                #      Newer GPUs (e.g. RTX 5060 Ti SM 12.0 / Blackwell) crash with
-                #      "no kernel image available" if PyTorch was compiled for SM <= 9.0.
-                import torch as _torch_cc
-
-                if _torch_cc.cuda.is_available():
-                    _cc_major, _cc_minor = _torch_cc.cuda.get_device_capability()
-                    _gpu_name = _torch_cc.cuda.get_device_name(0)
-                    # NOTE: We intentionally skip get_arch_list() here.
-                    # cu128 wheels use PTX intermediate code for forward-compat
-                    # architectures (e.g. sm_89 / RTX 40xx), so sm_89 may not
-                    # appear in the SASS arch list even though the GPU and
-                    # PyTorch build are fully compatible.
-                    # The only meaningful gate for LTX-2.3 is CC >= 8.9 (FP8).
-                    if _cc_major < 8 or (_cc_major == 8 and _cc_minor < 9):
-                        raise RuntimeError(
-                            f"LTX-2.3 requires CUDA compute capability 8.9+ "
-                            f"(this GPU: {_gpu_name}, CC {_cc_major}.{_cc_minor}). "
-                            f"Supported: RTX 4090/4080/4070 Ti Super/4070/4060 Ti (Ada Lovelace), "
-                            f"L40S, H100, H200. "
-                            f"FP8 Gemma 3 encoder cannot run on CC {_cc_major}.{_cc_minor}."
-                        )
-                    logging.info(
-                        f"GPU '{_gpu_name}' CC {_cc_major}.{_cc_minor} — FP8 OK for LTX-2.3"
-                    )
-
-                # PyTorch < 2.4 compat: torch.nn.Buffer was added in 2.4 and is
-                # used by mmgp (Memory Management for the GPU Poor).  The shim
-                # returns the tensor unchanged — nn.Buffer's only role is to mark
-                # a tensor as a non-parameter buffer, which is safe to skip here.
-                import torch as _torch
-
-                if not hasattr(_torch.nn, "Buffer"):
-                    _torch.nn.Buffer = lambda data=None, persistent=True: data
-
-                # PyTorch < 2.2 compat: torch.unique not implemented for BFloat16.
-                # rope.py has multiple call sites.  Replace ALL of them with a compat
-                # wrapper appended to the file (appended so torch is in scope; replacing
-                # call sites first avoids touching the helper itself).
-                # When return_inverse/return_counts are True, torch.unique returns a
-                # tuple — only cast the first element (unique values) back to the
-                # original dtype; leave index tensors as-is.
-                _rope_py = os.path.join(
-                    WAN2GP_ROOT,
-                    "models",
-                    "ltx2",
-                    "ltx_core",
-                    "model",
-                    "transformer",
-                    "rope.py",
-                )
-                _NEW_HELPER = (
-                    "\n\n# BFloat16 compat shim — OpenFork DGN client v2\n"
-                    "def _uniq_bf16_compat(t, **kw):\n"
-                    "    _t = t.float() if t.dtype == torch.bfloat16 else t\n"
-                    "    result = torch.unique(_t, **kw)\n"
-                    "    if isinstance(result, tuple):\n"
-                    "        return (result[0].to(t.dtype),) + result[1:]\n"
-                    "    return result.to(t.dtype)\n"
-                )
-                if os.path.isfile(_rope_py):
-                    with open(_rope_py) as _f:
-                        _src = _f.read()
-                    if "_uniq_bf16_compat(" not in _src:
-                        # First time: replace all call sites and append helper
-                        _src = _src.replace("torch.unique(", "_uniq_bf16_compat(")
-                        _src += _NEW_HELPER
-                        with open(_rope_py, "w") as _f:
-                            _f.write(_src)
-                        logging.info(
-                            "Patched Wan2GP rope.py: wrapped all torch.unique calls for BFloat16"
-                        )
-                    elif "OpenFork DGN client v2" not in _src:
-                        # Call sites already replaced but helper is the old broken version
-                        # (missing tuple handling) — strip old helper and append fixed one
-                        _old_marker = "\n\n# BFloat16 compatibility shim injected by OpenFork DGN client\n"
-                        if _old_marker in _src:
-                            _src = _src[: _src.find(_old_marker)]
-                        _src += _NEW_HELPER
-                        with open(_rope_py, "w") as _f:
-                            _f.write(_src)
-                        logging.info(
-                            "Updated Wan2GP rope.py BFloat16 patch: fixed tuple return handling"
-                        )
-
-                if WAN2GP_ROOT not in sys.path:
-                    sys.path.insert(0, WAN2GP_ROOT)
-                from shared.api import init  # noqa: PLC0415 — deferred import
-
-                os.makedirs(WAN2GP_OUTPUT, exist_ok=True)
-                _session = init(
-                    root=Path(WAN2GP_ROOT),
-                    output_dir=Path(WAN2GP_OUTPUT),
-                    console_output=True,
-                )
-                logging.info(f"Wan2GP session initialised (root={WAN2GP_ROOT})")
-    return _session
+def _pil_to_data_uri(image) -> str:
+    """Encode a PIL Image as a JPEG data-URI for JSON transport."""
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=95)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}"
 
 
 class Wan2GPProcessor(BaseJobProcessor):
-    """Base class for processors that use the Wan2GP Python API."""
+    """Base class for processors that use the Wan2GP HTTP server."""
 
     MAX_GENERATION_SECONDS = 7200  # 2 hours
 
@@ -179,54 +79,109 @@ class Wan2GPProcessor(BaseJobProcessor):
             return _ASPECT_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
         return _ASPECT_RESOLUTIONS.get(aspect_ratio, "1280x720")
 
-    def _run_task(self, settings: dict) -> list:
-        """Submit a generation task to Wan2GP and block until complete.
-
-        Returns a list of absolute output file paths, or an empty list on
-        failure / shutdown.
-        """
-        session = _get_session()
-        job = session.submit_task(settings)
-
-        result_holder = [None]
-        exc_holder = [None]
-
-        def _worker():
-            try:
-                result_holder[0] = job.result()
-            except Exception as exc:
-                exc_holder[0] = exc
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-
-        elapsed = 0
-        while t.is_alive():
+    def _wait_for_server(self) -> bool:
+        """Poll /health until the Wan2GP server responds or timeout is reached."""
+        url = f"{WAN2GP_HTTP_URL}/health"
+        deadline = time.monotonic() + WAN2GP_READY_TIMEOUT
+        last_log = time.monotonic()
+        while time.monotonic() < deadline:
             if self.shutdown_event.is_set():
-                logging.warning(
-                    f"Shutdown requested during Wan2GP generation for job {self.job_id}"
-                )
-                return []
-            t.join(timeout=2)
-            elapsed += 2
-            if elapsed > self.MAX_GENERATION_SECONDS:
-                logging.error(f"Wan2GP generation timed out for job {self.job_id}")
-                return []
+                return False
+            try:
+                resp = requests.get(url, timeout=5)
+                if resp.status_code == 200 and resp.json().get("status") == "ok":
+                    logging.info("Wan2GP server is ready.")
+                    return True
+            except requests.exceptions.RequestException:
+                pass
+            now = time.monotonic()
+            if now - last_log >= 60:
+                elapsed = int(now - (deadline - WAN2GP_READY_TIMEOUT))
+                logging.info(f"Waiting for Wan2GP server... ({elapsed}s elapsed)")
+                last_log = now
+            self.shutdown_event.wait(5)
+        logging.error(
+            f"Wan2GP server did not become ready within {WAN2GP_READY_TIMEOUT}s."
+        )
+        return False
 
-        if exc_holder[0]:
+    def _run_task(self, settings: dict) -> List[str]:
+        """Submit a generation task and return local paths to the output files."""
+        if not self._wait_for_server():
+            return []
+
+        # Serialize any PIL Images to data-URIs so they survive JSON transport
+        serialized = {}
+        for key, val in settings.items():
+            try:
+                from PIL import Image as _PIL_Image
+
+                if isinstance(val, _PIL_Image.Image):
+                    serialized[key] = _pil_to_data_uri(val)
+                    continue
+            except ImportError:
+                pass
+            serialized[key] = val
+
+        generate_url = f"{WAN2GP_HTTP_URL}/generate"
+        try:
+            resp = requests.post(
+                generate_url,
+                json={"settings": serialized},
+                timeout=self.MAX_GENERATION_SECONDS + 60,
+            )
+        except requests.exceptions.RequestException as e:
             logging.error(
-                f"Wan2GP raised an exception for job {self.job_id}: {exc_holder[0]}",
-                exc_info=exc_holder[0],
+                f"Wan2GP generate request failed for job {self.job_id}: {e}"
             )
             return []
 
-        result = result_holder[0]
-        if not result or not result.success:
-            for err in result.errors if result else []:
-                logging.error(f"Wan2GP error [{err.stage}]: {err.message}")
+        if resp.status_code != 200:
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text
+            logging.error(
+                f"Wan2GP server returned error for job {self.job_id}: {detail}"
+            )
             return []
 
-        return list(result.generated_files)
+        basenames = resp.json().get("files", [])
+        if not basenames:
+            logging.error(f"Wan2GP returned no output files for job {self.job_id}")
+            return []
+
+        # Download each output file to a local temp path
+        local_paths = []
+        for name in basenames:
+            download_url = f"{WAN2GP_HTTP_URL}/output/{name}"
+            try:
+                dl = requests.get(download_url, timeout=300, stream=True)
+                dl.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                logging.error(
+                    f"Failed to download output '{name}' for job {self.job_id}: {e}"
+                )
+                continue
+
+            suffix = Path(name).suffix or ".mp4"
+            os.makedirs(self.cache_dir, exist_ok=True)
+            tmp = tempfile.NamedTemporaryFile(
+                delete=False, suffix=suffix, dir=self.cache_dir
+            )
+            try:
+                for chunk in dl.iter_content(chunk_size=1 << 20):
+                    tmp.write(chunk)
+                tmp.close()
+                local_paths.append(tmp.name)
+            except Exception as e:
+                tmp.close()
+                os.unlink(tmp.name)
+                logging.error(
+                    f"Failed to write output file for job {self.job_id}: {e}"
+                )
+
+        return local_paths
 
     def _handle_video_output(
         self, file_path: str
