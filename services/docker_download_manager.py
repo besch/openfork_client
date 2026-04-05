@@ -19,6 +19,7 @@ class DownloadStatus(Enum):
     DOWNLOADING = "downloading"
     COMPLETED = "completed"
     FAILED = "failed"
+    PERMANENTLY_FAILED = "permanently_failed"  # e.g. image does not exist on registry
 
 
 class DockerDownloadManager:
@@ -156,8 +157,13 @@ class DockerDownloadManager:
                 self._download_status[service_type] = DownloadStatus.FAILED
                 return False
             
-            # Clear any previous FAILED status to allow retry
+            # Permanently-failed images (e.g. 404 - image doesn't exist on registry) must
+            # not be retried automatically; they require a config fix to resolve.
+            if self._download_status.get(service_type) == DownloadStatus.PERMANENTLY_FAILED:
+                logging.debug(f"Image for {service_type} permanently failed (image not found on registry); skipping retry")
+                return False
 
+            # Clear any previous FAILED status to allow retry
             # This is important for resuming after a cancelled download
             if service_type in self._download_status:
                 prev_status = self._download_status[service_type]
@@ -269,9 +275,24 @@ class DockerDownloadManager:
             self._report_download_state(service_type, "finish")
                 
         except Exception as e:
-            logging.error(f"Background download failed for {service_type}: {e}")
-            with self._lock:
-                self._download_status[service_type] = DownloadStatus.FAILED
+            # Distinguish permanent failures (image does not exist on registry) from
+            # transient ones (network blip, timeout).  A permanent failure must not be
+            # retried automatically — only a config/image-name fix can resolve it.
+            is_image_not_found = isinstance(e, docker.errors.NotFound) or (
+                isinstance(e, docker.errors.APIError) and getattr(e.response, "status_code", None) == 404
+            )
+            if is_image_not_found:
+                image_name = self.docker_manager.get_image_name(service_type)
+                logging.error(
+                    f"Image '{image_name}' does not exist on the registry "
+                    f"(404). Will not retry until config is corrected."
+                )
+                with self._lock:
+                    self._download_status[service_type] = DownloadStatus.PERMANENTLY_FAILED
+            else:
+                logging.error(f"Background download failed for {service_type}: {e}")
+                with self._lock:
+                    self._download_status[service_type] = DownloadStatus.FAILED
 
             # Report download failure to server (removes from downloading)
             self._report_download_state(service_type, "cancel")

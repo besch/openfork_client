@@ -734,7 +734,12 @@ class JobListener:
                                         )
 
                                         if not is_downloading and not is_queued:
-                                            if status and status.value == "failed":
+                                            if status and status.value == "permanently_failed":
+                                                logging.warning(
+                                                    f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
+                                                )
+                                                # start_background_download will no-op for permanently_failed
+                                            elif status and status.value == "failed":
                                                 logging.info(
                                                     f"Image for service '{service_type}' previously failed. Retrying download..."
                                                 )
