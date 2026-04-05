@@ -40,10 +40,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.sparkvsr-24gb", "beschiak/openfork-sparkvsr-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.davinci-magihuman-32gb", "beschiak/openfork-davinci-magihuman-32gb:latest", build=True, push=True),
     # Redundant tier-specific images (Consolidated into -24gb)
-    ImageConfig("Dockerfile.ltx23-8gb", "beschiak/openfork-ltx23-8gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.ltx23-16gb", "beschiak/openfork-ltx23-16gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.ltx23-24gb", "beschiak/openfork-ltx23-24gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.ltx23-32gb", "beschiak/openfork-ltx23-32gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-8gb", "beschiak/openfork-mmaudio-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-16gb", "beschiak/openfork-mmaudio-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.lavasr", "beschiak/openfork-lavasr:latest", build=True, push=True),
