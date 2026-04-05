@@ -66,39 +66,102 @@ def wrap_cot(prompt: str) -> str:
     )
 
 
+def _find_config_file() -> Optional[Path]:
+    """
+    Locate the model architecture config in /app/ckpts/.
+    Tries common filenames used by stable-audio-tools / HuggingFace repos.
+    Also checks the repo's own scripts/PrismAudio/ directory as a fallback.
+    """
+    candidates = [
+        CKPT_DIR / "model_config.json",
+        CKPT_DIR / "config.json",
+        CKPT_DIR / "model_config.yaml",
+        CKPT_DIR / "config.yaml",
+        # ThinkSound may bundle the config in the repo itself
+        WORK_DIR / "scripts" / "PrismAudio" / "model_config.json",
+        WORK_DIR / "scripts" / "PrismAudio" / "config.json",
+        WORK_DIR / "configs" / "model_config.json",
+        WORK_DIR / "configs" / "prismaudio.json",
+    ]
+    for p in candidates:
+        if p.exists():
+            logger.info(f"Found model config at: {p}")
+            return p
+    return None
+
+
+def _find_checkpoint(*names: str) -> Optional[Path]:
+    """Return the first matching checkpoint path, or None."""
+    for name in names:
+        p = CKPT_DIR / name
+        if p.exists():
+            return p
+    return None
+
+
+def _log_ckpts_contents():
+    """Log what's actually present in /app/ckpts/ to aid debugging."""
+    try:
+        files = sorted(CKPT_DIR.rglob("*"))
+        if files:
+            logger.info(f"Contents of {CKPT_DIR}:")
+            for f in files:
+                if f.is_file():
+                    size_mb = f.stat().st_size / 1024 / 1024
+                    logger.info(f"  {f.relative_to(CKPT_DIR)}  ({size_mb:.1f} MB)")
+        else:
+            logger.warning(f"{CKPT_DIR} is empty — weights were not downloaded at build time")
+    except Exception as e:
+        logger.warning(f"Could not list {CKPT_DIR}: {e}")
+
+
 def load_model():
     """Load PRiSM model at startup using ThinkSound's public API."""
     global _model
 
     logger.info("Loading PRiSM (Prism Audio) model...")
+    _log_ckpts_contents()
 
-    # The cloned repo exposes create_model_from_config_path and get_pretrained_model
-    # via ThinkSound/__init__.py → models/factory.py + models/pretrained.py
-    # Checkpoint layout in /app/ckpts/ mirrors what snapshot_download places there:
-    #   ckpts/prismaudio.ckpt  — main diffusion weights
-    #   ckpts/vae.ckpt         — pretransform / VAE weights
-    #   ckpts/model_config.json — architecture config
     sys.path.insert(0, str(WORK_DIR))
 
     try:
-        from PrismAudio import create_model_from_config_path
-        from PrismAudio.models.utils import load_ckpt_state_dict
+        # Try the PrismAudio package (installed from ThinkSound prismaudio branch).
+        # Fall back to stable_audio_tools if the package name differs.
+        try:
+            from PrismAudio import create_model_from_config_path
+            from PrismAudio.models.utils import load_ckpt_state_dict
+        except ImportError:
+            logger.warning("PrismAudio package not found; trying stable_audio_tools")
+            from stable_audio_tools.models.factory import create_model_from_config_path
+            from stable_audio_tools.models.utils import load_ckpt_state_dict
 
-        config_path = CKPT_DIR / "model_config.json"
-        if not config_path.exists():
-            raise FileNotFoundError(f"Model config not found: {config_path}")
+        config_path = _find_config_file()
+        if config_path is None:
+            raise FileNotFoundError(
+                f"No model config found in {CKPT_DIR} or repo. "
+                "Tried: model_config.json, config.json, model_config.yaml, config.yaml. "
+                "Check the ckpts directory listing above for the actual filenames."
+            )
 
         model = create_model_from_config_path(str(config_path))
 
-        # Load main diffusion weights
-        main_ckpt = CKPT_DIR / "prismaudio.ckpt"
-        if main_ckpt.exists():
+        # Load main diffusion weights — try several plausible filenames
+        main_ckpt = _find_checkpoint(
+            "prismaudio.ckpt", "model.ckpt", "diffusion_model.ckpt",
+            "prismaudio.safetensors", "model.safetensors",
+        )
+        if main_ckpt:
             load_ckpt_state_dict(model, str(main_ckpt), prefix="diffusion.")
             logger.info(f"Loaded diffusion weights from {main_ckpt}")
+        else:
+            logger.warning("No diffusion weights found in ckpts — model may be misconfigured")
 
-        # Load VAE / pretransform weights
-        vae_ckpt = CKPT_DIR / "vae.ckpt"
-        if vae_ckpt.exists():
+        # Load VAE / pretransform weights — try several plausible filenames
+        vae_ckpt = _find_checkpoint(
+            "vae.ckpt", "autoencoder.ckpt", "pretransform.ckpt",
+            "vae.safetensors", "autoencoder.safetensors",
+        )
+        if vae_ckpt:
             load_ckpt_state_dict(model, str(vae_ckpt), prefix="autoencoder.")
             logger.info(f"Loaded VAE weights from {vae_ckpt}")
 
@@ -109,7 +172,6 @@ def load_model():
 
     except Exception as e:
         logger.error(f"Failed to load PRiSM model: {e}", exc_info=True)
-        # Raise so the lifespan handler can surface the failure clearly
         raise
 
 

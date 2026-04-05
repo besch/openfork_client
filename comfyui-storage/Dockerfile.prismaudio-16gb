@@ -59,13 +59,16 @@ RUN conda create -n prismaudio python=3.10 -y \
 RUN mkdir -p /app/input /app/output /app/ckpts
 
 # Download model weights from HuggingFace
+# HF_TOKEN is required if the repo is gated; pass via --build-arg HF_TOKEN=hf_...
 ARG HF_TOKEN
 RUN HF_TOKEN=$HF_TOKEN conda run -n prismaudio python -c "\
 from huggingface_hub import snapshot_download; \
-import os; \
+import os, sys; \
 os.makedirs('/app/ckpts', exist_ok=True); \
-snapshot_download('FunAudioLLM/PrismAudio', local_dir='/app/ckpts'); \
-print('PRiSM weights downloaded successfully')" \
+snapshot_download('FunAudioLLM/PrismAudio', local_dir='/app/ckpts', token=os.environ.get('HF_TOKEN') or None); \
+files = [f for f in os.walk('/app/ckpts')]; \
+print('PRiSM weights downloaded successfully'); \
+[print(' ', root, f) for root, dirs, fs in files for f in fs]" \
     && rm -rf ~/.cache/pip
 
 # Copy the API script at build time (used as fallback if curl fails at runtime)

@@ -40,12 +40,12 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.sparkvsr-24gb", "beschiak/openfork-sparkvsr-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.davinci-magihuman-32gb", "beschiak/openfork-davinci-magihuman-32gb:latest", build=True, push=True),
     # Redundant tier-specific images (Consolidated into -24gb)
-    ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-8gb", "beschiak/openfork-mmaudio-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-16gb", "beschiak/openfork-mmaudio-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.lavasr", "beschiak/openfork-lavasr:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.prismaudio-8gb", "beschiak/openfork-prismaudio-8gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.prismaudio-16gb", "beschiak/openfork-prismaudio-16gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.prismaudio-8gb", "beschiak/openfork-prismaudio-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.prismaudio-16gb", "beschiak/openfork-prismaudio-16gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4
