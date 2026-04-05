@@ -123,7 +123,7 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
         # 3. Supabase storage path
         storage_path = self.job.get("input_storage_path")
         if not storage_path:
-            maybe = self.job.get("start_image_base64")
+            maybe = self.job.get("inputs", {}).get("start_image_base64")
             if (
                 maybe
                 and isinstance(maybe, str)
