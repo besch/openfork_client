@@ -369,7 +369,6 @@ class DockerProdManager:
                 ports=ports,
                 device_requests=device_requests,
                 restart_policy={"Name": "no"},
-                timeout=180,
             )
             logging.info(f"Container '{container_name}' started successfully.")
         except docker.errors.APIError as e:
