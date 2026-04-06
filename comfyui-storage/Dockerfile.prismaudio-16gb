@@ -58,12 +58,12 @@ RUN conda create -n prismaudio python=3.10 -y \
 # Fix dependency conflicts in a single pip pass to avoid resolver back-tracking:
 # - protobuf>=3.20,<4.0: >=3.20 required so TF-generated .pb2 files can import
 #   google.protobuf.internal.builder (added in 3.20); <4.0 keeps MessageFactory.GetPrototype
-# - transformers<4.45 ensures T5EncoderModel is available
+# - transformers>=4.45: t5gemma architecture (google/t5gemma-l-l-ul2-it) requires 4.45+
 # - numpy>=1.24,<2.0: JAX >= 0.4.14 needs np.dtypes (added in numpy 1.24); <2.0 avoids
 #   numpy 2.x API breakage elsewhere in the stack
 RUN conda run -n prismaudio pip install \
     "protobuf>=3.20,<4.0" \
-    "transformers<4.45,>=4.30" \
+    "transformers>=4.45" \
     "numpy>=1.24,<2.0" \
     && rm -rf ~/.cache/pip
 
