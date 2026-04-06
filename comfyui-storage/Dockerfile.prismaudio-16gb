@@ -55,10 +55,16 @@ RUN conda create -n prismaudio python=3.10 -y \
     && conda clean -afy \
     && rm -rf ~/.cache/pip /tmp/*
 
-# Fix dependency conflicts: pin protobuf and transformers to compatible versions
-# protobuf<4.0 avoids MessageFactory.GetPrototype errors with older TensorFlow versions
-# transformers<4.45 ensures T5EncoderModel is available
-RUN conda run -n prismaudio pip install "protobuf<4.0" "transformers<4.45,>=4.30" \
+# Fix dependency conflicts in a single pip pass to avoid resolver back-tracking:
+# - protobuf>=3.20,<4.0: >=3.20 required so TF-generated .pb2 files can import
+#   google.protobuf.internal.builder (added in 3.20); <4.0 keeps MessageFactory.GetPrototype
+# - transformers<4.45 ensures T5EncoderModel is available
+# - numpy>=1.24,<2.0: JAX >= 0.4.14 needs np.dtypes (added in numpy 1.24); <2.0 avoids
+#   numpy 2.x API breakage elsewhere in the stack
+RUN conda run -n prismaudio pip install \
+    "protobuf>=3.20,<4.0" \
+    "transformers<4.45,>=4.30" \
+    "numpy>=1.24,<2.0" \
     && rm -rf ~/.cache/pip
 
 # Create working directories
@@ -76,6 +82,19 @@ files = [f for f in os.walk('/app/ckpts')]; \
 print('PRiSM weights downloaded successfully'); \
 [print(' ', root, f) for root, dirs, fs in files for f in fs]" \
     && rm -rf ~/.cache/pip
+
+# Pre-download T5 text encoder loaded at startup by feature_utils_288.py:
+#   self.t5 = AutoModelForSeq2SeqLM.from_pretrained("google/t5gemma-l-l-ul2-it")
+#   self.t5tokenizer = AutoTokenizer.from_pretrained("google/t5gemma-l-l-ul2-it")
+# Without this the container crashes immediately because HF_HUB_OFFLINE=1 at runtime.
+RUN HF_TOKEN=$HF_TOKEN conda run -n prismaudio python -c "\
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer; \
+import os; \
+token = os.environ.get('HF_TOKEN') or None; \
+print('Downloading google/t5gemma-l-l-ul2-it model...'); \
+AutoModelForSeq2SeqLM.from_pretrained('google/t5gemma-l-l-ul2-it', token=token); \
+AutoTokenizer.from_pretrained('google/t5gemma-l-l-ul2-it', token=token); \
+print('T5 text encoder pre-cached successfully')"
 
 # Copy the API script at build time (used as fallback if curl fails at runtime)
 COPY prismaudio_api.py /app/prismaudio_api.py

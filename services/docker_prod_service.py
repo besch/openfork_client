@@ -41,7 +41,7 @@ class DockerProdManager:
     def __init__(self):
         try:
             logging.info("Initializing Docker client...")
-            self.client = docker.from_env()
+            self.client = docker.from_env(timeout=300)
             self.client.ping()
             logging.info("Successfully connected to Docker via from_env()")
         except (docker.errors.DockerException, Exception) as e:
