@@ -559,9 +559,61 @@ class JobListener:
 
                                         if not HEADLESS_MODE:
                                             logging.info("Starting container...")
-                                            docker_manager.run_container(
-                                                service_type=actual_service_type
+                                            service_cfg = self.client.services_config.get(
+                                                actual_service_type, {}
                                             )
+                                            is_wan2gp = (
+                                                service_cfg.get("backend") == "wan2gp"
+                                            )
+
+                                            if is_wan2gp:
+                                                # Start with a sleeping entrypoint so we can
+                                                # copy the server script before launching it.
+                                                # This makes old images (no CMD) work without
+                                                # a rebuild.
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    command=["sleep", "infinity"],
+                                                )
+                                                # Copy the latest wan2gp_server.py into the
+                                                # container, overwriting any baked-in version.
+                                                import os as _os
+
+                                                server_src = _os.path.join(
+                                                    self.client.root_dir,
+                                                    "comfyui-storage",
+                                                    "wan2gp_server.py",
+                                                )
+                                                if _os.path.isfile(server_src):
+                                                    docker_manager.copy_file_to_container(
+                                                        actual_service_type,
+                                                        server_src,
+                                                        "/opt/wan2gp/wan2gp_server.py",
+                                                        self.shutdown_event,
+                                                    )
+                                                    logging.info(
+                                                        "Copied wan2gp_server.py into container."
+                                                    )
+                                                else:
+                                                    logging.warning(
+                                                        f"wan2gp_server.py not found at {server_src}; using baked-in version."
+                                                    )
+                                                # Launch the server detached inside the container
+                                                docker_manager.exec_in_container(
+                                                    actual_service_type,
+                                                    [
+                                                        "python3",
+                                                        "/opt/wan2gp/wan2gp_server.py",
+                                                    ],
+                                                    detach=True,
+                                                )
+                                                logging.info(
+                                                    "Launched wan2gp_server.py inside container."
+                                                )
+                                            else:
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                )
 
                                             # Start container crash monitor
                                             # This detects OOM kills and unexpected container crashes

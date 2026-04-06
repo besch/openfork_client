@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
     python3.10 python3.10-venv python3-distutils \
-    curl git wget libsm6 libxext6 \
+    curl git wget libsm6 libxext6 libsndfile1 \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
     && ln -sf /usr/bin/python3.10 /usr/bin/python \
     && apt-get clean \

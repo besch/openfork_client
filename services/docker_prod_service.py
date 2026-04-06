@@ -290,8 +290,37 @@ class DockerProdManager:
                 logging.error(f"Failed to pull image '{image_name}': {e}")
                 raise
 
+    def exec_in_container(
+        self,
+        service_type: str,
+        command: list,
+        detach: bool = False,
+        environment: dict = None,
+    ):
+        """Run a command inside a running container."""
+        if not self.client:
+            logging.error(
+                f"Cannot exec in container for '{service_type}': Docker client not initialized."
+            )
+            return None
+        container_name = self.get_container_name(service_type)
+        try:
+            container = self.client.containers.get(container_name)
+            result = container.exec_run(command, detach=detach, environment=environment)
+            return result
+        except docker.errors.NotFound:
+            logging.error(f"Container '{container_name}' not found for exec.")
+            return None
+        except docker.errors.APIError as e:
+            logging.error(f"exec_run failed in '{container_name}': {e}")
+            return None
+
     def run_container(
-        self, service_type: str, ports: dict = None, force_restart: bool = True
+        self,
+        service_type: str,
+        ports: dict = None,
+        force_restart: bool = True,
+        command: list = None,
     ):
         if not self.client:
             logging.error(
@@ -362,7 +391,7 @@ class DockerProdManager:
                 )
 
         try:
-            self.client.containers.run(
+            run_kwargs = dict(
                 image=image_name,
                 detach=True,
                 name=container_name,
@@ -370,6 +399,9 @@ class DockerProdManager:
                 device_requests=device_requests,
                 restart_policy={"Name": "no"},
             )
+            if command:
+                run_kwargs["command"] = command
+            self.client.containers.run(**run_kwargs)
             logging.info(f"Container '{container_name}' started successfully.")
         except docker.errors.APIError as e:
             logging.error(f"Failed to start container '{container_name}': {e}")
