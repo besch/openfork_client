@@ -812,8 +812,20 @@ if [ "$START_SPARKVSR" = "true" ]; then
   fi
 
   if [ -n "$SPARKVSR_API" ]; then
-    log "Found SparkVSR API at $SPARKVSR_API. Starting..."
-    (cd "$SPARKVSR_CD" && "$PYTHON_EXE" sparkvsr_api.py > /tmp/sparkvsr_api.log 2>&1) &
+    # Check if port 8000 is already bound (e.g. by the Docker CMD running sparkvsr_api.py)
+    PORT8000_BOUND=false
+    if command -v netstat &> /dev/null; then
+      if netstat -tln | grep -q ":8000 "; then PORT8000_BOUND=true; fi
+    elif command -v ss &> /dev/null; then
+      if ss -tln | grep -q ":8000 "; then PORT8000_BOUND=true; fi
+    fi
+
+    if [ "$PORT8000_BOUND" = "true" ]; then
+      log "Port 8000 already bound — SparkVSR API is already starting (Docker CMD). Skipping redundant launch."
+    else
+      log "Found SparkVSR API at $SPARKVSR_API. Starting..."
+      (cd "$SPARKVSR_CD" && "$PYTHON_EXE" sparkvsr_api.py > /tmp/sparkvsr_api.log 2>&1) &
+    fi
     wait_for_url "SparkVSR API" "http://127.0.0.1:8000/health" 300 "/tmp/sparkvsr_api.log"
   else
     log "ERROR: SparkVSR API not found at /app/sparkvsr_api.py or /opt/SparkVSR/sparkvsr_api.py"
