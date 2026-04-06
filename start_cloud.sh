@@ -369,6 +369,7 @@ START_DIAGDISTILL="false"
 START_WAN2GP="false"
 START_DAVINCI="false"
 START_COMFYUI="true"
+START_SPARKVSR="false"
 ENABLE_4BIT="false"
 
 TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
@@ -411,10 +412,10 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman 32GB service."
       START_DAVINCI="true"
       SERVICE_TYPE="davinci-magihuman-32gb"
-  elif [ -f "/app/sparkvsr_api.py" ] || [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
-      log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
-      START_SPARKVSR="true"
-      SERVICE_TYPE="sparkvsr-upscaler"
+   elif [ -f "/app/sparkvsr_api.py" ] || [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
+       log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
+       START_SPARKVSR="true"
+       SERVICE_TYPE="sparkvsr-upscaler-24gb"
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
