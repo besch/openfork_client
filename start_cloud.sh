@@ -321,6 +321,11 @@ fi
           cp -v "$DGN_SOURCE_DIR/turbodiffusion_api_server.py" /opt/TurboDiffusion/api_server.py
       fi
 
+      # 3. Wan2GP HTTP server (runs in /opt/wan2gp)
+      if [ -d "/opt/wan2gp" ] && [ -f "$DGN_SOURCE_DIR/wan2gp_server.py" ]; then
+          cp -v "$DGN_SOURCE_DIR/wan2gp_server.py" /opt/wan2gp/
+      fi
+
       log "✓ Dynamic file sync complete"
   else
       log "WARNING: Could not find comfyui-storage in DGN client. Skipping file sync."
@@ -571,6 +576,18 @@ except Exception as e:
     fi
     
     log "Wan2GP environment configured (WAN2GP_ROOT=$WAN2GP_ROOT)"
+
+    # Start the Wan2GP HTTP server in the background.
+    # It loads the model at startup (can take 10-20 min for the 22B model).
+    # The DGN client processor polls /health and waits up to 30 min for it.
+    WAN2GP_SERVER="/opt/wan2gp/wan2gp_server.py"
+    if [ -f "$WAN2GP_SERVER" ]; then
+        log "Starting Wan2GP HTTP server in background (logging to /tmp/wan2gp_server.log)..."
+        (cd "$WAN2GP_ROOT" && "$PYTHON_EXE" "$WAN2GP_SERVER" > /tmp/wan2gp_server.log 2>&1) &
+    else
+        log "ERROR: wan2gp_server.py not found at $WAN2GP_SERVER. Cannot start Wan2GP HTTP server."
+        exit 1
+    fi
 fi
 
 # Start ComfyUI

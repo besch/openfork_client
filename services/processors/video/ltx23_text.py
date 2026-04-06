@@ -66,12 +66,14 @@ class LTX23TextToVideoWan2GPProcessor(Wan2GPProcessor):
 
         files = self._run_task(settings)
         if not files:
-            self._fail_job(f"Wan2GP produced no output for job {self.job_id}")
+            if not self.shutdown_event.is_set():
+                self._fail_job(f"Wan2GP produced no output for job {self.job_id}")
             return
 
         result = self._handle_video_output(files[0])
         if not result:
-            self._fail_job(f"Failed to process video output for job {self.job_id}")
+            if not self.shutdown_event.is_set():
+                self._fail_job(f"Failed to process video output for job {self.job_id}")
             return
 
         video_storage_path, thumbnail_storage_path, actual_duration = result
