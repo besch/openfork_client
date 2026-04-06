@@ -17,16 +17,13 @@ from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
 
+import subprocess
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torchaudio
 from torchvision.transforms import v2
 from torio.io import StreamingMediaDecoder
-try:
-    from moviepy.editor import VideoFileClip
-except ImportError:
-    from moviepy import VideoFileClip
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
@@ -119,10 +116,17 @@ def pad_to_square(video_tensor: torch.Tensor) -> torch.Tensor:
 
 
 def get_video_duration(video_path: str) -> float:
-    clip = VideoFileClip(str(video_path))
-    duration = clip.duration
-    clip.close()
-    return duration
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return float(result.stdout.strip())
 
 
 # ---------------------------------------------------------------------------
