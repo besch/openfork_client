@@ -55,6 +55,12 @@ RUN conda create -n prismaudio python=3.10 -y \
     && conda clean -afy \
     && rm -rf ~/.cache/pip /tmp/*
 
+# Ensure protobuf >= 3.20.0 — build_env.sh may install an older version that
+# lacks google.protobuf.internal.builder, causing TensorFlow (pulled in via
+# transformers → image_transforms.py) to fail at startup.
+RUN conda run -n prismaudio pip install "protobuf>=3.20.0" \
+    && rm -rf ~/.cache/pip
+
 # Create working directories
 RUN mkdir -p /app/input /app/output /app/ckpts
 
