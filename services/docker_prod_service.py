@@ -183,7 +183,7 @@ class DockerProdManager:
         return image
 
     def get_container_name(self, service_type: str) -> str:
-        return f"dgn-client-comfyui-{service_type}"
+        return f"dgn-client-{service_type}"
 
     def pull_image(
         self,
