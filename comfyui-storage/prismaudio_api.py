@@ -7,6 +7,7 @@ Accepts video file upload + prompt, returns generated audio.
 
 import os
 import sys
+import json
 import uuid
 import logging
 import shutil
@@ -16,11 +17,15 @@ from pathlib import Path
 from typing import Optional
 from contextlib import asynccontextmanager
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 import torchaudio
+from torchvision.transforms import v2
+from torio.io import StreamingMediaDecoder
+from moviepy.editor import VideoFileClip
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 
 # Setup logging
 logging.basicConfig(
@@ -37,27 +42,45 @@ OUTPUT_DIR = WORK_DIR / "output"
 INPUT_DIR = WORK_DIR / "input"
 CKPT_DIR = WORK_DIR / "ckpts"
 
-# Configuration
+# Configuration — mirrors app.py constants exactly
+SAMPLE_RATE = 44100
+_CLIP_FPS = 4
+_CLIP_SIZE = 288
+_SYNC_FPS = 25
+_SYNC_SIZE = 224
+
+MODEL_CONFIG_PATH = WORK_DIR / "PrismAudio" / "configs" / "model_configs" / "prismaudio.json"
+CKPT_PATH        = CKPT_DIR / "prismaudio.ckpt"
+VAE_CKPT_PATH    = CKPT_DIR / "vae.ckpt"
+VAE_CONFIG_PATH  = WORK_DIR / "PrismAudio" / "configs" / "model_configs" / "stable_audio_2_0_vae.json"
+SYNCHFORMER_PATH = CKPT_DIR / "synchformer_state_dict.pth"
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DTYPE = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+DTYPE  = torch.bfloat16 if torch.cuda.is_available() else torch.float32
 
 # Read 16GB-variant env vars (set in Dockerfile.prismaudio-16gb)
 MAX_DURATION = float(os.environ.get("PRISMAUDIO_MAX_DURATION", "10"))
-BATCH_SIZE = int(os.environ.get("PRISMAUDIO_BATCH_SIZE", "1"))
+BATCH_SIZE   = int(os.environ.get("PRISMAUDIO_BATCH_SIZE", "1"))
 
 # Thread pool for blocking GPU inference (keeps FastAPI event loop free)
 _executor = ThreadPoolExecutor(max_workers=1)
 
-# Globals for loaded model
-_model = None
+# Globals for loaded models
+_diffusion         = None
+_feature_extractor = None
+_sync_transform    = None
+_model_config      = None
 
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
 
 def wrap_cot(prompt: str) -> str:
     """Wrap simple prompt into PRiSM Chain-of-Thought format if tags are missing."""
     tags = ["<Semantic>", "<Temporal>", "<Aesthetic>", "<Spatial>"]
     if any(tag in prompt for tag in tags):
         return prompt
-
     return (
         f"<Semantic>{prompt}</Semantic>"
         f"<Temporal>Natural flow synchronous with video events.</Temporal>"
@@ -66,41 +89,7 @@ def wrap_cot(prompt: str) -> str:
     )
 
 
-def _find_config_file() -> Optional[Path]:
-    """
-    Locate the model architecture config in /app/ckpts/.
-    Tries common filenames used by stable-audio-tools / HuggingFace repos.
-    Also checks the repo's own scripts/PrismAudio/ directory as a fallback.
-    """
-    candidates = [
-        CKPT_DIR / "model_config.json",
-        CKPT_DIR / "config.json",
-        CKPT_DIR / "model_config.yaml",
-        CKPT_DIR / "config.yaml",
-        # ThinkSound may bundle the config in the repo itself
-        WORK_DIR / "scripts" / "PrismAudio" / "model_config.json",
-        WORK_DIR / "scripts" / "PrismAudio" / "config.json",
-        WORK_DIR / "configs" / "model_config.json",
-        WORK_DIR / "configs" / "prismaudio.json",
-    ]
-    for p in candidates:
-        if p.exists():
-            logger.info(f"Found model config at: {p}")
-            return p
-    return None
-
-
-def _find_checkpoint(*names: str) -> Optional[Path]:
-    """Return the first matching checkpoint path, or None."""
-    for name in names:
-        p = CKPT_DIR / name
-        if p.exists():
-            return p
-    return None
-
-
 def _log_ckpts_contents():
-    """Log what's actually present in /app/ckpts/ to aid debugging."""
     try:
         files = sorted(CKPT_DIR.rglob("*"))
         if files:
@@ -115,119 +104,264 @@ def _log_ckpts_contents():
         logger.warning(f"Could not list {CKPT_DIR}: {e}")
 
 
+def pad_to_square(video_tensor: torch.Tensor) -> torch.Tensor:
+    """(L, C, H, W) -> (L, C, _CLIP_SIZE, _CLIP_SIZE)"""
+    l, c, h, w = video_tensor.shape
+    max_side = max(h, w)
+    pad_h = max_side - h
+    pad_w = max_side - w
+    padding = (pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2)
+    padded = F.pad(video_tensor, pad=padding, mode="constant", value=0)
+    return F.interpolate(padded, size=(_CLIP_SIZE, _CLIP_SIZE), mode="bilinear", align_corners=False)
+
+
+def get_video_duration(video_path: str) -> float:
+    clip = VideoFileClip(str(video_path))
+    duration = clip.duration
+    clip.close()
+    return duration
+
+
+# ---------------------------------------------------------------------------
+# model loading
+# ---------------------------------------------------------------------------
+
 def load_model():
-    """Load PRiSM model at startup using ThinkSound's public API."""
-    global _model
+    """Load PRiSM diffusion model and feature extractor at startup."""
+    global _diffusion, _feature_extractor, _sync_transform, _model_config
 
     logger.info("Loading PRiSM (Prism Audio) model...")
     _log_ckpts_contents()
 
     sys.path.insert(0, str(WORK_DIR))
 
-    try:
-        # Try the PrismAudio package (installed from ThinkSound prismaudio branch).
-        # Fall back to stable_audio_tools if the package name differs.
-        try:
-            from PrismAudio import create_model_from_config_path
-            from PrismAudio.models.utils import load_ckpt_state_dict
-        except ImportError:
-            logger.warning("PrismAudio package not found; trying stable_audio_tools")
-            from stable_audio_tools.models.factory import create_model_from_config_path
-            from stable_audio_tools.models.utils import load_ckpt_state_dict
+    # Verify required files
+    missing = [p for p in (MODEL_CONFIG_PATH, CKPT_PATH, VAE_CKPT_PATH, SYNCHFORMER_PATH) if not p.exists()]
+    if missing:
+        raise FileNotFoundError(f"Required PRiSM files not found: {[str(m) for m in missing]}")
 
-        config_path = _find_config_file()
-        if config_path is None:
-            raise FileNotFoundError(
-                f"No model config found in {CKPT_DIR} or repo. "
-                "Tried: model_config.json, config.json, model_config.yaml, config.yaml. "
-                "Check the ckpts directory listing above for the actual filenames."
-            )
+    with open(MODEL_CONFIG_PATH) as f:
+        _model_config = json.load(f)
 
-        model = create_model_from_config_path(str(config_path))
+    from PrismAudio.models import create_model_from_config
+    from PrismAudio.models.utils import load_ckpt_state_dict
+    from data_utils.v2a_utils.feature_utils_288 import FeaturesUtils
 
-        # Load main diffusion weights — try several plausible filenames
-        main_ckpt = _find_checkpoint(
-            "prismaudio.ckpt", "model.ckpt", "diffusion_model.ckpt",
-            "prismaudio.safetensors", "model.safetensors",
-        )
-        if main_ckpt:
-            load_ckpt_state_dict(model, str(main_ckpt), prefix="diffusion.")
-            logger.info(f"Loaded diffusion weights from {main_ckpt}")
-        else:
-            logger.warning("No diffusion weights found in ckpts — model may be misconfigured")
+    # --- Diffusion model ---
+    diffusion = create_model_from_config(_model_config)
+    diffusion.load_state_dict(torch.load(str(CKPT_PATH), map_location="cpu"))
+    logger.info(f"Loaded diffusion weights from {CKPT_PATH}")
 
-        # Load VAE / pretransform weights — try several plausible filenames
-        vae_ckpt = _find_checkpoint(
-            "vae.ckpt", "autoencoder.ckpt", "pretransform.ckpt",
-            "vae.safetensors", "autoencoder.safetensors",
-        )
-        if vae_ckpt:
-            load_ckpt_state_dict(model, str(vae_ckpt), prefix="autoencoder.")
-            logger.info(f"Loaded VAE weights from {vae_ckpt}")
+    # --- VAE / pretransform ---
+    if diffusion.pretransform is not None:
+        vae_state = load_ckpt_state_dict(str(VAE_CKPT_PATH), prefix="autoencoder.")
+        diffusion.pretransform.load_state_dict(vae_state)
+        logger.info(f"Loaded VAE weights from {VAE_CKPT_PATH}")
 
-        model = model.to(DEVICE, dtype=DTYPE)
-        model.eval()
-        _model = model
-        logger.info(f"PRiSM model loaded on {DEVICE} ({DTYPE})")
+    diffusion = diffusion.to(DEVICE, dtype=DTYPE).eval()
+    _diffusion = diffusion
 
-    except Exception as e:
-        logger.error(f"Failed to load PRiSM model: {e}", exc_info=True)
-        raise
+    # --- Feature extractor (VideoPrism + Synchformer + T5) ---
+    feature_extractor = FeaturesUtils(
+        vae_ckpt=None,
+        vae_config=str(VAE_CONFIG_PATH),
+        enable_conditions=True,
+        synchformer_ckpt=str(SYNCHFORMER_PATH),
+    )
+    _feature_extractor = feature_extractor.eval().to(DEVICE)
 
+    # --- Sync transform ---
+    _sync_transform = v2.Compose([
+        v2.Resize(_SYNC_SIZE, interpolation=v2.InterpolationMode.BICUBIC),
+        v2.CenterCrop(_SYNC_SIZE),
+        v2.ToImage(),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+    ])
+
+    logger.info(f"PRiSM model loaded on {DEVICE} ({DTYPE})")
+    logger.info(f"MAX_DURATION={MAX_DURATION}s  BATCH_SIZE={BATCH_SIZE}")
+
+
+# ---------------------------------------------------------------------------
+# video frame extraction
+# ---------------------------------------------------------------------------
+
+def extract_video_frames(video_path: str):
+    """
+    Decode clip_chunk and sync_chunk from a video.
+
+    Returns:
+        clip_chunk : (L, H, W, C) float32 [0, 1]    — for VideoPrism
+        sync_chunk : (L, C, H, W) float32 normalized — for Synchformer
+        duration   : float (seconds)
+    """
+    duration_sec = get_video_duration(video_path)
+
+    reader = StreamingMediaDecoder(video_path)
+    reader.add_basic_video_stream(
+        frames_per_chunk=int(_CLIP_FPS * duration_sec),
+        frame_rate=_CLIP_FPS,
+        format="rgb24",
+    )
+    reader.add_basic_video_stream(
+        frames_per_chunk=int(_SYNC_FPS * duration_sec),
+        frame_rate=_SYNC_FPS,
+        format="rgb24",
+    )
+    reader.fill_buffer()
+    data_chunk = reader.pop_chunks()
+
+    clip_chunk = data_chunk[0]
+    sync_chunk = data_chunk[1]
+
+    if clip_chunk is None:
+        raise RuntimeError("CLIP video stream returned None")
+    if sync_chunk is None:
+        raise RuntimeError("Sync video stream returned None")
+
+    # --- clip_chunk: (L, C, H, W) uint8 -> (L, H, W, C) float32 [0,1] ---
+    clip_expected = int(_CLIP_FPS * duration_sec)
+    clip_chunk = clip_chunk[:clip_expected]
+    if clip_chunk.shape[0] < clip_expected:
+        pad_n = clip_expected - clip_chunk.shape[0]
+        clip_chunk = torch.cat([clip_chunk, clip_chunk[-1:].repeat(pad_n, 1, 1, 1)], dim=0)
+    clip_chunk = pad_to_square(clip_chunk)          # (L, C, _CLIP_SIZE, _CLIP_SIZE)
+    clip_chunk = clip_chunk.permute(0, 2, 3, 1)    # (L, H, W, C)
+    clip_chunk = clip_chunk.float() / 255.0        # [0, 1]
+
+    # --- sync_chunk: (L, C, H, W) uint8 -> (L, C, _SYNC_SIZE, _SYNC_SIZE) normalized ---
+    sync_expected = int(_SYNC_FPS * duration_sec)
+    sync_chunk = sync_chunk[:sync_expected]
+    if sync_chunk.shape[0] < sync_expected:
+        pad_n = sync_expected - sync_chunk.shape[0]
+        sync_chunk = torch.cat([sync_chunk, sync_chunk[-1:].repeat(pad_n, 1, 1, 1)], dim=0)
+    sync_chunk = _sync_transform(sync_chunk)
+
+    logger.info(f"clip_chunk: {clip_chunk.shape}, sync_chunk: {sync_chunk.shape}, duration: {duration_sec:.2f}s")
+    return clip_chunk, sync_chunk, duration_sec
+
+
+# ---------------------------------------------------------------------------
+# feature extraction
+# ---------------------------------------------------------------------------
+
+def extract_features(clip_chunk: torch.Tensor, sync_chunk: torch.Tensor, caption: str) -> dict:
+    info = {}
+    with torch.no_grad():
+        info["text_features"] = _feature_extractor.encode_t5_text([caption])[0].cpu()
+
+        clip_input = torch.from_numpy(np.array(clip_chunk)).unsqueeze(0)
+        video_feat, frame_embed, _, text_feat = \
+            _feature_extractor.encode_video_and_text_with_videoprism(clip_input, [caption])
+        info["global_video_features"] = torch.tensor(np.array(video_feat)).squeeze(0).cpu()
+        info["video_features"]        = torch.tensor(np.array(frame_embed)).squeeze(0).cpu()
+        info["global_text_features"]  = torch.tensor(np.array(text_feat)).squeeze(0).cpu()
+
+        sync_input = sync_chunk.unsqueeze(0).to(DEVICE)
+        info["sync_features"] = _feature_extractor.encode_video_with_sync(sync_input)[0].cpu()
+
+    return info
+
+
+# ---------------------------------------------------------------------------
+# diffusion sampling
+# ---------------------------------------------------------------------------
+
+def run_diffusion(meta: dict, duration: float) -> torch.Tensor:
+    """
+    Run the PRiSM diffusion pipeline.
+    Returns float32 CPU tensor of shape (channels, samples).
+    """
+    from PrismAudio.inference.sampling import sample, sample_discrete_euler
+
+    diffusion_objective = _model_config["model"]["diffusion"]["diffusion_objective"]
+    latent_length = round(SAMPLE_RATE * duration / 2048)
+
+    meta_on_device = {
+        k: v.to(DEVICE) if isinstance(v, torch.Tensor) else v
+        for k, v in meta.items()
+    }
+    metadata = (meta_on_device,)
+
+    with torch.no_grad():
+        with torch.amp.autocast("cuda"):
+            conditioning = _diffusion.conditioner(metadata, DEVICE)
+
+        video_exist = torch.stack([item["video_exist"] for item in metadata], dim=0)
+        if "metaclip_features" in conditioning:
+            conditioning["metaclip_features"][~video_exist] = \
+                _diffusion.model.model.empty_clip_feat
+        if "sync_features" in conditioning:
+            conditioning["sync_features"][~video_exist] = \
+                _diffusion.model.model.empty_sync_feat
+
+        cond_inputs = _diffusion.get_conditioning_inputs(conditioning)
+        noise = torch.randn([1, _diffusion.io_channels, latent_length]).to(DEVICE)
+
+        with torch.amp.autocast("cuda"):
+            if diffusion_objective == "v":
+                fakes = sample(
+                    _diffusion.model, noise, 24, 0,
+                    **cond_inputs, cfg_scale=5, batch_cfg=True,
+                )
+            else:  # rectified_flow
+                fakes = sample_discrete_euler(
+                    _diffusion.model, noise, 24,
+                    **cond_inputs, cfg_scale=5, batch_cfg=True,
+                )
+
+            if _diffusion.pretransform is not None:
+                fakes = _diffusion.pretransform.decode(fakes)
+
+    return (
+        fakes.to(torch.float32)
+             .div(torch.max(torch.abs(fakes)))
+             .clamp(-1, 1)
+             .cpu()
+    )
+
+
+# ---------------------------------------------------------------------------
+# inference entry point
+# ---------------------------------------------------------------------------
 
 def _run_inference(
     job_id: str,
     video_path: str,
     prompt: str,
-    negative_prompt: str,
-    duration: float,
+    duration_override: Optional[float],
     seed: int,
-    cfg_strength: float,
-    num_steps: int,
 ):
     """Run PRiSM generation (blocking — called inside ThreadPoolExecutor)."""
     try:
         jobs[job_id]["status"] = "processing"
+        torch.manual_seed(seed)
 
         cot_prompt = wrap_cot(prompt)
-        logger.info(
-            f"[{job_id}] Generating audio: prompt='{prompt}', duration={duration}s, seed={seed}"
-        )
-        logger.info(f"[{job_id}] CoT prompt: {cot_prompt}")
+        logger.info(f"[{job_id}] Extracting video frames: {video_path}")
 
-        # Clamp duration to the VRAM envelope for this image variant
-        duration = min(duration, MAX_DURATION)
+        clip_chunk, sync_chunk, video_duration = extract_video_frames(video_path)
 
-        from PrismAudio.inference.generation import generate_diffusion_cond
+        # Clamp to VRAM envelope for this image variant
+        duration = min(duration_override or video_duration, MAX_DURATION)
 
-        sample_rate = 44100
-        sample_size = int(sample_rate * duration)
+        logger.info(f"[{job_id}] Extracting features, prompt='{prompt}', duration={duration:.1f}s, seed={seed}")
+        info = extract_features(clip_chunk, sync_chunk, cot_prompt)
 
-        conditioning = {
-            "video_path": video_path,
-            "prompt": cot_prompt,
-        }
-        if negative_prompt:
-            conditioning["negative_prompt"] = negative_prompt
+        # Build metadata dict (mirrors app.py build_meta)
+        meta = dict(info)
+        meta["id"]          = job_id
+        meta["relpath"]     = "demo.npz"
+        meta["path"]        = "demo.npz"
+        meta["caption_cot"] = cot_prompt
+        meta["video_exist"] = torch.tensor(True)
 
-        with torch.inference_mode():
-            audio = generate_diffusion_cond(
-                model=_model,
-                steps=num_steps,
-                cfg_scale=cfg_strength,
-                conditioning=conditioning,
-                sample_size=sample_size,
-                seed=seed,
-                device=DEVICE,
-                batch_size=BATCH_SIZE,
-            )
-
-        # audio shape: [batch, channels, samples] — take first item
-        if audio.dim() == 3:
-            audio = audio[0]
+        logger.info(f"[{job_id}] Running diffusion...")
+        audio = run_diffusion(meta, duration)  # (1, channels, samples) float32 CPU
 
         output_path = OUTPUT_DIR / f"{job_id}.wav"
-        torchaudio.save(str(output_path), audio.cpu().float(), sample_rate)
+        torchaudio.save(str(output_path), audio[0], SAMPLE_RATE)
 
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["output_path"] = str(output_path)
@@ -248,13 +382,9 @@ async def generate_audio_async(
     job_id: str,
     video_path: str,
     prompt: str,
-    negative_prompt: str,
-    duration: float,
+    duration_override: Optional[float],
     seed: int,
-    cfg_strength: float,
-    num_steps: int,
 ):
-    """Dispatch blocking inference to the thread pool without blocking the event loop."""
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(
         _executor,
@@ -262,17 +392,17 @@ async def generate_audio_async(
         job_id,
         video_path,
         prompt,
-        negative_prompt,
-        duration,
+        duration_override,
         seed,
-        cfg_strength,
-        num_steps,
     )
 
 
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model on startup."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -281,23 +411,21 @@ async def lifespan(app: FastAPI):
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         logger.info(f"GPU: {props.name} | VRAM: {props.total_memory / 1024**3:.1f} GB")
-    logger.info(f"MAX_DURATION={MAX_DURATION}s  BATCH_SIZE={BATCH_SIZE}")
 
     load_model()
     yield
 
 
-app = FastAPI(title="Prism Audio API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Prism Audio API", version="2.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
     return {
         "status": "healthy",
         "service": "prismaudio",
         "cuda_available": torch.cuda.is_available(),
-        "model_loaded": _model is not None,
+        "model_loaded": _diffusion is not None,
     }
 
 
@@ -306,14 +434,15 @@ async def generate_endpoint(
     background_tasks: BackgroundTasks,
     video: UploadFile = File(...),
     prompt: str = Form(""),
-    negative_prompt: str = Form(""),
-    duration: str = Form("8"),
+    duration: str = Form("0"),    # 0 = use video's natural duration
     seed: str = Form("42"),
-    cfg_strength: str = Form("4.5"),
-    num_steps: str = Form("25"),
+    # kept for API compat but unused — model uses fixed cfg/steps
+    negative_prompt: str = Form(""),
+    cfg_strength: str = Form("5"),
+    num_steps: str = Form("24"),
 ):
     """Start video-to-audio generation via PRiSM."""
-    if _model is None:
+    if _diffusion is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     job_id = str(uuid.uuid4())
@@ -322,22 +451,18 @@ async def generate_endpoint(
     with open(video_path, "wb") as f:
         shutil.copyfileobj(video.file, f)
 
-    jobs[job_id] = {
-        "status": "pending",
-        "output_path": None,
-        "error": None,
-    }
+    duration_val = float(duration)
+    duration_override = duration_val if duration_val > 0 else None
+
+    jobs[job_id] = {"status": "pending", "output_path": None, "error": None}
 
     background_tasks.add_task(
         generate_audio_async,
         job_id,
         str(video_path),
         prompt,
-        negative_prompt,
-        float(duration),
+        duration_override,
         int(seed),
-        float(cfg_strength),
-        int(num_steps),
     )
 
     return {"job_id": job_id, "status": "pending"}
@@ -345,56 +470,35 @@ async def generate_endpoint(
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
-    """Get the status of a generation job."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-
     job = jobs[job_id]
-    return {
-        "job_id": job_id,
-        "status": job["status"],
-        "output_path": job.get("output_path"),
-        "error": job.get("error"),
-    }
+    return {"job_id": job_id, "status": job["status"], "error": job.get("error")}
 
 
 @app.get("/download/{job_id}")
 async def download(job_id: str):
-    """Download the generated audio file (.wav)."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-
     job = jobs[job_id]
     if job["status"] != "completed":
-        raise HTTPException(
-            status_code=400, detail=f"Job not completed. Status: {job['status']}"
-        )
-
+        raise HTTPException(status_code=400, detail=f"Job not completed. Status: {job['status']}")
     output_path = job.get("output_path")
     if not output_path or not Path(output_path).exists():
         raise HTTPException(status_code=404, detail="Output file not found")
-
-    return FileResponse(
-        output_path,
-        media_type="audio/wav",
-        filename=f"{job_id}.wav",
-    )
+    return FileResponse(output_path, media_type="audio/wav", filename=f"{job_id}.wav")
 
 
 @app.delete("/job/{job_id}")
 async def delete_job(job_id: str):
-    """Delete a job and its output file."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-
     job = jobs.pop(job_id)
     if job.get("output_path"):
         Path(job["output_path"]).unlink(missing_ok=True)
-
     return {"message": "Job deleted"}
 
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)

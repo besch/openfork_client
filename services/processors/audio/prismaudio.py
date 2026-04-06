@@ -121,7 +121,7 @@ class PrismAudioJobProcessor(BaseJobProcessor):
         finally:
             self._cleanup_remote_job(remote_job_id)
             # Clean up local cache
-            cache_path = os.path.join(self.cache_dir, f"{self.job_id}.flac")
+            cache_path = os.path.join(self.cache_dir, f"{self.job_id}.wav")
             if os.path.exists(cache_path):
                 try:
                     os.remove(cache_path)
@@ -226,7 +226,7 @@ class PrismAudioJobProcessor(BaseJobProcessor):
         """Download the generated audio file from the API."""
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
-            local_path = os.path.join(self.cache_dir, f"{self.job_id}.flac")
+            local_path = os.path.join(self.cache_dir, f"{self.job_id}.wav")
 
             response = requests.get(
                 f"{self.api_base_url}/download/{remote_job_id}",
