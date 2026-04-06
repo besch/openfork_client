@@ -314,6 +314,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/davinci_magihuman_api.py" ] && cp -v "$DGN_SOURCE_DIR/davinci_magihuman_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
+          [ -f "$DGN_SOURCE_DIR/sparkvsr_api.py" ] && cp -v "$DGN_SOURCE_DIR/sparkvsr_api.py" /app/
       fi
       
       # 2. TurboDiffusion (runs in /opt/TurboDiffusion)

@@ -19,7 +19,7 @@ warnings.warn(
     "Import from services.processors instead of services.job_processors. "
     "This module will be removed in a future version.",
     DeprecationWarning,
-    stacklevel=2
+    stacklevel=2,
 )
 
 from services.processors import (
@@ -36,10 +36,10 @@ from services.processors import (
     LTX23TextToVideoWan2GPProcessor,
     LTX23ImageToVideoWan2GPProcessor,
     VideoUpscalerJobProcessor,
+    SparkVSRUpscalerJobProcessor,
     TurboDiffusionT2VJobProcessor,
     TurboDiffusionI2VJobProcessor,
     StableAudioJobProcessor,
-
     VibeVoiceJobProcessor,
     VibeVoiceMultiCloneJobProcessor,
     DiffRhythmCLIJobProcessor,
@@ -53,8 +53,6 @@ from services.processors import (
     QwenImageInpaintProcessor,
     QwenImageT2IProcessor,
     LLMJobProcessor,
-    SVIShotImageToVideoJobProcessor,
-    SVIFilmImageToVideoJobProcessor,
     HeartMuLaCLIJobProcessor,
     AceStepCLIJobProcessor,
     Qwen3TTSJobProcessor,
@@ -66,7 +64,6 @@ from services.processors import (
     MMAudioJobProcessor,
     LavaSRJobProcessor,
     PrismAudioJobProcessor,
-    DiagDistillJobProcessor,
     DaVinciMagiHumanT2VProcessor,
     DaVinciMagiHumanI2VProcessor,
 )
@@ -85,10 +82,10 @@ __all__ = [
     "LTX23TextToVideoWan2GPProcessor",
     "LTX23ImageToVideoWan2GPProcessor",
     "VideoUpscalerJobProcessor",
+    "SparkVSRUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",
     "StableAudioJobProcessor",
-
     "VibeVoiceJobProcessor",
     "VibeVoiceMultiCloneJobProcessor",
     "DiffRhythmCLIJobProcessor",
@@ -102,8 +99,6 @@ __all__ = [
     "LLMJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",
-    "SVIShotImageToVideoJobProcessor",
-    "SVIFilmImageToVideoJobProcessor",
     "HeartMuLaCLIJobProcessor",
     "AceStepCLIJobProcessor",
     "Qwen3TTSJobProcessor",
@@ -115,9 +110,6 @@ __all__ = [
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
     "PrismAudioJobProcessor",
-    "DiagDistillJobProcessor",
     "DaVinciMagiHumanT2VProcessor",
     "DaVinciMagiHumanI2VProcessor",
 ]
-
-
