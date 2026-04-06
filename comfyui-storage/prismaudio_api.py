@@ -23,7 +23,10 @@ import torch.nn.functional as F
 import torchaudio
 from torchvision.transforms import v2
 from torio.io import StreamingMediaDecoder
-from moviepy.editor import VideoFileClip
+try:
+    from moviepy.editor import VideoFileClip
+except ImportError:
+    from moviepy import VideoFileClip
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
