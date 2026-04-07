@@ -74,7 +74,26 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
             self._fail_job(f"Could not analyse input video: {e}")
             return
 
-        # ── 3. Submit to SparkVSR REST API ──
+        # ── 3. Wait for model to finish downloading ──
+        model_wait_max = 1200  # 20 minutes
+        model_wait_elapsed = 0
+        model_poll_interval = 15
+        while model_wait_elapsed < model_wait_max:
+            try:
+                h = requests.get(self.HEALTH_ENDPOINT, timeout=10)
+                if h.status_code == 200 and h.json().get("model_ready"):
+                    break
+            except Exception:
+                pass
+            if model_wait_elapsed % 60 == 0:
+                logging.info(f"[SparkVSR] Waiting for model to be ready... ({model_wait_elapsed}s elapsed)")
+            time.sleep(model_poll_interval)
+            model_wait_elapsed += model_poll_interval
+        else:
+            self._fail_job(f"SparkVSR model was not ready after {model_wait_max}s")
+            return
+
+        # ── 4. Submit to SparkVSR REST API ──
         try:
             with open(video_path, "rb") as f:
                 files = {"video": (os.path.basename(video_path), f, "video/mp4")}
@@ -104,7 +123,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
             self._fail_job(f"Failed to submit to SparkVSR API: {e}")
             return
 
-        # ── 4. Poll for completion ──
+        # ── 5. Poll for completion ──
         max_wait = 1800  # 30 minutes max
         poll_interval = 10
         elapsed = 0
@@ -147,7 +166,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
             self._fail_job(f"SparkVSR job {self.job_id} timed out after {max_wait}s")
             return
 
-        # ── 5. Download result ──
+        # ── 6. Download result ──
         try:
             result_resp = requests.get(f"{self.RESULT_ENDPOINT}/{task_id}", timeout=60, stream=True)
             if result_resp.status_code != 200:
@@ -165,7 +184,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
             self._fail_job(f"Failed to download SparkVSR result: {e}")
             return
 
-        # ── 6. Upload result and complete job ──
+        # ── 7. Upload result and complete job ──
         try:
             video_storage_path = self.orchestrator_service.upload_output(
                 output_path, self.job_id, "video/mp4"

@@ -2,38 +2,58 @@ import os
 import uuid
 import shutil
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse
 import uvicorn
 
-app = FastAPI(title="SparkVSR API")
-
-JOBS = {}
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
 
 INPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+JOBS = {}
 
-def _resolve_sparkvsr_model_path() -> str:
-    """Resolve the SparkVSR Stage-2 checkpoint from the HuggingFace cache."""
+# Resolved at startup in the background; None means still downloading.
+SPARKVSR_MODEL_PATH: str | None = None
+_model_ready = asyncio.Event()
+
+
+async def _download_model():
+    """Download SparkVSR weights in the background so the API can start immediately."""
+    global SPARKVSR_MODEL_PATH
     try:
         from huggingface_hub import snapshot_download
-        repo_root = snapshot_download("JiongzeYu/SparkVSR")
+        hf_token = os.environ.get("HF_TOKEN")
+        print("[SparkVSR] Downloading model weights from JiongzeYu/SparkVSR ...")
+        repo_root = await asyncio.to_thread(
+            snapshot_download,
+            "JiongzeYu/SparkVSR",
+            token=hf_token,
+        )
         ckpt = os.path.join(repo_root, "checkpoints", "sparkvsr-s2", "ckpt-500-sft")
         if os.path.exists(ckpt):
-            print(f"[SparkVSR] Resolved model path: {ckpt}")
-            return ckpt
-        print(f"[SparkVSR] Warning: expected checkpoint not found at {ckpt}, using repo root")
-        return repo_root
+            SPARKVSR_MODEL_PATH = ckpt
+            print(f"[SparkVSR] Model ready: {ckpt}")
+        else:
+            SPARKVSR_MODEL_PATH = repo_root
+            print(f"[SparkVSR] Warning: expected checkpoint not found at {ckpt}, using repo root")
     except Exception as e:
-        print(f"[SparkVSR] Warning: could not resolve model path via HF hub: {e}")
-        return "checkpoints/sparkvsr-s2/ckpt-500-sft"
+        print(f"[SparkVSR] ERROR: could not download model: {e}")
+        SPARKVSR_MODEL_PATH = "checkpoints/sparkvsr-s2/ckpt-500-sft"
+    finally:
+        _model_ready.set()
 
 
-SPARKVSR_MODEL_PATH = _resolve_sparkvsr_model_path()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(_download_model())
+    yield
+
+
+app = FastAPI(title="SparkVSR API", lifespan=lifespan)
 
 
 async def _process_video(
@@ -45,8 +65,6 @@ async def _process_video(
 ):
     JOBS[task_id] = {"status": "processing", "progress": 0}
 
-    # sparkvsr_inference_script.py expects --input_dir (a directory), not a file path.
-    # Create per-task input/output dirs so concurrent jobs don't collide.
     task_input_dir = INPUT_DIR / task_id
     task_output_dir = OUTPUT_DIR / task_id
     task_input_dir.mkdir(parents=True, exist_ok=True)
@@ -90,7 +108,6 @@ async def _process_video(
             JOBS[task_id] = {"status": "failed", "error": error_msg}
             return
 
-        # Find the output video produced in task_output_dir
         output_videos = sorted(
             list(task_output_dir.rglob("*.mp4")), key=os.path.getmtime
         )
@@ -115,7 +132,7 @@ async def _process_video(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "model_ready": _model_ready.is_set()}
 
 
 @app.post("/upscale")
@@ -125,6 +142,9 @@ async def upscale(
     ref_mode: str = Form("no_ref"),
     ref_guidance_scale: float = Form(1.0),
 ):
+    if not _model_ready.is_set():
+        raise HTTPException(status_code=503, detail="Model is still downloading, please retry shortly")
+
     task_id = str(uuid.uuid4())
     input_path = INPUT_DIR / f"{task_id}_{video.filename}"
 
@@ -158,7 +178,6 @@ async def get_result(task_id: str):
     if os.path.exists(out_file):
         return FileResponse(out_file, media_type="video/mp4", filename=f"{task_id}_upscaled.mp4")
 
-    # Fallback: search output dir for any file matching this task
     for f in OUTPUT_DIR.glob(f"*{task_id}*.mp4"):
         return FileResponse(str(f), media_type="video/mp4", filename=f.name)
 
