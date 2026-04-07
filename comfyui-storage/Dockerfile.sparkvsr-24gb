@@ -39,7 +39,7 @@ RUN git clone --depth=1 https://github.com/taco-group/SparkVSR.git /app \
     && python -m pip install --no-cache-dir \
         torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124 \
     && python -m pip install --no-cache-dir -r requirements.txt \
-    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests moviepy pydantic pyiqa
+    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests moviepy pydantic pyiqa fal-client
 
 # Copy the API script
 COPY sparkvsr_api.py /app/sparkvsr_api.py
