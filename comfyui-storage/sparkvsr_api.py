@@ -71,11 +71,15 @@ async def _process_video(
             "--is_vae_st",
         ]
 
+        env = os.environ.copy()
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd="/app",
+            env=env,
         )
 
         stdout, stderr = await process.communicate()
