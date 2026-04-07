@@ -69,7 +69,6 @@ async def _process_video(
             "--ref_mode", ref_mode,
             "--ref_guidance_scale", str(ref_guidance_scale),
             "--is_vae_st",
-            "--is_cpu_offload",
         ]
 
         process = await asyncio.create_subprocess_exec(
