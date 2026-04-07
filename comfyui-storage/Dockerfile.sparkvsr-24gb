@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1.4
 # SparkVSR Docker Image (Optimized for 24GB)
 # Diffusion Transformer-based Video Super-Resolution (CogVideoX1.5-5B-I2V base)
+#
+# NOTE: Model weights (CogVideoX1.5-5B-I2V + SparkVSR) are NOT baked into this image.
+# They are downloaded at first container startup via sparkvsr_api.py / start_cloud.sh.
+# This keeps the image ~5GB instead of ~20GB and avoids Docker Hub layer pull timeouts.
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
@@ -9,6 +13,10 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
+
+# Point HuggingFace cache at a path that can be backed by a persistent volume.
+# Mount a vast.ai volume to /models to avoid re-downloading weights on every restart.
+ENV HF_HOME=/models/hf_cache
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -33,21 +41,17 @@ RUN git clone --depth=1 https://github.com/taco-group/SparkVSR.git /app \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests moviepy pydantic pyiqa
 
-# Pre-download base weights (CogVideoX1.5-5B-I2V and SparkVSR modules)
-RUN python -c "from huggingface_hub import snapshot_download; \
-    snapshot_download('THUDM/CogVideoX1.5-5B-I2V', ignore_patterns=['*.bin']); \
-    snapshot_download('JiongzeYu/SparkVSR'); \
-    print('Weights downloaded successfully')"
-
-# Copy the API script locally
+# Copy the API script
 COPY sparkvsr_api.py /app/sparkvsr_api.py
 
-# Create working directories
-RUN mkdir -p /app/input /app/output
+# Create working directories (including the HF cache dir so it exists even without a volume mount)
+RUN mkdir -p /app/input /app/output /models/hf_cache
 
 # Expose API port
 EXPOSE 8000
 
-# Run the API server with dynamic script download fall-back
-ENV HF_HUB_OFFLINE=1
-CMD ["/bin/bash", "-c", "curl -s -L -o sparkvsr_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/sparkvsr_api.py && python sparkvsr_api.py"]
+# On startup:
+#  1. Pull the latest sparkvsr_api.py from GitHub (allows hot-patching without a rebuild)
+#  2. sparkvsr_api.py calls snapshot_download() at boot, which populates /models/hf_cache
+#     on the first run and is a fast no-op on subsequent runs (HF_HUB_OFFLINE is NOT set).
+CMD ["/bin/bash", "-c", "curl -sf -L -o /app/sparkvsr_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/sparkvsr_api.py || echo '[warn] Could not fetch latest sparkvsr_api.py, using bundled version' && python /app/sparkvsr_api.py"]

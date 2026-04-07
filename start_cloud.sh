@@ -812,6 +812,35 @@ if [ "$START_SPARKVSR" = "true" ]; then
   fi
 
   if [ -n "$SPARKVSR_API" ]; then
+    # ── Download model weights if not already cached ──────────────────────────
+    # Weights live in HF_HOME (default /models/hf_cache). On a vast.ai instance
+    # with a persistent volume mounted at /models this download only happens once.
+    HF_CACHE_DIR="${HF_HOME:-/models/hf_cache}/hub"
+    SPARKVSR_CACHE="$HF_CACHE_DIR/models--JiongzeYu--SparkVSR"
+    COGVIDEO_CACHE="$HF_CACHE_DIR/models--THUDM--CogVideoX1.5-5B-I2V"
+
+    mkdir -p "$HF_CACHE_DIR"
+
+    if [ ! -d "$SPARKVSR_CACHE" ] || [ -z "$(ls -A "$SPARKVSR_CACHE" 2>/dev/null)" ]; then
+      log "SparkVSR weights not found in cache. Downloading JiongzeYu/SparkVSR (~3 GB)..."
+      huggingface-cli download JiongzeYu/SparkVSR \
+        --cache-dir "$HF_CACHE_DIR" 2>&1 | tee -a "$LOG_FILE" || \
+        log "WARNING: SparkVSR weight download failed — API will retry at startup."
+    else
+      log "SparkVSR weights found at $SPARKVSR_CACHE. Skipping download."
+    fi
+
+    if [ ! -d "$COGVIDEO_CACHE" ] || [ -z "$(ls -A "$COGVIDEO_CACHE" 2>/dev/null)" ]; then
+      log "CogVideoX1.5-5B-I2V weights not found in cache. Downloading THUDM/CogVideoX1.5-5B-I2V (~10–15 GB, safetensors only)..."
+      huggingface-cli download THUDM/CogVideoX1.5-5B-I2V \
+        --cache-dir "$HF_CACHE_DIR" \
+        --ignore-patterns "*.bin" 2>&1 | tee -a "$LOG_FILE" || \
+        log "WARNING: CogVideoX weight download failed — API will retry at startup."
+    else
+      log "CogVideoX1.5-5B-I2V weights found at $COGVIDEO_CACHE. Skipping download."
+    fi
+    # ─────────────────────────────────────────────────────────────────────────
+
     # Check if port 8000 is already bound (e.g. by the Docker CMD running sparkvsr_api.py)
     PORT8000_BOUND=false
     if command -v netstat &> /dev/null; then
@@ -826,7 +855,8 @@ if [ "$START_SPARKVSR" = "true" ]; then
       log "Found SparkVSR API at $SPARKVSR_API. Starting..."
       (cd "$SPARKVSR_CD" && "$PYTHON_EXE" sparkvsr_api.py > /tmp/sparkvsr_api.log 2>&1) &
     fi
-    wait_for_url "SparkVSR API" "http://127.0.0.1:8000/health" 300 "/tmp/sparkvsr_api.log"
+    # Extended timeout: first-run model load can take several minutes after the download above
+    wait_for_url "SparkVSR API" "http://127.0.0.1:8000/health" 600 "/tmp/sparkvsr_api.log"
   else
     log "ERROR: SparkVSR API not found at /app/sparkvsr_api.py or /opt/SparkVSR/sparkvsr_api.py"
   fi
