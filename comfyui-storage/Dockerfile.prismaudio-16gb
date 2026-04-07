@@ -96,6 +96,20 @@ AutoModelForSeq2SeqLM.from_pretrained('google/t5gemma-l-l-ul2-it', token=token);
 AutoTokenizer.from_pretrained('google/t5gemma-l-l-ul2-it', token=token); \
 print('T5 text encoder pre-cached successfully')"
 
+# Pre-download VideoprIsm LvT large weights used by feature_utils_288.py _init_jax():
+#   vp.load_pretrained_weights('videoprism_lvt_public_v1_large')
+#   → huggingface_hub.hf_hub_download('google/videoprism-lvt-large-f8r288',
+#                                      'flax_lvt_large_f8r288_repeated.npz')
+# Public model — no HF_TOKEN required.
+RUN conda run -n prismaudio python -c "\
+import huggingface_hub; \
+print('Downloading VideoprIsm LvT large model...'); \
+huggingface_hub.hf_hub_download(\
+    repo_id='google/videoprism-lvt-large-f8r288', \
+    filename='flax_lvt_large_f8r288_repeated.npz' \
+); \
+print('VideoprIsm model pre-cached successfully')"
+
 # Copy the API script at build time (used as fallback if curl fails at runtime)
 COPY prismaudio_api.py /app/prismaudio_api.py
 
