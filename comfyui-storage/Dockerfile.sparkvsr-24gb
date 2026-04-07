@@ -6,7 +6,7 @@
 # They are downloaded at first container startup via sparkvsr_api.py / start_cloud.sh.
 # This keeps the image ~5GB instead of ~20GB and avoids Docker Hub layer pull timeouts.
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
@@ -37,7 +37,7 @@ RUN git clone --depth=1 https://github.com/taco-group/SparkVSR.git /app \
     && rm -rf .git \
     && python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
-        torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu124 \
+        torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests moviepy pydantic pyiqa fal-client
 
