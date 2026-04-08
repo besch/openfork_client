@@ -33,6 +33,8 @@ class OrchestratorService:
         self.token_update_lock = threading.Lock()
         self._last_auth_expired_signal = 0
         self._auth_failed_permanently = False
+        self._active_job_id: Optional[str] = None
+        self._active_execution_token: Optional[str] = None
         
         # PERFORMANCE: Use a Session for HTTP connection pooling
         # This reuses TCP connections across requests, reducing latency for
@@ -46,6 +48,28 @@ class OrchestratorService:
         )
         self._session.mount('http://', adapter)
         self._session.mount('https://', adapter)
+
+    def _set_active_job(self, job: Optional[Dict[str, Any]]) -> None:
+        """Track the active leased job so heartbeats and status updates carry its token."""
+        if not job:
+            self._active_job_id = None
+            self._active_execution_token = None
+            return
+
+        self._active_job_id = job.get("id")
+        self._active_execution_token = job.get("execution_token")
+
+    def clear_active_job(self, job_id: Optional[str] = None) -> None:
+        """Clear tracked lease state when a job is completed, reset, or replaced."""
+        if job_id is None or self._active_job_id == job_id:
+            self._active_job_id = None
+            self._active_execution_token = None
+
+    def get_active_execution_token(self, job_id: Optional[str] = None) -> Optional[str]:
+        """Return the current execution token, optionally scoped to one job."""
+        if job_id is not None and self._active_job_id != job_id:
+            return None
+        return self._active_execution_token
 
     def update_tokens(self, access_token: str, refresh_token: str):
         """Thread-safe method to update auth tokens."""
@@ -233,7 +257,10 @@ class OrchestratorService:
             response.raise_for_status()
             if not response.content:
                 return None
-            return response.json()
+            job = response.json()
+            if isinstance(job, dict) and job.get("id"):
+                self._set_active_job(job)
+            return job
         except ProviderNotFoundError:
             raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
@@ -476,10 +503,15 @@ class OrchestratorService:
     def send_heartbeat(self, provider_id: str):
         """Sends a heartbeat to the orchestrator."""
         try:
+            payload: Dict[str, Any] = {"providerId": provider_id}
+            active_token = self.get_active_execution_token()
+            if active_token:
+                payload["executionToken"] = active_token
+
             response = self._make_request(
                 'post',
                 f"{self.orchestrator_url}/api/dgn/heartbeat",
-                json={"providerId": provider_id}
+                json=payload
             )
             
             # Check for provider expiration (404 with provider_not_found error)
@@ -499,7 +531,7 @@ class OrchestratorService:
             logging.error(f"Could not send heartbeat: {e}")
 
 
-    def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None):
+    def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None, execution_token: Optional[str] = None):
         """Update the status of a job."""
         try:
             payload = {"status": status}
@@ -511,6 +543,9 @@ class OrchestratorService:
 
             if self.provider_id:
                 payload["provider_id"] = self.provider_id
+            token = execution_token or self.get_active_execution_token(job_id)
+            if token:
+                payload["execution_token"] = token
             if storage_path:
                 payload["storage_path"] = storage_path
             if thumbnail_storage_path:
@@ -529,6 +564,8 @@ class OrchestratorService:
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status updated to {status}")
+            if status in ("completed", "failed", "cancelled"):
+                self.clear_active_job(job_id)
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not update job status: {e}")
 
@@ -653,19 +690,25 @@ class OrchestratorService:
             if e.response is not None:
                 logging.error(f"OrchestratorService: Response content: {e.response.text}")
 
-    def reset_interrupted_job(self, job_id: str):
+    def reset_interrupted_job(self, job_id: str, execution_token: Optional[str] = None, reason: str = "provider_interrupted"):
         """Resets a job's status to 'pending' and clears its provider via a specific API endpoint."""
         try:
             logging.info(f"Requesting reset for job {job_id}")
             query = f"{self.orchestrator_url}/api/dgn/job/reset?jobId={job_id}"
             if self.provider_id:
                 query += f"&providerId={self.provider_id}"
+            token = execution_token or self.get_active_execution_token(job_id)
+            if token:
+                query += f"&executionToken={token}"
+            if reason:
+                query += f"&reason={reason}"
             response = self._make_request(
                 'put',
                 query
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status reset successfully via API.")
+            self.clear_active_job(job_id)
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not reset job status for {job_id}: {e}")
             if e.response is not None:

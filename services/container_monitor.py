@@ -2,8 +2,8 @@
 Container Monitor
 
 Monitors Docker container health and detects unexpected crashes (OOM, etc.).
-When a container crash is detected, it marks the job as failed and allows
-the DGN client to continue processing new jobs.
+When a container crash is detected, it requeues the job so another healthy
+provider can retry it and allows the DGN client to continue processing new jobs.
 """
 
 import threading

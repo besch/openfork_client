@@ -64,6 +64,7 @@ def listen_for_ipc_commands(client: DGNClient):
                     job_id = client.current_job.get("id")
                     if job_id:
                         client.interrupted_job_id = job_id
+                        client.interrupted_job_execution_token = client.current_job.get("execution_token")
                         logging.info(
                             f"Stop requested while job {job_id} is in progress. "
                             "It will be reset to 'pending' during shutdown cleanup."
@@ -225,11 +226,18 @@ def cleanup(client, provider_id, service_mode):
     logging.info("DGN Client: Initiating shutdown sequence.")
 
     interrupted_job_id = None
+    interrupted_job_execution_token = None
     if client:
         if client.current_job:
             interrupted_job_id = client.current_job.get("id")
+            interrupted_job_execution_token = client.current_job.get("execution_token")
         elif getattr(client, "interrupted_job_id", None):
             interrupted_job_id = client.interrupted_job_id
+            interrupted_job_execution_token = getattr(
+                client,
+                "interrupted_job_execution_token",
+                None,
+            )
 
     if interrupted_job_id:
         should_reset = True
@@ -254,7 +262,11 @@ def cleanup(client, provider_id, service_mode):
             "Attempting to reset its status to 'pending'."
         )
         try:
-            client.orchestrator_service.reset_interrupted_job(interrupted_job_id)
+            client.orchestrator_service.reset_interrupted_job(
+                interrupted_job_id,
+                execution_token=interrupted_job_execution_token,
+                reason="provider_shutdown",
+            )
         except Exception as e:
             logging.error(f"Failed to reset job {interrupted_job_id}: {e}", exc_info=True)
 

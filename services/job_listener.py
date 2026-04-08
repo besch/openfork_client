@@ -120,6 +120,9 @@ class JobListener:
             ):
                 if job_id:
                     self.client.interrupted_job_id = job_id
+                    self.client.interrupted_job_execution_token = job.get(
+                        "execution_token"
+                    )
                 logging.info(
                     f"Shutdown interrupted job {job_id}. "
                     "Skipping completion event and deferring reset to cleanup."
@@ -168,6 +171,9 @@ class JobListener:
             ):
                 if job_id:
                     self.client.interrupted_job_id = job_id
+                    self.client.interrupted_job_execution_token = job.get(
+                        "execution_token"
+                    )
                 logging.info(
                     f"Shutdown interrupted job {job_id} with in-flight error: {e}. "
                     "Deferring reset to cleanup."
@@ -213,6 +219,9 @@ class JobListener:
                 and not self._job_has_terminal_status(job_id)
             ):
                 self.client.interrupted_job_id = job_id
+                self.client.interrupted_job_execution_token = job.get(
+                    "execution_token"
+                )
             self.client.current_job = None
 
     def _monitor_job_cancellation(self, job_id: str, processor) -> None:
@@ -649,29 +658,28 @@ class JobListener:
                                                     flush=True,
                                                 )
 
-                                                # Mark job as failed
+                                                # Requeue infrastructure crashes so another healthy
+                                                # provider can pick the job back up.
                                                 try:
-                                                    failure_metadata: Dict[str, Any] = {
-                                                        "error": reason,
-                                                    }
-                                                    if container_logs:
-                                                        failure_metadata[
-                                                            "container_logs_tail"
-                                                        ] = container_logs.splitlines()[
-                                                            -100:
-                                                        ]
-
-                                                    self.orchestrator_service.update_job_status(
+                                                    self.orchestrator_service.reset_interrupted_job(
                                                         crashed_job_id,
-                                                        "failed",
-                                                        completion_metadata=failure_metadata,
+                                                        execution_token=job.get(
+                                                            "execution_token"
+                                                        ),
+                                                        reason="provider_container_crash",
                                                     )
                                                 except Exception as e:
                                                     logging.error(
-                                                        f"Failed to update job status after crash: {e}"
+                                                        f"Failed to requeue job after crash: {e}"
                                                     )
 
                                                 # Clean up current job
+                                                self.client.interrupted_job_id = (
+                                                    crashed_job_id
+                                                )
+                                                self.client.interrupted_job_execution_token = job.get(
+                                                    "execution_token"
+                                                )
                                                 self.client.current_job = None
 
                                             container_monitor = ContainerMonitor(

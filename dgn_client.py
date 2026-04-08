@@ -42,6 +42,7 @@ class DGNClient:
         self.active_service_type = None
         self.current_job = None
         self.interrupted_job_id = None
+        self.interrupted_job_execution_token = None
         self.stop_requested = False
         self.config = {}
         self.docker_image_map = {}
