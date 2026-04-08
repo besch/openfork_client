@@ -129,6 +129,16 @@ class JobListener:
                 )
                 return True
 
+            # Job may have been cancelled externally (e.g., by the cancellation monitor)
+            # while the processor was still winding down.  Don't emit JOB_COMPLETE for
+            # jobs that already reached a terminal state in the DB.
+            if job_id and self._job_has_terminal_status(job_id):
+                logging.info(
+                    f"Job {job_id} reached terminal status during processing "
+                    "(cancelled/deleted externally). Skipping completion event."
+                )
+                return True
+
             _job_duration = int(_time.monotonic() - _job_start_time)
 
             # Emit JOB_COMPLETE event
@@ -177,6 +187,16 @@ class JobListener:
                 logging.info(
                     f"Shutdown interrupted job {job_id} with in-flight error: {e}. "
                     "Deferring reset to cleanup."
+                )
+                return True
+
+            # Processor threw because the container/workflow was stopped by the
+            # cancellation monitor.  If the job is already terminal in the DB,
+            # don't report it as a failure — just clean up quietly.
+            if job_id and self._job_has_terminal_status(job_id):
+                logging.info(
+                    f"Job {job_id} was externally terminated (cancelled/deleted). "
+                    "Suppressing failure notification."
                 )
                 return True
 
@@ -251,9 +271,6 @@ class JobListener:
                         logging.warning(
                             f"Job {job_id} was cancelled/deleted. Interrupting processing."
                         )
-
-                        # Signal the shutdown event to stop processing
-                        self.shutdown_event.set()
 
                         # Stop any running Docker container for this job
                         if (
