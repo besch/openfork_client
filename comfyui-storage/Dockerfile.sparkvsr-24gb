@@ -17,6 +17,7 @@ ENV PIP_NO_CACHE_DIR=1
 # Point HuggingFace cache at a path that can be backed by a persistent volume.
 # Mount a vast.ai volume to /models to avoid re-downloading weights on every restart.
 ENV HF_HOME=/models/hf_cache
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -39,7 +40,7 @@ RUN git clone --depth=1 https://github.com/taco-group/SparkVSR.git /app \
     && python -m pip install --no-cache-dir \
         torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir -r requirements.txt \
-    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests moviepy pydantic pyiqa fal-client
+    && python -m pip install --no-cache-dir fastapi uvicorn[standard] python-multipart requests moviepy pydantic pyiqa fal-client hf_transfer
 
 # Copy the API script
 COPY sparkvsr_api.py /app/sparkvsr_api.py

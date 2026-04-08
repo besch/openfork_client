@@ -75,7 +75,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
             return
 
         # ── 3. Wait for model to finish downloading ──
-        model_wait_max = 1200  # 20 minutes
+        model_wait_max = 3600  # 60 minutes (first-run model download can be slow)
         model_wait_elapsed = 0
         model_poll_interval = 15
         while model_wait_elapsed < model_wait_max:
