@@ -12,6 +12,7 @@ from config import TimeoutConfig
 from exceptions import AuthError, ProviderError, TransientError
 from services.hardware_profiler import get_hardware_profile
 import os
+from utils.recent_logs import get_recent_logs_tail
 
 # Backward compatibility aliases
 TokenExpiredError = AuthError
@@ -502,6 +503,12 @@ class OrchestratorService:
         """Update the status of a job."""
         try:
             payload = {"status": status}
+            metadata_payload = dict(completion_metadata) if completion_metadata else None
+
+            if status == "failed":
+                metadata_payload = metadata_payload or {}
+                metadata_payload.setdefault("provider_logs_tail", get_recent_logs_tail(100))
+
             if self.provider_id:
                 payload["provider_id"] = self.provider_id
             if storage_path:
@@ -510,8 +517,8 @@ class OrchestratorService:
                 payload["thumbnail_storage_path"] = thumbnail_storage_path
             if duration_seconds:
                 payload["duration_seconds"] = duration_seconds
-            if completion_metadata:
-                payload["completion_metadata"] = completion_metadata
+            if metadata_payload is not None:
+                payload["completion_metadata"] = metadata_payload
             if prompt:
                 payload["prompt"] = prompt
 

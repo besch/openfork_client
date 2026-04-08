@@ -19,6 +19,10 @@ logging.basicConfig(
 )
 logging.getLogger().setLevel(logging.INFO)
 
+from utils.recent_logs import install_recent_logs_handler
+
+install_recent_logs_handler()
+
 from config import DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
 from dgn_client import DGNClient
 from services.docker_manager import docker_manager

@@ -178,6 +178,7 @@ class JobListener:
                 f"An error occurred while processing job {job.get('id')}: {e}",
                 exc_info=True,
             )
+            trace = traceback.format_exc()
             # Emit JOB_FAILED event with traceback for remote debugging
             print(
                 json.dumps(
@@ -186,7 +187,7 @@ class JobListener:
                         "payload": {
                             "id": job.get("id"),
                             "error": str(e),
-                            "traceback": traceback.format_exc(),
+                            "traceback": trace,
                         },
                     }
                 ),
@@ -194,7 +195,14 @@ class JobListener:
             )
 
             if job and job.get("id"):
-                self.orchestrator_service.update_job_status(job.get("id"), "failed")
+                self.orchestrator_service.update_job_status(
+                    job.get("id"),
+                    "failed",
+                    completion_metadata={
+                        "error": str(e),
+                        "traceback": trace,
+                    },
+                )
             return True
         finally:
             if (
@@ -618,7 +626,9 @@ class JobListener:
                                             # Start container crash monitor
                                             # This detects OOM kills and unexpected container crashes
                                             def handle_container_crash(
-                                                crashed_job_id: str, reason: str
+                                                crashed_job_id: str,
+                                                reason: str,
+                                                container_logs: Optional[str],
                                             ):
                                                 """Called when container crashes unexpectedly."""
                                                 logging.error(
@@ -641,8 +651,20 @@ class JobListener:
 
                                                 # Mark job as failed
                                                 try:
+                                                    failure_metadata: Dict[str, Any] = {
+                                                        "error": reason,
+                                                    }
+                                                    if container_logs:
+                                                        failure_metadata[
+                                                            "container_logs_tail"
+                                                        ] = container_logs.splitlines()[
+                                                            -100:
+                                                        ]
+
                                                     self.orchestrator_service.update_job_status(
-                                                        crashed_job_id, "failed"
+                                                        crashed_job_id,
+                                                        "failed",
+                                                        completion_metadata=failure_metadata,
                                                     )
                                                 except Exception as e:
                                                     logging.error(

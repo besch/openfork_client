@@ -68,8 +68,7 @@ class BaseJobProcessor(ABC):
         try:
             local_filename = self.workflow_file
         except ValueError as e:
-            logging.error(f"Cannot get workflow payload for job {self.job_id}: {e}")
-            self.orchestrator_service.update_job_status(self.job_id, "failed")
+            self._fail_job(f"Cannot get workflow payload for job {self.job_id}: {e}")
             return None
 
         workflow_path = os.path.join(self.root_dir, "workflows", local_filename)
@@ -81,16 +80,15 @@ class BaseJobProcessor(ABC):
                 workflow_data = json.load(f)
             return workflow_data
         except FileNotFoundError:
-            logging.error(f"Local workflow file not found: {workflow_path}")
-            self.orchestrator_service.update_job_status(self.job_id, "failed")
+            self._fail_job(f"Local workflow file not found: {workflow_path}")
             return None
         except json.JSONDecodeError as e:
-            logging.error(f"Invalid JSON in workflow file {local_filename}: {e}")
-            self.orchestrator_service.update_job_status(self.job_id, "failed")
+            self._fail_job(f"Invalid JSON in workflow file {local_filename}: {e}")
             return None
         except Exception as e:
-            logging.error(f"An unexpected error occurred while loading local workflow {local_filename}: {e}")
-            self.orchestrator_service.update_job_status(self.job_id, "failed")
+            self._fail_job(
+                f"An unexpected error occurred while loading local workflow {local_filename}: {e}"
+            )
             return None
 
     def _check_interruption(self, outputs: Any) -> bool:
@@ -114,7 +112,11 @@ class BaseJobProcessor(ABC):
             message: Error message to log
         """
         logging.error(message)
-        self.orchestrator_service.update_job_status(self.job_id, "failed")
+        self.orchestrator_service.update_job_status(
+            self.job_id,
+            "failed",
+            completion_metadata={"error": message},
+        )
 
     @abstractmethod
     def process(self) -> None:

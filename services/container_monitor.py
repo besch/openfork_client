@@ -9,7 +9,6 @@ the DGN client to continue processing new jobs.
 import threading
 import logging
 import time
-import json
 from typing import Optional, Callable
 
 
@@ -21,7 +20,7 @@ class ContainerMonitor:
         docker_client,
         container_name: str,
         job_id: str,
-        on_container_crash: Callable[[str, str], None],
+        on_container_crash: Callable[[str, str, Optional[str]], None],
         shutdown_event: threading.Event
     ):
         """
@@ -97,16 +96,22 @@ class ContainerMonitor:
                             logging.debug(f"Container {self.container_name} exited cleanly (code 0)")
                             return
                         
-                        # Get last 20 lines of logs for debugging
+                        logs_tail = None
+                        # Get last 100 lines of logs for debugging and failure persistence
                         try:
-                            logs = container.logs(tail=20).decode('utf-8', errors='replace')
-                            logging.error(f"Last logs from {self.container_name}:\n{logs}")
+                            logs_tail = container.logs(tail=100).decode(
+                                "utf-8",
+                                errors="replace",
+                            )
+                            logging.error(
+                                f"Last logs from {self.container_name}:\n{logs_tail}"
+                            )
                         except Exception as log_err:
                             logging.debug(f"Could not retrieve container logs: {log_err}")
                         
                         # Notify caller of crash
                         if self.on_container_crash:
-                            self.on_container_crash(self.job_id, reason)
+                            self.on_container_crash(self.job_id, reason, logs_tail)
                         
                         return  # Exit monitoring loop
                         
