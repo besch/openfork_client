@@ -694,17 +694,18 @@ class OrchestratorService:
         """Resets a job's status to 'pending' and clears its provider via a specific API endpoint."""
         try:
             logging.info(f"Requesting reset for job {job_id}")
-            query = f"{self.orchestrator_url}/api/dgn/job/reset?jobId={job_id}"
+            params = {"jobId": job_id}
             if self.provider_id:
-                query += f"&providerId={self.provider_id}"
+                params["providerId"] = self.provider_id
             token = execution_token or self.get_active_execution_token(job_id)
             if token:
-                query += f"&executionToken={token}"
+                params["executionToken"] = token
             if reason:
-                query += f"&reason={reason}"
+                params["reason"] = reason
             response = self._make_request(
                 'put',
-                query
+                f"{self.orchestrator_url}/api/dgn/job/reset",
+                params=params,
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status reset successfully via API.")
