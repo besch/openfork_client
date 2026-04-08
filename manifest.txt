@@ -71,6 +71,7 @@ start_cloud.sh
 utils/comfyui_workflow_utils.py
 utils/log_tailer.py
 utils/media_utils.py
+utils/recent_logs.py
 utils/shutdown_handler.py
 workflows/chatterbox-tts.api.json
 workflows/chatterbox-voice-clone.api.json
