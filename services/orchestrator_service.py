@@ -27,6 +27,7 @@ class OrchestratorService:
         self.access_token = access_token
         self.refresh_token = refresh_token
         self.dgn_api_key = dgn_api_key
+        self.provider_id: Optional[str] = None
         self.use_api_key = dgn_api_key is not None
         self.token_update_lock = threading.Lock()
         self._last_auth_expired_signal = 0
@@ -501,6 +502,8 @@ class OrchestratorService:
         """Update the status of a job."""
         try:
             payload = {"status": status}
+            if self.provider_id:
+                payload["provider_id"] = self.provider_id
             if storage_path:
                 payload["storage_path"] = storage_path
             if thumbnail_storage_path:
@@ -547,7 +550,14 @@ class OrchestratorService:
             logging.error(f"Error decoding JWT to get user ID: {e}")
             return None
 
-    def register_with_orchestrator(self, service_type: str, supported_services: list = None, cached_images: list = None, accept_policy: str = "all") -> Union[Dict[str, str], None]:
+    def register_with_orchestrator(
+        self,
+        service_type: str,
+        supported_services: list = None,
+        cached_images: list = None,
+        accept_policy: str = "all",
+        allowed_ids: list = None,
+    ) -> Union[Dict[str, str], None]:
         """Register the client with the orchestrator.
         
         Returns:
@@ -570,6 +580,7 @@ class OrchestratorService:
             "supported_services": supported_services or [],
             "cached_images": cached_images or [],  # For smart job assignment
             "accept_policy": accept_policy,  # Job acceptance policy
+            "allowed_ids": allowed_ids or [],
         }
         
         # Only include user_id if we have it (OAuth mode)
@@ -609,6 +620,7 @@ class OrchestratorService:
             response.raise_for_status()
             logging.info("Successfully registered with the Orchestrator.")
             data = response.json()
+            self.provider_id = data.get("provider_id")
             # Return both provider_id and user_id (user_id is returned for API key mode)
             return {
                 "provider_id": data.get('provider_id'),
@@ -638,9 +650,12 @@ class OrchestratorService:
         """Resets a job's status to 'pending' and clears its provider via a specific API endpoint."""
         try:
             logging.info(f"Requesting reset for job {job_id}")
+            query = f"{self.orchestrator_url}/api/dgn/job/reset?jobId={job_id}"
+            if self.provider_id:
+                query += f"&providerId={self.provider_id}"
             response = self._make_request(
                 'put',
-                f"{self.orchestrator_url}/api/dgn/job/reset?jobId={job_id}"
+                query
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status reset successfully via API.")

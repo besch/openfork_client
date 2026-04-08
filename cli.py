@@ -181,7 +181,8 @@ def setup_client(args):
         service_type=args.service,
         supported_services=registration_services,
         cached_images=cached_images,
-        accept_policy=client.accept_policy
+        accept_policy=client.accept_policy,
+        allowed_ids=client.allowed_ids,
     )
     if not registration_result:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
