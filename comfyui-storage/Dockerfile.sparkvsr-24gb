@@ -51,7 +51,9 @@ RUN mkdir -p /app/input /app/output /models/hf_cache
 EXPOSE 8000
 
 # On startup:
-#  1. Pull the latest sparkvsr_api.py from GitHub (allows hot-patching without a rebuild)
-#  2. sparkvsr_api.py calls snapshot_download() at boot, which populates /models/hf_cache
+#  1. Create libcuda.so symlink — the NVIDIA Container Toolkit injects libcuda.so.1 at
+#     runtime but triton's JIT linker needs the bare libcuda.so name (-lcuda flag).
+#  2. Pull the latest sparkvsr_api.py from GitHub (allows hot-patching without a rebuild)
+#  3. sparkvsr_api.py calls snapshot_download() at boot, which populates /models/hf_cache
 #     on the first run and is a fast no-op on subsequent runs (HF_HUB_OFFLINE is NOT set).
-CMD ["/bin/bash", "-c", "curl -sf -L -o /app/sparkvsr_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/sparkvsr_api.py || echo '[warn] Could not fetch latest sparkvsr_api.py, using bundled version' && python /app/sparkvsr_api.py"]
+CMD ["/bin/bash", "-c", "ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so 2>/dev/null || true && curl -sf -L -o /app/sparkvsr_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/sparkvsr_api.py || echo '[warn] Could not fetch latest sparkvsr_api.py, using bundled version' && python /app/sparkvsr_api.py"]
