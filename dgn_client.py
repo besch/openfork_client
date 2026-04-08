@@ -3,7 +3,7 @@ import logging
 import threading
 import requests
 
-import json
+from config import POLICY_MAX_CACHED_IMAGES
 from services.orchestrator_service import OrchestratorService, TokenExpiredError
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
@@ -59,9 +59,21 @@ class DGNClient:
         
         # Shared event to wake up the job listener immediately when a download completes
         self.job_wakeup_event = threading.Event()
+
+        max_cached_images = POLICY_MAX_CACHED_IMAGES.get(self.accept_policy)
+        if max_cached_images is None and self.monetize_mode:
+            max_cached_images = POLICY_MAX_CACHED_IMAGES["monetize"]
         
         # Initialize download manager for Docker image pre-fetching (only when not headless)
-        self.download_manager = DockerDownloadManager(docker_manager, wakeup_event=self.job_wakeup_event) if docker_manager else None
+        self.download_manager = (
+            DockerDownloadManager(
+                docker_manager,
+                wakeup_event=self.job_wakeup_event,
+                max_cached_images=max_cached_images,
+            )
+            if docker_manager
+            else None
+        )
 
         if self.accept_policy == "mine" and not self.orchestrator_service.use_api_key:
             user_id = self.orchestrator_service._get_user_id_from_token()

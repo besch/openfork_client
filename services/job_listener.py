@@ -9,11 +9,6 @@ from config import HEADLESS_MODE, TimeoutConfig
 from services.docker_manager import docker_manager
 from services.container_monitor import ContainerMonitor
 from exceptions import AuthError, ProviderError
-from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
-from services.hardware_profiler import (
-    can_run_service,
-    get_service_incompatibility_reason,
-)
 
 
 class JobListener:
@@ -58,6 +53,8 @@ class JobListener:
             False if a critical auth error occurred that should stop the listener.
         """
         job_id = job.get("id") if job else None
+        service_type_for_cache = self._get_service_type_for_job(job) if job else None
+        job_used_service = False
 
         try:
             # Safety check: Validate hardware requirements before processing
@@ -65,8 +62,14 @@ class JobListener:
             workflow_type = job.get("workflow_type")
             if workflow_type:
                 try:
-                    service_type = self.client.get_service_type_for_workflow(
-                        workflow_type
+                    from services.hardware_profiler import (
+                        can_run_service,
+                        get_service_incompatibility_reason,
+                    )
+
+                    service_type = (
+                        service_type_for_cache
+                        or self.client.get_service_type_for_workflow(workflow_type)
                     )
                     service_config = self.client.services_config.get(service_type, {})
 
@@ -107,6 +110,7 @@ class JobListener:
 
             # Get processor and set up cancellation check
             processor = self.client._get_job_processor(job, self.shutdown_event)
+            job_used_service = True
 
             # Check periodically during processing
             self._monitor_job_cancellation(job.get("id"), processor)
@@ -169,7 +173,7 @@ class JobListener:
                 )
 
             return True
-        except (TokenExpiredError, AuthError):
+        except AuthError:
             self.orchestrator_service.signal_auth_expired()
             logging.warning(f"Auth expired during processing of job {job.get('id')}.")
             raise  # Re-raise to be caught by outer exception handler
@@ -231,6 +235,10 @@ class JobListener:
                 )
             return True
         finally:
+            download_manager = getattr(self.client, "download_manager", None)
+            if download_manager and service_type_for_cache and job_used_service:
+                download_manager.notify_job_complete(service_type_for_cache)
+
             if (
                 self.shutdown_event.is_set()
                 and getattr(self.client, "stop_requested", False)
@@ -386,13 +394,13 @@ class JobListener:
                             )
                     else:
                         logging.info("No new jobs.")
-            except TokenExpiredError:
+            except AuthError:
                 self.orchestrator_service.signal_auth_expired()
                 logging.warning("Could not fetch job due to expired token.")
                 if self.orchestrator_service.is_auth_failed_permanently():
                     logging.error("Auth permanently failed. Stopping job listener.")
                     break
-            except ProviderNotFoundError:
+            except ProviderError:
                 logging.warning(
                     "Provider registration expired. Signaling main process for restart."
                 )
@@ -453,6 +461,16 @@ class JobListener:
         Pre-fetching is purely for reducing job wait times.
         """
         if not download_manager:
+            return
+
+        accept_policy = getattr(self.client, "accept_policy", "all")
+        allow_network_prefetch = accept_policy in ("all", "monetize") or getattr(
+            self.client, "monetize_mode", False
+        )
+        if not allow_network_prefetch:
+            logging.debug(
+                f"Skipping global prefetch suggestions for private policy '{accept_policy}'."
+            )
             return
 
         # Don't fetch suggestions if we already have downloads in progress
@@ -886,13 +904,13 @@ class JobListener:
                             else:
                                 logging.info("No new jobs found in this check.")
 
-                except TokenExpiredError:
+                except AuthError:
                     self.orchestrator_service.signal_auth_expired()
                     logging.warning("Could not fetch job due to expired token.")
                     if self.orchestrator_service.is_auth_failed_permanently():
                         logging.error("Auth permanently failed. Stopping job listener.")
                         break
-                except ProviderNotFoundError:
+                except ProviderError:
                     logging.warning(
                         "Provider registration expired. Signaling main process for restart."
                     )

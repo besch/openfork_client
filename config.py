@@ -3,7 +3,13 @@ Configuration for the DGN Client
 '''
 import os
 import sys
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*args, **kwargs):
+        """Gracefully degrade when python-dotenv is not installed."""
+        return False
 
 
 load_dotenv()
@@ -21,6 +27,14 @@ os.chdir(ROOT_DIR)
 CACHE_DIR = os.path.join(ROOT_DIR, '.cache')
 DEV_MODE = False
 THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "512"))
+
+# Policy-specific cache caps for local Docker images in auto mode.
+# None means uncapped for that policy.
+POLICY_MAX_CACHED_IMAGES = {
+    "monetize": 3,
+    "project": 3,
+    "users": 3,
+}
 
 # Headless mode detection - when running inside a cloud container (RunPod/Vast.ai),
 # Docker operations should be skipped as ComfyUI is already running in the same container.

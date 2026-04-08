@@ -3,7 +3,6 @@ import logging
 import multiprocessing
 import sys
 import threading
-import requests
 import json
 import os
 
@@ -24,13 +23,9 @@ from utils.recent_logs import install_recent_logs_handler
 install_recent_logs_handler()
 
 from config import DEV_MODE, ORCHESTRATOR_URL_PROD, ORCHESTRATOR_URL_DEV
-from dgn_client import DGNClient
-from services.docker_manager import docker_manager
 from utils.shutdown_handler import start_shutdown_server, SHUTDOWN_EVENT
-from services.heartbeat_manager import HeartbeatManager
-from services.job_listener import JobListener
 
-def listen_for_ipc_commands(client: DGNClient):
+def listen_for_ipc_commands(client: "DGNClient"):
     """
     Listens for JSON commands from stdin (sent by the parent Electron process).
     """
@@ -90,6 +85,9 @@ def listen_for_ipc_commands(client: DGNClient):
 
 
 def setup_client(args):
+    import requests
+    from dgn_client import DGNClient
+
     determined_orchestrator_url = ORCHESTRATOR_URL_DEV if DEV_MODE else ORCHESTRATOR_URL_PROD
     
     logging.info(f"Attempting to connect to orchestrator URL: {determined_orchestrator_url}")
@@ -209,6 +207,9 @@ def setup_client(args):
     return client, provider_id
 
 def run_client(client, provider_id, service_mode):
+    from services.heartbeat_manager import HeartbeatManager
+    from services.job_listener import JobListener
+
     heartbeat_manager = HeartbeatManager(client.orchestrator_service, provider_id, SHUTDOWN_EVENT)
     heartbeat_manager.start()
 
@@ -283,6 +284,8 @@ def cleanup(client, provider_id, service_mode):
     if HEADLESS_MODE:
         logging.info("DGN Client: Headless mode - skipping Docker cleanup.")
     else:
+        from services.docker_manager import docker_manager
+
         logging.info("DGN Client: Stopping Docker container(s).")
         try:
             if service_mode != 'auto':
@@ -345,6 +348,7 @@ def main():
         # In headless mode (running inside cloud container), don't manage Docker
         # - container is already running with ComfyUI
         from config import HEADLESS_MODE
+        from services.docker_manager import docker_manager
         if not HEADLESS_MODE:
             docker_manager.run_container(service_type=args.service)
             # Start log streaming for dedicated service

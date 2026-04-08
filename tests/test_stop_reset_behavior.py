@@ -71,6 +71,7 @@ class StopResetBehaviorTests(unittest.TestCase):
             orchestrator_service=Mock(),
             services_config={},
             available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
             _get_job_processor=lambda job, event: FakeProcessor(),
         )
         client.orchestrator_service.get_job.return_value = {"status": "processing"}
