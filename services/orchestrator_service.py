@@ -609,6 +609,7 @@ class OrchestratorService:
     def upload_output(self, file_path: str, job_id: str, content_type: str) -> Union[str, None]:
         """Uploads a file directly to storage using a presigned URL."""
         file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
         
         upload_info = self._get_signed_upload_url(job_id, file_name)
         if not upload_info or not upload_info.get('success'):
@@ -617,6 +618,19 @@ class OrchestratorService:
         
         upload_url = upload_info['uploadUrl']
         storage_path = upload_info['storagePath']
+        max_file_size = upload_info.get('maxFileSize')
+
+        try:
+            max_file_size = int(max_file_size) if max_file_size is not None else None
+        except (TypeError, ValueError):
+            max_file_size = None
+
+        if max_file_size is not None and file_size > max_file_size:
+            logging.error(
+                f"Output file {file_name} for job {job_id} is {file_size} bytes, "
+                f"which exceeds bucket limit {max_file_size} bytes."
+            )
+            return None
 
         try:
             with open(file_path, 'rb') as f:
@@ -629,12 +643,20 @@ class OrchestratorService:
                 )
                 response.raise_for_status()
             
-            logging.info(f"Successfully uploaded {file_name} for job {job_id}. Storage path: {storage_path}")
+            logging.info(
+                f"Successfully uploaded {file_name} ({file_size} bytes) for job {job_id}. "
+                f"Storage path: {storage_path}"
+            )
             return storage_path
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not upload file to presigned URL: {e}")
             if e.response is not None:
                 logging.error(f"Response content: {e.response.text}")
+                if e.response.status_code == 413:
+                    logging.error(
+                        "Upload rejected by storage size limit. Increase the Supabase "
+                        "bucket file_size_limit for project buckets or reduce output bitrate."
+                    )
             return None
 
     def upload_audio_output(self, file_path: str, job_id: str) -> Union[str, None]:

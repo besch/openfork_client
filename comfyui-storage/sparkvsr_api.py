@@ -2,6 +2,7 @@ import os
 import uuid
 import shutil
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, Form, HTTPException
@@ -34,14 +35,39 @@ JOBS = {}
 # managing device placement explicitly with plain .to() calls.
 _INFERENCE_WRAPPER = Path("/tmp/sparkvsr_run.py")
 _INFERENCE_WRAPPER.write_text(
-    "import gc, torch, diffusers\n"
+    "import gc, os, torch, diffusers\n"
+    "import imageio.v3 as _spark_iio\n"
     "from diffusers.models.autoencoders.autoencoder_kl_cogvideox import AutoencoderKLCogVideoX\n"
     "from diffusers.models.transformers.cogvideox_transformer_3d import CogVideoXTransformer3DModel as T3D\n"
     "_GPU = 'cuda' if torch.cuda.is_available() else 'cpu'\n"
+    "_orig_imwrite = _spark_iio.imwrite\n"
     "_orig_enc = AutoencoderKLCogVideoX.encode\n"
     "_orig_dec = AutoencoderKLCogVideoX.decode\n"
     "_orig_fwd = T3D.forward\n"
     "_pipe = None\n"
+    "def _patched_imwrite(uri, image, *a, **kw):\n"
+    "    if kw.get('codec') == 'libx264':\n"
+    "        target_crf = os.environ.get('SPARKVSR_OUTPUT_CRF', '20')\n"
+    "        target_preset = os.environ.get('SPARKVSR_OUTPUT_PRESET', 'medium')\n"
+    "        target_pixfmt = os.environ.get('SPARKVSR_OUTPUT_PIXEL_FORMAT', 'yuv420p')\n"
+    "        ffmpeg_params = list(kw.get('ffmpeg_params') or [])\n"
+    "        if '-crf' in ffmpeg_params:\n"
+    "            idx = ffmpeg_params.index('-crf')\n"
+    "            if idx + 1 < len(ffmpeg_params):\n"
+    "                ffmpeg_params[idx + 1] = target_crf\n"
+    "            else:\n"
+    "                ffmpeg_params.append(target_crf)\n"
+    "        else:\n"
+    "            ffmpeg_params.extend(['-crf', target_crf])\n"
+    "        if '-preset' not in ffmpeg_params:\n"
+    "            ffmpeg_params.extend(['-preset', target_preset])\n"
+    "        if '-movflags' not in ffmpeg_params:\n"
+    "            ffmpeg_params.extend(['-movflags', '+faststart'])\n"
+    "        kw['ffmpeg_params'] = ffmpeg_params\n"
+    "        kw['pixelformat'] = target_pixfmt\n"
+    "        print(f'[sparkvsr-patch] mp4 encode tuned: crf={target_crf} pixfmt={target_pixfmt}', flush=True)\n"
+    "    return _orig_imwrite(uri, image, *a, **kw)\n"
+    "_spark_iio.imwrite = _patched_imwrite\n"
     "def _find_pipe():\n"
     "    global _pipe\n"
     "    if _pipe is not None:\n"
@@ -155,6 +181,53 @@ SPARKVSR_MODEL_PATH: str | None = None
 _model_ready = asyncio.Event()
 
 
+def _merge_job_status(task_id: str, **updates):
+    job = dict(JOBS.get(task_id, {}))
+    job.update(updates)
+    JOBS[task_id] = job
+
+
+def _set_job_progress(task_id: str, progress: int):
+    current = JOBS.get(task_id, {})
+    current_progress = int(current.get("progress", 0) or 0)
+    _merge_job_status(task_id, progress=max(current_progress, max(0, min(100, int(progress)))))
+
+
+def _progress_from_output(task_id: str, text: str):
+    lowered = text.lower()
+
+    if "loading weights" in lowered:
+        _set_job_progress(task_id, 8)
+    if "loading pipeline components" in lowered:
+        _set_job_progress(task_id, 15)
+    if "processing videos" in lowered:
+        _set_job_progress(task_id, 25)
+    if "[sparkvsr-patch] transformer" in lowered or "[sparkvsr-patch] vae" in lowered:
+        _set_job_progress(task_id, 45)
+    if "completed" in lowered and "processing videos" not in lowered:
+        _set_job_progress(task_id, 100)
+
+
+async def _consume_process_stream(stream, sink, task_id: str):
+    while True:
+        chunk = await stream.read(4096)
+        if not chunk:
+            break
+        text = chunk.decode(errors="replace")
+        sink.append(text)
+        _progress_from_output(task_id, text)
+
+
+async def _progress_heartbeat(task_id: str, process, expected_seconds: int):
+    started_at = time.monotonic()
+    while process.returncode is None:
+        elapsed = time.monotonic() - started_at
+        # Estimated progress only: SparkVSR does not emit machine-readable task %
+        estimated = 5 + int((elapsed / max(expected_seconds, 1)) * 90)
+        _set_job_progress(task_id, min(95, estimated))
+        await asyncio.sleep(5)
+
+
 async def _download_model():
     """Download SparkVSR weights in the background so the API can start immediately."""
     global SPARKVSR_MODEL_PATH
@@ -200,7 +273,7 @@ async def _process_video(
     chunk_len: int = 49,
     tile_size: int = 0,
 ):
-    JOBS[task_id] = {"status": "processing", "progress": 0}
+    JOBS[task_id] = {"status": "processing", "progress": 1}
 
     task_input_dir = INPUT_DIR / task_id
     task_output_dir = OUTPUT_DIR / task_id
@@ -232,6 +305,9 @@ async def _process_video(
 
         env = os.environ.copy()
         env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        env.setdefault("SPARKVSR_OUTPUT_CRF", "20")
+        env.setdefault("SPARKVSR_OUTPUT_PRESET", "medium")
+        env.setdefault("SPARKVSR_OUTPUT_PIXEL_FORMAT", "yuv420p")
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -241,11 +317,35 @@ async def _process_video(
             env=env,
         )
 
-        stdout, stderr = await process.communicate()
-        stdout_text = stdout.decode(errors="replace") if stdout else ""
-        stderr_text = stderr.decode(errors="replace") if stderr else ""
+        _set_job_progress(task_id, 3)
 
-        if process.returncode != 0:
+        stdout_chunks = []
+        stderr_chunks = []
+        expected_seconds = 1200 if upscale_factor >= 4 else 720
+
+        stdout_task = asyncio.create_task(
+            _consume_process_stream(process.stdout, stdout_chunks, task_id)
+        )
+        stderr_task = asyncio.create_task(
+            _consume_process_stream(process.stderr, stderr_chunks, task_id)
+        )
+        progress_task = asyncio.create_task(
+            _progress_heartbeat(task_id, process, expected_seconds)
+        )
+
+        returncode = await process.wait()
+        await stdout_task
+        await stderr_task
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+
+        stdout_text = "".join(stdout_chunks)
+        stderr_text = "".join(stderr_chunks)
+
+        if returncode != 0:
             error_msg = "\n".join(
                 part for part in (stdout_text.strip(), stderr_text.strip()) if part
             ) or "Unknown error"
@@ -265,7 +365,13 @@ async def _process_video(
 
         shutil.move(str(output_videos[-1]), str(final_output))
         print(f"[Task {task_id}] Completed → {final_output}")
-        JOBS[task_id] = {"status": "completed", "output": str(final_output)}
+        file_size = final_output.stat().st_size if final_output.exists() else 0
+        JOBS[task_id] = {
+            "status": "completed",
+            "progress": 100,
+            "output": str(final_output),
+            "file_size_bytes": file_size,
+        }
 
     except Exception as e:
         print(f"[Task {task_id}] Exception: {e}")
