@@ -16,6 +16,24 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 JOBS = {}
 
+# Wrapper script written to disk once at startup.
+# Patches enable_sequential_cpu_offload → enable_model_cpu_offload before running
+# the inference script.  Newer accelerate versions place VAE sub-modules on the
+# meta device during sequential offload, which breaks CogVideoX VAE forward passes
+# with "Cannot copy out of meta tensor; no data!".  Model-level offload uses real
+# CPU tensors instead and avoids this bug while still freeing ~15-18 GiB of VRAM.
+_INFERENCE_WRAPPER = Path("/tmp/sparkvsr_run.py")
+_INFERENCE_WRAPPER.write_text(
+    "import sys, diffusers\n"
+    "try:\n"
+    "    _cls = diffusers.CogVideoXImageToVideoPipeline\n"
+    "    _cls.enable_sequential_cpu_offload = _cls.enable_model_cpu_offload\n"
+    "except Exception as _e:\n"
+    "    print('[sparkvsr-patch] could not patch:', _e, flush=True)\n"
+    "import runpy\n"
+    "runpy.run_path('/app/sparkvsr_inference_script.py', run_name='__main__')\n"
+)
+
 # Resolved at startup in the background; None means still downloading.
 SPARKVSR_MODEL_PATH: str | None = None
 _model_ready = asyncio.Event()
@@ -81,7 +99,7 @@ async def _process_video(
         print(f"[Task {task_id}] Running SparkVSR on {input_path}")
 
         cmd = [
-            "python", "/app/sparkvsr_inference_script.py",
+            "python", str(_INFERENCE_WRAPPER),
             "--input_dir", str(task_input_dir),
             "--model_path", SPARKVSR_MODEL_PATH,
             "--output_path", str(task_output_dir),
