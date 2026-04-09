@@ -64,7 +64,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
         ref_guidance_scale = float(job_inputs.get("ref_guidance_scale", 1.0))
         cpu_offload = job_inputs.get("cpu_offload", True)
         chunk_len = int(job_inputs.get("chunk_len", 49))
-        tile_size = int(job_inputs.get("tile_size", 128))
+        tile_size = int(job_inputs.get("tile_size", 0))
 
         try:
             original_width, original_height = get_video_dimensions(video_path)

@@ -17,36 +17,62 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 JOBS = {}
 
 # Wrapper script written to disk once at startup.
-# Patches AutoencoderKLCogVideoX.encode to temporarily move the CogVideoX
-# transformer + text_encoder to CPU before VAE encoding, then restores them.
-# This frees ~15-18 GiB of VRAM for the VAE encode step without touching the
-# accelerate hook system (which is broken for CogVideoX VAE in some versions).
+#
+# Memory strategy for 24GB GPU (CogVideoX1.5-5B-I2V, ~23 GB loaded):
+#
+# Phase 1 — VAE encode (input video → latents):
+#   Move transformer + text_encoder to CPU before calling vae.encode().
+#   This frees ~16 GB, giving the VAE room to run.
+#   Do NOT restore them afterward.
+#
+# Phase 2 — Transformer denoising:
+#   On the very first transformer.forward() call, lazily move the transformer
+#   back to GPU.  Text encoder stays on CPU permanently, keeping ~6 GB free
+#   throughout denoising (enough headroom for full-resolution activations).
+#
+# This avoids the accelerate hook bugs (meta-tensor / device-mismatch) by
+# managing device placement explicitly with plain .to() calls.
 _INFERENCE_WRAPPER = Path("/tmp/sparkvsr_run.py")
 _INFERENCE_WRAPPER.write_text(
     "import gc, torch, diffusers\n"
     "from diffusers.models.autoencoders.autoencoder_kl_cogvideox import AutoencoderKLCogVideoX\n"
+    "from diffusers.models.transformers.cogvideox_transformer_3d import CogVideoXTransformer3DModel as T3D\n"
     "_orig_enc = AutoencoderKLCogVideoX.encode\n"
-    "def _enc_offload(self, video, *a, **kw):\n"
-    "    _off = []\n"
-    "    for obj in gc.get_objects():\n"
-    "        if isinstance(obj, diffusers.CogVideoXImageToVideoPipeline):\n"
-    "            for attr in ('transformer', 'text_encoder'):\n"
-    "                m = getattr(obj, attr, None)\n"
-    "                if m is None: continue\n"
-    "                try:\n"
-    "                    dev = next(m.parameters()).device\n"
-    "                    if dev.type == 'cuda':\n"
-    "                        m.to('cpu'); _off.append((m, dev))\n"
-    "                except StopIteration: pass\n"
-    "            break\n"
-    "    if _off:\n"
+    "_orig_fwd = T3D.forward\n"
+    "_enc_done = False\n"
+    "_fwd_done = False\n"
+    # --- VAE encode patch: offload transformer+encoder once, don't restore ---
+    "def _vae_enc(self, video, *a, **kw):\n"
+    "    global _enc_done\n"
+    "    if not _enc_done:\n"
+    "        for obj in gc.get_objects():\n"
+    "            if isinstance(obj, diffusers.CogVideoXImageToVideoPipeline):\n"
+    "                for attr in ('transformer', 'text_encoder'):\n"
+    "                    m = getattr(obj, attr, None)\n"
+    "                    if m:\n"
+    "                        try:\n"
+    "                            if next(m.parameters()).device.type == 'cuda':\n"
+    "                                m.to('cpu')\n"
+    "                        except StopIteration: pass\n"
+    "                break\n"
     "        torch.cuda.empty_cache()\n"
-    "        print('[sparkvsr-patch] offloaded transformer+encoder to CPU for VAE encode', flush=True)\n"
-    "    try:\n"
-    "        return _orig_enc(self, video, *a, **kw)\n"
-    "    finally:\n"
-    "        for m, d in _off: m.to(d)\n"
-    "AutoencoderKLCogVideoX.encode = _enc_offload\n"
+    "        print('[sparkvsr-patch] transformer+encoder→CPU for VAE encode', flush=True)\n"
+    "        _enc_done = True\n"
+    "    return _orig_enc(self, video, *a, **kw)\n"
+    # --- Transformer forward patch: lazily restore transformer once -----------
+    "def _trans_fwd(self, *a, **kw):\n"
+    "    global _fwd_done\n"
+    "    if not _fwd_done:\n"
+    "        try:\n"
+    "            if next(self.parameters()).device.type == 'cpu':\n"
+    "                self.to('cuda')\n"
+    "                torch.cuda.empty_cache()\n"
+    "                print('[sparkvsr-patch] transformer→GPU for denoising', flush=True)\n"
+    "        except StopIteration: pass\n"
+    "        _fwd_done = True\n"
+    "    return _orig_fwd(self, *a, **kw)\n"
+    "AutoencoderKLCogVideoX.encode = _vae_enc\n"
+    "T3D.forward = _trans_fwd\n"
     "import runpy\n"
     "runpy.run_path('/app/sparkvsr_inference_script.py', run_name='__main__')\n"
 )
@@ -99,7 +125,7 @@ async def _process_video(
     ref_guidance_scale: float,
     cpu_offload: bool = True,
     chunk_len: int = 49,
-    tile_size: int = 128,
+    tile_size: int = 0,
 ):
     JOBS[task_id] = {"status": "processing", "progress": 0}
 
@@ -126,8 +152,7 @@ async def _process_video(
             "--ref_guidance_scale", str(ref_guidance_scale),
             "--is_vae_st",
             "--chunk_len", str(chunk_len),
-            "--tile_size_hw", str(tile_size), str(tile_size),
-            "--overlap_hw", "32", "32",
+            *(["--tile_size_hw", str(tile_size), str(tile_size), "--overlap_hw", "32", "32"] if tile_size > 0 else []),
         ]
 
         env = os.environ.copy()
@@ -184,7 +209,7 @@ async def upscale(
     ref_guidance_scale: float = Form(1.0),
     cpu_offload: bool = Form(True),
     chunk_len: int = Form(49),
-    tile_size: int = Form(128),
+    tile_size: int = Form(0),
 ):
     if not _model_ready.is_set():
         raise HTTPException(status_code=503, detail="Model is still downloading, please retry shortly")
