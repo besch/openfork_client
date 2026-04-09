@@ -62,6 +62,8 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
         upscale_factor = int(job_inputs.get("upscale_factor", 4))
         ref_mode = job_inputs.get("ref_mode", "no_ref")
         ref_guidance_scale = float(job_inputs.get("ref_guidance_scale", 1.0))
+        cpu_offload = job_inputs.get("cpu_offload", True)
+        chunk_len = int(job_inputs.get("chunk_len", 49))
 
         try:
             original_width, original_height = get_video_dimensions(video_path)
@@ -101,6 +103,8 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
                     "upscale": str(upscale_factor),
                     "ref_mode": ref_mode,
                     "ref_guidance_scale": str(ref_guidance_scale),
+                    "cpu_offload": str(cpu_offload).lower(),
+                    "chunk_len": str(chunk_len),
                 }
                 logging.info(f"[SparkVSR] Submitting to {self.UPSCALE_ENDPOINT}")
                 resp = requests.post(self.UPSCALE_ENDPOINT, files=files, data=data, timeout=30)

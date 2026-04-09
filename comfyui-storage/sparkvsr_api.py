@@ -62,6 +62,8 @@ async def _process_video(
     upscale_factor: int,
     ref_mode: str,
     ref_guidance_scale: float,
+    cpu_offload: bool = True,
+    chunk_len: int = 49,
 ):
     JOBS[task_id] = {"status": "processing", "progress": 0}
 
@@ -87,6 +89,8 @@ async def _process_video(
             "--ref_mode", ref_mode,
             "--ref_guidance_scale", str(ref_guidance_scale),
             "--is_vae_st",
+            "--chunk_len", str(chunk_len),
+            *(["--is_cpu_offload"] if cpu_offload else []),
         ]
 
         env = os.environ.copy()
@@ -141,6 +145,8 @@ async def upscale(
     upscale: int = Form(4),
     ref_mode: str = Form("no_ref"),
     ref_guidance_scale: float = Form(1.0),
+    cpu_offload: bool = Form(True),
+    chunk_len: int = Form(49),
 ):
     if not _model_ready.is_set():
         raise HTTPException(status_code=503, detail="Model is still downloading, please retry shortly")
@@ -153,7 +159,7 @@ async def upscale(
 
     JOBS[task_id] = {"status": "queued", "progress": 0}
     asyncio.create_task(
-        _process_video(task_id, str(input_path), upscale, ref_mode, ref_guidance_scale)
+        _process_video(task_id, str(input_path), upscale, ref_mode, ref_guidance_scale, cpu_offload, chunk_len)
     )
     return {"task_id": task_id}
 
