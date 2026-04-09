@@ -73,6 +73,17 @@ _INFERENCE_WRAPPER.write_text(
     "        torch.cuda.empty_cache()\n"
     "        print('[sparkvsr-patch] transformer+encoder→CPU for VAE encode', flush=True)\n"
     "        _enc_done = True\n"
+    "    try:\n"
+    "        enc_param = next(self.parameters())\n"
+    "        target_device = enc_param.device\n"
+    "        target_dtype = enc_param.dtype\n"
+    "        if video.device != target_device or (torch.is_floating_point(video) and video.dtype != target_dtype):\n"
+    "            if torch.is_floating_point(video):\n"
+    "                video = video.to(device=target_device, dtype=target_dtype)\n"
+    "            else:\n"
+    "                video = video.to(device=target_device)\n"
+    "            print('[sparkvsr-patch] video→VAE device for encode', flush=True)\n"
+    "    except StopIteration: pass\n"
     "    return _orig_enc(self, video, *a, **kw)\n"
     "def _trans_fwd(self, *a, **kw):\n"
     "    global _fwd_done\n"
@@ -180,9 +191,13 @@ async def _process_video(
         )
 
         stdout, stderr = await process.communicate()
+        stdout_text = stdout.decode(errors="replace") if stdout else ""
+        stderr_text = stderr.decode(errors="replace") if stderr else ""
 
         if process.returncode != 0:
-            error_msg = stderr.decode() if stderr else "Unknown error"
+            error_msg = "\n".join(
+                part for part in (stdout_text.strip(), stderr_text.strip()) if part
+            ) or "Unknown error"
             print(f"[Task {task_id}] Failed:\n{error_msg}")
             JOBS[task_id] = {"status": "failed", "error": error_msg}
             return
