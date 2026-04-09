@@ -17,19 +17,36 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 JOBS = {}
 
 # Wrapper script written to disk once at startup.
-# Patches enable_sequential_cpu_offload → enable_model_cpu_offload before running
-# the inference script.  Newer accelerate versions place VAE sub-modules on the
-# meta device during sequential offload, which breaks CogVideoX VAE forward passes
-# with "Cannot copy out of meta tensor; no data!".  Model-level offload uses real
-# CPU tensors instead and avoids this bug while still freeing ~15-18 GiB of VRAM.
+# Patches AutoencoderKLCogVideoX.encode to temporarily move the CogVideoX
+# transformer + text_encoder to CPU before VAE encoding, then restores them.
+# This frees ~15-18 GiB of VRAM for the VAE encode step without touching the
+# accelerate hook system (which is broken for CogVideoX VAE in some versions).
 _INFERENCE_WRAPPER = Path("/tmp/sparkvsr_run.py")
 _INFERENCE_WRAPPER.write_text(
-    "import sys, diffusers\n"
-    "try:\n"
-    "    _cls = diffusers.CogVideoXImageToVideoPipeline\n"
-    "    _cls.enable_sequential_cpu_offload = _cls.enable_model_cpu_offload\n"
-    "except Exception as _e:\n"
-    "    print('[sparkvsr-patch] could not patch:', _e, flush=True)\n"
+    "import gc, torch, diffusers\n"
+    "from diffusers.models.autoencoders.autoencoder_kl_cogvideox import AutoencoderKLCogVideoX\n"
+    "_orig_enc = AutoencoderKLCogVideoX.encode\n"
+    "def _enc_offload(self, video, *a, **kw):\n"
+    "    _off = []\n"
+    "    for obj in gc.get_objects():\n"
+    "        if isinstance(obj, diffusers.CogVideoXImageToVideoPipeline):\n"
+    "            for attr in ('transformer', 'text_encoder'):\n"
+    "                m = getattr(obj, attr, None)\n"
+    "                if m is None: continue\n"
+    "                try:\n"
+    "                    dev = next(m.parameters()).device\n"
+    "                    if dev.type == 'cuda':\n"
+    "                        m.to('cpu'); _off.append((m, dev))\n"
+    "                except StopIteration: pass\n"
+    "            break\n"
+    "    if _off:\n"
+    "        torch.cuda.empty_cache()\n"
+    "        print('[sparkvsr-patch] offloaded transformer+encoder to CPU for VAE encode', flush=True)\n"
+    "    try:\n"
+    "        return _orig_enc(self, video, *a, **kw)\n"
+    "    finally:\n"
+    "        for m, d in _off: m.to(d)\n"
+    "AutoencoderKLCogVideoX.encode = _enc_offload\n"
     "import runpy\n"
     "runpy.run_path('/app/sparkvsr_inference_script.py', run_name='__main__')\n"
 )
@@ -108,7 +125,6 @@ async def _process_video(
             "--ref_guidance_scale", str(ref_guidance_scale),
             "--is_vae_st",
             "--chunk_len", str(chunk_len),
-            *(["--is_cpu_offload"] if cpu_offload else []),
         ]
 
         env = os.environ.copy()
