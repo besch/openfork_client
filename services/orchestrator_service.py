@@ -4,14 +4,23 @@ import base64
 import json
 import time
 import threading
-from typing import Union, Dict, Optional, Any, List
+import ipaddress
+import os
+import re
+import socket
+import uuid
+from typing import Union, Dict, Optional, Any, List, Tuple
+from urllib.parse import urljoin, urlparse, unquote
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from config import TimeoutConfig
+from config import (
+    TimeoutConfig,
+    MAX_INPUT_ASSET_BYTES,
+    MAX_INPUT_ASSET_REDIRECTS,
+)
 from exceptions import AuthError, ProviderError, TransientError
 from services.hardware_profiler import get_hardware_profile
-import os
 from utils.recent_logs import get_recent_logs_tail
 
 # Backward compatibility aliases
@@ -22,6 +31,13 @@ ProviderNotFoundError = ProviderError
 class OrchestratorService:
     # Debounce interval for AUTH_EXPIRED signals (seconds)
     AUTH_EXPIRED_DEBOUNCE_SECONDS = 5
+    BLOCKED_ASSET_HOSTNAMES = {
+        "localhost",
+        "localhost.localdomain",
+        "host.docker.internal",
+        "gateway.docker.internal",
+        "metadata.google.internal",
+    }
 
     def __init__(self, orchestrator_url: str, access_token: str = None, refresh_token: str = None, dgn_api_key: str = None):
         self.orchestrator_url = orchestrator_url
@@ -361,50 +377,174 @@ class OrchestratorService:
             logging.error(f"Failed to decode JSON from get_job response: {response.text}")
             return None
 
+    @staticmethod
+    def _is_blocked_asset_ip(ip_text: str) -> bool:
+        try:
+            ip_obj = ipaddress.ip_address(ip_text)
+        except ValueError:
+            return True
+
+        return any(
+            (
+                ip_obj.is_private,
+                ip_obj.is_loopback,
+                ip_obj.is_link_local,
+                ip_obj.is_multicast,
+                ip_obj.is_reserved,
+                ip_obj.is_unspecified,
+            )
+        )
+
+    def _validate_asset_url(self, asset_url: str) -> str:
+        parsed = urlparse(asset_url)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+
+        if scheme not in {"http", "https"}:
+            raise ValueError(f"Unsupported asset URL scheme: {scheme or 'missing'}")
+
+        if not hostname:
+            raise ValueError("Asset URL is missing a hostname")
+
+        if parsed.username or parsed.password:
+            raise ValueError("Asset URLs with embedded credentials are not allowed")
+
+        if hostname in self.BLOCKED_ASSET_HOSTNAMES:
+            raise ValueError(f"Blocked asset hostname: {hostname}")
+
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            literal_ip = None
+
+        if literal_ip is not None:
+            if self._is_blocked_asset_ip(hostname):
+                raise ValueError(f"Blocked asset IP: {hostname}")
+            return parsed.geturl()
+
+        try:
+            resolved = {
+                info[4][0]
+                for info in socket.getaddrinfo(
+                    hostname,
+                    parsed.port or (443 if scheme == "https" else 80),
+                    type=socket.SOCK_STREAM,
+                )
+            }
+        except socket.gaierror as exc:
+            raise ValueError(f"Unable to resolve asset hostname '{hostname}': {exc}") from exc
+
+        if not resolved:
+            raise ValueError(f"No IP addresses resolved for asset hostname '{hostname}'")
+
+        blocked_ips = sorted(ip for ip in resolved if self._is_blocked_asset_ip(ip))
+        if blocked_ips:
+            raise ValueError(
+                f"Asset hostname '{hostname}' resolves to blocked address(es): {', '.join(blocked_ips)}"
+            )
+
+        return parsed.geturl()
+
+    def _open_validated_asset_stream(self, asset_url: str) -> Tuple[str, requests.Response]:
+        current_url = asset_url
+
+        for redirect_count in range(MAX_INPUT_ASSET_REDIRECTS + 1):
+            validated_url = self._validate_asset_url(current_url)
+            response = self._session.get(
+                validated_url,
+                stream=True,
+                timeout=120,
+                allow_redirects=False,
+            )
+
+            if response.is_redirect or response.is_permanent_redirect:
+                location = response.headers.get("Location")
+                response.close()
+                if not location:
+                    raise ValueError("Asset redirect response missing Location header")
+                current_url = urljoin(validated_url, location)
+                continue
+
+            response.raise_for_status()
+            return validated_url, response
+
+        raise ValueError(
+            f"Asset download exceeded redirect limit ({MAX_INPUT_ASSET_REDIRECTS})"
+        )
+
+    @staticmethod
+    def _build_safe_asset_filename(asset_url: str, content_type: str) -> str:
+        content_type_map = {
+            'image/jpeg': '.jpeg',
+            'image/jpg': '.jpeg',
+            'image/png': '.png',
+            'image/webp': '.webp',
+            'image/gif': '.gif',
+            'video/mp4': '.mp4',
+            'video/webm': '.webm',
+            'audio/mpeg': '.mp3',
+            'audio/wav': '.wav',
+            'audio/flac': '.flac',
+        }
+
+        parsed = urlparse(asset_url)
+        raw_name = unquote(os.path.basename((parsed.path or "").replace("\\", "/"))).strip()
+        if raw_name in {"", ".", ".."}:
+            raw_name = "asset"
+
+        sanitized_name = re.sub(r"[^A-Za-z0-9._-]", "_", raw_name)
+        stem, ext = os.path.splitext(sanitized_name)
+        stem = stem.strip("._") or "asset"
+        ext = ext.lower()
+
+        normalized_content_type = content_type.split(";", 1)[0].strip().lower()
+        expected_ext = content_type_map.get(normalized_content_type)
+
+        if expected_ext and ext not in {expected_ext, ".jpg", ".jpeg"}:
+            ext = expected_ext
+        elif not ext:
+            ext = expected_ext or ".dat"
+
+        safe_stem = stem[:80]
+        return f"{safe_stem}-{uuid.uuid4().hex[:8]}{ext}"
+
     def download_asset_by_url(self, asset_url: str, download_dir: str) -> Union[str, None]:
         """Download an asset from a given URL with validation."""
+        file_path: Optional[str] = None
         try:
-            response = requests.get(asset_url, stream=True, timeout=120)
-            response.raise_for_status()
-            
-            # Get file extension from URL (strip query params)
-            file_name = asset_url.split('/')[-1].split('?')[0]
-            
-            # Determine correct extension from Content-Type header
-            content_type = response.headers.get('Content-Type', '').lower()
-            
-            # Map content types to extensions
-            content_type_map = {
-                'image/jpeg': '.jpeg',
-                'image/jpg': '.jpeg',
-                'image/png': '.png',
-                'image/webp': '.webp',
-                'image/gif': '.gif',
-                'video/mp4': '.mp4',
-                'video/webm': '.webm',
-                'audio/mpeg': '.mp3',
-                'audio/wav': '.wav',
-                'audio/flac': '.flac',
-            }
-            
-            # If file has no extension or wrong extension, fix it based on Content-Type
-            if '.' not in file_name:
-                ext = content_type_map.get(content_type.split(';')[0], '.dat')
-                file_name += ext
-            elif content_type and content_type.split(';')[0] in content_type_map:
-                # Verify extension matches content type
-                expected_ext = content_type_map[content_type.split(';')[0]]
-                current_ext = '.' + file_name.rsplit('.', 1)[-1].lower()
-                if current_ext != expected_ext and current_ext not in ['.jpg', '.jpeg']:
-                    # Fix mismatched extension
-                    file_name = file_name.rsplit('.', 1)[0] + expected_ext
-                    logging.info(f"Corrected file extension based on Content-Type: {file_name}")
+            os.makedirs(download_dir, exist_ok=True)
+            final_url, response = self._open_validated_asset_stream(asset_url)
+            with response:
+                content_type = response.headers.get('Content-Type', '').lower()
+                content_length = response.headers.get("Content-Length")
 
-            file_path = os.path.join(download_dir, file_name)
+                if content_length:
+                    try:
+                        expected_size = int(content_length)
+                    except ValueError:
+                        expected_size = None
+                    else:
+                        if expected_size < 0:
+                            raise ValueError("Asset response reported a negative Content-Length")
+                        if expected_size > MAX_INPUT_ASSET_BYTES:
+                            raise ValueError(
+                                f"Asset exceeds max allowed size ({expected_size} bytes > {MAX_INPUT_ASSET_BYTES} bytes)"
+                            )
 
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                file_name = self._build_safe_asset_filename(final_url, content_type)
+                file_path = os.path.join(download_dir, file_name)
+
+                downloaded_bytes = 0
+                with open(file_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if not chunk:
+                            continue
+                        downloaded_bytes += len(chunk)
+                        if downloaded_bytes > MAX_INPUT_ASSET_BYTES:
+                            raise ValueError(
+                                f"Asset exceeds max allowed size while downloading ({downloaded_bytes} bytes)"
+                            )
+                        f.write(chunk)
             
             # Validate downloaded file
             file_size = os.path.getsize(file_path)
@@ -431,11 +571,20 @@ class OrchestratorService:
             
             logging.info(f"Asset downloaded to {file_path} ({file_size} bytes)")
             return file_path
+        except ValueError as e:
+            logging.error(f"Rejected asset download from {asset_url}: {e}")
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+            return None
         except requests.exceptions.RequestException as e:
             logging.error(f"Error downloading asset from {asset_url}: {e}")
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
             return None
         except Exception as e:
             logging.error(f"Unexpected error downloading asset: {e}")
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
             return None
 
     def _get_signed_upload_url(self, job_id: str, file_name: str) -> Union[Dict, None]:
