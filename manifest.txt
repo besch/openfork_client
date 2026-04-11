@@ -1,5 +1,4 @@
 cli.py
-comfyui-storage/acestep_api.py
 comfyui-storage/build_and_push.py
 comfyui-storage/davinci_magihuman_api.py
 comfyui-storage/diffrhythm_api.py
