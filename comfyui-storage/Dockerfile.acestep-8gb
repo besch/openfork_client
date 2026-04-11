@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.4
-# ACE-Step-1.5 Docker Image - 8GB Optimized
-# Uses 2B turbo DiT only (no LM) to stay within 8GB VRAM
+# ACE-Step 1.5 Docker Image - 8GB Optimized
+# Uses the 2B turbo DiT configuration to stay within the 8GB tier.
 
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 # Metadata
 LABEL maintainer="openfork@example.com"
-LABEL description="ACE-Step-1.5 Music Generation API Server (8GB Optimized)"
+LABEL description="ACE-Step 1.5 Music Generation API Server (8GB Optimized)"
 LABEL version="1.5.0-8gb"
 
 # Environment variables
@@ -50,8 +50,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Clone ACE-Step-1.5
-RUN git clone https://github.com/ACE-Step/ACE-Step-1.5.git /app/acestep_repo
+# Clone the official ACE-Step 1.5 repository
+RUN git clone --depth 1 https://github.com/ace-step/ACE-Step-1.5.git /app/acestep_repo
 
 WORKDIR /app/acestep_repo
 

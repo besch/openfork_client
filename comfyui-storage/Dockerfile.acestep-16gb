@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.4
-# ACE-Step-1.5 Docker Image - 16GB
-# Uses 5B XL turbo DiT + 1.7B LM for best quality
+# ACE-Step 1.5 Docker Image - 16GB
+# Uses the ACE-Step 1.5 XL turbo DiT with the 1.7B LM.
 
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 # Metadata
 LABEL maintainer="openfork@example.com"
-LABEL description="ACE-Step-1.5 Music Generation API Server (16GB)"
+LABEL description="ACE-Step 1.5 Music Generation API Server (16GB)"
 LABEL version="1.5.0"
 
 # Environment variables
@@ -51,8 +51,8 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Clone ACE-Step-1.5
-RUN git clone https://github.com/ACE-Step/ACE-Step-1.5.git /app/acestep_repo
+# Clone the official ACE-Step 1.5 repository
+RUN git clone --depth 1 https://github.com/ace-step/ACE-Step-1.5.git /app/acestep_repo
 
 WORKDIR /app/acestep_repo
 
@@ -69,7 +69,7 @@ RUN mkdir -p /app/pretrained /app/output /app/acestep_repo/checkpoints
 # Download models:
 # - ACE-Step/Ace-Step1.5: base components (VAE, text encoder, 2B turbo DiT)
 # - ACE-Step/acestep-5Hz-lm-1.7B: language model for caption/lyric generation
-# - ACE-Step/acestep-v15-xl-turbo: 5B XL DiT for higher quality (16GB tier)
+# - ACE-Step/acestep-v15-xl-turbo: XL turbo DiT for higher quality (16GB tier)
 RUN uv run huggingface-cli download ACE-Step/Ace-Step1.5 --local-dir /app/acestep_repo/checkpoints --resume-download && \
     uv run huggingface-cli download ACE-Step/acestep-5Hz-lm-1.7B --local-dir /app/acestep_repo/checkpoints/acestep-5Hz-lm-1.7B --resume-download && \
     uv run huggingface-cli download ACE-Step/acestep-v15-xl-turbo --local-dir /app/acestep_repo/checkpoints/acestep-v15-xl-turbo --resume-download

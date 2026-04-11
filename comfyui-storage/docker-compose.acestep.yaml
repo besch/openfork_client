@@ -1,0 +1,29 @@
+services:
+  acestep-16gb:
+    build:
+      context: .
+      dockerfile: Dockerfile.acestep-16gb
+    container_name: acestep-16gb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/acestep-16gb/output:/app/output
+      - ./storage/acestep-16gb/pretrained:/app/pretrained
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/pretrained
+    tty: true
+    stdin_open: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 240s
