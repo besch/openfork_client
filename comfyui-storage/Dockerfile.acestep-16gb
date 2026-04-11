@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1.4
-# ACE-Step-1.5 Docker Image
-# Optimized for <8GB VRAM cards
+# ACE-Step-1.5 Docker Image - 16GB
+# Uses 5B XL turbo DiT + 1.7B LM for best quality
 
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 # Metadata
 LABEL maintainer="openfork@example.com"
-LABEL description="ACE-Step-1.5 Music Generation API Server"
+LABEL description="ACE-Step-1.5 Music Generation API Server (16GB)"
 LABEL version="1.5.0"
 
 # Environment variables
@@ -17,7 +17,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/app/pretrained \
-    UV_CACHE_DIR=/app/.uv_cache
+    UV_CACHE_DIR=/app/.uv_cache \
+    ACESTEP_CHECKPOINTS_DIR=/app/acestep_repo/checkpoints \
+    ACESTEP_CONFIG_PATH=acestep-v15-xl-turbo \
+    ACESTEP_INIT_LLM=true \
+    ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B \
+    ACESTEP_LM_BACKEND=pt \
+    ACESTEP_API_HOST=0.0.0.0 \
+    ACESTEP_API_PORT=8000
 
 # Install system dependencies with retry logic
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -50,7 +57,6 @@ RUN git clone https://github.com/ACE-Step/ACE-Step-1.5.git /app/acestep_repo
 WORKDIR /app/acestep_repo
 
 # Install dependencies using UV
-# Note: We force python 3.11 as required by ACE-Step
 RUN uv python install 3.11 \
     && uv sync
 
@@ -60,10 +66,13 @@ RUN uv pip install huggingface_hub[cli]
 # Create directories for models and output
 RUN mkdir -p /app/pretrained /app/output /app/acestep_repo/checkpoints
 
-# Download models using huggingface-cli (via uv run to ensure it's found in the environment)
-# ACE-Step/Ace-Step1.5 contains vae, Qwen3-Embedding-0.6B, and acestep-v15-turbo
+# Download models:
+# - ACE-Step/Ace-Step1.5: base components (VAE, text encoder, 2B turbo DiT)
+# - ACE-Step/acestep-5Hz-lm-1.7B: language model for caption/lyric generation
+# - ACE-Step/acestep-v15-xl-turbo: 5B XL DiT for higher quality (16GB tier)
 RUN uv run huggingface-cli download ACE-Step/Ace-Step1.5 --local-dir /app/acestep_repo/checkpoints --resume-download && \
-    uv run huggingface-cli download ACE-Step/acestep-5Hz-lm-1.7B --local-dir /app/acestep_repo/checkpoints/acestep-5Hz-lm-1.7B --resume-download
+    uv run huggingface-cli download ACE-Step/acestep-5Hz-lm-1.7B --local-dir /app/acestep_repo/checkpoints/acestep-5Hz-lm-1.7B --resume-download && \
+    uv run huggingface-cli download ACE-Step/acestep-v15-xl-turbo --local-dir /app/acestep_repo/checkpoints/acestep-v15-xl-turbo --resume-download
 
 # Expose API port
 EXPOSE 8000
@@ -72,5 +81,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Start the API
-CMD ["/bin/bash", "-c", "curl -s -L -o openfork_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/acestep_api.py && uv run python openfork_api.py"]
+# Start the built-in ACE-Step 1.5 API server
+CMD ["uv", "run", "acestep-api"]
