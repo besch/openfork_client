@@ -51,6 +51,7 @@ class OrchestratorService:
         self._auth_failed_permanently = False
         self._active_job_id: Optional[str] = None
         self._active_execution_token: Optional[str] = None
+        self.cloud_instance_id, self.cloud_provider = self._detect_cloud_instance()
         
         # PERFORMANCE: Use a Session for HTTP connection pooling
         # This reuses TCP connections across requests, reducing latency for
@@ -64,6 +65,21 @@ class OrchestratorService:
         )
         self._session.mount('http://', adapter)
         self._session.mount('https://', adapter)
+
+    @staticmethod
+    def _detect_cloud_instance() -> Tuple[Optional[str], Optional[str]]:
+        # Vast.ai detection
+        vast_container_id = os.environ.get("CONTAINER_ID") or os.environ.get("VAST_CONTAINERLABEL")
+        if vast_container_id:
+            normalized_id = vast_container_id.replace("C.", "") if vast_container_id.startswith("C.") else vast_container_id
+            return normalized_id, "vast.ai"
+
+        # RunPod detection
+        runpod_pod_id = os.environ.get("RUNPOD_POD_ID")
+        if runpod_pod_id:
+            return runpod_pod_id, "runpod"
+
+        return None, None
 
     def _set_active_job(self, job: Optional[Dict[str, Any]]) -> None:
         """Track the active leased job so heartbeats and status updates carry its token."""
@@ -169,6 +185,8 @@ class OrchestratorService:
             if self.use_api_key:
                 # Headless mode: use API key
                 request_headers['x-dgn-api-key'] = self.dgn_api_key
+                if self.cloud_instance_id:
+                    request_headers.setdefault('x-dgn-cloud-instance-id', self.cloud_instance_id)
             else:
                 # Electron/web mode: use Bearer token
                 with self.token_update_lock:
@@ -395,7 +413,62 @@ class OrchestratorService:
             )
         )
 
-    def _validate_asset_url(self, asset_url: str) -> str:
+    def _resolve_asset_host_ips(self, parsed) -> Tuple[str, set[str]]:
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            literal_ip = None
+
+        if literal_ip is not None:
+            return hostname, {hostname}
+
+        try:
+            resolved = {
+                info[4][0]
+                for info in socket.getaddrinfo(
+                    hostname,
+                    parsed.port or (443 if scheme == "https" else 80),
+                    type=socket.SOCK_STREAM,
+                )
+            }
+        except socket.gaierror as exc:
+            raise ValueError(f"Unable to resolve asset hostname '{hostname}': {exc}") from exc
+
+        if not resolved:
+            raise ValueError(f"No IP addresses resolved for asset hostname '{hostname}'")
+
+        return hostname, resolved
+
+    @staticmethod
+    def _get_response_peer_ip(response: requests.Response) -> Optional[str]:
+        candidate_paths = [
+            ("raw", "_connection", "sock"),
+            ("raw", "connection", "sock"),
+            ("raw", "_fp", "fp", "raw", "_sock"),
+            ("raw", "_fp", "fp", "raw", "sock"),
+        ]
+
+        for path in candidate_paths:
+            current: Any = response
+            for attr in path:
+                current = getattr(current, attr, None)
+                if current is None:
+                    break
+            if current is None:
+                continue
+            try:
+                peer = current.getpeername()
+            except Exception:
+                continue
+            if peer:
+                return peer[0]
+
+        return None
+
+    def _validate_asset_url(self, asset_url: str) -> Tuple[str, set[str]]:
         parsed = urlparse(asset_url)
         scheme = parsed.scheme.lower()
         hostname = (parsed.hostname or "").strip().lower().rstrip(".")
@@ -420,42 +493,41 @@ class OrchestratorService:
         if literal_ip is not None:
             if self._is_blocked_asset_ip(hostname):
                 raise ValueError(f"Blocked asset IP: {hostname}")
-            return parsed.geturl()
+            return parsed.geturl(), {hostname}
 
-        try:
-            resolved = {
-                info[4][0]
-                for info in socket.getaddrinfo(
-                    hostname,
-                    parsed.port or (443 if scheme == "https" else 80),
-                    type=socket.SOCK_STREAM,
-                )
-            }
-        except socket.gaierror as exc:
-            raise ValueError(f"Unable to resolve asset hostname '{hostname}': {exc}") from exc
-
-        if not resolved:
-            raise ValueError(f"No IP addresses resolved for asset hostname '{hostname}'")
-
+        _, resolved = self._resolve_asset_host_ips(parsed)
         blocked_ips = sorted(ip for ip in resolved if self._is_blocked_asset_ip(ip))
         if blocked_ips:
             raise ValueError(
                 f"Asset hostname '{hostname}' resolves to blocked address(es): {', '.join(blocked_ips)}"
             )
 
-        return parsed.geturl()
+        return parsed.geturl(), resolved
 
     def _open_validated_asset_stream(self, asset_url: str) -> Tuple[str, requests.Response]:
         current_url = asset_url
 
         for redirect_count in range(MAX_INPUT_ASSET_REDIRECTS + 1):
-            validated_url = self._validate_asset_url(current_url)
+            validated_url, allowed_ips = self._validate_asset_url(current_url)
             response = self._session.get(
                 validated_url,
                 stream=True,
                 timeout=120,
                 allow_redirects=False,
             )
+
+            peer_ip = self._get_response_peer_ip(response)
+            if not peer_ip:
+                response.close()
+                raise ValueError("Unable to verify asset peer address")
+            if self._is_blocked_asset_ip(peer_ip):
+                response.close()
+                raise ValueError(f"Asset connection reached blocked address: {peer_ip}")
+            if peer_ip not in allowed_ips:
+                response.close()
+                raise ValueError(
+                    f"Asset host resolved to unexpected address after validation: {peer_ip}"
+                )
 
             if response.is_redirect or response.is_permanent_redirect:
                 location = response.headers.get("Location")
@@ -802,28 +874,10 @@ class OrchestratorService:
         if user_id:
             payload["user_id"] = user_id
         
-        # Detect cloud environment and include cloud instance info
-        # This allows the orchestrator to correlate providers with cloud deployments
-        cloud_instance_id = None
-        cloud_provider = None
-        
-        # Vast.ai detection
-        vast_container_id = os.environ.get("CONTAINER_ID") or os.environ.get("VAST_CONTAINERLABEL")
-        if vast_container_id:
-            # CONTAINER_ID is the numeric ID, VAST_CONTAINERLABEL is like "C.12345"
-            cloud_instance_id = vast_container_id.replace("C.", "") if vast_container_id.startswith("C.") else vast_container_id
-            cloud_provider = "vast.ai"
-        
-        # RunPod detection
-        runpod_pod_id = os.environ.get("RUNPOD_POD_ID")
-        if runpod_pod_id:
-            cloud_instance_id = runpod_pod_id
-            cloud_provider = "runpod"
-        
-        if cloud_instance_id:
-            payload["cloud_instance_id"] = cloud_instance_id
-            payload["cloud_provider"] = cloud_provider
-            logging.info(f"Cloud environment detected: {cloud_provider} instance {cloud_instance_id}")
+        if self.cloud_instance_id:
+            payload["cloud_instance_id"] = self.cloud_instance_id
+            payload["cloud_provider"] = self.cloud_provider
+            logging.info(f"Cloud environment detected: {self.cloud_provider} instance {self.cloud_instance_id}")
 
         logging.info(f"Registering with profile: {payload}")
         try:
