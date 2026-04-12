@@ -5,7 +5,10 @@ images from a Docker registry (e.g., Docker Hub).
 
 import docker
 import logging
+import os
 import threading
+import time
+import requests
 from .docker_utils import (
     docker_cp,
     should_use_api_file_copy,
@@ -154,6 +157,85 @@ class DockerProdManager:
 
         self.docker_image_map = {}
         self.services_config = {}
+
+    def _is_transient_transport_error(self, exc: Exception) -> bool:
+        if isinstance(
+            exc,
+            (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                TimeoutError,
+            ),
+        ):
+            return True
+
+        text = str(exc).lower()
+        transient_markers = (
+            "connection aborted",
+            "timed out",
+            "timeout",
+            "npipe",
+            "named pipe",
+            "docker daemon",
+            "protocolerror",
+        )
+        return any(marker in text for marker in transient_markers)
+
+    def _refresh_client_connection(self) -> bool:
+        """Best-effort reconnect after transient Docker transport failures."""
+        candidates = []
+
+        current_base_url = getattr(getattr(self.client, "api", None), "base_url", None)
+        if current_base_url:
+            candidates.append(current_base_url)
+
+        docker_host = os.environ.get("DOCKER_HOST")
+        if docker_host:
+            candidates.append(docker_host)
+
+        if os.name == "nt":
+            candidates.extend(
+                [
+                    "npipe:////./pipe/docker_engine",
+                    "tcp://127.0.0.1:2375",
+                    "tcp://localhost:2375",
+                ]
+            )
+
+        for base_url in dict.fromkeys(filter(None, candidates)):
+            try:
+                logging.info(f"Attempting Docker client reconnect via {base_url}...")
+                client = docker.DockerClient(base_url=base_url, timeout=300)
+                client.ping()
+                self.client = client
+                self._use_api_file_copy = should_use_api_file_copy(self.client)
+                logging.info(f"Reconnected to Docker at {base_url}")
+                return True
+            except Exception as reconnect_error:
+                logging.debug(
+                    f"Docker reconnect attempt via {base_url} failed: {reconnect_error}"
+                )
+
+        try:
+            logging.info("Attempting Docker reconnect via docker.from_env()...")
+            client = docker.from_env(timeout=300)
+            client.ping()
+            self.client = client
+            self._use_api_file_copy = should_use_api_file_copy(self.client)
+            logging.info("Reconnected to Docker via docker.from_env()")
+            return True
+        except Exception as reconnect_error:
+            logging.error(f"Failed to reconnect to Docker: {reconnect_error}")
+            return False
+
+    def _get_existing_container(self, container_name: str):
+        try:
+            return self.client.containers.get(container_name)
+        except docker.errors.NotFound:
+            return None
+        except Exception as e:
+            logging.debug(f"Could not inspect container '{container_name}': {e}")
+            return None
 
     def set_docker_image_map(self, image_map: dict):
         if image_map:
@@ -401,8 +483,64 @@ class DockerProdManager:
             )
             if command:
                 run_kwargs["command"] = command
-            self.client.containers.run(**run_kwargs)
-            logging.info(f"Container '{container_name}' started successfully.")
+            max_attempts = 2
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.client.containers.run(**run_kwargs)
+                    logging.info(f"Container '{container_name}' started successfully.")
+                    return
+                except Exception as e:
+                    if attempt < max_attempts and self._is_transient_transport_error(e):
+                        logging.warning(
+                            f"Transient Docker transport error while starting "
+                            f"'{container_name}' (attempt {attempt}/{max_attempts}): {e}"
+                        )
+                        self._refresh_client_connection()
+
+                        existing = self._get_existing_container(container_name)
+                        if existing is not None:
+                            try:
+                                existing.reload()
+                                status = existing.status
+                            except Exception:
+                                status = "unknown"
+
+                            if status == "created":
+                                try:
+                                    existing.start()
+                                    existing.reload()
+                                    status = existing.status
+                                except Exception as start_error:
+                                    logging.debug(
+                                        f"Could not start existing container "
+                                        f"'{container_name}' after reconnect: {start_error}"
+                                    )
+
+                            if status in ("running", "restarting"):
+                                logging.info(
+                                    f"Container '{container_name}' appears to have started "
+                                    "despite the transport timeout. Reusing it."
+                                )
+                                return
+
+                            if status in ("created", "exited", "dead"):
+                                try:
+                                    existing.remove(force=True)
+                                    logging.info(
+                                        f"Removed partially created container "
+                                        f"'{container_name}' before retry."
+                                    )
+                                except Exception as cleanup_error:
+                                    logging.debug(
+                                        f"Could not remove partially created container "
+                                        f"'{container_name}': {cleanup_error}"
+                                    )
+
+                        time.sleep(2)
+                        continue
+
+                    logging.error(f"Failed to start container '{container_name}': {e}")
+                    raise
         except docker.errors.APIError as e:
             logging.error(f"Failed to start container '{container_name}': {e}")
             raise

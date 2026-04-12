@@ -159,23 +159,28 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
             if payload:
                 health = payload.get("data") if isinstance(payload.get("data"), dict) else payload
                 if isinstance(health, dict):
+                    status = health.get("status")
                     models_initialized = health.get("models_initialized")
                     loaded_model = health.get("loaded_model")
                     llm_initialized = health.get("llm_initialized")
-                    if health.get("status") == "ok" and (
-                        models_initialized is None or models_initialized
-                    ):
+                    if status == "ok":
                         loaded_suffix = f", model={loaded_model}" if loaded_model else ""
                         llm_suffix = f", llm_initialized={llm_initialized}" if llm_initialized is not None else ""
-                        logging.info(
-                            f"ACE-Step API is ready after {elapsed}s{loaded_suffix}{llm_suffix}"
-                        )
+                        if models_initialized is False:
+                            logging.info(
+                                "ACE-Step API is reachable after "
+                                f"{elapsed}s and is using lazy model initialization{loaded_suffix}{llm_suffix}"
+                            )
+                        else:
+                            logging.info(
+                                f"ACE-Step API is ready after {elapsed}s{loaded_suffix}{llm_suffix}"
+                            )
                         return True
                     if elapsed - last_status_log >= 30:
                         logging.info(
-                            "ACE-Step API is reachable but still initializing "
-                            f"(models_initialized={models_initialized}, loaded_model={loaded_model}, "
-                            f"llm_initialized={llm_initialized})"
+                            "ACE-Step API health payload is not ready yet "
+                            f"(status={status}, models_initialized={models_initialized}, "
+                            f"loaded_model={loaded_model}, llm_initialized={llm_initialized})"
                         )
                         last_status_log = elapsed
                 else:

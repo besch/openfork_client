@@ -41,6 +41,68 @@ class JobListener:
             "deleted",
         )
 
+    def _is_requeueable_infrastructure_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        transient_markers = (
+            "connection aborted",
+            "timed out",
+            "timeout",
+            "npipe",
+            "named pipe",
+            "docker daemon",
+            "protocolerror",
+        )
+        return any(marker in text for marker in transient_markers)
+
+    def _requeue_job_after_infrastructure_error(
+        self,
+        job: Dict[str, Any],
+        exc: Exception,
+        reason: str = "provider_docker_unavailable",
+    ) -> None:
+        job_id = job.get("id")
+        error_message = f"Infrastructure error: {exc}"
+
+        if not job_id:
+            return
+
+        logging.error(f"Requeueing job {job_id} after infrastructure error: {exc}")
+
+        print(
+            json.dumps(
+                {
+                    "type": "JOB_FAILED",
+                    "payload": {
+                        "id": job_id,
+                        "error": f"{error_message} (job requeued)",
+                    },
+                }
+            ),
+            flush=True,
+        )
+
+        try:
+            self.orchestrator_service.reset_interrupted_job(
+                job_id,
+                execution_token=job.get("execution_token"),
+                reason=reason,
+            )
+        except Exception as reset_error:
+            logging.error(f"Failed to requeue job {job_id}: {reset_error}")
+
+        if self.client.active_service_type and not HEADLESS_MODE:
+            try:
+                docker_manager.stop_container(service_type=self.client.active_service_type)
+            except Exception as stop_error:
+                logging.debug(
+                    f"Failed to stop container after infrastructure error: {stop_error}"
+                )
+
+        self.client.interrupted_job_id = job_id
+        self.client.interrupted_job_execution_token = job.get("execution_token")
+        self.client.current_job = None
+        self.client.active_service_type = None
+
     def _process_job_safely(self, job: Dict[str, Any]) -> bool:
         """
         Process a job with proper error handling.
@@ -932,6 +994,10 @@ class JobListener:
                         logging.error(
                             f"Failed to reset provider status after error: {status_err}"
                         )
+
+                    if job and job.get("id") and self._is_requeueable_infrastructure_error(e):
+                        self._requeue_job_after_infrastructure_error(job, e)
+                        continue
 
                     if job and job.get("id"):
                         logging.error(
