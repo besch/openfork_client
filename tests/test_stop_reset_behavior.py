@@ -36,6 +36,28 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertEqual(client.interrupted_job_execution_token, "token-123")
         self.assertTrue(SHUTDOWN_EVENT.is_set())
 
+    def test_request_stop_is_processed_even_if_shutdown_was_already_signaled(self):
+        client = SimpleNamespace(
+            current_job={"id": "job-race", "execution_token": "token-race"},
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            stop_requested=False,
+            orchestrator_service=Mock(),
+            download_manager=None,
+        )
+
+        original_stdin = sys.stdin
+        sys.stdin = io.StringIO('{"type":"REQUEST_STOP"}\n')
+        SHUTDOWN_EVENT.set()
+        try:
+            listen_for_ipc_commands(client)
+        finally:
+            sys.stdin = original_stdin
+
+        self.assertTrue(client.stop_requested)
+        self.assertEqual(client.interrupted_job_id, "job-race")
+        self.assertEqual(client.interrupted_job_execution_token, "token-race")
+
     def test_cleanup_resets_interrupted_job_even_after_current_job_is_cleared(self):
         orchestrator_service = Mock()
         orchestrator_service.get_job.return_value = {"status": "processing"}
