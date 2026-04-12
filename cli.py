@@ -31,8 +31,6 @@ def listen_for_ipc_commands(client: "DGNClient"):
     """
     logging.info("IPC listener thread started.")
     for line in sys.stdin:
-        if SHUTDOWN_EVENT.is_set():
-            break
         try:
             command = json.loads(line)
             cmd_type = command.get("type")
@@ -78,6 +76,8 @@ def listen_for_ipc_commands(client: "DGNClient"):
             logging.warning(f"Could not decode IPC command from stdin: {line.strip()}")
         except Exception as e:
             logging.error(f"Error processing IPC command: {e}")
+        if SHUTDOWN_EVENT.is_set():
+            break
     logging.info("IPC listener thread stopped.")
     if not SHUTDOWN_EVENT.is_set():
         logging.warning("Stdin closed (EOF) in IPC listener thread. Parent process probably exited. Initiating shutdown.")
