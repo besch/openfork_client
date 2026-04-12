@@ -109,6 +109,79 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertIsNone(client.current_job)
         self.assertNotIn("JOB_COMPLETE", output.getvalue())
 
+    def test_job_listener_emits_job_cleared_when_job_is_cancelled_elsewhere(self):
+        shutdown_event = threading.Event()
+
+        class FakeProcessor:
+            def process(self_inner):
+                return None
+
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={"id": "job-321", "execution_token": "token-321"},
+            orchestrator_service=Mock(),
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
+            _get_job_processor=lambda job, event: FakeProcessor(),
+            download_manager=None,
+        )
+        client.orchestrator_service.get_job.return_value = {"status": "cancelled"}
+
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {"id": "job-321", "workflow_type": "wan_video"}
+            )
+
+        self.assertTrue(result)
+        self.assertIsNone(client.current_job)
+        self.assertIn("JOB_CLEARED", output.getvalue())
+        self.assertIn("cancelled", output.getvalue())
+        self.assertNotIn("JOB_COMPLETE", output.getvalue())
+        self.assertNotIn("JOB_FAILED", output.getvalue())
+
+    def test_job_listener_emits_job_cleared_when_terminal_job_throws(self):
+        shutdown_event = threading.Event()
+
+        class FailingProcessor:
+            def process(self_inner):
+                raise RuntimeError("processor interrupted after remote cancellation")
+
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={"id": "job-654", "execution_token": "token-654"},
+            orchestrator_service=Mock(),
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
+            _get_job_processor=lambda job, event: FailingProcessor(),
+            download_manager=None,
+        )
+        client.orchestrator_service.get_job.return_value = {"status": "deleted"}
+
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {"id": "job-654", "workflow_type": "wan_video"}
+            )
+
+        self.assertTrue(result)
+        self.assertIsNone(client.current_job)
+        self.assertIn("JOB_CLEARED", output.getvalue())
+        self.assertIn("deleted", output.getvalue())
+        self.assertNotIn("JOB_FAILED", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

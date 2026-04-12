@@ -22,24 +22,52 @@ class JobListener:
 
     def _job_has_terminal_status(self, job_id: Optional[str]) -> bool:
         """Check whether a job has already reached a terminal status."""
+        return self._get_terminal_job_status(job_id) is not None
+
+    def _get_terminal_job_status(self, job_id: Optional[str]) -> Optional[str]:
+        """Return the current terminal status for a job, if any."""
         if not job_id:
-            return False
+            return None
 
         try:
             job_details = self.orchestrator_service.get_job(job_id)
         except Exception as e:
             logging.warning(f"Could not verify terminal status for job {job_id}: {e}")
-            return False
+            return None
 
         if not isinstance(job_details, dict):
-            return False
+            return None
 
-        return job_details.get("status") in (
+        status = job_details.get("status")
+        if status in (
             "completed",
             "failed",
             "cancelled",
             "deleted",
-        )
+        ):
+            return status
+
+        return None
+
+    def _emit_job_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        print(json.dumps({"type": event_type, "payload": payload}), flush=True)
+
+    def _emit_job_cleared(
+        self,
+        job_id: Optional[str],
+        service_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> None:
+        if not job_id:
+            return
+
+        payload: Dict[str, Any] = {"id": job_id}
+        if service_type:
+            payload["service_type"] = service_type
+        if status:
+            payload["status"] = status
+
+        self._emit_job_event("JOB_CLEARED", payload)
 
     def _is_requeueable_infrastructure_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
@@ -68,17 +96,13 @@ class JobListener:
 
         logging.error(f"Requeueing job {job_id} after infrastructure error: {exc}")
 
-        print(
-            json.dumps(
-                {
-                    "type": "JOB_FAILED",
-                    "payload": {
-                        "id": job_id,
-                        "error": f"{error_message} (job requeued)",
-                    },
-                }
-            ),
-            flush=True,
+        self._emit_job_event(
+            "JOB_FAILED",
+            {
+                "id": job_id,
+                "service_type": self._get_service_type_for_job(job),
+                "error": f"{error_message} (job requeued)",
+            },
         )
 
         try:
@@ -145,17 +169,13 @@ class JobListener:
                         logging.error(error_msg)
 
                         # Emit JOB_FAILED event
-                        print(
-                            json.dumps(
-                                {
-                                    "type": "JOB_FAILED",
-                                    "payload": {
-                                        "id": job.get("id"),
-                                        "error": error_msg,
-                                    },
-                                }
-                            ),
-                            flush=True,
+                        self._emit_job_event(
+                            "JOB_FAILED",
+                            {
+                                "id": job.get("id"),
+                                "service_type": service_type,
+                                "error": error_msg,
+                            },
                         )
 
                         self.orchestrator_service.update_job_status(
@@ -198,19 +218,25 @@ class JobListener:
             # Job may have been cancelled externally (e.g., by the cancellation monitor)
             # while the processor was still winding down.  Don't emit JOB_COMPLETE for
             # jobs that already reached a terminal state in the DB.
-            if job_id and self._job_has_terminal_status(job_id):
+            terminal_status = self._get_terminal_job_status(job_id)
+            if terminal_status:
                 logging.info(
                     f"Job {job_id} reached terminal status during processing "
-                    "(cancelled/deleted externally). Skipping completion event."
+                    f"('{terminal_status}'). Clearing local job state without "
+                    "emitting a completion/failure notification."
                 )
+                self._emit_job_cleared(job_id, service_type_for_cache, terminal_status)
                 return True
 
             _job_duration = int(_time.monotonic() - _job_start_time)
 
             # Emit JOB_COMPLETE event
-            print(
-                json.dumps({"type": "JOB_COMPLETE", "payload": {"id": job.get("id")}}),
-                flush=True,
+            self._emit_job_event(
+                "JOB_COMPLETE",
+                {
+                    "id": job.get("id"),
+                    "service_type": service_type_for_cache,
+                },
             )
 
             # Emit MONETIZE_JOB_COMPLETE for wallet refresh in Electron
@@ -259,11 +285,14 @@ class JobListener:
             # Processor threw because the container/workflow was stopped by the
             # cancellation monitor.  If the job is already terminal in the DB,
             # don't report it as a failure — just clean up quietly.
-            if job_id and self._job_has_terminal_status(job_id):
+            terminal_status = self._get_terminal_job_status(job_id)
+            if terminal_status:
                 logging.info(
-                    f"Job {job_id} was externally terminated (cancelled/deleted). "
-                    "Suppressing failure notification."
+                    f"Job {job_id} was externally terminated with status "
+                    f"'{terminal_status}'. Clearing local job state without "
+                    "emitting a failure notification."
                 )
+                self._emit_job_cleared(job_id, service_type_for_cache, terminal_status)
                 return True
 
             logging.error(
@@ -272,18 +301,14 @@ class JobListener:
             )
             trace = traceback.format_exc()
             # Emit JOB_FAILED event with traceback for remote debugging
-            print(
-                json.dumps(
-                    {
-                        "type": "JOB_FAILED",
-                        "payload": {
-                            "id": job.get("id"),
-                            "error": str(e),
-                            "traceback": trace,
-                        },
-                    }
-                ),
-                flush=True,
+            self._emit_job_event(
+                "JOB_FAILED",
+                {
+                    "id": job.get("id"),
+                    "service_type": service_type_for_cache,
+                    "error": str(e),
+                    "traceback": trace,
+                },
             )
 
             if job and job.get("id"):
@@ -426,22 +451,15 @@ class JobListener:
                         logging.info(f"Received job: {job['id']}")
 
                         # Emit JOB_START event
-                        print(
-                            json.dumps(
-                                {
-                                    "type": "JOB_START",
-                                    "payload": {
-                                        "id": job.get("id"),
-                                        "workflow_type": job.get(
-                                            "workflow_type", "unknown"
-                                        ),
-                                        "service_type": self._get_service_type_for_job(
-                                            job
-                                        ),
-                                    },
-                                }
-                            ),
-                            flush=True,
+                        self._emit_job_event(
+                            "JOB_START",
+                            {
+                                "id": job.get("id"),
+                                "workflow_type": job.get(
+                                    "workflow_type", "unknown"
+                                ),
+                                "service_type": self._get_service_type_for_job(job),
+                            },
                         )
 
                         # Process the job using the shared helper
@@ -655,20 +673,15 @@ class JobListener:
                                         )
 
                                         # Emit JOB_START early to update UI while container starts/warms up
-                                        print(
-                                            json.dumps(
-                                                {
-                                                    "type": "JOB_START",
-                                                    "payload": {
-                                                        "id": job.get("id"),
-                                                        "workflow_type": job.get(
-                                                            "workflow_type", "unknown"
-                                                        ),
-                                                        "service_type": actual_service_type,
-                                                    },
-                                                }
-                                            ),
-                                            flush=True,
+                                        self._emit_job_event(
+                                            "JOB_START",
+                                            {
+                                                "id": job.get("id"),
+                                                "workflow_type": job.get(
+                                                    "workflow_type", "unknown"
+                                                ),
+                                                "service_type": actual_service_type,
+                                            },
                                         )
 
                                         if not HEADLESS_MODE:
@@ -742,17 +755,13 @@ class JobListener:
                                                 )
 
                                                 # Emit JOB_FAILED event
-                                                print(
-                                                    json.dumps(
-                                                        {
-                                                            "type": "JOB_FAILED",
-                                                            "payload": {
-                                                                "id": crashed_job_id,
-                                                                "error": reason,
-                                                            },
-                                                        }
-                                                    ),
-                                                    flush=True,
+                                                self._emit_job_event(
+                                                    "JOB_FAILED",
+                                                    {
+                                                        "id": crashed_job_id,
+                                                        "service_type": actual_service_type,
+                                                        "error": reason,
+                                                    },
                                                 )
 
                                                 # Requeue infrastructure crashes so another healthy
@@ -843,17 +852,13 @@ class JobListener:
                                                     )
 
                                                     # Emit JOB_FAILED since we started the job in UI
-                                                    print(
-                                                        json.dumps(
-                                                            {
-                                                                "type": "JOB_FAILED",
-                                                                "payload": {
-                                                                    "id": job.get("id"),
-                                                                    "error": "ComfyUI failed to start",
-                                                                },
-                                                            }
-                                                        ),
-                                                        flush=True,
+                                                    self._emit_job_event(
+                                                        "JOB_FAILED",
+                                                        {
+                                                            "id": job.get("id"),
+                                                            "service_type": actual_service_type,
+                                                            "error": "ComfyUI failed to start",
+                                                        },
                                                     )
 
                                                     self.orchestrator_service.update_job_status(
@@ -1004,14 +1009,13 @@ class JobListener:
                             f"Failure occurred with active job {job.get('id')}. Cleaning up..."
                         )
                         # Emit JOB_FAILED event
-                        print(
-                            json.dumps(
-                                {
-                                    "type": "JOB_FAILED",
-                                    "payload": {"id": job.get("id"), "error": str(e)},
-                                }
-                            ),
-                            flush=True,
+                        self._emit_job_event(
+                            "JOB_FAILED",
+                            {
+                                "id": job.get("id"),
+                                "service_type": self._get_service_type_for_job(job),
+                                "error": str(e),
+                            },
                         )
 
                         try:
