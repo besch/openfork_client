@@ -412,6 +412,57 @@ class JobListener:
         monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
         monitor_thread.start()
 
+    def _fetch_next_job_with_priority(self):
+        """
+        Poll for the next job using priority ordering:
+        1. Own jobs first (if process_own_jobs=True) — mine policy
+        2. Community jobs second (if community_mode != 'none')
+        3. Monetize jobs (if monetize_mode=True, separate track)
+
+        Returns the first job found, or None.
+        """
+        client = self.client
+
+        # Monetize is a completely separate track — check it independently
+        if getattr(client, "monetize_mode", False):
+            job = self.orchestrator_service.get_next_job(
+                provider_id=self.provider_id,
+                accept_policy="monetize",
+                allowed_ids=[],
+                monetize_mode=True,
+            )
+            if job:
+                return job
+
+        # Priority 1: own jobs (mine policy)
+        if getattr(client, "process_own_jobs", False):
+            job = self.orchestrator_service.get_next_job(
+                provider_id=self.provider_id,
+                accept_policy="mine",
+                allowed_ids=client.allowed_ids,
+                monetize_mode=False,
+            )
+            if job:
+                return job
+
+        # Priority 2: community jobs
+        community_mode = getattr(client, "community_mode", "none")
+        if community_mode == "none":
+            return None
+
+        community_policy = {
+            "trusted_users": "users",
+            "trusted_projects": "project",
+            "all": "all",
+        }.get(community_mode, "all")
+
+        return self.orchestrator_service.get_next_job(
+            provider_id=self.provider_id,
+            accept_policy=community_policy,
+            allowed_ids=client.allowed_ids,
+            monetize_mode=False,
+        )
+
     def listen_for_jobs(self) -> None:
         """Listen for jobs from the orchestrator (for dedicated providers)."""
         while not self.shutdown_event.is_set():
@@ -427,12 +478,7 @@ class JobListener:
                     logging.info(
                         f"Checking for new jobs for provider {self.provider_id}..."
                     )
-                    job = self.orchestrator_service.get_next_job(
-                        provider_id=self.provider_id,
-                        accept_policy=self.client.accept_policy,
-                        allowed_ids=self.client.allowed_ids,
-                        monetize_mode=getattr(self.client, "monetize_mode", False),
-                    )
+                    job = self._fetch_next_job_with_priority()
 
                     if job and job.get("id"):
                         # Check if job was cancelled/deleted before processing
@@ -543,13 +589,12 @@ class JobListener:
         if not download_manager:
             return
 
-        accept_policy = getattr(self.client, "accept_policy", "all")
-        allow_network_prefetch = accept_policy in ("all", "monetize") or getattr(
-            self.client, "monetize_mode", False
-        )
+        community_mode = getattr(self.client, "community_mode", "all")
+        monetize_mode = getattr(self.client, "monetize_mode", False)
+        allow_network_prefetch = community_mode == "all" or monetize_mode
         if not allow_network_prefetch:
             logging.debug(
-                f"Skipping global prefetch suggestions for private policy '{accept_policy}'."
+                f"Skipping global prefetch suggestions for private community_mode='{community_mode}'."
             )
             return
 
@@ -606,9 +651,19 @@ class JobListener:
                         logging.info("Auto mode: Peeking at available jobs...")
 
                         # Step 1: Peek at available jobs without reserving
+                        # Determine effective peek policy from community_mode
+                        _community_mode = getattr(self.client, "community_mode", "all")
+                        _peek_policy = {
+                            "trusted_users": "users",
+                            "trusted_projects": "project",
+                            "none": "mine",
+                            "all": "all",
+                        }.get(_community_mode, "all")
+                        if getattr(self.client, "monetize_mode", False):
+                            _peek_policy = "monetize"
                         available_jobs = self.orchestrator_service.peek_available_jobs(
                             provider_id=self.provider_id,
-                            accept_policy=self.client.accept_policy,
+                            accept_policy=_peek_policy,
                             allowed_ids=self.client.allowed_ids,
                             limit=10,
                         )

@@ -4,10 +4,11 @@ import json
 from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
 
 class HeartbeatManager:
-    def __init__(self, orchestrator_service, provider_id, shutdown_event):
+    def __init__(self, orchestrator_service, provider_id, shutdown_event, client=None):
         self.orchestrator_service = orchestrator_service
         self.provider_id = provider_id
         self.shutdown_event = shutdown_event
+        self.client = client  # Optional DGNClient reference for routing config hot-reload
         self.thread = None
 
     def start(self):
@@ -20,7 +21,10 @@ class HeartbeatManager:
         """The loop that sends heartbeats periodically."""
         while not self.shutdown_event.is_set():
             try:
-                self.orchestrator_service.send_heartbeat(self.provider_id)
+                routing_config = self.orchestrator_service.send_heartbeat(self.provider_id)
+                # Apply routing config hot-reload if client reference is available
+                if routing_config and self.client and hasattr(self.client, "apply_routing_config"):
+                    self.client.apply_routing_config(routing_config)
             except TokenExpiredError:
                 self.orchestrator_service.signal_auth_expired()
                 logging.warning("Heartbeat failed due to expired token.")

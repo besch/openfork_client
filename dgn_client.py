@@ -21,7 +21,8 @@ class DGNClient:
         access_token: str = None,
         refresh_token: str = None,
         dgn_api_key: str = None,
-        accept_policy: str = "all",
+        process_own_jobs: bool = False,
+        community_mode: str = "all",
         allowed_targets: list[str] = None,
         monetize_mode: bool = False,
     ):
@@ -46,7 +47,8 @@ class DGNClient:
         self.stop_requested = False
         self.config = {}
         self.docker_image_map = {}
-        self.accept_policy = accept_policy
+        self.process_own_jobs = process_own_jobs
+        self.community_mode = community_mode  # 'none' | 'trusted_users' | 'trusted_projects' | 'all'
         self.monetize_mode = monetize_mode
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
@@ -56,14 +58,18 @@ class DGNClient:
         self.services_config = {}
         self.available_vram = get_available_vram()
         self.compatible_services = set()
-        
+
         # Shared event to wake up the job listener immediately when a download completes
         self.job_wakeup_event = threading.Event()
 
-        max_cached_images = POLICY_MAX_CACHED_IMAGES.get(self.accept_policy)
-        if max_cached_images is None and self.monetize_mode:
-            max_cached_images = POLICY_MAX_CACHED_IMAGES["monetize"]
-        
+        # Max cached images: monetize and all-community get larger caches; private gets minimal
+        if self.monetize_mode:
+            max_cached_images = POLICY_MAX_CACHED_IMAGES.get("monetize")
+        elif self.community_mode == "all":
+            max_cached_images = POLICY_MAX_CACHED_IMAGES.get("all")
+        else:
+            max_cached_images = POLICY_MAX_CACHED_IMAGES.get("mine")
+
         # Initialize download manager for Docker image pre-fetching (only when not headless)
         self.download_manager = (
             DockerDownloadManager(
@@ -75,19 +81,45 @@ class DGNClient:
             else None
         )
 
-        if self.accept_policy == "mine" and not self.orchestrator_service.use_api_key:
+        if self.process_own_jobs and not self.orchestrator_service.use_api_key:
             user_id = self.orchestrator_service._get_user_id_from_token()
             if user_id:
                 self.allowed_ids.append(user_id)
-        elif (
-            self.accept_policy == "project" or self.accept_policy == "users"
-        ) and self.allowed_targets:
-            target_type = "project" if self.accept_policy == "project" else "user"
+
+        if self.community_mode in ("trusted_users", "trusted_projects") and self.allowed_targets:
+            target_type = "project" if self.community_mode == "trusted_projects" else "user"
             logging.info(f"Resolving {target_type} targets: {self.allowed_targets}")
             self.allowed_ids = self.orchestrator_service.resolve_targets(
                 self.allowed_targets, target_type
             )
             logging.info(f"Resolved targets to IDs: {self.allowed_ids}")
+
+    def apply_routing_config(self, config: dict) -> None:
+        """Apply routing config received from heartbeat response (hot-reload)."""
+        new_process_own = config.get("process_own_jobs", self.process_own_jobs)
+        new_community = config.get("community_mode", self.community_mode)
+        new_monetize = config.get("monetize_mode", self.monetize_mode)
+
+        changed = (
+            new_process_own != self.process_own_jobs
+            or new_community != self.community_mode
+            or new_monetize != self.monetize_mode
+        )
+
+        if changed:
+            logging.info(
+                f"Routing config updated: process_own_jobs={new_process_own}, "
+                f"community_mode={new_community}, monetize_mode={new_monetize}"
+            )
+            self.process_own_jobs = new_process_own
+            self.community_mode = new_community
+            self.monetize_mode = new_monetize
+
+            # Refresh own user_id in allowed_ids if process_own_jobs toggled on
+            if new_process_own and not self.orchestrator_service.use_api_key:
+                user_id = self.orchestrator_service._get_user_id_from_token()
+                if user_id and user_id not in self.allowed_ids:
+                    self.allowed_ids.append(user_id)
 
     def _build_processor_map(self):
         proc_map = {}

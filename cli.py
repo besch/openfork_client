@@ -110,7 +110,8 @@ def setup_client(args):
         access_token=args.access_token,
         refresh_token=args.refresh_token,
         dgn_api_key=args.dgn_api_key,
-        accept_policy=args.accept_policy,
+        process_own_jobs=args.process_own_jobs,
+        community_mode=args.community_mode,
         allowed_targets=args.allowed_targets.split(',') if args.allowed_targets else None,
         monetize_mode=args.monetize_mode,
     )
@@ -166,10 +167,14 @@ def setup_client(args):
         logging.info(f"Headless mode: restricting supported_services to [{args.service}] (Docker image only has this service)")
         
         # Headless clients exist to provide network capacity, not for personal use
-        # Force accept_policy to 'all' to ensure they serve the public network
-        if client.accept_policy != 'all':
-            logging.warning(f"Headless mode: overriding accept_policy '{client.accept_policy}' -> 'all' (headless clients serve public network only)")
-            client.accept_policy = 'all'
+        # Force community mode to 'all' to ensure they serve the public network
+        if client.community_mode != 'all' or client.process_own_jobs:
+            logging.warning(
+                f"Headless mode: overriding routing config to community_mode='all', "
+                f"process_own_jobs=False (headless clients serve public network only)"
+            )
+            client.community_mode = 'all'
+            client.process_own_jobs = False
             client.allowed_ids = []  # Clear any user-specific filtering
         
         # TIER 0 routing ensured by reporting cached image
@@ -184,8 +189,10 @@ def setup_client(args):
         service_type=args.service,
         supported_services=registration_services,
         cached_images=cached_images,
-        accept_policy=client.accept_policy,
+        process_own_jobs=client.process_own_jobs,
+        community_mode=client.community_mode,
         allowed_ids=client.allowed_ids,
+        monetize_mode=client.monetize_mode,
     )
     if not registration_result:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")
@@ -193,11 +200,11 @@ def setup_client(args):
     provider_id = registration_result.get("provider_id")
     user_id = registration_result.get("user_id")
     
-    # For 'mine' policy (Electron/desktop clients only), ensure allowed_ids contains the user's ID
-    if client.accept_policy == "mine" and user_id:
+    # For process_own_jobs, ensure allowed_ids contains the user's ID
+    if client.process_own_jobs and user_id:
         if user_id not in client.allowed_ids:
             client.allowed_ids.append(user_id)
-            logging.info(f"'mine' policy: Added user_id from registration to allowed_ids")
+            logging.info(f"process_own_jobs: Added user_id from registration to allowed_ids")
     
     # Update download manager with provider_id for reporting newly cached images
     if client.download_manager:
@@ -210,7 +217,7 @@ def run_client(client, provider_id, service_mode):
     from services.heartbeat_manager import HeartbeatManager
     from services.job_listener import JobListener
 
-    heartbeat_manager = HeartbeatManager(client.orchestrator_service, provider_id, SHUTDOWN_EVENT)
+    heartbeat_manager = HeartbeatManager(client.orchestrator_service, provider_id, SHUTDOWN_EVENT, client=client)
     heartbeat_manager.start()
 
     job_listener = JobListener(client, provider_id, SHUTDOWN_EVENT)
@@ -311,8 +318,9 @@ def main():
 
     parser.add_argument('--root-dir', type=str, help='The root directory of the dgn-client.')
     parser.add_argument('--data-dir', type=str, help='The directory for storing user data.')
-    parser.add_argument('--accept-policy', type=str, default='mine', help='The job acceptance policy (all, mine, project).')
-    parser.add_argument('--allowed-targets', type=str, help='For specific_* policies, a comma-separated list of targets (e.g., user/project-slug or user/project-slug:branch-name).')
+    parser.add_argument('--process-own-jobs', action='store_true', default=False, help='Pick up jobs submitted by your own user first (mine-policy jobs).')
+    parser.add_argument('--community-mode', type=str, default='all', choices=['none', 'trusted_users', 'trusted_projects', 'all'], help='What community jobs to accept: none, trusted_users, trusted_projects, all.')
+    parser.add_argument('--allowed-targets', type=str, help='For trusted_users/trusted_projects modes, a comma-separated list of targets.')
     # This argument is used solely for process identification by the cleanup logic
     parser.add_argument('--process-marker', type=str, help='Unique marker for process identification')
     parser.add_argument('--monetize-mode', action='store_true', default=False, help='Enable monetize mode: poll only for paid monetize jobs and emit MONETIZE_JOB_COMPLETE events.')

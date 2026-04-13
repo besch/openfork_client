@@ -743,8 +743,11 @@ class OrchestratorService:
         """Upload the thumbnail file to the orchestrator."""
         return self.upload_output(file_path, job_id, 'image/jpeg')
 
-    def send_heartbeat(self, provider_id: str):
-        """Sends a heartbeat to the orchestrator."""
+    def send_heartbeat(self, provider_id: str) -> Optional[Dict[str, Any]]:
+        """Sends a heartbeat to the orchestrator.
+
+        Returns the routing_config from the response, or None if no config was returned.
+        """
         try:
             payload: Dict[str, Any] = {"providerId": provider_id}
             active_token = self.get_active_execution_token()
@@ -756,7 +759,7 @@ class OrchestratorService:
                 f"{self.orchestrator_url}/api/dgn/heartbeat",
                 json=payload
             )
-            
+
             # Check for provider expiration (404 with provider_not_found error)
             if response.status_code == 404:
                 try:
@@ -768,10 +771,16 @@ class OrchestratorService:
             
             response.raise_for_status()
             logging.info("Heartbeat sent successfully.")
+            try:
+                data = response.json()
+                return data.get("routing_config")
+            except (json.JSONDecodeError, AttributeError):
+                return None
         except ProviderNotFoundError:
             raise  # Re-raise to be handled by caller
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
+        return None
 
 
     def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None, execution_token: Optional[str] = None):
@@ -842,8 +851,10 @@ class OrchestratorService:
         service_type: str,
         supported_services: list = None,
         cached_images: list = None,
-        accept_policy: str = "all",
+        process_own_jobs: bool = False,
+        community_mode: str = "all",
         allowed_ids: list = None,
+        monetize_mode: bool = False,
     ) -> Union[Dict[str, str], None]:
         """Register the client with the orchestrator.
         
@@ -865,9 +876,11 @@ class OrchestratorService:
             **hardware_profile,
             "service_type": service_type,
             "supported_services": supported_services or [],
-            "cached_images": cached_images or [],  # For smart job assignment
-            "accept_policy": accept_policy,  # Job acceptance policy
+            "cached_images": cached_images or [],
+            "process_own_jobs": process_own_jobs,
+            "community_mode": community_mode,
             "allowed_ids": allowed_ids or [],
+            "monetize_mode": monetize_mode,
         }
         
         # Only include user_id if we have it (OAuth mode)
