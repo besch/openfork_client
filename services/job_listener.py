@@ -620,7 +620,34 @@ class JobListener:
                                 f"Peeked {len(available_jobs)} available jobs."
                             )
 
-                            # Step 2: Find first job with available Docker image
+                            # Step 2a: Fetch network download coverage ONCE before
+                            # iterating so the peeked-job download path can gate on it.
+                            #
+                            # get_prefetch_suggestions returns service types where:
+                            #   effective_deficit = pending - cached - downloading > 0
+                            # (i.e. uncovered demand after accounting for in-flight pulls)
+                            #
+                            # A None result means the check failed; we fail-open in that
+                            # case so a connectivity blip never blocks all downloads.
+                            #
+                            # NOTE: only relevant in non-headless mode where Docker exists.
+                            network_download_needed: Optional[set] = None
+                            if not HEADLESS_MODE and download_manager:
+                                try:
+                                    raw_suggestions = self.orchestrator_service.get_prefetch_suggestions(
+                                        self.provider_id, limit=20
+                                    )
+                                    network_download_needed = set(raw_suggestions)
+                                    logging.debug(
+                                        f"Network download coverage check: {network_download_needed or 'none needed'}"
+                                    )
+                                except Exception as _e:
+                                    logging.debug(
+                                        f"Could not fetch network coverage (fail-open): {_e}"
+                                    )
+                                    # network_download_needed stays None → fail-open below
+
+                            # Step 2b: Find first job with available Docker image
                             for peeked_job in available_jobs:
                                 service_type = self._get_service_type_for_job(
                                     peeked_job
@@ -903,7 +930,8 @@ class JobListener:
 
                                     break  # Exit the peeked jobs loop after processing one job
                                 else:
-                                    # Image not available - start background download
+                                    # Image not available - start background download if
+                                    # this provider should be the one to pull it.
                                     if download_manager:
                                         status = download_manager.get_download_status(
                                             service_type
@@ -927,13 +955,39 @@ class JobListener:
                                                 logging.info(
                                                     f"Image for service '{service_type}' previously failed. Retrying download..."
                                                 )
-                                            else:
-                                                logging.info(
-                                                    f"Image for service '{service_type}' not available. Starting background download..."
-                                                )
-                                            download_manager.start_background_download(
-                                                service_type
+
+                                            # Network coverage gate: only start a download
+                                            # if the server tells us demand is not already
+                                            # covered by other providers that are cached or
+                                            # currently downloading.
+                                            #
+                                            # network_download_needed is:
+                                            #   set  → use it (empty set = nothing needed)
+                                            #   None → check failed; fail-open (allow download)
+                                            network_needs_this = (
+                                                network_download_needed is None
+                                                or service_type in network_download_needed
                                             )
+
+                                            if network_needs_this:
+                                                logging.info(
+                                                    f"Image for service '{service_type}' not available locally "
+                                                    f"and network has uncovered demand. Starting background download..."
+                                                )
+                                                download_manager.start_background_download(
+                                                    service_type
+                                                )
+                                                # Mark as handled so we don't double-trigger
+                                                # if the same service_type appears in later
+                                                # peeked jobs this iteration.
+                                                if network_download_needed is not None:
+                                                    network_download_needed.discard(service_type)
+                                            else:
+                                                logging.debug(
+                                                    f"Skipping download for '{service_type}': "
+                                                    f"another provider is already covering it "
+                                                    f"(effective network deficit = 0)."
+                                                )
                                         else:
                                             logging.debug(
                                                 f"Image for service '{service_type}' already downloading/queued (status: {status.value if status else 'unknown'})."

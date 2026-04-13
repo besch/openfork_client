@@ -1067,26 +1067,35 @@ class OrchestratorService:
             logging.warning(f"Failed to report download state: {e}")
             return False
 
-    def get_prefetch_suggestions(self, provider_id: str) -> list[str]:
+    def get_prefetch_suggestions(self, provider_id: str, limit: int = 10) -> list[str]:
         """
         Get pre-fetch suggestions from the server based on network demand.
-        
+
         The server analyzes pending jobs and cache coverage to suggest which
-        Docker images this provider should download proactively.
-        
+        Docker images this provider should download proactively.  The returned
+        list only contains service types where effective demand is not already
+        covered by cached + downloading providers, so callers can use it as a
+        coordination gate: if a service type is absent, another provider is
+        already handling the download.
+
         NOTE: This is purely for network efficiency. It does NOT affect credits.
-        
+
         Args:
             provider_id: The provider's ID
-            
+            limit: Max number of suggestions to return.  Pass a larger value
+                   (e.g. 20) when using the result to gate peeked-job downloads
+                   so that all uncovered service types are visible.
+
         Returns:
-            List of service types to consider pre-fetching
+            List of service types with genuine uncovered demand, ordered by
+            cache_deficit DESC.  Empty list on any error (fail-open callers
+            should treat an empty result as "unknown" and allow the download).
         """
         try:
             response = self._make_request(
                 'get',
                 f"{self.orchestrator_url}/api/dgn/provider-download-state",
-                params={"providerId": provider_id}
+                params={"providerId": provider_id, "limit": limit}
             )
             response.raise_for_status()
             data = response.json()
