@@ -697,7 +697,7 @@ class JobListener:
                             network_download_needed: Optional[set] = None
                             if not HEADLESS_MODE and download_manager:
                                 open_network_policy = (
-                                    self.client.accept_policy in ("all", "monetize")
+                                    getattr(self.client, "community_mode", "all") == "all"
                                     or getattr(self.client, "monetize_mode", False)
                                 )
                                 if open_network_policy:
@@ -740,7 +740,7 @@ class JobListener:
 
                                     job = self.orchestrator_service.get_next_job(
                                         provider_id=self.provider_id,
-                                        accept_policy=self.client.accept_policy,
+                                        accept_policy=_peek_policy,
                                         allowed_ids=self.client.allowed_ids,
                                         job_id=peeked_job.get("id"),
                                         monetize_mode=getattr(
