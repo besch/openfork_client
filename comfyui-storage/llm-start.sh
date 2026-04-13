@@ -52,7 +52,7 @@ export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 python3 cli.py \
   --dgn-api-key "$DGN_API_KEY" \
   --service "${SERVICE_TYPE:-auto}" \
-  --accept-policy all \
+  --community-mode all \
   --root-dir /opt/dgn-client \
   --data-dir /data &
 

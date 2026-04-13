@@ -910,7 +910,7 @@ fi
 # Save restart configuration
 log "Saving restart configuration..."
 cat > /opt/dgn-client/.restart-config << RESTART_CONFIG_EOF
-export DGN_CLIENT_ARGS="--dgn-api-key \"$DGN_API_KEY\" --service \"${SERVICE_TYPE:-auto}\" --accept-policy all --root-dir /opt/dgn-client --data-dir /data"
+export DGN_CLIENT_ARGS="--dgn-api-key \"$DGN_API_KEY\" --service \"${SERVICE_TYPE:-auto}\" --community-mode all --root-dir /opt/dgn-client --data-dir /data"
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 RESTART_CONFIG_EOF
 
@@ -944,6 +944,6 @@ except Exception as e:
 "$PYTHON_EXE" cli.py \
   --dgn-api-key "$DGN_API_KEY" \
   --service "${SERVICE_TYPE:-auto}" \
-  --accept-policy all \
+  --community-mode all \
   --root-dir /opt/dgn-client \
   --data-dir /data 2>&1 | tee -a /tmp/dgn_client.log
