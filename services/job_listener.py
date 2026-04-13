@@ -627,25 +627,40 @@ class JobListener:
                             #   effective_deficit = pending - cached - downloading > 0
                             # (i.e. uncovered demand after accounting for in-flight pulls)
                             #
-                            # A None result means the check failed; we fail-open in that
-                            # case so a connectivity blip never blocks all downloads.
+                            # A None result means "skip the gate" — either the fetch
+                            # failed (fail-open) or this provider uses a private policy
+                            # and the global coverage state is not relevant to it.
+                            #
+                            # Private-policy providers (mine, users, project) only
+                            # process jobs that no other policy type can handle.  An
+                            # 'all' provider pulling the same image does NOT cover the
+                            # demand for a 'mine' job, so the global deficit stat would
+                            # falsely suppress the private provider's download.  Skip
+                            # the gate entirely for private policies — always download.
                             #
                             # NOTE: only relevant in non-headless mode where Docker exists.
                             network_download_needed: Optional[set] = None
                             if not HEADLESS_MODE and download_manager:
-                                try:
-                                    raw_suggestions = self.orchestrator_service.get_prefetch_suggestions(
-                                        self.provider_id, limit=20
-                                    )
-                                    network_download_needed = set(raw_suggestions)
-                                    logging.debug(
-                                        f"Network download coverage check: {network_download_needed or 'none needed'}"
-                                    )
-                                except Exception as _e:
-                                    logging.debug(
-                                        f"Could not fetch network coverage (fail-open): {_e}"
-                                    )
-                                    # network_download_needed stays None → fail-open below
+                                open_network_policy = (
+                                    self.client.accept_policy in ("all", "monetize")
+                                    or getattr(self.client, "monetize_mode", False)
+                                )
+                                if open_network_policy:
+                                    try:
+                                        raw_suggestions = self.orchestrator_service.get_prefetch_suggestions(
+                                            self.provider_id, limit=20
+                                        )
+                                        network_download_needed = set(raw_suggestions)
+                                        logging.debug(
+                                            f"Network download coverage check: {network_download_needed or 'none needed'}"
+                                        )
+                                    except Exception as _e:
+                                        logging.debug(
+                                            f"Could not fetch network coverage (fail-open): {_e}"
+                                        )
+                                        # network_download_needed stays None → fail-open below
+                                # else: private policy → network_download_needed stays None
+                                #   → network_needs_this = True → always download
 
                             # Step 2b: Find first job with available Docker image
                             for peeked_job in available_jobs:
