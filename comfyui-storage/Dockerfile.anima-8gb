@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python packages
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
-        torch==2.7.1+cu128 torchvision torchaudio \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg ninja uv "huggingface_hub[cli]"
@@ -66,4 +66,4 @@ RUN mkdir -p models/text_encoders models/diffusion_models models/vae \
 
 WORKDIR /opt/ComfyUI
 ENV SERVICE_TYPE=anima-8gb
-CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]
+CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || { echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.'; exit 1; }; else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]
