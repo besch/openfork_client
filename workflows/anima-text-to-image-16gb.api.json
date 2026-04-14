@@ -79,11 +79,10 @@
       }
     },
     "15": {
-      "class_type": "DualCLIPLoader",
+      "class_type": "CLIPLoader",
       "inputs": {
-        "clip_name1": "qwen_3_06b_base.safetensors",
-        "clip_name2": "",
-        "type": "qwen"
+        "clip_name": "qwen_3_06b_base.safetensors",
+        "type": "stable_diffusion"
       }
     },
     "16": {

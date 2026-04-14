@@ -47,8 +47,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.sparkvsr-24gb", "beschiak/openfork-sparkvsr-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.inspatio-world-16gb", "beschiak/openfork-inspatio-world-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.inspatio-world-24gb", "beschiak/openfork-inspatio-world-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.anima-16gb", "beschiak/openfork-anima-16gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.anima-8gb", "beschiak/openfork-anima-8gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.anima-16gb", "beschiak/openfork-anima-16gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.anima-8gb", "beschiak/openfork-anima-8gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4

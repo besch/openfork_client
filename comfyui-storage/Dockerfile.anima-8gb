@@ -48,17 +48,23 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && python -m pip install --no-cache-dir -r custom_nodes/was-node-suite-comfyui/requirements.txt \
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Download Anima models into ComfyUI
 RUN mkdir -p models/text_encoders models/diffusion_models models/vae \
     && hf download circlestone-labs/Anima \
         split_files/diffusion_models/anima-preview3-base.safetensors \
-        --local-dir /opt/ComfyUI/models/diffusion_models \
+        --local-dir /tmp/anima \
+    && mv /tmp/anima/split_files/diffusion_models/anima-preview3-base.safetensors \
+           models/diffusion_models/ \
     && hf download circlestone-labs/Anima \
         split_files/text_encoders/qwen_3_06b_base.safetensors \
-        --local-dir /opt/ComfyUI/models/text_encoders \
+        --local-dir /tmp/anima \
+    && mv /tmp/anima/split_files/text_encoders/qwen_3_06b_base.safetensors \
+           models/text_encoders/ \
     && hf download circlestone-labs/Anima \
         split_files/vae/qwen_image_vae.safetensors \
-        --local-dir /opt/ComfyUI/models/vae
+        --local-dir /tmp/anima \
+    && mv /tmp/anima/split_files/vae/qwen_image_vae.safetensors \
+           models/vae/ \
+    && rm -rf /tmp/anima
 
 WORKDIR /opt/ComfyUI
 ENV SERVICE_TYPE=anima-8gb
