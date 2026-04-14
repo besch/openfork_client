@@ -1,0 +1,69 @@
+# syntax=docker/dockerfile:1.4
+# OpenFork - Anima (16GB)
+#
+# ComfyUI-based image generation model (Anima 2B)
+# Requires: 16GB VRAM
+
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+# System dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Python packages
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg ninja uv "huggingface_hub[cli]"
+
+# Clone SageAttention for runtime compilation
+RUN git clone --depth=1 https://github.com/thu-ml/SageAttention.git /opt/sageattention \
+    && rm -rf /opt/sageattention/.git
+
+WORKDIR /opt/ComfyUI
+
+# Clone repos with --depth=1, remove .git
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
+    && git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes.git custom_nodes/comfyui-kjnodes \
+    && rm -rf custom_nodes/comfyui-kjnodes/.git \
+    && git clone --depth=1 https://github.com/WASasquatch/was-node-suite-comfyui.git custom_nodes/was-node-suite-comfyui \
+    && rm -rf custom_nodes/was-node-suite-comfyui/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/was-node-suite-comfyui/requirements.txt \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Download Anima models into ComfyUI
+RUN mkdir -p models/text_encoders models/diffusion_models models/vae \
+    && hf download circlestone-labs/Anima \
+        split_files/diffusion_models/anima-preview3-base.safetensors \
+        --local-dir /opt/ComfyUI/models/diffusion_models \
+    && hf download circlestone-labs/Anima \
+        split_files/text_encoders/qwen_3_06b_base.safetensors \
+        --local-dir /opt/ComfyUI/models/text_encoders \
+    && hf download circlestone-labs/Anima \
+        split_files/vae/qwen_image_vae.safetensors \
+        --local-dir /opt/ComfyUI/models/vae
+
+WORKDIR /opt/ComfyUI
+ENV SERVICE_TYPE=anima-16gb
+CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]

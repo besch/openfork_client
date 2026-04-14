@@ -68,6 +68,7 @@ from .image.qwen_turbo import (
     QwenImageInpaintTurboProcessor,
     QwenImageT2ITurboProcessor,
 )
+from .image.anima import AnimaTextToImageProcessor
 
 # Text processors
 from .llm.llm import LLMJobProcessor
@@ -114,6 +115,7 @@ __all__ = [
     "QwenImageEditTurboProcessor",
     "QwenImageInpaintTurboProcessor",
     "QwenImageT2ITurboProcessor",
+    "AnimaTextToImageProcessor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
     "PrismAudioJobProcessor",

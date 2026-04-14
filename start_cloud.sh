@@ -438,6 +438,7 @@ else
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
   if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
+  if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for all LTX-2.3 Audio-Video services
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]]; then
       START_WAN2GP="true"
@@ -640,6 +641,10 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       # Hunyuan is very heavy (especially FP16 T2V).
       # Disable smart memory to force aggressive unloading.
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none"
+      ;;
+    *anima*)
+      log "Applying Anima optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0"
       ;;
     *)
       # Default to lowvram if service type is unknown but potentially heavy
