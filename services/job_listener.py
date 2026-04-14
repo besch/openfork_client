@@ -116,7 +116,9 @@ class JobListener:
 
         if self.client.active_service_type and not HEADLESS_MODE:
             try:
-                docker_manager.stop_container(service_type=self.client.active_service_type)
+                docker_manager.stop_container(
+                    service_type=self.client.active_service_type
+                )
             except Exception as stop_error:
                 logging.debug(
                     f"Failed to stop container after infrastructure error: {stop_error}"
@@ -334,9 +336,7 @@ class JobListener:
                 and not self._job_has_terminal_status(job_id)
             ):
                 self.client.interrupted_job_id = job_id
-                self.client.interrupted_job_execution_token = job.get(
-                    "execution_token"
-                )
+                self.client.interrupted_job_execution_token = job.get("execution_token")
             self.client.current_job = None
 
     def _monitor_job_cancellation(self, job_id: str, processor) -> None:
@@ -435,7 +435,10 @@ class JobListener:
                 return job
 
         # Priority 1: own jobs (mine policy)
-        if getattr(client, "process_own_jobs", False):
+        # Always poll own jobs when process_own_jobs is enabled OR when community
+        # mode is "none" (Private) — without this, Private mode would never poll.
+        community_mode = getattr(client, "community_mode", "none")
+        if getattr(client, "process_own_jobs", False) or community_mode == "none":
             job = self.orchestrator_service.get_next_job(
                 provider_id=self.provider_id,
                 accept_policy="mine",
@@ -446,7 +449,6 @@ class JobListener:
                 return job
 
         # Priority 2: community jobs
-        community_mode = getattr(client, "community_mode", "none")
         if community_mode == "none":
             return None
 
@@ -501,9 +503,7 @@ class JobListener:
                             "JOB_START",
                             {
                                 "id": job.get("id"),
-                                "workflow_type": job.get(
-                                    "workflow_type", "unknown"
-                                ),
+                                "workflow_type": job.get("workflow_type", "unknown"),
                                 "service_type": self._get_service_type_for_job(job),
                             },
                         )
@@ -696,9 +696,10 @@ class JobListener:
                             # NOTE: only relevant in non-headless mode where Docker exists.
                             network_download_needed: Optional[set] = None
                             if not HEADLESS_MODE and download_manager:
-                                open_network_policy = (
-                                    getattr(self.client, "community_mode", "all") == "all"
-                                    or getattr(self.client, "monetize_mode", False)
+                                open_network_policy = getattr(
+                                    self.client, "community_mode", "all"
+                                ) == "all" or getattr(
+                                    self.client, "monetize_mode", False
                                 )
                                 if open_network_policy:
                                     try:
@@ -783,8 +784,10 @@ class JobListener:
 
                                         if not HEADLESS_MODE:
                                             logging.info("Starting container...")
-                                            service_cfg = self.client.services_config.get(
-                                                actual_service_type, {}
+                                            service_cfg = (
+                                                self.client.services_config.get(
+                                                    actual_service_type, {}
+                                                )
                                             )
                                             is_wan2gp = (
                                                 service_cfg.get("backend") == "wan2gp"
@@ -1016,7 +1019,10 @@ class JobListener:
                                         )
 
                                         if not is_downloading and not is_queued:
-                                            if status and status.value == "permanently_failed":
+                                            if (
+                                                status
+                                                and status.value == "permanently_failed"
+                                            ):
                                                 logging.warning(
                                                     f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
                                                 )
@@ -1036,7 +1042,8 @@ class JobListener:
                                             #   None → check failed; fail-open (allow download)
                                             network_needs_this = (
                                                 network_download_needed is None
-                                                or service_type in network_download_needed
+                                                or service_type
+                                                in network_download_needed
                                             )
 
                                             if network_needs_this:
@@ -1051,7 +1058,9 @@ class JobListener:
                                                 # if the same service_type appears in later
                                                 # peeked jobs this iteration.
                                                 if network_download_needed is not None:
-                                                    network_download_needed.discard(service_type)
+                                                    network_download_needed.discard(
+                                                        service_type
+                                                    )
                                             else:
                                                 logging.debug(
                                                     f"Skipping download for '{service_type}': "
@@ -1124,7 +1133,11 @@ class JobListener:
                             f"Failed to reset provider status after error: {status_err}"
                         )
 
-                    if job and job.get("id") and self._is_requeueable_infrastructure_error(e):
+                    if (
+                        job
+                        and job.get("id")
+                        and self._is_requeueable_infrastructure_error(e)
+                    ):
                         self._requeue_job_after_infrastructure_error(job, e)
                         continue
 
