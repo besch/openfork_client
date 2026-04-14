@@ -8,6 +8,8 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, Form, HTTPException
 from fastapi.responses import FileResponse
 import uvicorn
+from typing import Optional
+
 
 INPUT_DIR = Path("/app/input")
 OUTPUT_DIR = Path("/app/output")
@@ -177,7 +179,8 @@ _INFERENCE_WRAPPER.write_text(
 )
 
 # Resolved at startup in the background; None means still downloading.
-SPARKVSR_MODEL_PATH: str | None = None
+SPARKVSR_MODEL_PATH: Optional[str] = None
+
 _model_ready = asyncio.Event()
 
 

@@ -15,6 +15,8 @@ import os
 import time
 import logging
 import requests
+from typing import Optional
+
 
 from services.processors.base import BaseJobProcessor
 from services.processors.output_handlers import VideoOutputHandler
@@ -178,7 +180,8 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
 
         return False
 
-    def _submit_generation(self, **kwargs) -> str | None:
+    def _submit_generation(self, **kwargs) -> Optional[str]:
+
         try:
             resp = self.session.post(
                 f"{self.api_base_url}/generate",
@@ -220,7 +223,8 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
             time.sleep(self.POLL_INTERVAL)
         return {"status": "failed", "error": "Timeout"}
 
-    def _download_output(self, task_id: str) -> str | None:
+    def _download_output(self, task_id: str) -> Optional[str]:
+
         try:
             resp = self.session.get(
                 f"{self.api_base_url}/download/{task_id}",
