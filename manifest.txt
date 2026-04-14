@@ -75,6 +75,8 @@ utils/log_tailer.py
 utils/media_utils.py
 utils/recent_logs.py
 utils/shutdown_handler.py
+workflows/anima-text-to-image-16gb.api.json
+workflows/anima-text-to-image-8gb.api.json
 workflows/chatterbox-tts.api.json
 workflows/chatterbox-voice-clone.api.json
 workflows/diagdistill-t2v.api.json
