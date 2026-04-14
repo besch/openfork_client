@@ -3,6 +3,7 @@ comfyui-storage/build_and_push.py
 comfyui-storage/davinci_magihuman_api.py
 comfyui-storage/diffrhythm_api.py
 comfyui-storage/heartmula_api.py
+comfyui-storage/inspatio_api.py
 comfyui-storage/lavasr_api.py
 comfyui-storage/mmaudio_api.py
 comfyui-storage/prismaudio_api.py
@@ -58,6 +59,7 @@ services/processors/video/__init__.py
 services/processors/video/davinci_magihuman.py
 services/processors/video/hunyuan_image.py
 services/processors/video/hunyuan_text.py
+services/processors/video/inspatio_world.py
 services/processors/video/ltx23_image.py
 services/processors/video/ltx23_text.py
 services/processors/video/sparkvsr.py
