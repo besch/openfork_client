@@ -1,0 +1,128 @@
+# OpenFork — InSpatio-World Novel-View Video Synthesis (24GB)
+#
+# What this image provides:
+#   - inspatio/inspatio-world pipeline at /opt/inspatio-world
+#   - Python 3.10 + CUDA 12.1 + PyTorch 2.5.1+cu121
+#   - Three-step pipeline: Florence-2 captioning → DA3 depth + point cloud → V2V inference
+#   - InSpatio-World 1.3B checkpoint + Wan2.1-T2V-1.3B base + Florence-2-large + DA3
+#   - Models (~15 GB) downloaded on first container start via scripts/download.sh
+#   - FastAPI REST wrapper at port 8000
+#
+# Build:
+#   docker build \
+#     -t beschiak/openfork-inspatio-world-24gb:latest \
+#     -f Dockerfile.inspatio-world-24gb .
+#
+# Notes:
+#   - Requires 24GB VRAM minimum (RTX 3090/4090, A10G, L40S, H100)
+#   - CUDA 12.1 + PyTorch 2.5.1 cu121 wheel covers sm_75–sm_90 out of the box
+#   - ComfyUI is NOT used — REST API via inspatio_api.py at port 8000
+#   - Model weights download on first start into /opt/inspatio-world/checkpoints
+#     (mount a persistent volume at that path to skip re-download on restart)
+#   - flash-attn is intentionally skipped at build time (needs matching CUDA headers);
+#     install manually post-start if acceleration is required
+
+ARG INSPATIO_REPO=https://github.com/inspatio/inspatio-world
+
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ARG INSPATIO_REPO
+
+# Supported GPU compute capabilities (via PyTorch cu121 wheel):
+#   7.5 = T4, RTX 20xx  |  8.0 = A100  |  8.6 = RTX 30xx, A10G
+#   8.9 = RTX 40xx, L40, L40S  |  9.0 = H100
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV INSPATIO_ROOT=/opt/inspatio-world
+ENV INSPATIO_CHECKPOINTS=/opt/inspatio-world/checkpoints
+ENV INSPATIO_TRAJ_DIR=/opt/inspatio-world/traj
+ENV INSPATIO_OUTPUT_DIR=/data/inspatio_output
+ENV INSPATIO_TASKS_DIR=/data/inspatio_tasks
+ENV HF_HOME=/models/hf_cache
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+ENV PIP_NO_CACHE_DIR=1
+
+# ── System dependencies ───────────────────────────────────────────────────────
+# Drop the NVIDIA apt repo before updating — CUDA is already in the base image
+# and the NVIDIA mirror is often transiently inconsistent during docker builds.
+RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.10 python3.10-dev python3-pip \
+        git git-lfs wget curl ffmpeg \
+        libgl1 libglib2.0-0 libgomp1 libsm6 libxext6 libxrender1 \
+        build-essential g++ cmake \
+    && git lfs install --system \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && pip3 install --upgrade pip setuptools wheel
+
+# ── PyTorch 2.5.1 (CUDA 12.1) ────────────────────────────────────────────────
+# Matches the project's environment.yml: torch==2.5.1+cu121 / torchvision==0.20.1+cu121
+RUN pip3 install \
+        torch==2.5.1+cu121 \
+        torchvision==0.20.1+cu121 \
+        torchaudio==2.5.1+cu121 \
+        --index-url https://download.pytorch.org/whl/cu121
+
+# ── xformers (compatible with torch 2.5.1 + cu121) ───────────────────────────
+RUN pip3 install xformers==0.0.29.post1 \
+        --index-url https://download.pytorch.org/whl/cu121 \
+    || pip3 install xformers \
+        --index-url https://download.pytorch.org/whl/cu121
+
+# ── Clone InSpatio-World ──────────────────────────────────────────────────────
+RUN git clone ${INSPATIO_REPO} /opt/inspatio-world \
+    && git -C /opt/inspatio-world checkout main
+
+# ── Python dependencies ───────────────────────────────────────────────────────
+# flash-attn is listed as optional in requirements.txt and requires a CUDA devel
+# image to compile at build time — strip it out and install the rest normally.
+RUN grep -iv 'flash.attn\|flash_attn' /opt/inspatio-world/requirements.txt \
+        > /tmp/requirements_nofattn.txt \
+    && pip3 install -r /tmp/requirements_nofattn.txt
+
+# ── HuggingFace tooling + FastAPI ─────────────────────────────────────────────
+RUN pip3 install \
+        "huggingface_hub[cli,hf_transfer]" \
+        hf_transfer \
+        fastapi \
+        "uvicorn[standard]" \
+        requests \
+        python-multipart
+
+# ── Pre-create directories ────────────────────────────────────────────────────
+RUN mkdir -p /opt/inspatio-world/checkpoints \
+             /data/inspatio_output \
+             /data/inspatio_tasks \
+             /models/hf_cache
+
+WORKDIR /opt/inspatio-world
+
+EXPOSE 8000
+
+# ── REST API wrapper ──────────────────────────────────────────────────────────
+COPY inspatio_api.py /opt/inspatio-world/inspatio_api.py
+
+# At startup:
+#   1. Patch libcuda.so symlink — NVIDIA Container Toolkit injects libcuda.so.1 at
+#      runtime but some JIT linkers need the bare libcuda.so name (-lcuda flag).
+#   2. Pull latest inspatio_api.py from GitHub (hot-patch without rebuild).
+#   3. First-run model download: run scripts/download.sh from the cloned repo,
+#      which fetches InSpatio-World-1.3B, Wan2.1-T2V-1.3B, Florence-2-large, and DA3
+#      checkpoints into /opt/inspatio-world/checkpoints (~15 GB total).
+#      Skipped automatically on subsequent starts once the sentinel file is present.
+#   4. Start the FastAPI server on port 8000.
+CMD ["/bin/bash", "-c", \
+    "ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/lib/x86_64-linux-gnu/libcuda.so 2>/dev/null || true \
+     && curl -sf -L -o /opt/inspatio-world/inspatio_api.py \
+         https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/inspatio_api.py \
+     || echo '[warn] Could not fetch latest inspatio_api.py, using bundled version' \
+     && if [ ! -f /opt/inspatio-world/checkpoints/InSpatio-World-1.3B/InSpatio-World-1.3B.safetensors ]; then \
+         echo '[info] First-run: downloading InSpatio-World model weights (~15 GB)...' \
+         && cd /opt/inspatio-world && bash scripts/download.sh \
+         || { echo '[error] Model download failed — check network / HF access'; exit 1; }; \
+        fi \
+     && python3 /opt/inspatio-world/inspatio_api.py"]

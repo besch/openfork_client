@@ -370,6 +370,7 @@ START_WAN2GP="false"
 START_DAVINCI="false"
 START_COMFYUI="true"
 START_SPARKVSR="false"
+START_INSPATIO="false"
 ENABLE_4BIT="false"
 
 TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
@@ -413,9 +414,19 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       START_DAVINCI="true"
       SERVICE_TYPE="davinci-magihuman-32gb"
    elif [ -f "/app/sparkvsr_api.py" ] || [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
-       log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
-       START_SPARKVSR="true"
-       SERVICE_TYPE="sparkvsr-upscaler-24gb"
+        log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
+        START_SPARKVSR="true"
+        SERVICE_TYPE="sparkvsr-upscaler-24gb"
+   elif [ -f "/app/inspatio_api.py" ] || [ -f "/opt/inspatio-world/inspatio_api.py" ]; then
+       log "Auto-mode: Detected InSpatio-World image."
+       START_INSPATIO="true"
+       if [ "$TOTAL_VRAM_MB" -gt 20000 ]; then
+           SERVICE_TYPE="inspatio-world-24gb"
+           log "Auto-selected InSpatio-World 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+       else
+           SERVICE_TYPE="inspatio-world-16gb"
+           log "Auto-selected InSpatio-World 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+       fi
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -426,6 +437,7 @@ else
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
   if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
+  if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
   # Wan2GP backend for all LTX-2.3 Audio-Video services
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]]; then
       START_WAN2GP="true"
@@ -474,6 +486,16 @@ if [ "$START_SPARKVSR" = "true" ]; then
   # SparkVSR needs full 24GB VRAM — always disable ComfyUI
   log "SparkVSR selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
+fi
+
+if [ "$START_INSPATIO" = "true" ]; then
+  # InSpatio-World needs full VRAM — always disable ComfyUI
+  log "InSpatio-World selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+  if [[ "${SERVICE_TYPE:-auto}" == *"16gb"* ]]; then
+      export INSPATIO_VRAM_GB=16
+      log "InSpatio-World: INSPATIO_VRAM_GB=16 (CPU offloading enabled)"
+  fi
 fi
 
 if [ "$START_QWEN3TTS" = "true" ]; then
@@ -859,6 +881,36 @@ if [ "$START_SPARKVSR" = "true" ]; then
     wait_for_url "SparkVSR API" "http://127.0.0.1:8000/health" 600 "/tmp/sparkvsr_api.log"
   else
     log "ERROR: SparkVSR API not found at /app/sparkvsr_api.py or /opt/SparkVSR/sparkvsr_api.py"
+  fi
+fi
+
+# Start InSpatio-World REST API
+if [ "$START_INSPATIO" = "true" ]; then
+  log "Starting InSpatio-World API service..."
+  INSPATIO_API=""
+  if [ -f "/app/inspatio_api.py" ]; then
+    INSPATIO_API="/app/inspatio_api.py"
+    INSPATIO_CD="/app"
+  elif [ -f "/opt/inspatio-world/inspatio_api.py" ]; then
+    INSPATIO_API="/opt/inspatio-world/inspatio_api.py"
+    INSPATIO_CD="/opt/inspatio-world"
+  fi
+
+  if [ -n "$INSPATIO_API" ]; then
+    export INSPATIO_ROOT="${INSPATIO_ROOT:-/opt/inspatio-world}"
+    export INSPATIO_CHECKPOINTS="${INSPATIO_CHECKPOINTS:-${INSPATIO_ROOT}/checkpoints}"
+
+    if [ ! -d "$INSPATIO_CHECKPOINTS" ] || [ -z "$(ls -A "$INSPATIO_CHECKPOINTS" 2>/dev/null)" ]; then
+      log "InSpatio-World checkpoints not found. Please ensure the Docker image includes model weights."
+    else
+      log "InSpatio-World checkpoints found at $INSPATIO_CHECKPOINTS"
+    fi
+
+    log "Found InSpatio-World API at $INSPATIO_API. Starting..."
+    (cd "$INSPATIO_CD" && "$PYTHON_EXE" inspatio_api.py > /tmp/inspatio_api.log 2>&1) &
+    wait_for_url "InSpatio-World API" "http://127.0.0.1:8000/health" 600 "/tmp/inspatio_api.log"
+  else
+    log "ERROR: InSpatio-World API not found at /app/inspatio_api.py or /opt/inspatio-world/inspatio_api.py"
   fi
 fi
 
