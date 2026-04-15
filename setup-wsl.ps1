@@ -293,6 +293,12 @@ for i in {1..15}; do
 done
 
 echo "[Linux] OpenFork AI Engine Setup Complete."
+
+# Drop a pyrightconfig.json at the root of the distro so VS Code's Pylance
+# language server does not index the entire WSL filesystem when it detects
+# the new distro. Without this, Pylance crawls all Docker/system Python files
+# and can spike to 90% RAM on developer machines.
+echo '{"exclude":["/**"]}' | sudo tee /pyrightconfig.json > /dev/null
 "@
 
 # Write the bash script to a Windows temp file to avoid stdin pipe issues when running elevated.
