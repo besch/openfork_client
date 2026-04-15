@@ -84,7 +84,44 @@ try {
             $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz"
 
             Write-Log "Downloading Ubuntu rootfs (~130MB)..."
-            Invoke-WebRequest -Uri $rootfsUrl -OutFile $rootfsPath -UseBasicParsing
+
+            Add-Type -AssemblyName System.Net.Http
+            $httpClient = [System.Net.Http.HttpClient]::new()
+            $httpClient.Timeout = [System.TimeSpan]::FromMinutes(10)
+
+            $response = $httpClient.GetAsync($rootfsUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            $response.EnsureSuccessStatusCode()
+
+            $totalBytes = $response.Content.Headers.ContentLength
+            $totalMB = if ($totalBytes) { [math]::Round($totalBytes / 1MB, 1) } else { $null }
+            $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+            $fileStream = [System.IO.File]::Create($rootfsPath)
+
+            $buffer = New-Object byte[] 81920
+            $totalRead = 0
+            $lastReportedPct = -1
+
+            while ($true) {
+                $read = $stream.Read($buffer, 0, $buffer.Length)
+                if ($read -le 0) { break }
+                $fileStream.Write($buffer, 0, $read)
+                $totalRead += $read
+
+                if ($totalBytes -and $totalBytes -gt 0) {
+                    $pct = [math]::Floor(($totalRead / $totalBytes) * 100)
+                    if ($pct -ge $lastReportedPct + 5 -or $pct -eq 100) {
+                        $readMB = [math]::Round($totalRead / 1MB, 1)
+                        Write-Log "Downloading Ubuntu rootfs... $($pct)% ($readMB MB / $totalMB MB)"
+                        $lastReportedPct = $pct
+                    }
+                }
+            }
+
+            $fileStream.Close()
+            $stream.Close()
+            $httpClient.Dispose()
+
+            Write-Log "Download complete. ($([math]::Round($totalRead / 1MB, 1)) MB)"
 
             # Clean up any leftover VHDX from a previous failed import
             # (causes ERROR_FILE_EXISTS even when no distro is registered)
@@ -190,6 +227,16 @@ $script = @"
 #!/bin/bash
 set -e
 
+echo "[Linux] Waiting for network connectivity..."
+for i in {1..15}; do
+    if curl -fsSL --connect-timeout 3 https://get.docker.com -o /dev/null 2>/dev/null; then
+        echo "[Linux] Network is ready."
+        break
+    fi
+    echo "[Linux] Waiting for network... (attempt \$i/15)"
+    sleep 2
+done
+
 echo "[Linux] Checking for Docker..."
 if ! command -v docker &> /dev/null; then
     echo "[Linux] Installing Docker Engine..."
@@ -261,6 +308,12 @@ $wslScriptPath = "/mnt/$driveLetter/" + $tempScriptPath.Substring(3).Replace('\'
 
 Write-Log "Running Docker setup commands inside WSL $DistroName..."
 wsl -d $DistroName --user root -- bash $wslScriptPath
+if ($LASTEXITCODE -ne 0) {
+    Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue
+    Write-Log "ERROR: Setup script inside WSL exited with code $LASTEXITCODE"
+    Write-Output "ERROR: WSL setup script failed."
+    Exit 1
+}
 
 Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue
 
