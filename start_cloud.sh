@@ -315,6 +315,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/davinci_magihuman_api.py" ] && cp -v "$DGN_SOURCE_DIR/davinci_magihuman_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
           [ -f "$DGN_SOURCE_DIR/sparkvsr_api.py" ] && cp -v "$DGN_SOURCE_DIR/sparkvsr_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/ernie_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/ernie_image_api.py" /app/
       fi
       
       # 2. TurboDiffusion (runs in /opt/TurboDiffusion)
@@ -371,6 +372,7 @@ START_DAVINCI="false"
 START_COMFYUI="true"
 START_SPARKVSR="false"
 START_INSPATIO="false"
+START_ERNIE_IMAGE="false"
 ENABLE_4BIT="false"
 
 TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
@@ -427,6 +429,19 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
            SERVICE_TYPE="inspatio-world-16gb"
            log "Auto-selected InSpatio-World 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
        fi
+  elif [ -f "/app/ernie_image_api.py" ]; then
+      log "Auto-mode: Detected ERNIE-Image image. Selecting ERNIE-Image service."
+      START_ERNIE_IMAGE="true"
+      if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+          SERVICE_TYPE="ernie-image-24gb"
+          log "Auto-selected ERNIE-Image 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -gt 14000 ]; then
+          SERVICE_TYPE="ernie-image-16gb"
+          log "Auto-selected ERNIE-Image 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="ernie-image-8gb"
+          log "Auto-selected ERNIE-Image 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -438,6 +453,7 @@ else
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
   if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
+  if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for all LTX-2.3 Audio-Video services
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]]; then
@@ -490,13 +506,17 @@ if [ "$START_SPARKVSR" = "true" ]; then
 fi
 
 if [ "$START_INSPATIO" = "true" ]; then
-  # InSpatio-World needs full VRAM — always disable ComfyUI
   log "InSpatio-World selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
   if [[ "${SERVICE_TYPE:-auto}" == *"16gb"* ]]; then
       export INSPATIO_VRAM_GB=16
       log "InSpatio-World: INSPATIO_VRAM_GB=16 (CPU offloading enabled)"
   fi
+fi
+
+if [ "$START_ERNIE_IMAGE" = "true" ]; then
+  log "ERNIE-Image selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
 fi
 
 if [ "$START_QWEN3TTS" = "true" ]; then
@@ -916,6 +936,31 @@ if [ "$START_INSPATIO" = "true" ]; then
     wait_for_url "InSpatio-World API" "http://127.0.0.1:8000/health" 600 "/tmp/inspatio_api.log"
   else
     log "ERROR: InSpatio-World API not found at /app/inspatio_api.py or /opt/inspatio-world/inspatio_api.py"
+  fi
+fi
+
+# Start ERNIE-Image REST API
+if [ "$START_ERNIE_IMAGE" = "true" ]; then
+  log "Starting ERNIE-Image API service..."
+  if [ -f "/app/ernie_image_api.py" ]; then
+    export ERNIE_MODEL_ID="${ERNIE_MODEL_ID:-baidu/ERNIE-Image}"
+    export ERNIE_DEFAULT_STEPS="${ERNIE_DEFAULT_STEPS:-50}"
+    if [[ "${SERVICE_TYPE}" == *"8gb"* ]]; then
+      export ERNIE_MODEL_ID="baidu/ERNIE-Image-Turbo"
+      export ERNIE_DEFAULT_STEPS="8"
+      export ERNIE_DTYPE="fp16"
+    elif [[ "${SERVICE_TYPE}" == *"16gb"* ]]; then
+      export ERNIE_MODEL_ID="baidu/ERNIE-Image"
+      export ERNIE_DEFAULT_STEPS="28"
+      export ERNIE_DTYPE="fp16"
+    else
+      export ERNIE_DTYPE="bf16"
+    fi
+    log "ERNIE-Image config: model=$ERNIE_MODEL_ID dtype=$ERNIE_DTYPE steps=$ERNIE_DEFAULT_STEPS"
+    (cd /app && "$PYTHON_EXE" ernie_image_api.py > /tmp/ernie_image_api.log 2>&1) &
+    wait_for_url "ERNIE-Image API" "http://127.0.0.1:8000/health" 600 "/tmp/ernie_image_api.log"
+  else
+    log "ERROR: ERNIE-Image API not found at /app/ernie_image_api.py"
   fi
 fi
 

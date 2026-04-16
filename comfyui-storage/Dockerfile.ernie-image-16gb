@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.4
+# ERNIE-Image (16GB) - FP8 weights
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV HF_HOME=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+
+ENV ERNIE_MODEL_ID=baidu/ERNIE-Image
+ENV ERNIE_DEFAULT_STEPS=28
+ENV ERNIE_DTYPE=fp16
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget libgl1-mesa-glx ffmpeg \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch torchvision \
+        --index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        diffusers>=0.33.0 \
+        transformers>=4.51.0 \
+        accelerate>=1.3.0 \
+        sentencepiece \
+        huggingface_hub \
+        Pillow \
+        fastapi \
+        "uvicorn[standard]" \
+        python-multipart \
+        requests
+
+RUN mkdir -p /app/input /app/output /app/models
+
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('baidu/ERNIE-Image', cache_dir='/app/models')"
+
+COPY ernie_image_api.py /app/ernie_image_api.py
+
+EXPOSE 8000
+CMD ["python", "/app/ernie_image_api.py"]
