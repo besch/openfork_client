@@ -2,6 +2,7 @@ cli.py
 comfyui-storage/build_and_push.py
 comfyui-storage/davinci_magihuman_api.py
 comfyui-storage/diffrhythm_api.py
+comfyui-storage/ernie_image_api.py
 comfyui-storage/heartmula_api.py
 comfyui-storage/inspatio_api.py
 comfyui-storage/lavasr_api.py
@@ -49,6 +50,7 @@ services/processors/base.py
 services/processors/comfyui_processor.py
 services/processors/image/__init__.py
 services/processors/image/anima.py
+services/processors/image/ernie_image.py
 services/processors/image/qwen.py
 services/processors/image/qwen_turbo.py
 services/processors/image/text_to_image.py
