@@ -22,6 +22,7 @@ from PIL import Image
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
+from contextlib import asynccontextmanager
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -63,7 +64,7 @@ def load_model():
     global pipe, model_loading, model_error
     model_loading = True
     try:
-        from diffusers import FluxPipeline
+        from diffusers import DiffusionPipeline
 
         logger.info(f"Loading ERNIE-Image model: {MODEL_ID} (dtype={MODEL_DTYPE})")
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -79,7 +80,7 @@ def load_model():
         else:
             dtype = torch.bfloat16
 
-        pipe = FluxPipeline.from_pretrained(
+        pipe = DiffusionPipeline.from_pretrained(
             MODEL_ID,
             torch_dtype=dtype,
         ).to(device)
@@ -131,15 +132,16 @@ def run_generation(job_id: str, request: GenerateRequest):
         jobs[job_id]["error"] = str(e)
 
 
-app = FastAPI(title="ERNIE-Image API")
-
-
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app_instance):
     import threading
 
     thread = threading.Thread(target=load_model, daemon=True)
     thread.start()
+    yield
+
+
+app = FastAPI(title="ERNIE-Image API", lifespan=lifespan)
 
 
 @app.get("/health")
