@@ -242,8 +242,10 @@ if ! command -v docker &> /dev/null; then
     echo "[Linux] Installing Docker Engine..."
     curl -fsSL https://get.docker.com -o get-docker.sh
     sed -i 's/sleep 20/sleep 1/g' get-docker.sh
-    sudo sh get-docker.sh
-    rm get-docker.sh
+    echo "[Linux] Downloading and installing Docker packages..."
+    sudo sh get-docker.sh > /dev/null
+    rm -f get-docker.sh
+    echo "[Linux] Docker Engine installed successfully."
 else
     echo "[Linux] Docker is already installed."
 fi
@@ -254,9 +256,11 @@ if ! command -v nvidia-ctk &> /dev/null; then
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
       sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-      sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-    sudo apt-get update
-    sudo apt-get install -y nvidia-container-toolkit
+      sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+    echo "[Linux] Updating package lists for NVIDIA toolkit..."
+    sudo apt-get update -qq
+    echo "[Linux] Downloading and installing NVIDIA toolkit packages..."
+    sudo apt-get install -y -qq nvidia-container-toolkit > /dev/null
     sudo nvidia-ctk runtime configure --runtime=docker
 else
     echo "[Linux] NVIDIA Container Toolkit is already installed."
@@ -313,7 +317,9 @@ $driveLetter = $tempScriptPath[0].ToString().ToLower()
 $wslScriptPath = "/mnt/$driveLetter/" + $tempScriptPath.Substring(3).Replace('\', '/')
 
 Write-Log "Running Docker setup commands inside WSL $DistroName..."
-wsl -d $DistroName --user root -- bash $wslScriptPath
+wsl -d $DistroName --user root -- bash $wslScriptPath 2>&1 | ForEach-Object {
+    Write-Log "$_"
+}
 if ($LASTEXITCODE -ne 0) {
     Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue
     Write-Log "ERROR: Setup script inside WSL exited with code $LASTEXITCODE"
