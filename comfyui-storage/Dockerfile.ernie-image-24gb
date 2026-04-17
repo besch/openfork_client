@@ -47,7 +47,4 @@ RUN mkdir -p /app/input /app/output /app/models
 
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('baidu/ERNIE-Image', cache_dir='/app/models')"
 
-COPY ernie_image_api.py /app/ernie_image_api.py
-
-EXPOSE 8000
-CMD ["python", "/app/ernie_image_api.py"]
+CMD ["/bin/bash", "-c", "curl -s -L -o ernie_image_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/ernie_image_api.py && python ernie_image_api.py"]
