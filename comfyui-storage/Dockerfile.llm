@@ -19,7 +19,7 @@ ENV OLLAMA_MODELS=/root/.ollama
 # Pre-pull models during build - Ensure they are fully baked into the image
 RUN /bin/sh -c "ollama serve & pid=\$! && \
     sleep 5 && \
-    echo 'Pulling qwen2.5:3b...' && ollama pull qwen2.5:3b && \
+    echo 'Pulling qwen3:4b...' && ollama pull qwen3:4b && \
     kill \$pid"
 
 # Bake DGN client into image

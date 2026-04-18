@@ -9,6 +9,7 @@ import time
 import logging
 import math
 import random
+import json
 import requests
 
 from services.processors.base import BaseJobProcessor
@@ -101,7 +102,9 @@ class LLMJobProcessor(BaseJobProcessor):
             num_scenes = inputs.get("num_scenes")
 
             # JSON schema for script scenes - forces Ollama to output valid JSON
+            # Must be a proper JSON Schema with $schema and additionalProperties for Ollama compatibility
             json_schema = {
+                "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "array",
                 "items": {
                     "type": "object",
@@ -112,14 +115,17 @@ class LLMJobProcessor(BaseJobProcessor):
                         "camera_movement": {"type": "string", "enum": ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "dolly-in", "push-in", "pull-back"]},
                         "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10}
                     },
-                    "required": ["name", "description", "aspect_ratio", "camera_movement", "duration_seconds"]
+                    "required": ["name", "description", "aspect_ratio", "camera_movement", "duration_seconds"],
+                    "additionalProperties": False
                 }
             }
 
             # Enforce exact scene count via JSON schema constraints
+            # Note: minItems and maxItems are added at the array level, not within items
             if num_scenes is not None:
                 json_schema["minItems"] = num_scenes
                 json_schema["maxItems"] = num_scenes
+                logging.info(f"Enforcing exactly {num_scenes} scene(s) via JSON schema constraints")
 
             # Dynamically size the context window to fit the requested output.
             # num_ctx must be >= (input tokens + max_tokens).  We add a 2048-token
@@ -152,7 +158,23 @@ class LLMJobProcessor(BaseJobProcessor):
                 self._fail_job(f"Ollama returned empty response. Full result: {result}")
                 return
 
-            logging.info(f"Generation complete. Length: {len(generated_text)} chars.")
+            # Validate the generated JSON matches the expected schema
+            try:
+                parsed_json = json.loads(generated_text)
+                if isinstance(parsed_json, list):
+                    actual_count = len(parsed_json)
+                    if num_scenes is not None and actual_count != num_scenes:
+                        logging.warning(f"Schema constraint mismatch: expected {num_scenes} scenes but got {actual_count}")
+                        # Still proceed - the schema should have enforced this, but log the mismatch
+                else:
+                    logging.error(f"Generated content is not a JSON array: {type(parsed_json)}")
+                    self._fail_job(f"Generated JSON is not an array. Got: {type(parsed_json).__name__}")
+                    return
+            except json.JSONDecodeError as e:
+                self._fail_job(f"Generated content is not valid JSON: {e}")
+                return
+
+            logging.info(f"Generation complete. Generated {len(parsed_json)} scene(s). Length: {len(generated_text)} chars.")
 
             output_filename = f"{self.job_id}_script.txt"
             output_path = os.path.join(self.cache_dir, output_filename)

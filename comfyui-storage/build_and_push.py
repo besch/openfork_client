@@ -49,6 +49,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.inspatio-world-24gb", "beschiak/openfork-inspatio-world-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.anima-16gb", "beschiak/openfork-anima-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.anima-8gb", "beschiak/openfork-anima-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.llm", "beschiak/openfork-llm:latest", build=True, push=True),
     # ERNIE-Image
     ImageConfig(
         "Dockerfile.ernie-image-8gb",
