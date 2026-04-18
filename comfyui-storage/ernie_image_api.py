@@ -196,3 +196,9 @@ async def get_output(job_id: str):
     if not output_path or not Path(output_path).exists():
         raise HTTPException(status_code=404, detail="Output file not found")
     return FileResponse(output_path, media_type="image/png", filename=f"{job_id}.png")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
