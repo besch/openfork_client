@@ -83,6 +83,7 @@ def load_model():
         pipe = DiffusionPipeline.from_pretrained(
             MODEL_ID,
             torch_dtype=dtype,
+            trust_remote_code=True,
         ).to(device)
 
         logger.info(f"ERNIE-Image model loaded on {device} with dtype {dtype}")
