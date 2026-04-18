@@ -23,7 +23,7 @@ def _get_wsl_distro_base_path() -> Optional[str]:
     if platform.system() != "win32":
         return None
     
-    distro = os.environ.get("OPENFORK_WSL_DISTRO") or "Ubuntu"
+    distro = os.environ.get("OPENFORK_WSL_DISTRO") or "OpenFork"
     
     try:
         ps_command = f"Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\*' | Where-Object DistributionName -eq '{distro}' | Select-Object -ExpandProperty BasePath"
@@ -51,21 +51,16 @@ def get_docker_storage_path() -> str:
     system = platform.system()
     
     if system == "Windows":
-        # Check if we're using WSL Docker (OPENFORK_DOCKER_HOST is set by electron.cjs)
-        if os.environ.get("OPENFORK_DOCKER_HOST"):
-            # WSL Docker mode - get the VHDX location from registry
-            wsl_base = _get_wsl_distro_base_path()
-            if wsl_base:
-                # Extract drive letter from base path (e.g., D:\WSL\OpenFork -> D:)
-                match = re.match(r"([a-zA-Z]):", wsl_base)
-                if match:
-                    drive = match.group(1).upper()
-                    return f"{drive}:\\"
-            # Fallback: check C: drive
-            return "C:\\"
-        else:
-            # Docker Desktop on Windows stores data in ProgramData
-            return "C:\\ProgramData\\Docker"
+        # OpenFork on Windows stores Docker data inside its dedicated WSL distro.
+        wsl_base = _get_wsl_distro_base_path()
+        if wsl_base:
+            # Extract drive letter from base path (e.g., D:\WSL\OpenFork -> D:)
+            match = re.match(r"([a-zA-Z]):", wsl_base)
+            if match:
+                drive = match.group(1).upper()
+                return f"{drive}:\\"
+        # Fallback: check C: drive
+        return "C:\\"
     elif system == "Darwin":  # macOS
         # Docker Desktop on macOS uses a VM disk image
         return os.path.expanduser("~/Library/Containers/com.docker.docker/Data")

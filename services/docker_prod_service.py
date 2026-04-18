@@ -63,10 +63,8 @@ class DockerProdManager:
             wsl_ip = self._get_wsl_ip()
             explicit_host = os.environ.get("DOCKER_HOST")
             if explicit_host:
-                # An explicit endpoint was configured (e.g. tcp://127.0.0.1:2375 for WSL
-                # Docker or npipe://... for Docker Desktop).  Trust it; only add TCP
-                # variants when it is already a TCP URL so we don't accidentally fall
-                # through to the WSL daemon when Docker Desktop is the intended engine.
+                # An explicit endpoint was configured for the OpenFork Ubuntu Docker daemon.
+                # Trust it and add the common local TCP variants to handle WSL IP churn.
                 if explicit_host.startswith("tcp://"):
                     docker_hosts = [
                         explicit_host,
@@ -75,13 +73,10 @@ class DockerProdManager:
                         f"tcp://{wsl_ip}:2375" if wsl_ip else None,
                     ]
                 else:
-                    docker_hosts = [explicit_host, "npipe:////./pipe/docker_engine"]
+                    docker_hosts = [explicit_host]
             else:
-                # No explicit endpoint: Docker Desktop native mode.
-                # Prefer the named pipe so we never accidentally pick up a WSL Docker
-                # daemon that happens to be listening on port 2375.
+                # No explicit endpoint: probe the OpenFork Ubuntu Docker daemon directly.
                 docker_hosts = [
-                    "npipe:////./pipe/docker_engine",
                     "tcp://127.0.0.1:2375",
                     "tcp://localhost:2375",
                     f"tcp://{wsl_ip}:2375" if wsl_ip else None,
@@ -199,7 +194,6 @@ class DockerProdManager:
         if os.name == "nt":
             candidates.extend(
                 [
-                    "npipe:////./pipe/docker_engine",
                     "tcp://127.0.0.1:2375",
                     "tcp://localhost:2375",
                 ]

@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
     Automated OpenFork AI Engine Setup
-    Enables WSL, installs Ubuntu, Docker Engine, and NVIDIA Container Toolkit.
+    Enables WSL, installs the dedicated OpenFork distro, Docker Engine, and NVIDIA Container Toolkit.
 #>
 
 param (
     [switch]$InstallOnly,
     [string]$InstallPath,
-    [string]$DistroName = "Ubuntu"
+    [string]$DistroName = "OpenFork"
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,19 +31,6 @@ function Check-IsAdmin {
 if (-not (Check-IsAdmin)) {
     Write-Log "Need Administrator privileges to install WSL features. Please re-run as Administrator."
     Exit 1
-}
-
-# Check if Docker is already available natively on Windows
-try {
-    Write-Log "Checking if Docker is already available on Windows..."
-    $dockerCheck = docker version --format '{{.Server.Os}}' 2>$null
-    if ($null -ne $dockerCheck -and $dockerCheck -match "linux") {
-        Write-Log "Native Docker (Linux containers) detected on Windows. Skipping WSL distro installation."
-        Write-Output "SUCCESS"
-        Exit 0
-    }
-} catch {
-    # Ignore errors here, just proceed with normal installation
 }
 
 Write-Log "Checking Windows Subsystem for Linux (WSL) status..."
@@ -70,75 +57,75 @@ if ($requiresReboot) {
     Exit 0
 }
 
+if ($null -eq $InstallPath -or $InstallPath -eq "") {
+    $InstallPath = Join-Path $env:SystemDrive "OpenFork\wsl"
+    Write-Log "No install path provided. Using default path: $InstallPath"
+}
+
 Write-Log "Checking for $DistroName distribution..."
 try {
     $dists = (wsl -l -v | Out-String) -replace "\0", ""
     if ($dists -notmatch $DistroName) {
-        if ($null -ne $InstallPath -and $InstallPath -ne "") {
-            Write-Log "Installing $DistroName to custom path: $InstallPath"
-            if (-not (Test-Path $InstallPath)) {
-                New-Item -ItemType Directory -Path $InstallPath -Force
-            }
+        Write-Log "Installing $DistroName to path: $InstallPath"
+        if (-not (Test-Path $InstallPath)) {
+            New-Item -ItemType Directory -Path $InstallPath -Force
+        }
 
-            $rootfsPath = Join-Path $InstallPath "ubuntu-rootfs.tar.gz"
-            $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz"
+        $rootfsPath = Join-Path $InstallPath "ubuntu-rootfs.tar.gz"
+        $rootfsUrl = "https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz"
 
-            Write-Log "Downloading Ubuntu rootfs (~130MB)..."
+        Write-Log "Downloading Ubuntu rootfs (~130MB)..."
 
-            Add-Type -AssemblyName System.Net.Http
-            $httpClient = [System.Net.Http.HttpClient]::new()
-            $httpClient.Timeout = [System.TimeSpan]::FromMinutes(10)
+        Add-Type -AssemblyName System.Net.Http
+        $httpClient = [System.Net.Http.HttpClient]::new()
+        $httpClient.Timeout = [System.TimeSpan]::FromMinutes(10)
 
-            $response = $httpClient.GetAsync($rootfsUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-            $response.EnsureSuccessStatusCode()
+        $response = $httpClient.GetAsync($rootfsUrl, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $response.EnsureSuccessStatusCode()
 
-            $totalBytes = $response.Content.Headers.ContentLength
-            $totalMB = if ($totalBytes) { [math]::Round($totalBytes / 1MB, 1) } else { $null }
-            $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-            $fileStream = [System.IO.File]::Create($rootfsPath)
+        $totalBytes = $response.Content.Headers.ContentLength
+        $totalMB = if ($totalBytes) { [math]::Round($totalBytes / 1MB, 1) } else { $null }
+        $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $fileStream = [System.IO.File]::Create($rootfsPath)
 
-            $buffer = New-Object byte[] 81920
-            $totalRead = 0
-            $lastReportedPct = -1
+        $buffer = New-Object byte[] 81920
+        $totalRead = 0
+        $lastReportedPct = -1
 
-            while ($true) {
-                $read = $stream.Read($buffer, 0, $buffer.Length)
-                if ($read -le 0) { break }
-                $fileStream.Write($buffer, 0, $read)
-                $totalRead += $read
+        while ($true) {
+            $read = $stream.Read($buffer, 0, $buffer.Length)
+            if ($read -le 0) { break }
+            $fileStream.Write($buffer, 0, $read)
+            $totalRead += $read
 
-                if ($totalBytes -and $totalBytes -gt 0) {
-                    $pct = [math]::Floor(($totalRead / $totalBytes) * 100)
-                    if ($pct -ge $lastReportedPct + 5 -or $pct -eq 100) {
-                        $readMB = [math]::Round($totalRead / 1MB, 1)
-                        Write-Log "Downloading Ubuntu rootfs... $($pct)% ($readMB MB / $totalMB MB)"
-                        $lastReportedPct = $pct
-                    }
+            if ($totalBytes -and $totalBytes -gt 0) {
+                $pct = [math]::Floor(($totalRead / $totalBytes) * 100)
+                if ($pct -ge $lastReportedPct + 5 -or $pct -eq 100) {
+                    $readMB = [math]::Round($totalRead / 1MB, 1)
+                    Write-Log "Downloading Ubuntu rootfs... $($pct)% ($readMB MB / $totalMB MB)"
+                    $lastReportedPct = $pct
                 }
             }
-
-            $fileStream.Close()
-            $stream.Close()
-            $httpClient.Dispose()
-
-            Write-Log "Download complete. ($([math]::Round($totalRead / 1MB, 1)) MB)"
-
-            # Clean up any leftover VHDX from a previous failed import
-            # (causes ERROR_FILE_EXISTS even when no distro is registered)
-            $leftoverVhdx = Join-Path $InstallPath "ext4.vhdx"
-            if (Test-Path $leftoverVhdx) {
-                Write-Log "Found leftover ext4.vhdx from previous failed install. Removing..."
-                Remove-Item $leftoverVhdx -Force
-            }
-
-            Write-Log "Importing $DistroName to $InstallPath..."
-            wsl --import $DistroName $InstallPath $rootfsPath --version 2
-
-            Remove-Item $rootfsPath -Force
-        } else {
-            Write-Log "Installing Ubuntu without launch (Default path)..."
-            wsl --install -d Ubuntu --no-launch
         }
+
+        $fileStream.Close()
+        $stream.Close()
+        $httpClient.Dispose()
+
+        Write-Log "Download complete. ($([math]::Round($totalRead / 1MB, 1)) MB)"
+
+        # Clean up any leftover VHDX from a previous failed import
+        # (causes ERROR_FILE_EXISTS even when no distro is registered)
+        $leftoverVhdx = Join-Path $InstallPath "ext4.vhdx"
+        if (Test-Path $leftoverVhdx) {
+            Write-Log "Found leftover ext4.vhdx from previous failed install. Removing..."
+            Remove-Item $leftoverVhdx -Force
+        }
+
+        Write-Log "Importing $DistroName to $InstallPath..."
+        wsl --import $DistroName $InstallPath $rootfsPath --version 2
+
+        Remove-Item $rootfsPath -Force
 
         Write-Log "Waiting for WSL to list $DistroName..."
         $retry = 0
@@ -159,6 +146,7 @@ if ! id -u openfork > /dev/null 2>&1; then
 fi
 mkdir -p /etc
 echo -e "[boot]\nsystemd=true\n[user]\ndefault=openfork" > /etc/wsl.conf
+echo "managed-by=openfork" > /etc/openfork-managed
 "@
         $provisionScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/provision.sh && bash /tmp/provision.sh"
 
@@ -270,6 +258,7 @@ echo "[Linux] Configuring Docker to listen on TCP..."
 # Create or modify daemon.json to listen on tcp and unix socket
 sudo mkdir -p /etc/docker
 echo '{"hosts": ["tcp://0.0.0.0:2375", "unix:///var/run/docker.sock"], "tls": false}' | sudo tee /etc/docker/daemon.json
+echo "managed-by=openfork" | sudo tee /etc/openfork-managed > /dev/null
 
 # Override docker.service to not pass -H fd:// which conflicts with daemon.json hosts
 sudo mkdir -p /etc/systemd/system/docker.service.d
