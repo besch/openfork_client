@@ -8,6 +8,7 @@ comfyui-storage/build_and_push.py
 
 __pycache__
 venv
+.venv
 input
 cu128-slim
 build
