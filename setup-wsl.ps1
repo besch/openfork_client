@@ -20,7 +20,10 @@ function Write-Log {
     param([string]$Message)
     Write-Host "[OpenFork Setup] $Message" -ForegroundColor Cyan
     $ts = Get-Date -Format "HH:mm:ss"
-    Add-Content -Path $progressLog -Value "[$ts] $Message" -Encoding UTF8
+    # Suppress sharing-violation errors: Node.js polls this file every 500 ms, and
+    # $ErrorActionPreference = "Stop" would otherwise terminate the script if Add-Content
+    # races with a concurrent read in the Electron process.
+    try { Add-Content -Path $progressLog -Value "[$ts] $Message" -Encoding UTF8 -ErrorAction Stop } catch { }
 }
 
 function Check-IsAdmin {
@@ -151,46 +154,32 @@ echo "managed-by=openfork" > /etc/openfork-managed
         $provisionScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/provision.sh && bash /tmp/provision.sh"
 
         Write-Log "Restarting WSL to apply new default user and systemd setting..."
-        wsl --shutdown
+        wsl --terminate $DistroName
         Start-Sleep -Seconds 2
      } else {
-         Write-Log "$DistroName is already installed. Ensuring systemd is enabled and default user is openfork..."
-         # Ensure the openfork user exists
-         $userExists = wsl -d $DistroName --user root -e bash -c "id -u openfork > /dev/null 2>&1 && echo 'true' || echo 'false'"
-         if ($userExists -eq 'false') {
-             Write-Log "Creating openfork user..."
-             $userScript = @"
+         Write-Log "$DistroName is already installed. Ensuring OpenFork user and WSL config..."
+         $repairScript = @"
+set -e
 if ! id -u openfork > /dev/null 2>&1; then
     useradd -m -s /bin/bash openfork
     echo "openfork:openfork" | chpasswd
     usermod -aG sudo openfork
     echo "openfork ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/openfork
 fi
-"@
-             $userScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/user.sh && bash /tmp/user.sh"
-         }
-
-         # Ensure wsl.conf has systemd=true and default user openfork
-         $desiredWslConf = "[boot]`nsystemd=true`n[user]`ndefault=openfork`n"
-         $currentWslConf = wsl -d $DistroName --user root -e bash -c "cat /etc/wsl.conf 2>$null"
-         if ($currentWslConf -ne $desiredWslConf) {
-             Write-Log "Updating wsl.conf to desired state..."
-             $confScript = @"
 mkdir -p /etc
-echo -e '"$desiredWslConf"' > /etc/wsl.conf
+cat > /etc/wsl.conf <<'EOF'
+[boot]
+systemd=true
+[user]
+default=openfork
+EOF
+echo "managed-by=openfork" > /etc/openfork-managed
 "@
-             $confScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/conf.sh && bash /tmp/conf.sh"
-             # Check if we changed the systemd setting (from not having systemd=true to having it)
-             $oldSystemd = $currentWslConf -match 'systemd=true'
-             $newSystemd = $desiredWslConf -match 'systemd=true'
-             if (-not $oldSystemd -and $newSystemd) {
-                 Write-Log "Systemd was just enabled. Restarting WSL..."
-                 wsl --shutdown
-                 Start-Sleep -Seconds 2
-             }
-         } else {
-             Write-Log "WSL conf is already correct."
-         }
+         $repairScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/repair.sh && bash /tmp/repair.sh"
+
+         Write-Log "Restarting WSL to apply OpenFork configuration..."
+         wsl --terminate $DistroName
+         Start-Sleep -Seconds 2
      }
 } catch {
     Write-Log "Detailed Error: $($_.Exception.Message)"
@@ -211,104 +200,152 @@ try {
 
 Write-Log "Ensuring WSL is running and executing setup script..."
 
-$script = @"
+$script = @'
 #!/bin/bash
-set -e
+set -eo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Prevent apt/dpkg/needrestart from opening interactive prompts when stdin is not a terminal.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
 
-echo "[Linux] Waiting for network connectivity..."
+# Write progress directly to the Windows log file via the WSL /mnt/ mount.
+# This bypasses the PowerShell stdout pipe entirely, avoiding pipe-buffer deadlocks
+# when apt outputs bursts of text faster than PowerShell can process them.
+WLOG=/mnt/c/Windows/Temp/openfork_install_progress.log
+log() {
+    local ts
+    ts=$(date '+%H:%M:%S')
+    printf '[%s] %s\n' "$ts" "$*" >> "$WLOG" 2>/dev/null || true
+}
+
+log "[Linux] Waiting for network connectivity..."
 for i in {1..15}; do
-    if curl -fsSL --connect-timeout 3 https://get.docker.com -o /dev/null 2>/dev/null; then
-        echo "[Linux] Network is ready."
+    if curl -fsSL --connect-timeout 3 https://download.docker.com -o /dev/null 2>/dev/null; then
+        log "[Linux] Network is ready."
         break
     fi
-    echo "[Linux] Waiting for network... (attempt \$i/15)"
+    log "[Linux] Waiting for network... (attempt $i/15)"
     sleep 2
 done
 
-echo "[Linux] Checking for Docker..."
+log "[Linux] Checking for Docker..."
 if ! command -v docker &> /dev/null; then
-    echo "[Linux] Installing Docker Engine..."
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sed -i 's/sleep 20/sleep 1/g' get-docker.sh
-    echo "[Linux] Downloading and installing Docker packages..."
-    sudo sh get-docker.sh > /dev/null
-    rm -f get-docker.sh
-    echo "[Linux] Docker Engine installed successfully."
+    log "[Linux] Installing Docker Engine..."
+    sudo apt-get update -qq 2>&1 | while IFS= read -r line; do log "$line"; done
+    log "[Linux] Installing ca-certificates and curl..."
+    sudo apt-get install -y ca-certificates curl 2>&1 | while IFS= read -r line; do log "$line"; done
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+    UBUNTU_CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+    ARCH=$(dpkg --print-architecture)
+    echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${UBUNTU_CODENAME} stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt-get update -qq 2>&1 | while IFS= read -r line; do log "$line"; done
+    log "[Linux] Downloading and installing Docker packages..."
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+        2>&1 | while IFS= read -r line; do log "$line"; done
+    log "[Linux] Docker Engine installed successfully."
 else
-    echo "[Linux] Docker is already installed."
+    log "[Linux] Docker is already installed."
 fi
 
-echo "[Linux] Checking for NVIDIA Container Toolkit..."
+log "[Linux] Checking for NVIDIA Container Toolkit..."
 if ! command -v nvidia-ctk &> /dev/null; then
-    echo "[Linux] Installing NVIDIA Container Toolkit..."
+    log "[Linux] Installing NVIDIA Container Toolkit..."
     curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
     curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
       sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
       sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-    echo "[Linux] Updating package lists for NVIDIA toolkit..."
-    sudo apt-get update -qq
-    echo "[Linux] Downloading and installing NVIDIA toolkit packages..."
-    sudo apt-get install -y -qq nvidia-container-toolkit > /dev/null
+    log "[Linux] Updating package lists for NVIDIA toolkit..."
+    sudo apt-get update -qq 2>&1 | while IFS= read -r line; do log "$line"; done
+    log "[Linux] Downloading and installing NVIDIA toolkit packages..."
+    sudo apt-get install -y nvidia-container-toolkit 2>&1 | while IFS= read -r line; do log "$line"; done
     sudo nvidia-ctk runtime configure --runtime=docker
 else
-    echo "[Linux] NVIDIA Container Toolkit is already installed."
+    log "[Linux] NVIDIA Container Toolkit is already installed."
 fi
 
-echo "[Linux] Configuring Docker to listen on TCP..."
-# Create or modify daemon.json to listen on tcp and unix socket
+log "[Linux] Configuring Docker to listen on TCP..."
 sudo mkdir -p /etc/docker
 echo '{"hosts": ["tcp://0.0.0.0:2375", "unix:///var/run/docker.sock"], "tls": false}' | sudo tee /etc/docker/daemon.json
 echo "managed-by=openfork" | sudo tee /etc/openfork-managed > /dev/null
 
-# Override docker.service to not pass -H fd:// which conflicts with daemon.json hosts
 sudo mkdir -p /etc/systemd/system/docker.service.d
 echo -e "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd" | sudo tee /etc/systemd/system/docker.service.d/override.conf
 
-# Start docker
-if command -v systemctl &> /dev/null; then
-    sudo systemctl daemon-reload
-    sudo systemctl enable docker
-    sudo systemctl restart docker
-else
-    # Fallback to service if systemd somehow isn't active
-    sudo service docker restart
-fi
+is_systemd_active() {
+    [ "$(cat /proc/1/comm 2>/dev/null | tr -d '\r\n')" = "systemd" ]
+}
 
-# Ensure docker is ready before proceeding
-echo "[Linux] Waiting for Docker daemon to be ready..."
+start_docker_service() {
+    if command -v systemctl >/dev/null 2>&1 && is_systemd_active; then
+        log "[Linux] Starting Docker with systemd..."
+        sudo systemctl daemon-reload
+        sudo systemctl enable docker
+        sudo systemctl restart docker
+        return
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        log "[Linux] systemctl is installed, but systemd is not active yet in this WSL session."
+    fi
+
+    if command -v service >/dev/null 2>&1; then
+        log "[Linux] Starting Docker with service..."
+        if sudo service docker restart; then
+            return
+        fi
+        if sudo service docker start; then
+            return
+        fi
+    fi
+
+    log "[Linux] Falling back to launching dockerd directly..."
+    sudo mkdir -p /var/log/openfork
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x dockerd >/dev/null 2>&1; then
+        return
+    fi
+    sudo nohup /usr/bin/dockerd >/var/log/openfork/dockerd.log 2>&1 &
+}
+
+start_docker_service
+
+log "[Linux] Waiting for Docker daemon to be ready..."
 sleep 2
 for i in {1..15}; do
     if sudo docker info &> /dev/null; then
-        echo "[Linux] Docker daemon is running."
+        log "[Linux] Docker daemon is running."
         break
     fi
     sleep 1
 done
 
-echo "[Linux] OpenFork AI Engine Setup Complete."
+log "[Linux] OpenFork AI Engine Setup Complete."
 
-# Drop a pyrightconfig.json at the root of the distro so VS Code's Pylance
-# language server does not index the entire WSL filesystem when it detects
-# the new distro. Without this, Pylance crawls all Docker/system Python files
-# and can spike to 90% RAM on developer machines.
 echo '{"exclude":["/**"]}' | sudo tee /pyrightconfig.json > /dev/null
-"@
+'@
 
 # Write the bash script to a Windows temp file to avoid stdin pipe issues when running elevated.
 # When PowerShell is launched via Start-Process -Verb RunAs, the stdin pipe is broken,
 # so piping to `wsl ... cat >` silently produces an empty file. Using a file on disk is reliable.
 Write-Log "Writing setup script to temp file..."
-$tempScriptPath = "C:\Windows\Temp\openfork_setup.sh"
-[System.IO.File]::WriteAllText($tempScriptPath, $script.Replace("`r`n", "`n"), [System.Text.Encoding]::UTF8)
+$tempScriptDir = Join-Path ([System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)) "OpenFork\Temp"
+if (-not (Test-Path $tempScriptDir)) {
+    New-Item -ItemType Directory -Path $tempScriptDir -Force | Out-Null
+}
+$tempScriptPath = Join-Path $tempScriptDir "openfork_setup.sh"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($tempScriptPath, $script.Replace("`r`n", "`n"), $utf8NoBom)
 
 # Convert Windows path to WSL /mnt/ path (works for any drive letter)
 $driveLetter = $tempScriptPath[0].ToString().ToLower()
 $wslScriptPath = "/mnt/$driveLetter/" + $tempScriptPath.Substring(3).Replace('\', '/')
 
 Write-Log "Running Docker setup commands inside WSL $DistroName..."
-wsl -d $DistroName --user root -- bash $wslScriptPath 2>&1 | ForEach-Object {
-    Write-Log "$_"
-}
+# Run the bash script directly — no PowerShell pipe. The script writes progress to the
+# Windows log file itself via /mnt/c/... to avoid pipe-buffer deadlocks with apt output.
+wsl -d $DistroName --user root -- bash $wslScriptPath
 if ($LASTEXITCODE -ne 0) {
     Remove-Item $tempScriptPath -Force -ErrorAction SilentlyContinue
     Write-Log "ERROR: Setup script inside WSL exited with code $LASTEXITCODE"
