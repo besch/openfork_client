@@ -159,6 +159,10 @@ class DockerProdManager:
         self.services_config = {}
 
     def _is_transient_transport_error(self, exc: Exception) -> bool:
+        if isinstance(exc, docker.errors.APIError):
+            if getattr(exc, "status_code", None) in (409, 400, 404, 500):
+                return False
+
         if isinstance(
             exc,
             (
@@ -174,7 +178,6 @@ class DockerProdManager:
             "connection aborted",
             "timed out",
             "timeout",
-            "npipe",
             "named pipe",
             "docker daemon",
             "protocolerror",
@@ -236,6 +239,57 @@ class DockerProdManager:
         except Exception as e:
             logging.debug(f"Could not inspect container '{container_name}': {e}")
             return None
+
+    def _list_containers_by_name(self, container_name: str):
+        try:
+            matches = self.client.containers.list(
+                all=True, filters={"name": container_name}
+            )
+            return [
+                c
+                for c in matches
+                if c.name == container_name or c.name == f"/{container_name}"
+            ]
+        except Exception as e:
+            logging.debug(f"Container list lookup failed for '{container_name}': {e}")
+            return []
+
+    def _force_remove_by_name(self, container_name: str):
+        existing = self._get_existing_container(container_name)
+        if existing is not None:
+            try:
+                existing.remove(force=True)
+                logging.info(f"Force-removed conflicting container '{container_name}'.")
+                return
+            except Exception as e:
+                logging.debug(
+                    f"containers.get().remove() failed for '{container_name}': {e}"
+                )
+
+        try:
+            matches = self.client.containers.list(
+                all=True, filters={"name": container_name}
+            )
+            for c in matches:
+                if c.name == container_name or c.name == f"/{container_name}":
+                    try:
+                        c.remove(force=True)
+                        logging.info(
+                            f"Force-removed conflicting container '{container_name}' "
+                            f"(id={c.short_id}) via list fallback."
+                        )
+                        return
+                    except Exception as e:
+                        logging.debug(
+                            f"list-based remove failed for '{container_name}': {e}"
+                        )
+        except Exception as e:
+            logging.debug(f"Container list fallback failed for '{container_name}': {e}")
+
+        logging.warning(
+            f"Could not find or remove conflicting container '{container_name}' "
+            f"by name. Docker may be in an inconsistent state."
+        )
 
     def set_docker_image_map(self, image_map: dict):
         if image_map:
@@ -437,10 +491,23 @@ class DockerProdManager:
                     container.remove(force=True)
 
         except docker.errors.NotFound:
-            logging.info(
-                f"No existing container named '{container_name}' found. Proceeding to create a new one."
-            )
-            pass  # Container does not exist, which is fine.
+            matches = self._list_containers_by_name(container_name)
+            if matches:
+                for c in matches:
+                    try:
+                        c.remove(force=True)
+                        logging.info(
+                            f"Removed ghost container '{container_name}' "
+                            f"(id={c.short_id}) via list fallback."
+                        )
+                    except Exception as cleanup_err:
+                        logging.debug(
+                            f"Could not remove ghost container '{container_name}': {cleanup_err}"
+                        )
+            else:
+                logging.info(
+                    f"No existing container named '{container_name}' found. Proceeding to create a new one."
+                )
         except docker.errors.APIError as e:
             logging.error(
                 f"Error checking/removing existing container '{container_name}': {e}. Attempting to continue."
@@ -483,14 +550,31 @@ class DockerProdManager:
             )
             if command:
                 run_kwargs["command"] = command
-            max_attempts = 2
+            max_attempts = 3
             for attempt in range(1, max_attempts + 1):
                 try:
                     self.client.containers.run(**run_kwargs)
                     logging.info(f"Container '{container_name}' started successfully.")
                     return
                 except Exception as e:
-                    if attempt < max_attempts and self._is_transient_transport_error(e):
+                    is_409 = (
+                        isinstance(e, docker.errors.APIError)
+                        and getattr(e, "status_code", None) == 409
+                    )
+
+                    if attempt < max_attempts and (
+                        self._is_transient_transport_error(e) or is_409
+                    ):
+                        if is_409:
+                            logging.warning(
+                                f"Container name conflict for "
+                                f"'{container_name}' (attempt {attempt}/{max_attempts}). "
+                                f"Force-removing stale container."
+                            )
+                            self._force_remove_by_name(container_name)
+                            time.sleep(2)
+                            continue
+
                         logging.warning(
                             f"Transient Docker transport error while starting "
                             f"'{container_name}' (attempt {attempt}/{max_attempts}): {e}"
