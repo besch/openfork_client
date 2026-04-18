@@ -5,6 +5,7 @@ Docker Build and Push Script with Retry Logic
 Builds and pushes Docker images one at a time with retry capability.
 """
 
+import os
 import subprocess
 import sys
 import time
@@ -49,33 +50,33 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.inspatio-world-24gb", "beschiak/openfork-inspatio-world-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.anima-16gb", "beschiak/openfork-anima-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.anima-8gb", "beschiak/openfork-anima-8gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.llm", "beschiak/openfork-llm:latest", build=True, push=True),
+    ImageConfig("Dockerfile.llm", "beschiak/openfork-llm:latest", push=True),
     # ERNIE-Image
-    ImageConfig(
-        "Dockerfile.ernie-image-8gb",
-        "beschiak/openfork-ernie-image-8gb:latest",
-        build=True,
-        push=True,
-    ),
-    ImageConfig(
-        "Dockerfile.ernie-image-16gb",
-        "beschiak/openfork-ernie-image-16gb:latest",
-        build=True,
-        push=True,
-    ),
-    ImageConfig(
-        "Dockerfile.ernie-image-24gb",
-        "beschiak/openfork-ernie-image-24gb:latest",
-        build=True,
-        push=True,
-    ),
+    # ImageConfig(
+    #     "Dockerfile.ernie-image-8gb",
+    #     "beschiak/openfork-ernie-image-8gb:latest",
+    #     build=True,
+    #     direct_push=False,
+    # ),
+    # ImageConfig(
+    #     "Dockerfile.ernie-image-16gb",
+    #     "beschiak/openfork-ernie-image-16gb:latest",
+    #     build=True,
+    #     push=True,
+    # ),
+    # ImageConfig(
+    #     "Dockerfile.ernie-image-24gb",
+    #     "beschiak/openfork-ernie-image-24gb:latest",
+    #     build=True,
+    #     push=True,
+    # ),
 ]
 
 PUSH_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 1200  # 20 minutes
 
 
-def run_command(command: List[str], description: str) -> bool:
+def run_command(command: List[str], description: str, extra_env: dict = None) -> bool:
     """
     Run a command and return True if successf ul, False otherwise.
     """
@@ -84,11 +85,14 @@ def run_command(command: List[str], description: str) -> bool:
     print(f"   Command: {' '.join(command)}")
     print("=" * 60)
 
+    env = {**os.environ, **(extra_env or {})}
+
     try:
         result = subprocess.run(
             command,
             check=True,
             text=True,
+            env=env,
         )
         print(f"✅ {description} - SUCCESS")
         return True
@@ -150,7 +154,9 @@ def build_image(
         print(f"\n📦 Building {tag} (single attempt)")
 
     command.append(".")
-    return run_command(command, f"Building {tag}")
+    # Legacy builder avoids BuildKit daemon OOM on large downloads; incompatible with direct_push.
+    extra_env = {} if direct_push else {"DOCKER_BUILDKIT": "0"}
+    return run_command(command, f"Building {tag}", extra_env=extra_env)
 
 
 def push_image(tag: str) -> bool:
