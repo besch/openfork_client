@@ -3,6 +3,10 @@ ERNIE-Image Processor
 
 Processor for Baidu ERNIE-Image text-to-image generation.
 Communicates with the ERNIE-Image REST API (FastAPI server on port 8000).
+
+The Docker image bakes model weights at build time, so the container
+starts the API server immediately and loads the model in a background
+thread. The _wait_for_api method polls /health until model_loaded=true.
 """
 
 import os
@@ -20,16 +24,20 @@ class ErnieImageProcessor(BaseJobProcessor):
     Job processor for ERNIE-Image text-to-image generation via REST API.
 
     Endpoints:
-      POST /generate   - submit generation, returns job_id
+      POST /generate    - submit generation, returns job_id
       GET  /status/{id} - poll status
       GET  /output/{id} - download output image
-      GET  /health      - health check
+      GET  /health      - health check (model_loaded bool)
     """
 
     API_HOST = "127.0.0.1"
     API_PORT = 8000
-    POLL_INTERVAL = 3
-    MAX_WAIT_TIME = 600
+    POLL_INTERVAL = 3       # seconds between status polls after generation starts
+    # How long to wait for the model to finish loading after the container starts.
+    # With weights baked into the image this is typically 30-120s (just model load,
+    # no download). Set conservatively in case the host GPU is slow to initialise.
+    API_WAIT_TIMEOUT = 300  # seconds
+    MAX_WAIT_TIME = 600     # seconds for generation itself
 
     def __init__(self, client, job, shutdown_event):
         super().__init__(client, job, shutdown_event)
@@ -48,8 +56,8 @@ class ErnieImageProcessor(BaseJobProcessor):
 
         inputs = self.job.get("inputs") or {}
 
-        if not self._wait_for_api():
-            self._fail_job("ERNIE-Image API did not become available")
+        if not self._wait_for_api(timeout=self.API_WAIT_TIMEOUT):
+            self._fail_job("ERNIE-Image API / model did not become ready in time")
             return
 
         job_id = self._submit_generation(inputs)
@@ -109,9 +117,19 @@ class ErnieImageProcessor(BaseJobProcessor):
                 except OSError:
                     pass
 
-    def _wait_for_api(self, timeout: int = 600) -> bool:
+    def _wait_for_api(self, timeout: int = 300) -> bool:
+        """
+        Poll /health until the model reports model_loaded=true.
+
+        Because the model weights are baked into the image, the server starts
+        almost immediately and only needs time to load weights into GPU memory
+        (typically 30-120s). We distinguish between three phases and log each:
+          1. Server not yet reachable (container still starting)
+          2. Server reachable but model still loading
+          3. Model loaded and ready
+        """
         start_time = time.monotonic()
-        last_log = -30
+        last_log = -31  # force an immediate first log
 
         logging.info(
             f"Waiting for ERNIE-Image API at {self.api_base_url} (timeout: {timeout}s)..."
@@ -119,25 +137,39 @@ class ErnieImageProcessor(BaseJobProcessor):
 
         while time.monotonic() - start_time < timeout:
             if self.shutdown_event.is_set():
+                logging.warning("Shutdown requested while waiting for API.")
                 return False
 
             elapsed = int(time.monotonic() - start_time)
+
             try:
-                response = self.session.get(f"{self.api_base_url}/health", timeout=5)
+                response = self.session.get(
+                    f"{self.api_base_url}/health", timeout=5
+                )
                 if response.status_code == 200:
                     data = response.json()
                     if data.get("model_loaded"):
                         logging.info(
-                            f"ERNIE-Image API is ready after {elapsed}s (model: {data.get('model_id', 'unknown')})"
+                            f"ERNIE-Image API ready after {elapsed}s "
+                            f"(model: {data.get('model_id', 'unknown')})"
                         )
                         return True
-                    status = data.get("status", "unknown")
+
+                    # Server is up but model is still loading — log every 30s
                     if elapsed - last_log >= 30:
-                        logging.info(
-                            f"ERNIE-Image API reachable but model not loaded (status={status}, {elapsed}/{timeout}s)"
+                        api_status = data.get("status", "unknown")
+                        api_error = data.get("error")
+                        msg = (
+                            f"ERNIE-Image API reachable, model loading "
+                            f"(status={api_status}, {elapsed}/{timeout}s)"
                         )
+                        if api_error:
+                            msg += f" | error: {api_error}"
+                        logging.info(msg)
                         last_log = elapsed
+
             except requests.exceptions.RequestException:
+                # Container may still be starting — log every 30s
                 if elapsed - last_log >= 30:
                     logging.info(
                         f"ERNIE-Image API not reachable yet ({elapsed}/{timeout}s)"
@@ -145,6 +177,10 @@ class ErnieImageProcessor(BaseJobProcessor):
                     last_log = elapsed
 
             time.sleep(5)
+
+        logging.error(
+            f"ERNIE-Image API did not become ready within {timeout}s"
+        )
         return False
 
     def _submit_generation(self, inputs: dict) -> Optional[str]:
@@ -201,7 +237,7 @@ class ErnieImageProcessor(BaseJobProcessor):
             except requests.exceptions.RequestException:
                 pass
             time.sleep(self.POLL_INTERVAL)
-        return {"status": "failed", "error": "Timeout"}
+        return {"status": "failed", "error": "Timeout waiting for generation"}
 
     def _download_output(self, api_job_id: str) -> Optional[str]:
         try:
@@ -228,12 +264,12 @@ class ErnieImageProcessor(BaseJobProcessor):
 
     def _resolve_dimensions(self, aspect_ratio: Optional[str]) -> tuple:
         ratios = {
-            "1:1": (1024, 1024),
+            "1:1":  (1024, 1024),
             "16:9": (1344, 768),
             "9:16": (768, 1344),
-            "4:3": (1152, 896),
-            "3:4": (896, 1152),
-            "3:2": (1216, 832),
-            "2:3": (832, 1216),
+            "4:3":  (1152, 896),
+            "3:4":  (896, 1152),
+            "3:2":  (1216, 832),
+            "2:3":  (832, 1216),
         }
         return ratios.get(aspect_ratio, (1024, 1024))

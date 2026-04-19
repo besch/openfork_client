@@ -6,19 +6,20 @@ Baidu ERNIE-Image text-to-image generation via diffusers pipeline.
 Supports two model variants via ERNIE_MODEL_ID env var:
   - baidu/ERNIE-Image      (standard, 50 steps)
   - baidu/ERNIE-Image-Turbo (turbo, 8 steps)
+
+Model weights are expected to be pre-baked into the Docker image at /app/models.
+The server starts immediately and loads the model in a background thread so
+that /health is reachable right away and the client can start polling.
 """
 
 import os
 import uuid
 import logging
 import time
-import base64
-import io
 from pathlib import Path
 from typing import Optional
 
 import torch
-from PIL import Image
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
@@ -33,15 +34,18 @@ WORK_DIR = Path("/app")
 OUTPUT_DIR = WORK_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-jobs = {}
+jobs: dict = {}
 
 pipe = None
 model_loading = False
-model_error = None
+model_error: Optional[str] = None
 
-MODEL_ID = os.environ.get("ERNIE_MODEL_ID", "baidu/ERNIE-Image")
-DEFAULT_STEPS = int(os.environ.get("ERNIE_DEFAULT_STEPS", "50"))
-MODEL_DTYPE = os.environ.get("ERNIE_DTYPE", "auto")
+MODEL_ID = os.environ.get("ERNIE_MODEL_ID", "baidu/ERNIE-Image-Turbo")
+# local_files_only=True because weights are baked into the image.
+# Falls back to downloading if the cache is somehow missing (e.g. dev builds).
+HF_HOME = os.environ.get("HF_HOME", "/app/models")
+DEFAULT_STEPS = int(os.environ.get("ERNIE_DEFAULT_STEPS", "8"))
+MODEL_DTYPE = os.environ.get("ERNIE_DTYPE", "fp16")
 
 
 class GenerateRequest(BaseModel):
@@ -58,35 +62,56 @@ class HealthResponse(BaseModel):
     status: str
     model_id: str
     model_loaded: bool
+    error: Optional[str] = None
 
 
-def load_model():
+def _resolve_dtype() -> torch.dtype:
+    if MODEL_DTYPE == "bf16":
+        return torch.bfloat16
+    if MODEL_DTYPE == "fp16":
+        return torch.float16
+    if MODEL_DTYPE == "fp8":
+        return torch.float8_e4m3fn
+    # auto
+    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+
+def load_model() -> None:
     global pipe, model_loading, model_error
     model_loading = True
     try:
         from diffusers import DiffusionPipeline
 
-        logger.info(f"Loading ERNIE-Image model: {MODEL_ID} (dtype={MODEL_DTYPE})")
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = _resolve_dtype()
 
-        if MODEL_DTYPE == "auto":
-            dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-        elif MODEL_DTYPE == "bf16":
-            dtype = torch.bfloat16
-        elif MODEL_DTYPE == "fp16":
-            dtype = torch.float16
-        elif MODEL_DTYPE == "fp8":
-            dtype = torch.float8_e4m3fn
-        else:
-            dtype = torch.bfloat16
+        logger.info(
+            f"Loading ERNIE-Image model: {MODEL_ID} | device={device} | dtype={dtype}"
+        )
 
-        pipe = DiffusionPipeline.from_pretrained(
-            MODEL_ID,
-            torch_dtype=dtype,
-            trust_remote_code=True,
-        ).to(device)
+        # Try local cache first (baked into image), fall back to HF download.
+        try:
+            pipe = DiffusionPipeline.from_pretrained(
+                MODEL_ID,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+                local_files_only=True,
+                cache_dir=HF_HOME,
+            ).to(device)
+            logger.info("Model loaded from local cache.")
+        except Exception as local_err:
+            logger.warning(
+                f"Local cache load failed ({local_err}). Falling back to HF download..."
+            )
+            pipe = DiffusionPipeline.from_pretrained(
+                MODEL_ID,
+                torch_dtype=dtype,
+                trust_remote_code=True,
+                cache_dir=HF_HOME,
+            ).to(device)
+            logger.info("Model downloaded and loaded from HuggingFace.")
 
-        logger.info(f"ERNIE-Image model loaded on {device} with dtype {dtype}")
+        logger.info(f"ERNIE-Image model ready on {device} with dtype {dtype}")
     except Exception as e:
         logger.error(f"Failed to load ERNIE-Image model: {e}", exc_info=True)
         model_error = str(e)
@@ -94,7 +119,7 @@ def load_model():
         model_loading = False
 
 
-def run_generation(job_id: str, request: GenerateRequest):
+def run_generation(job_id: str, request: GenerateRequest) -> None:
     try:
         jobs[job_id]["status"] = "processing"
         logger.info(f"Starting generation for job {job_id}: {request.prompt[:80]}...")
@@ -134,7 +159,7 @@ def run_generation(job_id: str, request: GenerateRequest):
 
 
 @asynccontextmanager
-async def lifespan(app_instance):
+async def lifespan(app_instance: FastAPI):
     import threading
 
     thread = threading.Thread(target=load_model, daemon=True)
@@ -145,22 +170,31 @@ async def lifespan(app_instance):
 app = FastAPI(title="ERNIE-Image API", lifespan=lifespan)
 
 
-@app.get("/health")
-async def health():
+@app.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    if pipe is not None:
+        status = "ok"
+    elif model_loading:
+        status = "loading"
+    else:
+        status = "error"
+
     return HealthResponse(
-        status="ok" if pipe is not None else ("loading" if model_loading else "error"),
+        status=status,
         model_id=MODEL_ID,
         model_loaded=pipe is not None,
+        error=model_error,
     )
 
 
 @app.post("/generate")
 async def generate(request: GenerateRequest):
-    global model_error
     if model_loading:
         raise HTTPException(status_code=503, detail="Model is still loading")
     if pipe is None:
-        raise HTTPException(status_code=503, detail=f"Model not loaded: {model_error}")
+        raise HTTPException(
+            status_code=503, detail=f"Model not loaded: {model_error}"
+        )
 
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
