@@ -46,6 +46,9 @@ MODEL_ID = os.environ.get("ERNIE_MODEL_ID", "baidu/ERNIE-Image-Turbo")
 HF_HOME = os.environ.get("HF_HOME", "/app/models")
 DEFAULT_STEPS = int(os.environ.get("ERNIE_DEFAULT_STEPS", "8"))
 MODEL_DTYPE = os.environ.get("ERNIE_DTYPE", "fp16")
+# Turbo needs guidance_scale=1.0; standard ERNIE-Image uses 4.0-5.0
+_IS_TURBO = "turbo" in MODEL_ID.lower()
+DEFAULT_CFG = float(os.environ.get("ERNIE_DEFAULT_CFG", "1.0" if _IS_TURBO else "4.0"))
 
 
 class GenerateRequest(BaseModel):
@@ -54,7 +57,8 @@ class GenerateRequest(BaseModel):
     width: int = 1024
     height: int = 1024
     num_inference_steps: Optional[int] = None
-    guidance_scale: float = 5.0
+    # -1 sentinel → use model default (1.0 for Turbo, 4.0 for standard)
+    guidance_scale: float = -1.0
     seed: Optional[int] = None
 
 
@@ -80,7 +84,7 @@ def load_model() -> None:
     global pipe, model_loading, model_error
     model_loading = True
     try:
-        from diffusers import DiffusionPipeline
+        from diffusers import ErnieImagePipeline
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = _resolve_dtype()
@@ -91,10 +95,9 @@ def load_model() -> None:
 
         # Try local cache first (baked into image), fall back to HF download.
         try:
-            pipe = DiffusionPipeline.from_pretrained(
+            pipe = ErnieImagePipeline.from_pretrained(
                 MODEL_ID,
                 torch_dtype=dtype,
-                trust_remote_code=True,
                 local_files_only=True,
                 cache_dir=HF_HOME,
             ).to(device)
@@ -103,10 +106,9 @@ def load_model() -> None:
             logger.warning(
                 f"Local cache load failed ({local_err}). Falling back to HF download..."
             )
-            pipe = DiffusionPipeline.from_pretrained(
+            pipe = ErnieImagePipeline.from_pretrained(
                 MODEL_ID,
                 torch_dtype=dtype,
-                trust_remote_code=True,
                 cache_dir=HF_HOME,
             ).to(device)
             logger.info("Model downloaded and loaded from HuggingFace.")
@@ -125,6 +127,7 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
         logger.info(f"Starting generation for job {job_id}: {request.prompt[:80]}...")
 
         steps = request.num_inference_steps or DEFAULT_STEPS
+        cfg = request.guidance_scale if request.guidance_scale >= 0 else DEFAULT_CFG
         generator = None
         if request.seed is not None:
             generator = torch.Generator(device="cpu").manual_seed(request.seed)
@@ -136,7 +139,7 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
             width=request.width,
             height=request.height,
             num_inference_steps=steps,
-            guidance_scale=request.guidance_scale,
+            guidance_scale=cfg,
             generator=generator,
         )
         elapsed = time.time() - start_time

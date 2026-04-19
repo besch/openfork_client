@@ -188,14 +188,14 @@ class ErnieImageProcessor(BaseJobProcessor):
             seed = inputs.get("seed")
             width, height = self._resolve_dimensions(inputs.get("aspect_ratio"))
             steps = inputs.get("steps")
-            cfg = inputs.get("cfg", 5.0)
+            cfg = inputs.get("cfg")  # None → API will apply model default (1.0 Turbo / 4.0 standard)
 
             payload = {
                 "prompt": self.positive_prompt,
                 "negative_prompt": inputs.get("negative_prompt", ""),
                 "width": width,
                 "height": height,
-                "guidance_scale": float(cfg),
+                "guidance_scale": float(cfg) if cfg is not None else -1.0,
             }
             if steps is not None:
                 payload["num_inference_steps"] = int(steps)
