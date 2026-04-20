@@ -197,5 +197,11 @@ if ! docker_ready && ! docker_ready_for_user; then
     exit 1
 fi
 
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^fstrim\.timer'; then
+    echo "[OpenFork] Enabling periodic filesystem trim..."
+    systemctl enable fstrim.timer >/dev/null 2>&1 || true
+    systemctl start fstrim.timer >/dev/null 2>&1 || true
+fi
+
 echo "[OpenFork] Setup Complete!"
 echo "[OpenFork] Note: If Docker was just installed, you may need to LOG OUT and LOG BACK IN to apply user permissions."
