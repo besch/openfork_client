@@ -321,6 +321,12 @@ for i in {1..15}; do
     sleep 1
 done
 
+if command -v systemctl >/dev/null 2>&1 && is_systemd_active; then
+    log "[Linux] Enabling periodic WSL disk trimming..."
+    sudo systemctl enable fstrim.timer >/dev/null 2>&1 || true
+    sudo systemctl start fstrim.timer >/dev/null 2>&1 || true
+fi
+
 log "[Linux] OpenFork AI Engine Setup Complete."
 
 echo '{"exclude":["/**"]}' | sudo tee /pyrightconfig.json > /dev/null
