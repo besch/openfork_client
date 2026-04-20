@@ -15,6 +15,7 @@ import logging
 import requests
 from typing import Optional
 
+from config import TimeoutConfig
 from services.processors.base import BaseJobProcessor
 from services.orchestrator_service import TokenExpiredError
 
@@ -36,8 +37,16 @@ class ErnieImageProcessor(BaseJobProcessor):
     # How long to wait for the model to finish loading after the container starts.
     # With weights baked into the image this is typically 30-120s (just model load,
     # no download). Set conservatively in case the host GPU is slow to initialise.
-    API_WAIT_TIMEOUT = 300  # seconds
-    MAX_WAIT_TIME = 600     # seconds for generation itself
+    API_WAIT_TIMEOUT = int(os.environ.get("ERNIE_IMAGE_API_WAIT_TIMEOUT", "300"))
+    # Generation on lower-VRAM GPUs can take much longer than 10 minutes even when
+    # the API is healthy and the GPU is fully utilized, so follow the broader
+    # workflow timeout by default and allow a processor-specific override.
+    MAX_WAIT_TIME = int(
+        os.environ.get(
+            "ERNIE_IMAGE_GENERATION_TIMEOUT",
+            str(TimeoutConfig.WORKFLOW_TIMEOUT),
+        )
+    )
 
     def __init__(self, client, job, shutdown_event):
         super().__init__(client, job, shutdown_event)
@@ -217,9 +226,11 @@ class ErnieImageProcessor(BaseJobProcessor):
 
     def _poll_for_completion(self, api_job_id: str) -> dict:
         start_time = time.time()
+        last_log = -30
         while time.time() - start_time < self.MAX_WAIT_TIME:
             if self.shutdown_event.is_set():
                 return {"status": "cancelled", "error": "Shutdown requested"}
+            elapsed = int(time.time() - start_time)
             try:
                 response = self.session.get(
                     f"{self.api_base_url}/status/{api_job_id}", timeout=10
@@ -234,10 +245,22 @@ class ErnieImageProcessor(BaseJobProcessor):
                             "status": "failed",
                             "error": data.get("error", "Generation failed"),
                         }
+                    elif elapsed - last_log >= 30:
+                        logging.info(
+                            "ERNIE-Image job %s still %s (%ss/%ss)",
+                            api_job_id,
+                            status or "processing",
+                            elapsed,
+                            self.MAX_WAIT_TIME,
+                        )
+                        last_log = elapsed
             except requests.exceptions.RequestException:
                 pass
             time.sleep(self.POLL_INTERVAL)
-        return {"status": "failed", "error": "Timeout waiting for generation"}
+        return {
+            "status": "failed",
+            "error": f"Timeout waiting for generation after {self.MAX_WAIT_TIME}s",
+        }
 
     def _download_output(self, api_job_id: str) -> Optional[str]:
         try:
