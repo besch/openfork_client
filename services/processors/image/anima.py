@@ -4,12 +4,26 @@ Anima Image Processor
 Processor for Anima text-to-image.
 """
 
+import copy
+from typing import Optional
+
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import ImageOutputHandler
 
 
 class AnimaTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
     """Processor for Anima text-to-image generation."""
+
+    _DIMENSIONS_BY_ASPECT_RATIO = {
+        "1:1": (1024, 1024),
+        "16:9": (1360, 768),
+        "9:16": (768, 1360),
+        "4:3": (1152, 864),
+        "3:4": (864, 1152),
+        "3:2": (1216, 832),
+        "2:3": (832, 1216),
+        "21:9": (1536, 640),
+    }
 
     def process(self):
         if not self.job:
@@ -22,8 +36,34 @@ class AnimaTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
         if not workflow_data:
             return
 
-        api_graph = workflow_data["prompt"]
         inputs = self.job.get("inputs", {})
+        api_graph = copy.deepcopy(workflow_data["prompt"])
+
+        self._apply_inputs_to_workflow(api_graph, inputs)
+
+        payload = {"prompt": api_graph}
+        outputs = self._trigger_and_get_output(payload)
+        if not outputs:
+            return
+
+        image_storage_path = self.handle_image_output(outputs)
+        if not image_storage_path:
+            return
+
+        self.orchestrator_service.update_job_status(
+            self.job_id,
+            "completed",
+            storage_path=image_storage_path,
+            thumbnail_storage_path=image_storage_path,
+            prompt=self.positive_prompt,
+        )
+
+    @classmethod
+    def _get_dimensions(cls, aspect_ratio: Optional[str]) -> tuple[int, int]:
+        return cls._DIMENSIONS_BY_ASPECT_RATIO.get(aspect_ratio or "1:1", (1024, 1024))
+
+    def _apply_inputs_to_workflow(self, api_graph, inputs) -> None:
+        width, height = self._get_dimensions(inputs.get("aspect_ratio"))
 
         for node_id, node in api_graph.items():
             class_type = node.get("class_type", "")
@@ -50,20 +90,6 @@ class AnimaTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
                     node["inputs"]["scheduler"] = inputs["scheduler"]
                 if "seed" in inputs:
                     node["inputs"]["seed"] = inputs["seed"]
-
-        payload = {"prompt": api_graph}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
-
-        image_storage_path = self.handle_image_output(outputs)
-        if not image_storage_path:
-            return
-
-        self.orchestrator_service.update_job_status(
-            self.job_id,
-            "completed",
-            storage_path=image_storage_path,
-            thumbnail_storage_path=image_storage_path,
-            prompt=self.positive_prompt,
-        )
+            elif class_type == "EmptyLatentImage":
+                node["inputs"]["width"] = width
+                node["inputs"]["height"] = height
