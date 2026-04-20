@@ -949,14 +949,26 @@ if [ "$START_ERNIE_IMAGE" = "true" ]; then
       export ERNIE_MODEL_ID="baidu/ERNIE-Image-Turbo"
       export ERNIE_DEFAULT_STEPS="8"
       export ERNIE_DTYPE="fp16"
+      export ERNIE_USE_PE="false"
+      export ERNIE_ENABLE_CPU_OFFLOAD="true"
+      export ERNIE_ENABLE_ATTENTION_SLICING="true"
+      export ERNIE_ENABLE_VAE_TILING="true"
     elif [[ "${SERVICE_TYPE}" == *"16gb"* ]]; then
       export ERNIE_MODEL_ID="baidu/ERNIE-Image"
       export ERNIE_DEFAULT_STEPS="28"
       export ERNIE_DTYPE="fp16"
+      export ERNIE_USE_PE="false"
+      export ERNIE_ENABLE_CPU_OFFLOAD="true"
+      export ERNIE_ENABLE_ATTENTION_SLICING="true"
+      export ERNIE_ENABLE_VAE_TILING="true"
     else
       export ERNIE_DTYPE="bf16"
+      export ERNIE_USE_PE="true"
+      export ERNIE_ENABLE_CPU_OFFLOAD="false"
+      export ERNIE_ENABLE_ATTENTION_SLICING="false"
+      export ERNIE_ENABLE_VAE_TILING="true"
     fi
-    log "ERNIE-Image config: model=$ERNIE_MODEL_ID dtype=$ERNIE_DTYPE steps=$ERNIE_DEFAULT_STEPS"
+    log "ERNIE-Image config: model=$ERNIE_MODEL_ID dtype=$ERNIE_DTYPE steps=$ERNIE_DEFAULT_STEPS use_pe=${ERNIE_USE_PE:-true} cpu_offload=${ERNIE_ENABLE_CPU_OFFLOAD:-false}"
     (cd /app && "$PYTHON_EXE" ernie_image_api.py > /tmp/ernie_image_api.log 2>&1) &
     wait_for_url "ERNIE-Image API" "http://127.0.0.1:8000/health" 600 "/tmp/ernie_image_api.log"
   else

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# ERNIE-Image Turbo (8GB) - Distilled turbo model, 8 steps
+# ERNIE-Image Turbo (8GB) - low-VRAM compatibility mode
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -14,6 +14,10 @@ ENV TRANSFORMERS_CACHE=/app/models
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image-Turbo
 ENV ERNIE_DEFAULT_STEPS=8
 ENV ERNIE_DTYPE=fp16
+ENV ERNIE_USE_PE=false
+ENV ERNIE_ENABLE_CPU_OFFLOAD=true
+ENV ERNIE_ENABLE_ATTENTION_SLICING=true
+ENV ERNIE_ENABLE_VAE_TILING=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
@@ -65,6 +69,10 @@ RUN python -m pip install --no-cache-dir \
 RUN mkdir -p /app/input /app/output /app/models
 
 # --- Bake model weights into the image at build time ---
+# This is still the official Turbo checkpoint, but the runtime defaults above
+# switch the service into a low-VRAM mode (CPU offload, PE disabled) so the
+# "8GB" tier behaves like a compatibility tier instead of trying to run the
+# full prompt-enhanced pipeline entirely on GPU.
 # Pass --build-arg HF_TOKEN=hf_xxx to avoid rate limits during build.
 # If no token is provided the download still works but may be slower.
 ARG HF_TOKEN=""

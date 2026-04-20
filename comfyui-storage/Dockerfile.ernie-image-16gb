@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# ERNIE-Image (16GB) - FP16 weights, standard model
+# ERNIE-Image (16GB) - reduced-memory standard model
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -14,6 +14,10 @@ ENV TRANSFORMERS_CACHE=/app/models
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image
 ENV ERNIE_DEFAULT_STEPS=28
 ENV ERNIE_DTYPE=fp16
+ENV ERNIE_USE_PE=false
+ENV ERNIE_ENABLE_CPU_OFFLOAD=true
+ENV ERNIE_ENABLE_ATTENTION_SLICING=true
+ENV ERNIE_ENABLE_VAE_TILING=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
@@ -65,6 +69,8 @@ RUN python -m pip install --no-cache-dir \
 RUN mkdir -p /app/input /app/output /app/models
 
 # --- Bake model weights into the image at build time ---
+# 16GB is a constrained tier for the full ERNIE-Image checkpoint, so default
+# to memory-saving runtime behavior and leave PE opt-in.
 # Pass --build-arg HF_TOKEN=hf_xxx to avoid rate limits during build.
 ARG HF_TOKEN=""
 RUN if [ -n "$HF_TOKEN" ]; then \

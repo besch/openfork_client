@@ -50,26 +50,26 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.inspatio-world-24gb", "beschiak/openfork-inspatio-world-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.anima-16gb", "beschiak/openfork-anima-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.anima-8gb", "beschiak/openfork-anima-8gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.llm", "beschiak/openfork-llm:latest", push=True),
+    # ImageConfig("Dockerfile.llm", "beschiak/openfork-llm:latest", push=True),
     # ERNIE-Image
-    # ImageConfig(
-    #     "Dockerfile.ernie-image-8gb",
-    #     "beschiak/openfork-ernie-image-8gb:latest",
-    #     build=True,
-    #     direct_push=False,
-    # ),
-    # ImageConfig(
-    #     "Dockerfile.ernie-image-16gb",
-    #     "beschiak/openfork-ernie-image-16gb:latest",
-    #     build=True,
-    #     push=True,
-    # ),
-    # ImageConfig(
-    #     "Dockerfile.ernie-image-24gb",
-    #     "beschiak/openfork-ernie-image-24gb:latest",
-    #     build=True,
-    #     push=True,
-    # ),
+    ImageConfig(
+        "Dockerfile.ernie-image-8gb",
+        "beschiak/openfork-ernie-image-8gb:latest",
+        build=True,
+        direct_push=True,
+    ),
+    ImageConfig(
+        "Dockerfile.ernie-image-16gb",
+        "beschiak/openfork-ernie-image-16gb:latest",
+        build=True,
+        push=True,
+    ),
+    ImageConfig(
+        "Dockerfile.ernie-image-24gb",
+        "beschiak/openfork-ernie-image-24gb:latest",
+        build=True,
+        push=True,
+    ),
 ]
 
 PUSH_ATTEMPTS = 4

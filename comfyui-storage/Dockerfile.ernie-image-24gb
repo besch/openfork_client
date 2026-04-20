@@ -14,6 +14,10 @@ ENV TRANSFORMERS_CACHE=/app/models
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image
 ENV ERNIE_DEFAULT_STEPS=50
 ENV ERNIE_DTYPE=bf16
+ENV ERNIE_USE_PE=true
+ENV ERNIE_ENABLE_CPU_OFFLOAD=false
+ENV ERNIE_ENABLE_ATTENTION_SLICING=false
+ENV ERNIE_ENABLE_VAE_TILING=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \

@@ -16,6 +16,7 @@ import os
 import uuid
 import logging
 import time
+import inspect
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,23 @@ _IS_TURBO = "turbo" in MODEL_ID.lower()
 DEFAULT_CFG = float(os.environ.get("ERNIE_DEFAULT_CFG", "1.0" if _IS_TURBO else "4.0"))
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+DEFAULT_USE_PE = _env_flag("ERNIE_USE_PE", True)
+ENABLE_CPU_OFFLOAD = _env_flag("ERNIE_ENABLE_CPU_OFFLOAD", False)
+ENABLE_ATTENTION_SLICING = _env_flag("ERNIE_ENABLE_ATTENTION_SLICING", False)
+ENABLE_VAE_TILING = _env_flag("ERNIE_ENABLE_VAE_TILING", False)
+GENERATOR_DEVICE = os.environ.get(
+    "ERNIE_GENERATOR_DEVICE",
+    "cuda" if torch.cuda.is_available() else "cpu",
+)
+
+
 class GenerateRequest(BaseModel):
     prompt: str
     negative_prompt: str = ""
@@ -60,6 +78,7 @@ class GenerateRequest(BaseModel):
     # -1 sentinel → use model default (1.0 for Turbo, 4.0 for standard)
     guidance_scale: float = -1.0
     seed: Optional[int] = None
+    use_pe: Optional[bool] = None
 
 
 class HealthResponse(BaseModel):
@@ -80,6 +99,46 @@ def _resolve_dtype() -> torch.dtype:
     return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 
+def _configure_pipeline_memory(pipe_instance, device: str) -> None:
+    if ENABLE_VAE_TILING and hasattr(pipe_instance, "enable_vae_tiling"):
+        try:
+            pipe_instance.enable_vae_tiling()
+            logger.info("Enabled VAE tiling for ERNIE-Image pipeline")
+        except Exception as exc:
+            logger.warning(f"enable_vae_tiling() failed: {exc}")
+
+    if ENABLE_ATTENTION_SLICING and hasattr(pipe_instance, "enable_attention_slicing"):
+        try:
+            pipe_instance.enable_attention_slicing()
+            logger.info("Enabled attention slicing for ERNIE-Image pipeline")
+        except Exception as exc:
+            logger.warning(f"enable_attention_slicing() failed: {exc}")
+
+    if ENABLE_CPU_OFFLOAD:
+        for method_name in ("enable_model_cpu_offload", "enable_sequential_cpu_offload"):
+            if not hasattr(pipe_instance, method_name):
+                continue
+            try:
+                method = getattr(pipe_instance, method_name)
+                params = inspect.signature(method).parameters
+                if "gpu_id" in params:
+                    method(gpu_id=0)
+                else:
+                    method()
+                logger.info("Enabled ERNIE-Image CPU offload via %s()", method_name)
+                return
+            except Exception as exc:
+                logger.warning("%s() failed: %s", method_name, exc)
+
+        logger.warning(
+            "ERNIE_ENABLE_CPU_OFFLOAD=true but no offload method could be applied; "
+            "falling back to full GPU placement."
+        )
+
+    pipe_instance.to(device)
+    logger.info("Placed ERNIE-Image pipeline on %s without CPU offload", device)
+
+
 def load_model() -> None:
     global pipe, model_loading, model_error
     model_loading = True
@@ -90,7 +149,15 @@ def load_model() -> None:
         dtype = _resolve_dtype()
 
         logger.info(
-            f"Loading ERNIE-Image model: {MODEL_ID} | device={device} | dtype={dtype}"
+            "Loading ERNIE-Image model: %s | device=%s | dtype=%s | "
+            "use_pe_default=%s | cpu_offload=%s | attention_slicing=%s | vae_tiling=%s",
+            MODEL_ID,
+            device,
+            dtype,
+            DEFAULT_USE_PE,
+            ENABLE_CPU_OFFLOAD,
+            ENABLE_ATTENTION_SLICING,
+            ENABLE_VAE_TILING,
         )
 
         # Try local cache first (baked into image), fall back to HF download.
@@ -100,7 +167,8 @@ def load_model() -> None:
                 torch_dtype=dtype,
                 local_files_only=True,
                 cache_dir=HF_HOME,
-            ).to(device)
+            )
+            _configure_pipeline_memory(pipe, device)
             logger.info("Model loaded from local cache.")
         except Exception as local_err:
             logger.warning(
@@ -110,7 +178,8 @@ def load_model() -> None:
                 MODEL_ID,
                 torch_dtype=dtype,
                 cache_dir=HF_HOME,
-            ).to(device)
+            )
+            _configure_pipeline_memory(pipe, device)
             logger.info("Model downloaded and loaded from HuggingFace.")
 
         logger.info(f"ERNIE-Image model ready on {device} with dtype {dtype}")
@@ -128,11 +197,27 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
 
         steps = request.num_inference_steps or DEFAULT_STEPS
         cfg = request.guidance_scale if request.guidance_scale >= 0 else DEFAULT_CFG
+        use_pe = DEFAULT_USE_PE if request.use_pe is None else request.use_pe
         generator = None
+        generator_device_name = "none"
         if request.seed is not None:
-            generator = torch.Generator(device="cpu").manual_seed(request.seed)
+            generator_device = GENERATOR_DEVICE
+            if generator_device == "cuda" and not torch.cuda.is_available():
+                generator_device = "cpu"
+            generator = torch.Generator(device=generator_device).manual_seed(request.seed)
+            generator_device_name = generator_device
 
         start_time = time.time()
+        logger.info(
+            "ERNIE-Image job %s config: steps=%s cfg=%s size=%sx%s use_pe=%s generator_device=%s",
+            job_id,
+            steps,
+            cfg,
+            request.width,
+            request.height,
+            use_pe,
+            generator_device_name,
+        )
         result = pipe(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt or None,
@@ -141,6 +226,7 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
             num_inference_steps=steps,
             guidance_scale=cfg,
             generator=generator,
+            use_pe=use_pe,
         )
         elapsed = time.time() - start_time
         logger.info(

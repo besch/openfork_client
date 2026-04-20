@@ -38,13 +38,14 @@ class ErnieImageProcessor(BaseJobProcessor):
     # With weights baked into the image this is typically 30-120s (just model load,
     # no download). Set conservatively in case the host GPU is slow to initialise.
     API_WAIT_TIMEOUT = int(os.environ.get("ERNIE_IMAGE_API_WAIT_TIMEOUT", "300"))
-    # Generation on lower-VRAM GPUs can take much longer than 10 minutes even when
-    # the API is healthy and the GPU is fully utilized, so follow the broader
-    # workflow timeout by default and allow a processor-specific override.
+    # Generation on lower-VRAM GPUs can take much longer than 10-30 minutes even
+    # when the API is healthy and the GPU is fully utilized, so allow a
+    # processor-specific override and otherwise fall back to a 2-hour ceiling,
+    # matching the more permissive long-running ComfyUI path.
     MAX_WAIT_TIME = int(
         os.environ.get(
             "ERNIE_IMAGE_GENERATION_TIMEOUT",
-            str(TimeoutConfig.WORKFLOW_TIMEOUT),
+            str(max(TimeoutConfig.WORKFLOW_TIMEOUT, 7200)),
         )
     )
 
@@ -210,6 +211,8 @@ class ErnieImageProcessor(BaseJobProcessor):
                 payload["num_inference_steps"] = int(steps)
             if seed is not None:
                 payload["seed"] = int(seed)
+            if inputs.get("use_pe") is not None:
+                payload["use_pe"] = bool(inputs.get("use_pe"))
 
             response = self.session.post(
                 f"{self.api_base_url}/generate", json=payload, timeout=30
