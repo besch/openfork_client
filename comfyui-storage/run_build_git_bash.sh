@@ -68,12 +68,32 @@ else
     HF_TOKEN_ARG="--hf-token $HF_TOKEN"
 fi
 
+# Check if DOCKER_HUB_TOKEN and DOCKER_HUB_USERNAME are set for Docker Hub login
+DOCKER_LOGIN_CMD=""
+if [ -n "$DOCKER_HUB_TOKEN" ] && [ -n "$DOCKER_HUB_USERNAME" ]; then
+    echo "🔑 Docker Hub credentials detected, will log in..."
+    DOCKER_LOGIN_CMD="echo '$DOCKER_HUB_TOKEN' | docker login -u '$DOCKER_HUB_USERNAME' --password-stdin && "
+    echo "✅ Docker Hub username: $DOCKER_HUB_USERNAME"
+elif [ -n "$DOCKER_HUB_TOKEN" ]; then
+    echo "⚠️  DOCKER_HUB_TOKEN set but DOCKER_HUB_USERNAME not set"
+    echo "   Set both for automatic Docker Hub login:"
+    echo "   export DOCKER_HUB_USERNAME='your_username'"
+    echo "   export DOCKER_HUB_TOKEN='dckr_pat_xxxxx'"
+else
+    echo "ℹ️  DOCKER_HUB_TOKEN not set"
+    echo "   You must be pre-logged into Docker Hub for push to work:"
+    echo "   docker login"
+    echo "   Or set credentials:"
+    echo "   export DOCKER_HUB_USERNAME='your_username'"
+    echo "   export DOCKER_HUB_TOKEN='dckr_pat_xxxxx'"
+fi
+
 echo ""
 echo "Running build_and_push.py with arguments: $HF_TOKEN_ARG $@"
 echo ""
 
-# Run the build script in WSL
-wsl.exe -d "$WSL_DISTRO" bash -c "cd '$WSL_SCRIPT_PATH' && python3 build_and_push.py $HF_TOKEN_ARG $@"
+# Run the build script in WSL (with optional Docker login)
+wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && python3 build_and_push.py $HF_TOKEN_ARG $@"
 BUILD_EXIT_CODE=$?
 
 echo ""
