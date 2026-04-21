@@ -303,6 +303,15 @@ class DockerProdManager:
             f"by name. Docker may be in an inconsistent state."
         )
 
+    def _wait_for_container_removal(self, container_name: str, timeout: float = 15.0) -> bool:
+        """Poll until the container name is fully released. Returns True if freed."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._get_existing_container(container_name) is None:
+                return True
+            time.sleep(0.5)
+        return False
+
     def set_docker_image_map(self, image_map: dict):
         if image_map:
             logging.info("Setting dynamic Docker image map.")
@@ -565,7 +574,7 @@ class DockerProdManager:
                 run_kwargs["command"] = command
             if environment:
                 run_kwargs["environment"] = environment
-            max_attempts = 3
+            max_attempts = 5
             for attempt in range(1, max_attempts + 1):
                 try:
                     self.client.containers.run(**run_kwargs)
@@ -587,7 +596,12 @@ class DockerProdManager:
                                 f"Force-removing stale container."
                             )
                             self._force_remove_by_name(container_name)
-                            time.sleep(2)
+                            freed = self._wait_for_container_removal(container_name)
+                            if not freed:
+                                logging.warning(
+                                    f"Container '{container_name}' still present after "
+                                    f"removal — proceeding anyway."
+                                )
                             continue
 
                         logging.warning(
