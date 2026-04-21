@@ -153,6 +153,24 @@ class DockerProdManager:
         self.docker_image_map = {}
         self.services_config = {}
 
+    @staticmethod
+    def _is_layer_extraction_error(exc: Exception) -> bool:
+        """True for 500s caused by a transient gRPC/layer-extraction failure.
+
+        These are NOT permanent image errors — Docker Desktop's containerd
+        connection to the WSL2 backend dropped mid-extraction. Re-pulling the
+        image repairs damaged layers and resolves the error.
+        """
+        if not (
+            isinstance(exc, docker.errors.APIError)
+            and getattr(exc, "status_code", None) == 500
+        ):
+            return False
+        text = str(exc).lower()
+        return "apply layer error" in text or (
+            "extract layer" in text and "canceled" in text
+        )
+
     def _is_transient_transport_error(self, exc: Exception) -> bool:
         if isinstance(exc, docker.errors.APIError):
             if getattr(exc, "status_code", None) in (409, 400, 404, 500):
@@ -311,6 +329,20 @@ class DockerProdManager:
                 return True
             time.sleep(0.5)
         return False
+
+    def _force_pull_image(self, image_name: str) -> None:
+        """Pull an image unconditionally, bypassing the 'already present' check.
+
+        Used after a layer-extraction 500 to repair damaged cached layers.
+        """
+        from .docker_progress_logger import stream_pull_with_progress
+
+        logging.info(f"Force-pulling '{image_name}' to repair layer cache...")
+        try:
+            stream_pull_with_progress(self.client, image_name, throttle_interval=0.5)
+            logging.info(f"Force-pull of '{image_name}' complete.")
+        except Exception as e:
+            logging.warning(f"Force-pull of '{image_name}' failed: {e}")
 
     def set_docker_image_map(self, image_map: dict):
         if image_map:
@@ -585,10 +617,19 @@ class DockerProdManager:
                         isinstance(e, docker.errors.APIError)
                         and getattr(e, "status_code", None) == 409
                     )
+                    is_layer_error = self._is_layer_extraction_error(e)
 
                     if attempt < max_attempts and (
-                        self._is_transient_transport_error(e) or is_409
+                        self._is_transient_transport_error(e) or is_409 or is_layer_error
                     ):
+                        if is_layer_error:
+                            logging.warning(
+                                f"Layer extraction error creating '{container_name}' "
+                                f"(attempt {attempt}/{max_attempts}). "
+                                f"Re-pulling image to repair layer cache."
+                            )
+                            self._force_pull_image(image_name)
+                            continue
                         if is_409:
                             logging.warning(
                                 f"Container name conflict for "
