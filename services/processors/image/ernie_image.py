@@ -198,7 +198,21 @@ class ErnieImageProcessor(BaseJobProcessor):
             seed = inputs.get("seed")
             width, height = self._resolve_dimensions(inputs.get("aspect_ratio"))
             steps = inputs.get("steps")
-            cfg = inputs.get("cfg")  # None → API will apply model default (1.0 Turbo / 4.0 standard)
+            cfg = inputs.get("cfg")
+            if cfg is None:
+                cfg = inputs.get("cfg_scale")
+            # Turbo is distilled for CFG=1.0. Higher CFG doubles denoising work in
+            # the Diffusers pipeline and is especially punishing on the 8GB tier.
+            if cfg is not None and self.workflow_type and "8gb" in self.workflow_type:
+                try:
+                    if float(cfg) != 1.0:
+                        logging.warning(
+                            "Ignoring ERNIE-Image Turbo CFG=%s for 8GB tier; using CFG=1.0",
+                            cfg,
+                        )
+                    cfg = 1.0
+                except (TypeError, ValueError):
+                    cfg = 1.0
 
             payload = {
                 "prompt": self.positive_prompt,

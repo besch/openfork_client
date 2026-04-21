@@ -43,7 +43,6 @@ model_error: Optional[str] = None
 
 MODEL_ID = os.environ.get("ERNIE_MODEL_ID", "baidu/ERNIE-Image-Turbo")
 # local_files_only=True because weights are baked into the image.
-# Falls back to downloading if the cache is somehow missing (e.g. dev builds).
 HF_HOME = os.environ.get("HF_HOME", "/app/models")
 DEFAULT_STEPS = int(os.environ.get("ERNIE_DEFAULT_STEPS", "8"))
 MODEL_DTYPE = os.environ.get("ERNIE_DTYPE", "fp16")
@@ -60,6 +59,7 @@ def _env_flag(name: str, default: bool) -> bool:
 
 
 DEFAULT_USE_PE = _env_flag("ERNIE_USE_PE", True)
+ALLOW_MODEL_DOWNLOAD = _env_flag("ERNIE_ALLOW_MODEL_DOWNLOAD", False)
 ENABLE_CPU_OFFLOAD = _env_flag("ERNIE_ENABLE_CPU_OFFLOAD", False)
 ENABLE_ATTENTION_SLICING = _env_flag("ERNIE_ENABLE_ATTENTION_SLICING", False)
 ENABLE_VAE_TILING = _env_flag("ERNIE_ENABLE_VAE_TILING", False)
@@ -160,24 +160,42 @@ def load_model() -> None:
             ENABLE_VAE_TILING,
         )
 
-        # Try local cache first (baked into image), fall back to HF download.
+        load_kwargs = {
+            "torch_dtype": dtype,
+            "cache_dir": HF_HOME,
+        }
+        if not DEFAULT_USE_PE:
+            # PE is optional in ErnieImagePipeline. Avoid loading the extra
+            # multi-GB prompt enhancer on low-VRAM tiers where it is disabled.
+            load_kwargs["pe"] = None
+            load_kwargs["pe_tokenizer"] = None
+
         try:
             pipe = ErnieImagePipeline.from_pretrained(
                 MODEL_ID,
-                torch_dtype=dtype,
                 local_files_only=True,
-                cache_dir=HF_HOME,
+                **load_kwargs,
             )
             _configure_pipeline_memory(pipe, device)
             logger.info("Model loaded from local cache.")
         except Exception as local_err:
+            if not ALLOW_MODEL_DOWNLOAD:
+                raise RuntimeError(
+                    "Local ERNIE-Image model cache load failed and runtime "
+                    "downloads are disabled. Rebuild the Docker image with the "
+                    f"model baked into HF_HOME={HF_HOME}, or set "
+                    "ERNIE_ALLOW_MODEL_DOWNLOAD=true for a dev-only fallback. "
+                    f"Original error: {local_err}"
+                ) from local_err
+
             logger.warning(
-                f"Local cache load failed ({local_err}). Falling back to HF download..."
+                "Local cache load failed (%s). Falling back to HF download "
+                "because ERNIE_ALLOW_MODEL_DOWNLOAD=true...",
+                local_err,
             )
             pipe = ErnieImagePipeline.from_pretrained(
                 MODEL_ID,
-                torch_dtype=dtype,
-                cache_dir=HF_HOME,
+                **load_kwargs,
             )
             _configure_pipeline_memory(pipe, device)
             logger.info("Model downloaded and loaded from HuggingFace.")

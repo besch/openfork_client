@@ -943,6 +943,9 @@ fi
 if [ "$START_ERNIE_IMAGE" = "true" ]; then
   log "Starting ERNIE-Image API service..."
   if [ -f "/app/ernie_image_api.py" ]; then
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export ERNIE_ALLOW_MODEL_DOWNLOAD="${ERNIE_ALLOW_MODEL_DOWNLOAD:-false}"
     export ERNIE_MODEL_ID="${ERNIE_MODEL_ID:-baidu/ERNIE-Image}"
     export ERNIE_DEFAULT_STEPS="${ERNIE_DEFAULT_STEPS:-50}"
     if [[ "${SERVICE_TYPE}" == *"8gb"* ]]; then

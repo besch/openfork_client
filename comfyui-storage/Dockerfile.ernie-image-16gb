@@ -10,6 +10,8 @@ ENV PIP_NO_CACHE_DIR=1
 ENV PIP_DEFAULT_TIMEOUT=120
 ENV HF_HOME=/app/models
 ENV TRANSFORMERS_CACHE=/app/models
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image
 ENV ERNIE_DEFAULT_STEPS=28
@@ -18,6 +20,7 @@ ENV ERNIE_USE_PE=false
 ENV ERNIE_ENABLE_CPU_OFFLOAD=true
 ENV ERNIE_ENABLE_ATTENTION_SLICING=true
 ENV ERNIE_ENABLE_VAE_TILING=true
+ENV ERNIE_ALLOW_MODEL_DOWNLOAD=false
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
@@ -76,9 +79,9 @@ ARG HF_TOKEN=""
 RUN if [ -n "$HF_TOKEN" ]; then \
         python -c "from huggingface_hub import login; login('$HF_TOKEN')"; \
     fi \
-    && python -c "\
+    && HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "\
 from huggingface_hub import snapshot_download; \
-snapshot_download('baidu/ERNIE-Image', cache_dir='/app/models')" \
+snapshot_download('baidu/ERNIE-Image', cache_dir='/app/models', ignore_patterns=['pe/*', 'pe_tokenizer/*'])" \
     && echo "Model downloaded successfully"
 
 COPY ernie_image_api.py /app/ernie_image_api.py
