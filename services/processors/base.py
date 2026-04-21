@@ -118,6 +118,14 @@ class BaseJobProcessor(ABC):
             completion_metadata={"error": message},
         )
 
+    def close(self) -> None:
+        """Release any resources held by this processor (e.g. HTTP sessions)."""
+        if hasattr(self, "session") and self.session is not None:
+            try:
+                self.session.close()
+            except Exception:
+                pass
+
     @abstractmethod
     def process(self) -> None:
         """Process the job. Must be implemented by subclasses."""

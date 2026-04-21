@@ -197,6 +197,10 @@ class ComfyUIClient:
             ws.settimeout(10) # Set a shorter timeout for recv operations
             logging.info(f"Successfully connected to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}")
         except Exception as e:
+            try:
+                ws.close()
+            except Exception:
+                pass
             logging.error(f"Failed to connect to ComfyUI WebSocket at {self.comfyui_ws_url.format(client_id)}: {e}")
             raise RuntimeError(f"Failed to connect to ComfyUI WebSocket at {self.comfyui_ws_url}: {e}")
 

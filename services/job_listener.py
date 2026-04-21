@@ -200,7 +200,10 @@ class JobListener:
             # Check periodically during processing
             self._monitor_job_cancellation(job.get("id"), processor)
 
-            processor.process()
+            try:
+                processor.process()
+            finally:
+                processor.close()
 
             if (
                 self.shutdown_event.is_set()
