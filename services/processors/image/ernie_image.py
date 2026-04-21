@@ -225,7 +225,17 @@ class ErnieImageProcessor(BaseJobProcessor):
                 payload["num_inference_steps"] = int(steps)
             if seed is not None:
                 payload["seed"] = int(seed)
-            if inputs.get("use_pe") is not None:
+
+            # 8GB tier: always disable PE regardless of job input. The Mistral3
+            # prompt enhancer consumes ~3GB of VRAM during text encoding and
+            # significantly extends that phase — not worth it on this tier.
+            if self.workflow_type and "8gb" in self.workflow_type:
+                if inputs.get("use_pe"):
+                    logging.warning(
+                        "8GB tier: overriding use_pe=True to False (insufficient VRAM)"
+                    )
+                payload["use_pe"] = False
+            elif inputs.get("use_pe") is not None:
                 payload["use_pe"] = bool(inputs.get("use_pe"))
 
             response = self.session.post(
@@ -303,6 +313,7 @@ class ErnieImageProcessor(BaseJobProcessor):
             return None
 
     def _resolve_dimensions(self, aspect_ratio: Optional[str]) -> tuple:
+        # Standard resolutions — suitable for 16GB+ VRAM.
         ratios = {
             "1:1":  (1024, 1024),
             "16:9": (1344, 768),
@@ -312,4 +323,16 @@ class ErnieImageProcessor(BaseJobProcessor):
             "3:2":  (1216, 832),
             "2:3":  (832, 1216),
         }
-        return ratios.get(aspect_ratio, (1024, 1024))
+        # 8GB tier: use the smallest ERNIE-supported non-square resolutions so
+        # the denoising loop stays well within 8GB even in fp8 with cpu_offload.
+        ratios_8gb = {
+            "1:1":  (1024, 1024),
+            "16:9": (1264, 848),
+            "9:16": (848, 1264),
+            "4:3":  (1024, 768),
+            "3:4":  (768, 1024),
+            "3:2":  (1024, 768),
+            "2:3":  (768, 1024),
+        }
+        table = ratios_8gb if (self.workflow_type and "8gb" in self.workflow_type) else ratios
+        return table.get(aspect_ratio, (1024, 1024))

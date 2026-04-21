@@ -15,12 +15,20 @@ ENV TRANSFORMERS_OFFLINE=1
 
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image-Turbo
 ENV ERNIE_DEFAULT_STEPS=8
-ENV ERNIE_DTYPE=fp16
+# fp8 cuts DiT VRAM from ~16GB (fp16) to ~8GB, letting it fit in 8GB VRAM
+# without PCIe paging on every denoising step. Falls back to bf16 on load error.
+ENV ERNIE_DTYPE=fp8
 ENV ERNIE_USE_PE=false
+# cpu_offload swaps text-encoder vs DiT (each ~3-8GB in fp8).
+# With fp8 the DiT fits in 8GB so all 8 denoising steps run entirely on GPU;
+# only the initial text-encoding triggers a CPU<->GPU transfer.
 ENV ERNIE_ENABLE_CPU_OFFLOAD=true
 ENV ERNIE_ENABLE_ATTENTION_SLICING=true
 ENV ERNIE_ENABLE_VAE_TILING=true
 ENV ERNIE_ALLOW_MODEL_DOWNLOAD=false
+# Set to "true" to enable torch.compile on the transformer (20-40% faster
+# after a one-time ~2 min warmup on the first generation).
+ENV ERNIE_TORCH_COMPILE=false
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \

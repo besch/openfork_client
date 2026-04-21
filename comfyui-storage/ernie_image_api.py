@@ -63,6 +63,7 @@ ALLOW_MODEL_DOWNLOAD = _env_flag("ERNIE_ALLOW_MODEL_DOWNLOAD", False)
 ENABLE_CPU_OFFLOAD = _env_flag("ERNIE_ENABLE_CPU_OFFLOAD", False)
 ENABLE_ATTENTION_SLICING = _env_flag("ERNIE_ENABLE_ATTENTION_SLICING", False)
 ENABLE_VAE_TILING = _env_flag("ERNIE_ENABLE_VAE_TILING", False)
+ENABLE_TORCH_COMPILE = _env_flag("ERNIE_TORCH_COMPILE", False)
 GENERATOR_DEVICE = os.environ.get(
     "ERNIE_GENERATOR_DEVICE",
     "cuda" if torch.cuda.is_available() else "cpu",
@@ -94,7 +95,13 @@ def _resolve_dtype() -> torch.dtype:
     if MODEL_DTYPE == "fp16":
         return torch.float16
     if MODEL_DTYPE == "fp8":
-        return torch.float8_e4m3fn
+        # fp8 halves VRAM vs fp16 (~8GB for the 8B DiT vs ~16GB).
+        # Supported for storage+compute on Ada/Ampere (RTX 30xx/40xx) with
+        # PyTorch 2.1+. If the GPU/driver rejects it we fall back to bf16.
+        if hasattr(torch, "float8_e4m3fn"):
+            return torch.float8_e4m3fn
+        logger.warning("torch.float8_e4m3fn not available on this build; falling back to bf16")
+        return torch.bfloat16
     # auto
     return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
@@ -139,25 +146,71 @@ def _configure_pipeline_memory(pipe_instance, device: str) -> None:
     logger.info("Placed ERNIE-Image pipeline on %s without CPU offload", device)
 
 
+def _try_load_pipeline(model_id: str, load_kwargs: dict, device: str, local_only: bool):
+    """
+    Attempt to load the pipeline, with OOM-aware dtype fallback.
+
+    Load order:
+      1. Requested dtype (fp8 or caller's choice) — full GPU placement if
+         ENABLE_CPU_OFFLOAD=false, otherwise model_cpu_offload.
+      2. On OOM or fp8 rejection: retry with bf16 + model_cpu_offload.
+    """
+    from diffusers import ErnieImagePipeline
+
+    def _do_load(kwargs):
+        if local_only:
+            return ErnieImagePipeline.from_pretrained(
+                model_id, local_files_only=True, **kwargs
+            )
+        return ErnieImagePipeline.from_pretrained(model_id, **kwargs)
+
+    try:
+        p = _do_load(load_kwargs)
+        _configure_pipeline_memory(p, device)
+        return p
+    except (RuntimeError, torch.cuda.OutOfMemoryError) as first_err:
+        # fp8 may be rejected by the pipeline internals on some driver versions;
+        # OOM means the dtype didn't save enough VRAM — both warrant a bf16 retry.
+        err_str = str(first_err).lower()
+        is_fp8_issue = "float8" in err_str or "fp8" in err_str or "dtype" in err_str
+        is_oom = "out of memory" in err_str or isinstance(first_err, torch.cuda.OutOfMemoryError)
+
+        if is_fp8_issue or is_oom:
+            reason = "fp8 unsupported by pipeline" if is_fp8_issue else "OOM with requested dtype"
+            logger.warning(
+                "Initial load failed (%s: %s). Retrying with bf16 + cpu_offload.",
+                reason, first_err,
+            )
+            torch.cuda.empty_cache()
+            fallback_kwargs = {**load_kwargs, "torch_dtype": torch.bfloat16}
+            p = _do_load(fallback_kwargs)
+            # Force cpu_offload on the fallback path regardless of env setting
+            if hasattr(p, "enable_model_cpu_offload"):
+                try:
+                    p.enable_model_cpu_offload(gpu_id=0)
+                except TypeError:
+                    p.enable_model_cpu_offload()
+            else:
+                p.to(device)
+            logger.info("Fallback load succeeded: bf16 + cpu_offload")
+            return p
+        raise
+
+
 def load_model() -> None:
     global pipe, model_loading, model_error
     model_loading = True
     try:
-        from diffusers import ErnieImagePipeline
-
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = _resolve_dtype()
 
         logger.info(
             "Loading ERNIE-Image model: %s | device=%s | dtype=%s | "
-            "use_pe_default=%s | cpu_offload=%s | attention_slicing=%s | vae_tiling=%s",
-            MODEL_ID,
-            device,
-            dtype,
-            DEFAULT_USE_PE,
-            ENABLE_CPU_OFFLOAD,
-            ENABLE_ATTENTION_SLICING,
-            ENABLE_VAE_TILING,
+            "use_pe_default=%s | cpu_offload=%s | attention_slicing=%s | "
+            "vae_tiling=%s | torch_compile=%s",
+            MODEL_ID, device, dtype, DEFAULT_USE_PE,
+            ENABLE_CPU_OFFLOAD, ENABLE_ATTENTION_SLICING,
+            ENABLE_VAE_TILING, ENABLE_TORCH_COMPILE,
         )
 
         load_kwargs = {
@@ -165,18 +218,11 @@ def load_model() -> None:
             "cache_dir": HF_HOME,
         }
         if not DEFAULT_USE_PE:
-            # PE is optional in ErnieImagePipeline. Avoid loading the extra
-            # multi-GB prompt enhancer on low-VRAM tiers where it is disabled.
             load_kwargs["pe"] = None
             load_kwargs["pe_tokenizer"] = None
 
         try:
-            pipe = ErnieImagePipeline.from_pretrained(
-                MODEL_ID,
-                local_files_only=True,
-                **load_kwargs,
-            )
-            _configure_pipeline_memory(pipe, device)
+            pipe = _try_load_pipeline(MODEL_ID, load_kwargs, device, local_only=True)
             logger.info("Model loaded from local cache.")
         except Exception as local_err:
             if not ALLOW_MODEL_DOWNLOAD:
@@ -190,19 +236,28 @@ def load_model() -> None:
 
             logger.warning(
                 "Local cache load failed (%s). Falling back to HF download "
-                "because ERNIE_ALLOW_MODEL_DOWNLOAD=true...",
-                local_err,
+                "because ERNIE_ALLOW_MODEL_DOWNLOAD=true...", local_err,
             )
-            pipe = ErnieImagePipeline.from_pretrained(
-                MODEL_ID,
-                **load_kwargs,
-            )
-            _configure_pipeline_memory(pipe, device)
+            pipe = _try_load_pipeline(MODEL_ID, load_kwargs, device, local_only=False)
             logger.info("Model downloaded and loaded from HuggingFace.")
 
-        logger.info(f"ERNIE-Image model ready on {device} with dtype {dtype}")
+        # Optional torch.compile — significant speedup after a one-time warmup.
+        # Only applied to the transformer (the hot path), not the full pipeline.
+        if ENABLE_TORCH_COMPILE and hasattr(pipe, "transformer"):
+            try:
+                logger.info("Applying torch.compile to transformer (first generation will be slow)...")
+                pipe.transformer = torch.compile(
+                    pipe.transformer,
+                    mode="reduce-overhead",
+                    fullgraph=False,
+                )
+                logger.info("torch.compile applied successfully.")
+            except Exception as compile_err:
+                logger.warning("torch.compile failed (%s); continuing without it.", compile_err)
+
+        logger.info("ERNIE-Image model ready on %s with dtype %s", device, dtype)
     except Exception as e:
-        logger.error(f"Failed to load ERNIE-Image model: {e}", exc_info=True)
+        logger.error("Failed to load ERNIE-Image model: %s", e, exc_info=True)
         model_error = str(e)
     finally:
         model_loading = False
@@ -210,31 +265,21 @@ def load_model() -> None:
 
 def _make_step_callback(job_id: str, total_steps: int):
     """
-    Return a diffusers-compatible step callback that logs progress and updates
-    the in-memory job dict so /status/{id} can expose it.
+    Returns a diffusers-compatible step callback that logs progress and updates
+    the in-memory job dict so GET /status/{id} exposes step/progress_pct.
 
-    Diffusers ≥0.27 uses callback_on_step_end(pipe, step, timestep, kwargs→dict).
+    Diffusers >=0.27 uses callback_on_step_end(pipe, step, timestep, kwargs→dict).
     Older versions use callback(step, timestep, latents).
-    We build one function that satisfies both signatures.
+    One function handles both signatures.
     """
     def _cb(pipeline_or_step, step_or_ts=None, ts_or_latents=None, callback_kwargs=None):
-        # Modern API: first arg is the pipeline instance
-        if hasattr(pipeline_or_step, "__call__"):
-            step = step_or_ts
-        else:
-            step = pipeline_or_step
-
+        step = step_or_ts if hasattr(pipeline_or_step, "__call__") else pipeline_or_step
         pct = int((step + 1) / total_steps * 100)
         jobs[job_id]["step"] = step + 1
         jobs[job_id]["total_steps"] = total_steps
         jobs[job_id]["progress_pct"] = pct
-        logger.info(
-            "ERNIE-Image job %s: step %d/%d (%d%%)",
-            job_id, step + 1, total_steps, pct,
-        )
-        # Modern API requires returning the kwargs dict unchanged
+        logger.info("ERNIE-Image job %s: step %d/%d (%d%%)", job_id, step + 1, total_steps, pct)
         return callback_kwargs or {}
-
     return _cb
 
 
@@ -266,21 +311,17 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
             use_pe,
             generator_device_name,
         )
-        step_cb = _make_step_callback(job_id, steps)
 
-        # Diffusers ≥0.27 uses callback_on_step_end; older versions use callback.
-        # Inspect the pipeline's __call__ signature to pick the right kwarg so we
-        # don't silently pass an unknown argument and suppress the error.
+        # Wire in per-step progress callback. Detect the right kwarg name so we
+        # don't pass an unknown argument and silently swallow the TypeError.
+        step_cb = _make_step_callback(job_id, steps)
         call_sig = inspect.signature(pipe.__call__)
         if "callback_on_step_end" in call_sig.parameters:
             cb_kwargs = {"callback_on_step_end": step_cb}
         elif "callback" in call_sig.parameters:
             cb_kwargs = {"callback": step_cb, "callback_steps": 1}
         else:
-            logger.warning(
-                "ERNIE-Image pipeline has no recognised callback parameter; "
-                "step progress will not be logged."
-            )
+            logger.warning("Pipeline has no recognised callback parameter; step progress will not be logged.")
             cb_kwargs = {}
 
         result = pipe(

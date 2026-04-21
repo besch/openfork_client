@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# ERNIE-Image (16GB) - reduced-memory standard model
+# ERNIE-Image (16GB) - fp8 full model with PE, no cpu_offload
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -15,12 +15,18 @@ ENV TRANSFORMERS_OFFLINE=1
 
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image
 ENV ERNIE_DEFAULT_STEPS=28
-ENV ERNIE_DTYPE=fp16
-ENV ERNIE_USE_PE=false
-ENV ERNIE_ENABLE_CPU_OFFLOAD=true
+# fp8 cuts the full ERNIE-Image DiT from ~16GB (fp16) to ~8GB, so it fits
+# cleanly in 16GB VRAM with no cpu_offload. The freed headroom also lets us
+# run the Mistral3 PE (~3GB fp8) fully on GPU.
+ENV ERNIE_DTYPE=fp8
+ENV ERNIE_USE_PE=true
+ENV ERNIE_ENABLE_CPU_OFFLOAD=false
 ENV ERNIE_ENABLE_ATTENTION_SLICING=true
 ENV ERNIE_ENABLE_VAE_TILING=true
 ENV ERNIE_ALLOW_MODEL_DOWNLOAD=false
+# Set to "true" to enable torch.compile on the transformer (20-40% faster
+# after a one-time ~2 min warmup on the first generation).
+ENV ERNIE_TORCH_COMPILE=false
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
@@ -81,7 +87,7 @@ RUN if [ -n "$HF_TOKEN" ]; then \
     fi \
     && HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "\
 from huggingface_hub import snapshot_download; \
-snapshot_download('baidu/ERNIE-Image', cache_dir='/app/models', ignore_patterns=['pe/*', 'pe_tokenizer/*'])" \
+snapshot_download('baidu/ERNIE-Image', cache_dir='/app/models')" \
     && echo "Model downloaded successfully"
 
 COPY ernie_image_api.py /app/ernie_image_api.py
