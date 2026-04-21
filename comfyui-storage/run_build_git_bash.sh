@@ -62,10 +62,6 @@ if [ -z "$HF_TOKEN" ]; then
     echo "⚠️  HF_TOKEN environment variable not set"
     echo "   Some gated models may fail to download"
     echo "   Set with: export HF_TOKEN='hf_your_token_here'"
-    HF_TOKEN_ARG=""
-else
-    echo "✅ HuggingFace token is available (${#HF_TOKEN} characters)"
-    HF_TOKEN_ARG="--hf-token $HF_TOKEN"
 fi
 
 # Check if DOCKER_HUB_TOKEN and DOCKER_HUB_USERNAME are set for Docker Hub login
