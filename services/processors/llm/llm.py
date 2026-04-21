@@ -10,6 +10,7 @@ import logging
 import math
 import random
 import json
+import threading
 import requests
 
 from services.processors.base import BaseJobProcessor
@@ -148,7 +149,29 @@ class LLMJobProcessor(BaseJobProcessor):
             }
 
             logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
-            response = requests.post(f"{api_base}/api/chat", json=payload, timeout=1200)
+            response_holder: list = [None]
+            error_holder: list = [None]
+
+            def _do_request():
+                try:
+                    response_holder[0] = requests.post(
+                        f"{api_base}/api/chat", json=payload, timeout=1200
+                    )
+                except Exception as exc:
+                    error_holder[0] = exc
+
+            req_thread = threading.Thread(target=_do_request, daemon=True)
+            req_thread.start()
+            while req_thread.is_alive():
+                req_thread.join(timeout=1.0)
+                if self.shutdown_event.is_set():
+                    logging.info("Shutdown event received during LLM generation. Aborting.")
+                    return
+
+            if error_holder[0]:
+                raise error_holder[0]
+
+            response = response_holder[0]
             response.raise_for_status()
 
             result = response.json()
@@ -183,6 +206,10 @@ class LLMJobProcessor(BaseJobProcessor):
                 f.write(generated_text)
 
             storage_path = self.orchestrator_service.upload_output(output_path, self.job_id, "text/plain")
+
+            if self.shutdown_event.is_set():
+                logging.info("Shutdown event set after LLM generation completed. Skipping job completion.")
+                return
 
             if storage_path:
                 self.orchestrator_service.update_job_status(

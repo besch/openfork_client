@@ -82,6 +82,9 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
         model_wait_elapsed = 0
         model_poll_interval = 15
         while model_wait_elapsed < model_wait_max:
+            if self.shutdown_event.is_set():
+                logging.info("[SparkVSR] Shutdown requested while waiting for model. Aborting.")
+                return
             try:
                 h = requests.get(self.HEALTH_ENDPOINT, timeout=10)
                 if h.status_code == 200 and h.json().get("model_ready"):
@@ -90,7 +93,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
                 pass
             if model_wait_elapsed % 60 == 0:
                 logging.info(f"[SparkVSR] Waiting for model to be ready... ({model_wait_elapsed}s elapsed)")
-            time.sleep(model_poll_interval)
+            self.shutdown_event.wait(model_poll_interval)
             model_wait_elapsed += model_poll_interval
         else:
             self._fail_job(f"SparkVSR model was not ready after {model_wait_max}s")
