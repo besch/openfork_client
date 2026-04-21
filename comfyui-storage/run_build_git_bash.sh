@@ -23,7 +23,7 @@ if ! command -v wsl.exe &> /dev/null; then
 fi
 
 # Convert Windows path to WSL path
-WSL_SCRIPT_PATH=$(echo "/mnt/d/openfork/client/comfyui-storage" | tr '\\' '/')
+WSL_SCRIPT_PATH="/mnt/d/openfork/client/comfyui-storage"
 
 echo "📍 Running in Git Bash"
 echo "🐧 Target WSL distro: $WSL_DISTRO"
@@ -85,11 +85,15 @@ else
 fi
 
 echo ""
-echo "Running build_and_push.py with arguments: $HF_TOKEN_ARG $@"
+echo "Running build_and_push.py with arguments: $@"
 echo ""
 
 # Build properly escaped argument string for the inner bash
-BUILD_ARGS=$(printf '%q ' "--hf-token" "$HF_TOKEN" "$@")
+if [ -n "$HF_TOKEN" ]; then
+    BUILD_ARGS=$(printf '%q ' "--hf-token" "$HF_TOKEN" "$@")
+else
+    BUILD_ARGS=$(printf '%q ' "$@")
+fi
 
 # Run the build script in WSL (with optional Docker login)
 wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && python3 build_and_push.py $BUILD_ARGS"
