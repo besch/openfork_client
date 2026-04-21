@@ -58,18 +58,18 @@ IMAGES: List[ImageConfig] = [
         build=True,
         direct_push=True,
     ),
-    ImageConfig(
-        "Dockerfile.ernie-image-16gb",
-        "beschiak/openfork-ernie-image-16gb:latest",
-        build=True,
-        push=True,
-    ),
-    ImageConfig(
-        "Dockerfile.ernie-image-24gb",
-        "beschiak/openfork-ernie-image-24gb:latest",
-        build=True,
-        push=True,
-    ),
+    # ImageConfig(
+    #     "Dockerfile.ernie-image-16gb",
+    #     "beschiak/openfork-ernie-image-16gb:latest",
+    #     build=True,
+    #     push=True,
+    # ),
+    # ImageConfig(
+    #     "Dockerfile.ernie-image-24gb",
+    #     "beschiak/openfork-ernie-image-24gb:latest",
+    #     build=True,
+    #     push=True,
+    # ),
 ]
 
 PUSH_ATTEMPTS = 4

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import docker
+import requests
 
 if not hasattr(docker, "errors"):
     class _DockerImageNotFound(Exception):
@@ -23,7 +24,10 @@ if not hasattr(docker, "errors"):
         APIError=_DockerApiError,
     )
 
-from services.docker_download_manager import DockerDownloadManager
+from services.docker_download_manager import (
+    DockerDownloadManager,
+    ImageAvailability,
+)
 from services.job_listener import JobListener
 
 
@@ -98,14 +102,74 @@ class FakeDockerManager:
         return f"dgn-client-{service_type}"
 
 
+class FlakyImageStore:
+    def __init__(self, image_name):
+        self.image_name = image_name
+        self.calls = 0
+
+    def get(self, image_name):
+        self.calls += 1
+        if self.calls == 1:
+            raise requests.exceptions.ConnectionError("docker temporarily unavailable")
+        if image_name != self.image_name:
+            raise docker.errors.ImageNotFound(f"{image_name} not found")
+        return SimpleNamespace(tags=[image_name])
+
+
+class BrokenImageStore:
+    def get(self, image_name):
+        raise requests.exceptions.ConnectionError("docker unavailable")
+
+
+class ReconnectingDockerManager(FakeDockerManager):
+    def __init__(self, service_type):
+        super().__init__([service_type], cached_service_types=[])
+        self.service_type = service_type
+        self.refresh_calls = 0
+        image_name = self.get_image_name(service_type)
+        self.client = SimpleNamespace(
+            images=FlakyImageStore(image_name),
+            containers=FakeContainersAPI(),
+        )
+
+    def _is_transient_transport_error(self, exc):
+        return isinstance(exc, requests.exceptions.ConnectionError)
+
+    def _refresh_client_connection(self):
+        self.refresh_calls += 1
+        self.client = FakeDockerClient([self.get_image_name(self.service_type)])
+        return True
+
+
+class UnavailableDockerManager(FakeDockerManager):
+    def __init__(self, service_type):
+        super().__init__([service_type], cached_service_types=[])
+        self.client = SimpleNamespace(
+            images=BrokenImageStore(),
+            containers=FakeContainersAPI(),
+        )
+        self.refresh_calls = 0
+
+    def _is_transient_transport_error(self, exc):
+        return isinstance(exc, requests.exceptions.ConnectionError)
+
+    def _refresh_client_connection(self):
+        self.refresh_calls += 1
+        return False
+
+
 class FakeDownloadManager:
-    def __init__(self):
+    def __init__(self, availability=ImageAvailability.MISSING):
         self._active_downloads = set()
         self._download_queue = []
         self.started = []
+        self.availability = availability
 
     def has_image(self, service_type):
-        return False
+        return self.availability == ImageAvailability.AVAILABLE
+
+    def get_image_availability(self, service_type):
+        return self.availability
 
     def is_downloading(self, service_type):
         return False
@@ -165,15 +229,44 @@ class DockerCachePolicyTests(unittest.TestCase):
             docker_manager.client.images.present,
         )
 
+    def test_transient_docker_error_is_not_treated_as_missing_image(self):
+        docker_manager = ReconnectingDockerManager("ltx23-video-8gb")
+        manager = DockerDownloadManager(docker_manager)
+
+        self.assertEqual(
+            manager.get_image_availability("ltx23-video-8gb"),
+            ImageAvailability.AVAILABLE,
+        )
+        self.assertTrue(manager.has_image("ltx23-video-8gb"))
+        self.assertEqual(docker_manager.refresh_calls, 1)
+
+    def test_unknown_image_availability_does_not_start_background_download(self):
+        docker_manager = UnavailableDockerManager("ltx23-video-8gb")
+        manager = DockerDownloadManager(docker_manager)
+
+        self.assertEqual(
+            manager.get_image_availability("ltx23-video-8gb"),
+            ImageAvailability.UNKNOWN,
+        )
+        self.assertFalse(manager.start_background_download("ltx23-video-8gb"))
+        self.assertEqual(docker_manager.refresh_calls, 2)
+        self.assertEqual(manager.get_all_statuses(), {})
+
 
 class PrefetchPolicyTests(unittest.TestCase):
     def test_private_policies_skip_global_prefetch_suggestions(self):
-        for policy in ("mine", "project", "users"):
+        policy_to_community_mode = {
+            "mine": "none",
+            "project": "trusted_projects",
+            "users": "trusted_users",
+        }
+        for policy, community_mode in policy_to_community_mode.items():
             with self.subTest(policy=policy):
                 orchestrator_service = Mock()
                 client = SimpleNamespace(
                     orchestrator_service=orchestrator_service,
                     accept_policy=policy,
+                    community_mode=community_mode,
                     monetize_mode=False,
                 )
                 listener = JobListener(
@@ -207,6 +300,26 @@ class PrefetchPolicyTests(unittest.TestCase):
 
         orchestrator_service.get_prefetch_suggestions.assert_called_once_with("provider-1")
         self.assertEqual(download_manager.started, ["wan22", "foley"])
+
+    def test_prefetch_skips_unknown_image_availability(self):
+        orchestrator_service = Mock()
+        orchestrator_service.get_prefetch_suggestions.return_value = ["wan22"]
+        client = SimpleNamespace(
+            orchestrator_service=orchestrator_service,
+            accept_policy="monetize",
+            monetize_mode=True,
+        )
+        listener = JobListener(
+            client, provider_id="provider-1", shutdown_event=threading.Event()
+        )
+        download_manager = FakeDownloadManager(
+            availability=ImageAvailability.UNKNOWN
+        )
+
+        listener._handle_prefetch_suggestions(download_manager)
+
+        orchestrator_service.get_prefetch_suggestions.assert_called_once_with("provider-1")
+        self.assertEqual(download_manager.started, [])
 
 
 if __name__ == "__main__":

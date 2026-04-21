@@ -32,7 +32,7 @@ echo ""
 
 # Check and start Docker service in WSL
 echo "🔧 Checking Docker service..."
-wsl.exe -d "$WSL_DISTRO" bash -c "sudo service docker status > /dev/null 2>&1" || {
+wsl.exe -d "$WSL_DISTRO" bash -c "sudo service docker status > /dev/null 2>&1" 2>/dev/null || {
     echo "⏳ Starting Docker service in WSL..."
     wsl.exe -d "$WSL_DISTRO" bash -c "sudo service docker start" || {
         echo "⚠️  Warning: Could not start Docker service"
@@ -41,7 +41,7 @@ wsl.exe -d "$WSL_DISTRO" bash -c "sudo service docker status > /dev/null 2>&1" |
 
 # Check Docker socket permissions
 echo "🔐 Checking Docker permissions..."
-DOCKER_CHECK=$(wsl.exe -d "$WSL_DISTRO" bash -c "docker ps 2>&1")
+DOCKER_CHECK=$(wsl.exe -d "$WSL_DISTRO" bash -c "docker ps 2>&1" || true)
 if echo "$DOCKER_CHECK" | grep -q "permission denied"; then
     echo "❌ Docker permission denied. Fixing..."
     echo "   Running: sudo usermod -aG docker \$USER"
@@ -92,8 +92,11 @@ echo ""
 echo "Running build_and_push.py with arguments: $HF_TOKEN_ARG $@"
 echo ""
 
+# Build properly escaped argument string for the inner bash
+BUILD_ARGS=$(printf '%q ' "--hf-token" "$HF_TOKEN" "$@")
+
 # Run the build script in WSL (with optional Docker login)
-wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && python3 build_and_push.py $HF_TOKEN_ARG $@"
+wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && python3 build_and_push.py $BUILD_ARGS"
 BUILD_EXIT_CODE=$?
 
 echo ""

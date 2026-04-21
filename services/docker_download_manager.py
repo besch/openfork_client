@@ -39,6 +39,12 @@ class DownloadStatus(Enum):
     PERMANENTLY_FAILED = "permanently_failed"  # e.g. image does not exist on registry
 
 
+class ImageAvailability(Enum):
+    AVAILABLE = "available"
+    MISSING = "missing"
+    UNKNOWN = "unknown"
+
+
 class DockerDownloadManager:
     """
     Manages background Docker image downloads with concurrency limiting.
@@ -89,29 +95,82 @@ class DockerDownloadManager:
         self._last_job_times: Dict[str, float] = {}
         self._shutdown = False
         
-    def has_image(self, service_type: str) -> bool:
+    def _check_image_once(
+        self,
+        docker_client,
+        image_name: str,
+    ) -> tuple[ImageAvailability, Optional[Exception]]:
+        try:
+            docker_client.images.get(image_name)
+            return ImageAvailability.AVAILABLE, None
+        except DockerImageNotFound:
+            return ImageAvailability.MISSING, None
+        except Exception as e:
+            return ImageAvailability.UNKNOWN, e
+
+    def get_image_availability(self, service_type: str) -> ImageAvailability:
         """
-        Check if Docker image for a service exists locally.
-        
-        Args:
-            service_type: The service type (e.g., 'wan22', 'hunyuan')
-            
-        Returns:
-            True if image exists locally, False otherwise
+        Check Docker image availability for a service.
+
+        Returns AVAILABLE only when the image can be verified locally.
+        Transient Docker transport failures are reported as UNKNOWN so callers
+        do not incorrectly treat a cached image as missing and trigger a pull.
         """
-        docker_client = getattr(self.docker_manager, "client", None) if self.docker_manager else None
-        if not self.docker_manager or not docker_client:
-            return False if self.docker_manager else True  # Headless mode - no Docker needed
-            
+        if not self.docker_manager:
+            return ImageAvailability.AVAILABLE  # Headless mode - no Docker needed
+
+        docker_client = getattr(self.docker_manager, "client", None)
+        if not docker_client:
+            logging.warning(
+                f"Docker client unavailable while checking image for {service_type}."
+            )
+            return ImageAvailability.UNKNOWN
+
         try:
             image_name = self.docker_manager.get_image_name(service_type)
-            docker_client.images.get(image_name)
-            return True
-        except DockerImageNotFound:
-            return False
         except Exception as e:
-            logging.warning(f"Error checking image for {service_type}: {e}")
-            return False
+            logging.warning(f"Could not resolve image name for {service_type}: {e}")
+            return ImageAvailability.UNKNOWN
+
+        availability, error = self._check_image_once(docker_client, image_name)
+        if error is None:
+            return availability
+
+        is_transient = False
+        is_transient_transport_error = getattr(
+            self.docker_manager, "_is_transient_transport_error", None
+        )
+        if callable(is_transient_transport_error):
+            try:
+                is_transient = is_transient_transport_error(error)
+            except Exception:
+                is_transient = False
+
+        if is_transient:
+            logging.warning(
+                f"Transient Docker error checking image for {service_type}: {error}"
+            )
+            refresh_client_connection = getattr(
+                self.docker_manager, "_refresh_client_connection", None
+            )
+            if callable(refresh_client_connection) and refresh_client_connection():
+                refreshed_client = getattr(self.docker_manager, "client", None)
+                if refreshed_client:
+                    retry_availability, retry_error = self._check_image_once(
+                        refreshed_client, image_name
+                    )
+                    if retry_error is None:
+                        return retry_availability
+                    error = retry_error
+
+        logging.warning(f"Error checking image for {service_type}: {error}")
+        return ImageAvailability.UNKNOWN
+
+    def has_image(self, service_type: str) -> bool:
+        """
+        Return True only when the Docker image is confirmed to exist locally.
+        """
+        return self.get_image_availability(service_type) == ImageAvailability.AVAILABLE
 
     def notify_job_complete(self, service_type: str):
         """Record that a service type was actually used to process a job this session."""
@@ -137,7 +196,7 @@ class DockerDownloadManager:
         """Return cached service types using the manager's known service list."""
         cached = []
         for service_type in self._get_known_service_types():
-            if self.has_image(service_type):
+            if self.get_image_availability(service_type) == ImageAvailability.AVAILABLE:
                 cached.append(service_type)
         return cached
 
@@ -317,10 +376,17 @@ class DockerDownloadManager:
             
             # TOCTOU fix: Check inside lock to prevent race condition
             # where multiple threads could pass the has_image check simultaneously
-            if self.has_image(service_type):
+            availability = self.get_image_availability(service_type)
+            if availability == ImageAvailability.AVAILABLE:
                 logging.debug(f"Image for {service_type} already exists, skipping download")
                 # Clear failed status if image exists now
                 self._download_status.pop(service_type, None)
+                return False
+            if availability == ImageAvailability.UNKNOWN:
+                logging.info(
+                    f"Deferring background download for {service_type} because Docker image "
+                    "availability could not be verified."
+                )
                 return False
             
             # Permanently-failed images (e.g. 404 - image doesn't exist on registry) must
@@ -584,9 +650,18 @@ class DockerDownloadManager:
             while self._download_queue and not self._shutdown:
                 next_service = self._download_queue.pop(0)
 
-                if self.has_image(next_service):
+                availability = self.get_image_availability(next_service)
+                if availability == ImageAvailability.AVAILABLE:
                     self._download_status.pop(next_service, None)
                     continue
+                if availability == ImageAvailability.UNKNOWN:
+                    self._download_queue.insert(0, next_service)
+                    self._download_status[next_service] = DownloadStatus.PENDING
+                    logging.info(
+                        f"Deferring queued download for {next_service} because Docker image "
+                        "availability could not be verified."
+                    )
+                    break
 
                 if not self._ensure_cache_capacity(next_service):
                     self._download_status[next_service] = DownloadStatus.FAILED
@@ -654,7 +729,7 @@ class DockerDownloadManager:
         
         cached = []
         for service_type in all_service_types:
-            if self.has_image(service_type):
+            if self.get_image_availability(service_type) == ImageAvailability.AVAILABLE:
                 cached.append(service_type)
         
         return cached

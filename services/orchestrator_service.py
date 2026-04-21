@@ -57,10 +57,14 @@ class OrchestratorService:
         # This reuses TCP connections across requests, reducing latency for
         # frequent operations like heartbeats and status updates
         self._session = requests.Session()
-        # Configure connection pool size for parallel operations
+        # Configure connection pool size for parallel operations.
+        # The client can have a heartbeat thread, cancellation checks, job peeks,
+        # status updates, and asset downloads all active at once, so the default
+        # pool size of 10 is easy to exhaust.
+        pool_size = int(os.environ.get("OPENFORK_HTTP_POOL_SIZE", "32"))
         adapter = requests.adapters.HTTPAdapter(
-            pool_connections=10,
-            pool_maxsize=10,
+            pool_connections=pool_size,
+            pool_maxsize=pool_size,
             max_retries=0  # We handle retries via tenacity
         )
         self._session.mount('http://', adapter)

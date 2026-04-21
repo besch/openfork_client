@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from config import HEADLESS_MODE, TimeoutConfig
 from services.docker_manager import docker_manager
 from services.container_monitor import ContainerMonitor
+from services.docker_download_manager import ImageAvailability
 from exceptions import AuthError, ProviderError
 
 
@@ -617,13 +618,21 @@ class JobListener:
                 for service_type in suggestions[
                     :2
                 ]:  # Limit to 2 to avoid queue buildup
+                    availability = download_manager.get_image_availability(
+                        service_type
+                    )
                     if (
-                        not download_manager.has_image(service_type)
+                        availability == ImageAvailability.MISSING
                         and not download_manager.is_downloading(service_type)
                         and not download_manager.is_queued(service_type)
                     ):
                         logging.info(f"Pre-fetching suggested image: {service_type}")
                         download_manager.start_background_download(service_type)
+                    elif availability == ImageAvailability.UNKNOWN:
+                        logging.debug(
+                            f"Skipping pre-fetch for '{service_type}' because Docker image "
+                            "availability could not be verified."
+                        )
         except Exception as e:
             # Non-critical - just log and continue
             logging.debug(f"Failed to get/apply pre-fetch suggestions: {e}")
@@ -727,11 +736,16 @@ class JobListener:
                                     continue
 
                                 # Check if Docker image is available
-                                image_available = True
+                                image_availability = ImageAvailability.AVAILABLE
                                 if not HEADLESS_MODE and download_manager:
-                                    image_available = download_manager.has_image(
-                                        service_type
+                                    image_availability = (
+                                        download_manager.get_image_availability(
+                                            service_type
+                                        )
                                     )
+                                image_available = (
+                                    image_availability == ImageAvailability.AVAILABLE
+                                )
 
                                 if image_available:
                                     # Image is ready - reserve and process this job
@@ -1002,6 +1016,11 @@ class JobListener:
                                         continue  # Try next peeked job
 
                                     break  # Exit the peeked jobs loop after processing one job
+                                elif image_availability == ImageAvailability.UNKNOWN:
+                                    logging.debug(
+                                        f"Skipping job {peeked_job.get('id')} for '{service_type}' because "
+                                        "Docker image availability could not be verified."
+                                    )
                                 else:
                                     # Image not available - start background download if
                                     # this provider should be the one to pull it.
@@ -1084,18 +1103,33 @@ class JobListener:
                                 # Count how many were actually ready vs downloading
                                 ready_count = 0
                                 downloading_count = 0
+                                unknown_count = 0
                                 for pj in available_jobs:
                                     st = self._get_service_type_for_job(pj)
-                                    if download_manager and download_manager.has_image(
-                                        st
-                                    ):
+                                    availability = (
+                                        download_manager.get_image_availability(st)
+                                        if download_manager
+                                        else ImageAvailability.AVAILABLE
+                                    )
+                                    if availability == ImageAvailability.AVAILABLE:
                                         ready_count += 1
+                                    elif availability == ImageAvailability.UNKNOWN:
+                                        unknown_count += 1
                                     else:
                                         downloading_count += 1
 
                                 if ready_count > 0:
                                     logging.info(
                                         f"{ready_count} jobs were ready but reservation failed. Provider may be busy in DB or jobs were taken. Waiting..."
+                                    )
+                                elif unknown_count > 0 and downloading_count > 0:
+                                    logging.info(
+                                        f"{downloading_count} jobs still need image downloads, and "
+                                        f"{unknown_count} could not be checked because Docker was temporarily unavailable. Waiting..."
+                                    )
+                                elif unknown_count > 0:
+                                    logging.info(
+                                        f"{unknown_count} jobs could not be checked because Docker was temporarily unavailable. Waiting..."
                                     )
                                 else:
                                     logging.info(
