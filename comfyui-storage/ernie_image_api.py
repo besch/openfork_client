@@ -208,6 +208,36 @@ def load_model() -> None:
         model_loading = False
 
 
+def _make_step_callback(job_id: str, total_steps: int):
+    """
+    Return a diffusers-compatible step callback that logs progress and updates
+    the in-memory job dict so /status/{id} can expose it.
+
+    Diffusers ≥0.27 uses callback_on_step_end(pipe, step, timestep, kwargs→dict).
+    Older versions use callback(step, timestep, latents).
+    We build one function that satisfies both signatures.
+    """
+    def _cb(pipeline_or_step, step_or_ts=None, ts_or_latents=None, callback_kwargs=None):
+        # Modern API: first arg is the pipeline instance
+        if hasattr(pipeline_or_step, "__call__"):
+            step = step_or_ts
+        else:
+            step = pipeline_or_step
+
+        pct = int((step + 1) / total_steps * 100)
+        jobs[job_id]["step"] = step + 1
+        jobs[job_id]["total_steps"] = total_steps
+        jobs[job_id]["progress_pct"] = pct
+        logger.info(
+            "ERNIE-Image job %s: step %d/%d (%d%%)",
+            job_id, step + 1, total_steps, pct,
+        )
+        # Modern API requires returning the kwargs dict unchanged
+        return callback_kwargs or {}
+
+    return _cb
+
+
 def run_generation(job_id: str, request: GenerateRequest) -> None:
     try:
         jobs[job_id]["status"] = "processing"
@@ -236,6 +266,23 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
             use_pe,
             generator_device_name,
         )
+        step_cb = _make_step_callback(job_id, steps)
+
+        # Diffusers ≥0.27 uses callback_on_step_end; older versions use callback.
+        # Inspect the pipeline's __call__ signature to pick the right kwarg so we
+        # don't silently pass an unknown argument and suppress the error.
+        call_sig = inspect.signature(pipe.__call__)
+        if "callback_on_step_end" in call_sig.parameters:
+            cb_kwargs = {"callback_on_step_end": step_cb}
+        elif "callback" in call_sig.parameters:
+            cb_kwargs = {"callback": step_cb, "callback_steps": 1}
+        else:
+            logger.warning(
+                "ERNIE-Image pipeline has no recognised callback parameter; "
+                "step progress will not be logged."
+            )
+            cb_kwargs = {}
+
         result = pipe(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt or None,
@@ -245,6 +292,7 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
             guidance_scale=cfg,
             generator=generator,
             use_pe=use_pe,
+            **cb_kwargs,
         )
         elapsed = time.time() - start_time
         logger.info(
