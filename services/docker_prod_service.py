@@ -315,6 +315,15 @@ class DockerProdManager:
         # than removing by name when the container is in a zombie/removing state.
         for cid in ids_to_remove:
             try:
+                # Explicitly kill first so the daemon isn't waiting for a graceful stop
+                # before it can release GPU/filesystem resources and complete rm.
+                subprocess.run(
+                    ["docker", "kill", cid],
+                    capture_output=True, text=True, timeout=10,
+                )
+            except Exception:
+                pass
+            try:
                 result = subprocess.run(
                     ["docker", "rm", "-f", cid],
                     capture_output=True, text=True, timeout=30,
@@ -353,12 +362,47 @@ class DockerProdManager:
             f"by name. Docker may be in an inconsistent state."
         )
 
-    def _wait_for_container_removal(self, container_name: str, timeout: float = 15.0) -> bool:
-        """Poll until the container name is fully released. Returns True if freed."""
+    def _wait_for_container_id_gone(self, container_id: str, timeout: float = 20.0) -> bool:
+        """Poll `docker inspect <ID>` until the container truly disappears.
+
+        On Docker Desktop / WSL2, `docker rm -f` returns 0 while the daemon
+        finishes async cleanup — the name slot stays reserved until the inspect
+        endpoint stops returning data for that ID.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            # containers.get() and containers.list() can disagree briefly on Windows/WSL2;
-            # require both to report absence before declaring the name slot free.
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{.State.Status}}", container_id],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                # Non-zero means "no such container" — truly gone
+                return True
+            logging.debug(
+                f"Container {container_id[:12]} still in state "
+                f"'{result.stdout.strip()}', waiting for cleanup..."
+            )
+            time.sleep(0.5)
+        return False
+
+    def _wait_for_container_removal(
+        self, container_name: str, container_id: Optional[str] = None, timeout: float = 20.0
+    ) -> bool:
+        """Poll until the container name is fully released. Returns True if freed.
+
+        When container_id is supplied we poll by ID (most reliable) and fall back
+        to name-based checks as a secondary signal.
+        """
+        if container_id:
+            gone = self._wait_for_container_id_gone(container_id, timeout=timeout)
+            if not gone:
+                return False
+            # Name slot may briefly outlast ID removal — add a short stabilization pause.
+            time.sleep(1.5)
+            return True
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             if self._get_existing_container(container_name) is None:
                 try:
                     matches = self.client.containers.list(
@@ -369,9 +413,7 @@ class DockerProdManager:
                         if c.name == container_name or c.name == f"/{container_name}"
                     ]
                     if not still_there:
-                        # Extra stabilization pause: Docker may still hold the name slot
-                        # in its create-path even after both lookup methods return empty.
-                        time.sleep(1.0)
+                        time.sleep(1.5)
                         return True
                 except Exception:
                     pass
@@ -691,7 +733,7 @@ class DockerProdManager:
                             )
                             _conflict_id = _id_match.group(1) if _id_match else None
                             self._force_remove_by_name(container_name, container_id=_conflict_id)
-                            freed = self._wait_for_container_removal(container_name)
+                            freed = self._wait_for_container_removal(container_name, container_id=_conflict_id)
                             if not freed:
                                 logging.warning(
                                     f"Container '{container_name}' still present after "
