@@ -1170,6 +1170,20 @@ class JobListener:
                         exc_info=True,
                     )
 
+                    if (
+                        self.shutdown_event.is_set()
+                        and getattr(self.client, "stop_requested", False)
+                        and job and job.get("id")
+                        and not self._job_has_terminal_status(job.get("id"))
+                    ):
+                        self.client.interrupted_job_id = job.get("id")
+                        self.client.interrupted_job_execution_token = job.get("execution_token")
+                        logging.info(
+                            f"Shutdown interrupted job {job.get('id')} with error: {e}. "
+                            "Deferring reset to cleanup."
+                        )
+                        continue
+
                     # Ensure provider status is reset to available on error
                     # This prevents the provider from being stuck in 'busy' state in the DB
                     try:
