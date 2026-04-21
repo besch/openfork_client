@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import requests
+from typing import Optional
 from .docker_utils import (
     docker_cp,
     should_use_api_file_copy,
@@ -268,7 +269,7 @@ class DockerProdManager:
             logging.debug(f"Container list lookup failed for '{container_name}': {e}")
             return []
 
-    def _force_remove_by_name(self, container_name: str, container_id: str | None = None):
+    def _force_remove_by_name(self, container_name: str, container_id: Optional[str] = None):
 
         # Collect candidate IDs to remove (by-ID is more reliable than by-name on Windows/WSL2)
         ids_to_remove: list[str] = []
