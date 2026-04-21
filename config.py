@@ -38,8 +38,10 @@ MAX_INPUT_ASSET_REDIRECTS = int(
 # None means uncapped for that policy.
 POLICY_MAX_CACHED_IMAGES = {
     "monetize": 3,
+    "all": 3,
     "project": 3,
     "users": 3,
+    "mine": None,
 }
 
 # Headless mode detection - when running inside a cloud container (RunPod/Vast.ai),

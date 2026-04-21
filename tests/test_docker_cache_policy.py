@@ -29,6 +29,7 @@ from services.docker_download_manager import (
     ImageAvailability,
 )
 from services.job_listener import JobListener
+from dgn_client import _get_max_cached_images_for_policy
 
 
 class FakeImageStore:
@@ -182,6 +183,15 @@ class FakeDownloadManager:
 
 
 class DockerCachePolicyTests(unittest.TestCase):
+    def test_cache_cap_policy_mapping_matches_routing_modes(self):
+        self.assertEqual(_get_max_cached_images_for_policy("all", False), 3)
+        self.assertEqual(
+            _get_max_cached_images_for_policy("trusted_projects", False), 3
+        )
+        self.assertEqual(_get_max_cached_images_for_policy("trusted_users", False), 3)
+        self.assertIsNone(_get_max_cached_images_for_policy("none", False))
+        self.assertEqual(_get_max_cached_images_for_policy("none", True), 3)
+
     def test_evicts_prefetched_untouched_image_before_used_images(self):
         docker_manager = FakeDockerManager(
             service_types=["wan22", "foley", "hunyuan"],

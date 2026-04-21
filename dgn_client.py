@@ -12,6 +12,21 @@ from services.hardware_profiler import get_available_vram, can_run_service, get_
 import services.processors as job_processors_module
 
 
+def _get_max_cached_images_for_policy(community_mode: str, monetize_mode: bool):
+    """Return the local Docker image cache cap for the current routing policy."""
+    if monetize_mode:
+        policy_key = "monetize"
+    else:
+        policy_key = {
+            "all": "all",
+            "trusted_projects": "project",
+            "trusted_users": "users",
+            "none": "mine",
+        }.get(community_mode, "mine")
+
+    return POLICY_MAX_CACHED_IMAGES.get(policy_key)
+
+
 class DGNClient:
     def __init__(
         self,
@@ -62,13 +77,10 @@ class DGNClient:
         # Shared event to wake up the job listener immediately when a download completes
         self.job_wakeup_event = threading.Event()
 
-        # Max cached images: monetize and all-community get larger caches; private gets minimal
-        if self.monetize_mode:
-            max_cached_images = POLICY_MAX_CACHED_IMAGES.get("monetize")
-        elif self.community_mode == "all":
-            max_cached_images = POLICY_MAX_CACHED_IMAGES.get("all")
-        else:
-            max_cached_images = POLICY_MAX_CACHED_IMAGES.get("mine")
+        max_cached_images = _get_max_cached_images_for_policy(
+            self.community_mode,
+            self.monetize_mode,
+        )
 
         # Initialize download manager for Docker image pre-fetching (only when not headless)
         self.download_manager = (
