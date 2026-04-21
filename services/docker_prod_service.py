@@ -6,6 +6,8 @@ images from a Docker registry (e.g., Docker Hub).
 import docker
 import logging
 import os
+import re
+import subprocess
 import threading
 import time
 import requests
@@ -266,9 +268,17 @@ class DockerProdManager:
             logging.debug(f"Container list lookup failed for '{container_name}': {e}")
             return []
 
-    def _force_remove_by_name(self, container_name: str):
+    def _force_remove_by_name(self, container_name: str, container_id: str | None = None):
+
+        # Collect candidate IDs to remove (by-ID is more reliable than by-name on Windows/WSL2)
+        ids_to_remove: list[str] = []
+        if container_id:
+            ids_to_remove.append(container_id)
+
         existing = self._get_existing_container(container_name)
         if existing is not None:
+            if existing.id not in ids_to_remove:
+                ids_to_remove.append(existing.id)
             try:
                 existing.remove(force=True)
                 logging.info(f"Force-removed conflicting container '{container_name}'.")
@@ -284,6 +294,8 @@ class DockerProdManager:
             )
             for c in matches:
                 if c.name == container_name or c.name == f"/{container_name}":
+                    if c.id not in ids_to_remove:
+                        ids_to_remove.append(c.id)
                     try:
                         c.remove(force=True)
                         logging.info(
@@ -298,16 +310,35 @@ class DockerProdManager:
         except Exception as e:
             logging.warning(f"Container list fallback failed for '{container_name}': {e}")
 
-        # Last resort: delegate to the Docker CLI so SDK connection issues don't block removal
+        # Try removing by container ID via CLI — on Windows/WSL2 this is more reliable
+        # than removing by name when the container is in a zombie/removing state.
+        for cid in ids_to_remove:
+            try:
+                result = subprocess.run(
+                    ["docker", "rm", "-f", cid],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode == 0:
+                    logging.info(
+                        f"Force-removed conflicting container '{container_name}' "
+                        f"(id={cid[:12]}) via docker CLI (by ID)."
+                    )
+                    return
+                logging.warning(
+                    f"docker rm -f {cid[:12]} exited {result.returncode}: {result.stderr.strip()}"
+                )
+            except Exception as e:
+                logging.warning(f"docker rm -f by ID subprocess failed for '{container_name}': {e}")
+
+        # Last resort: remove by name via CLI
         try:
-            import subprocess
             result = subprocess.run(
                 ["docker", "rm", "-f", container_name],
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode == 0:
                 logging.info(
-                    f"Force-removed conflicting container '{container_name}' via docker CLI."
+                    f"Force-removed conflicting container '{container_name}' via docker CLI (by name)."
                 )
                 return
             logging.warning(
@@ -325,8 +356,24 @@ class DockerProdManager:
         """Poll until the container name is fully released. Returns True if freed."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            # containers.get() and containers.list() can disagree briefly on Windows/WSL2;
+            # require both to report absence before declaring the name slot free.
             if self._get_existing_container(container_name) is None:
-                return True
+                try:
+                    matches = self.client.containers.list(
+                        all=True, filters={"name": container_name}
+                    )
+                    still_there = [
+                        c for c in matches
+                        if c.name == container_name or c.name == f"/{container_name}"
+                    ]
+                    if not still_there:
+                        # Extra stabilization pause: Docker may still hold the name slot
+                        # in its create-path even after both lookup methods return empty.
+                        time.sleep(1.0)
+                        return True
+                except Exception:
+                    pass
             time.sleep(0.5)
         return False
 
@@ -636,7 +683,13 @@ class DockerProdManager:
                                 f"'{container_name}' (attempt {attempt}/{max_attempts}). "
                                 f"Force-removing stale container."
                             )
-                            self._force_remove_by_name(container_name)
+                            # Extract the container ID from the 409 error message so we can
+                            # remove by ID — more reliable than by name on Windows/WSL2.
+                            _id_match = re.search(
+                                r'already in use by container "([0-9a-f]{64})"', str(e)
+                            )
+                            _conflict_id = _id_match.group(1) if _id_match else None
+                            self._force_remove_by_name(container_name, container_id=_conflict_id)
                             freed = self._wait_for_container_removal(container_name)
                             if not freed:
                                 logging.warning(
