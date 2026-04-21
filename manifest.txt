@@ -9,6 +9,7 @@ comfyui-storage/lavasr_api.py
 comfyui-storage/mmaudio_api.py
 comfyui-storage/prismaudio_api.py
 comfyui-storage/qwen3_tts_api.py
+comfyui-storage/setup_ckpts_symlinks.py
 comfyui-storage/sparkvsr_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/temp_handler.py
