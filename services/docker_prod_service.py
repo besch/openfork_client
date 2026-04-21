@@ -256,7 +256,7 @@ class DockerProdManager:
                 logging.info(f"Force-removed conflicting container '{container_name}'.")
                 return
             except Exception as e:
-                logging.debug(
+                logging.warning(
                     f"containers.get().remove() failed for '{container_name}': {e}"
                 )
 
@@ -274,11 +274,29 @@ class DockerProdManager:
                         )
                         return
                     except Exception as e:
-                        logging.debug(
+                        logging.warning(
                             f"list-based remove failed for '{container_name}': {e}"
                         )
         except Exception as e:
-            logging.debug(f"Container list fallback failed for '{container_name}': {e}")
+            logging.warning(f"Container list fallback failed for '{container_name}': {e}")
+
+        # Last resort: delegate to the Docker CLI so SDK connection issues don't block removal
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["docker", "rm", "-f", container_name],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                logging.info(
+                    f"Force-removed conflicting container '{container_name}' via docker CLI."
+                )
+                return
+            logging.warning(
+                f"docker rm -f '{container_name}' exited {result.returncode}: {result.stderr.strip()}"
+            )
+        except Exception as e:
+            logging.warning(f"docker rm -f subprocess failed for '{container_name}': {e}")
 
         logging.warning(
             f"Could not find or remove conflicting container '{container_name}' "
@@ -580,11 +598,17 @@ class DockerProdManager:
 
                         existing = self._get_existing_container(container_name)
                         if existing is not None:
-                            try:
-                                existing.reload()
-                                status = existing.status
-                            except Exception:
-                                status = "unknown"
+                            # Reload with one retry — the fresh client may need a moment
+                            for _reload_try in range(2):
+                                try:
+                                    existing.reload()
+                                    status = existing.status
+                                    break
+                                except Exception:
+                                    if _reload_try == 0:
+                                        time.sleep(1)
+                                    else:
+                                        status = "unknown"
 
                             if status == "created":
                                 try:
@@ -604,7 +628,7 @@ class DockerProdManager:
                                 )
                                 return
 
-                            if status in ("created", "exited", "dead"):
+                            if status in ("created", "exited", "dead", "unknown"):
                                 try:
                                     existing.remove(force=True)
                                     logging.info(
