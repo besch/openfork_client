@@ -11,12 +11,12 @@ USAGE:
   curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_build.sh | bash
 
   Or with environment variables:
-  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=user/image:tag ./start_build.sh
+  DOCKERFILE_NAME=Dockerfile.ltx23-wan2gp-8gb DOCKER_TAG=user/image:tag ./start_build.sh
 
 ENVIRONMENT VARIABLES:
   Required:
-    DOCKERFILE_NAME       Dockerfile to build (e.g., Dockerfile.ltx2-8gb)
-    DOCKER_TAG            Docker image tag (e.g., beschiak/openfork-ltx2-8gb:latest)
+    DOCKERFILE_NAME       Dockerfile to build (e.g., Dockerfile.ltx23-wan2gp-8gb)
+    DOCKER_TAG            Docker image tag (e.g., beschiak/openfork-ltx23-wan2gp-8gb:latest)
 
   Optional:
     BUILD_JOB_ID          UUID of the build job for webhook reporting
@@ -27,20 +27,20 @@ ENVIRONMENT VARIABLES:
     HF_TOKEN              HuggingFace token for gated models
     RUN_DGN_CLIENT        Set to "true" to start DGN client after build
     DGN_API_KEY           DGN API key (required if running client)
-    SERVICE_TYPE          Service type for DGN client (e.g., ltx2-video-8gb)
+    SERVICE_TYPE          Service type for DGN client (e.g., ltx23-video-8gb)
     SAVE_LOGS             Set to "true" to stream logs to webhook (default: false)
 
 EXAMPLES:
   # Build only
-  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=myuser/ltx2:test ./start_build.sh
+  DOCKERFILE_NAME=Dockerfile.ltx23-wan2gp-8gb DOCKER_TAG=myuser/ltx23-q4:test ./start_build.sh
 
   # Build and push
-  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=myuser/ltx2:test \\
+  DOCKERFILE_NAME=Dockerfile.ltx23-wan2gp-8gb DOCKER_TAG=myuser/ltx23-q4:test \\
     PUSH_TO_DOCKERHUB=true DOCKERHUB_USER=myuser DOCKERHUB_TOKEN=xxx \\
     ./start_build.sh
 
   # Build, push, and run DGN client
-  DOCKERFILE_NAME=Dockerfile.ltx2-8gb DOCKER_TAG=myuser/ltx2:test \\
+  DOCKERFILE_NAME=Dockerfile.ltx23-wan2gp-8gb DOCKER_TAG=myuser/ltx23-q4:test \\
     PUSH_TO_DOCKERHUB=true RUN_DGN_CLIENT=true DGN_API_KEY=xxx \\
     ./start_build.sh
 EOF

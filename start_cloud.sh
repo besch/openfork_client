@@ -11,7 +11,7 @@ USAGE:
   curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_cloud.sh | bash
 
   Or with environment variables:
-  DGN_API_KEY=xxx SERVICE_TYPE=ltx2-video-8gb ./start_cloud.sh
+  DGN_API_KEY=xxx SERVICE_TYPE=ltx23-video-8gb ./start_cloud.sh
 
 ENVIRONMENT VARIABLES:
   Required:
@@ -30,7 +30,7 @@ EXAMPLES:
   DGN_API_KEY=dgn_xxx ./start_cloud.sh
 
   # With specific service type
-  DGN_API_KEY=dgn_xxx SERVICE_TYPE=ltx2-video-16gb ./start_cloud.sh
+  DGN_API_KEY=dgn_xxx SERVICE_TYPE=ltx23-video-16gb ./start_cloud.sh
 
   # With log streaming
   DGN_API_KEY=dgn_xxx SAVE_LOGS=true ./start_cloud.sh
@@ -401,12 +401,20 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
-      if [ "$TOTAL_VRAM_MB" -gt 28000 ]; then
+      LTX23_Q4_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
+      LTX23_Q8_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
+      if [ -f "$LTX23_Q4_TRANSFORMER" ] && [ ! -f "$LTX23_Q8_TRANSFORMER" ]; then
+          SERVICE_TYPE="ltx23-video-8gb"
+          log "Auto-selected LTX-2.3 8GB tier (Q4_K_M image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -gt 28000 ]; then
           SERVICE_TYPE="ltx23-video-32gb"
           log "Auto-selected LTX-2.3 32GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       elif [ "$TOTAL_VRAM_MB" -gt 18000 ]; then
           SERVICE_TYPE="ltx23-video-24gb"
           log "Auto-selected LTX-2.3 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -lt 12000 ] && [ -f "$LTX23_Q4_TRANSFORMER" ]; then
+          SERVICE_TYPE="ltx23-video-8gb"
+          log "Auto-selected LTX-2.3 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       else
           SERVICE_TYPE="ltx23-video-16gb"
           log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
@@ -537,11 +545,10 @@ if [ "$START_WAN2GP" = "true" ]; then
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    # LTX-2.3 uses the FP8 Gemma 3 12B text encoder which requires CC >= 8.9.
-    #   1. CC >= 8.9 for FP8 support (RTX 40xx / Ada Lovelace, Hopper)
-    #   2. The GPU's SM version must be in this PyTorch build's arch list.
-    #      Blackwell GPUs (RTX 5060 Ti = SM 12.0) crash with "no kernel image"
-    #      if PyTorch was compiled only up to SM 9.0.
+    # LTX-2.3 uses GGUF transformer + Gemma-3 12B QAT Q4_0 encoder (not FP8).
+    # Minimum requirement is CC >= 7.5 — the floor for the PyTorch 2.7 cu128 wheel
+    # (sm_75 = T4/RTX 20xx, sm_80 = A100, sm_86 = RTX 30xx/A10G, sm_89 = RTX 40xx, sm_90 = H100).
+    # Blackwell GPUs (SM 12.0) are forward-compatible via PTX JIT in the cu128 wheel.
     # Use Python (which has the actual PyTorch build info) rather than a raw CC check.
     WAN2GP_GPU_CHECK=$("$PYTHON_EXE" -c "
 import sys
@@ -553,12 +560,11 @@ try:
     major, minor = torch.cuda.get_device_capability()
     gpu_name = torch.cuda.get_device_name(0)
     # NOTE: We intentionally do NOT check get_arch_list() here.
-    # cu128 wheels use PTX intermediate code for forward-compat architectures
-    # (e.g. sm_89 / RTX 40xx), so sm_89 may not appear in the SASS arch list
-    # even though the GPU and PyTorch build are fully compatible.
-    # The only meaningful gate for LTX-2.3 is CC >= 8.9 (FP8 tensor cores).
-    if major < 8 or (major == 8 and minor < 9):
-        print('NO_FP8:{}.{}'.format(major, minor))
+    # cu128 wheels use PTX intermediate code for forward-compat architectures,
+    # so an SM may not appear in the SASS arch list yet still be fully compatible.
+    # Hard minimum is CC 7.5 (PyTorch cu128 wheel floor).
+    if major < 7 or (major == 7 and minor < 5):
+        print('BELOW_MIN:{}.{}'.format(major, minor))
     else:
         print('OK:{}.{}:{}'.format(major, minor, gpu_name))
 except Exception as e:
@@ -570,12 +576,12 @@ except Exception as e:
             _info="${WAN2GP_GPU_CHECK#OK:}"
             _cc=$(echo "$_info" | cut -d: -f1-2)
             _gpu=$(echo "$_info" | cut -d: -f3-)
-            log "GPU '${_gpu}' CC ${_cc} — FP8 compute capability OK for LTX-2.3."
+            log "GPU '${_gpu}' CC ${_cc} — compatible with LTX-2.3 Wan2GP (PyTorch cu128 minimum: CC 7.5)."
             ;;
-        NO_FP8:*)
-            _cc="${WAN2GP_GPU_CHECK#NO_FP8:}"
-            log "ERROR: LTX-2.3 requires compute capability 8.9+ for FP8 (detected: ${_cc})."
-            log "Supported GPUs: RTX 4090/4080/4070 Ti Super/4070/4060 Ti (Ada Lovelace, CC 8.9+), L40S, H100, H200."
+        BELOW_MIN:*)
+            _cc="${WAN2GP_GPU_CHECK#BELOW_MIN:}"
+            log "ERROR: LTX-2.3 requires compute capability 7.5+ (detected: ${_cc})."
+            log "Supported GPUs: T4 (CC 7.5), A100 (CC 8.0), RTX 30xx/A10G (CC 8.6), RTX 40xx/L40S (CC 8.9), H100 (CC 9.0)."
             exit 1
             ;;
         NO_CUDA)
@@ -589,6 +595,9 @@ except Exception as e:
     # Set Wan2GP environment variables
     export WAN2GP_ROOT="/opt/wan2gp"
     export WAN2GP_OUTPUT="/opt/wan2gp/outputs"
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export HF_HUB_DISABLE_TELEMETRY="${HF_HUB_DISABLE_TELEMETRY:-1}"
     
     # Detailed diagnostics for Wan2GP installation
     log "Checking Wan2GP installation at $WAN2GP_ROOT..."
@@ -612,6 +621,26 @@ except Exception as e:
         log "WARNING: Wan2GP checkpoints directory not found at $WAN2GP_ROOT/ckpts."
         log "Models may not have been downloaded during build."
         WAN2GP_CHECK_FAILED=1
+    fi
+
+    if [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]]; then
+        LTX23_Q4_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
+        LTX23_Q8_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
+        if [[ "$SERVICE_TYPE" == *"8gb"* ]]; then
+            LTX23_REQUIRED_TRANSFORMER="$LTX23_Q4_TRANSFORMER"
+            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-8gb:latest"
+        else
+            LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
+            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
+        fi
+
+        if [ ! -f "$LTX23_REQUIRED_TRANSFORMER" ]; then
+            log "ERROR: $SERVICE_TYPE requires $(basename "$LTX23_REQUIRED_TRANSFORMER"), but this image does not contain it."
+            log "Use beschiak/openfork-ltx23-wan2gp-8gb:latest for the 8GB tier."
+            log "Use beschiak/openfork-ltx23-wan2gp:latest for the 16GB, 24GB, and 32GB tiers."
+            log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
     fi
     
     if [ "$WAN2GP_CHECK_FAILED" = "1" ]; then
@@ -641,16 +670,16 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
   
   case "$SERVICE_TYPE" in
-    *ltx2*-8gb*|*8gb*)
+    *ltx23*-8gb*|*ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
       ;;
-    *ltx2*-16gb*|*16gb*)
+    *ltx23*-16gb*|*ltx2*-16gb*|*16gb*)
       log "Applying 16GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"
       # IMPORTANT: Use --lowvram because total model size (~29.5GB) far exceeds 16GB VRAM
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none"
       ;;
-    *ltx2*-24gb*|*24gb*)
+    *ltx23*-24gb*|*ltx2*-24gb*|*24gb*)
       log "Applying 24GB VRAM optimizations for ComfyUI (GGUF Q8_0 model)"
       # GGUF Q8_0 (~20.4GB) + Gemma FP8 (~6GB) = ~26.4GB total, slightly over 24GB VRAM
       # Use --lowvram to allow CPU offloading when needed
@@ -994,7 +1023,7 @@ fi
 if [ -d "/opt/ComfyUI" ]; then
   # Determine timeout based on service tier
   WAIT_TIME=120
-  if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]]; then
     WAIT_TIME=600
     log "Large model detected ($SERVICE_TYPE). Extending ComfyUI readiness timeout to ${WAIT_TIME}s."
   fi

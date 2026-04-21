@@ -811,6 +811,16 @@ class JobListener:
                                             )
 
                                             if is_wan2gp:
+                                                # LTX/Wan2GP images are expected to contain
+                                                # their model files. If a dependency tries to
+                                                # fetch from Hugging Face at runtime, fail
+                                                # visibly instead of silently re-downloading on
+                                                # every container start.
+                                                wan2gp_env = {
+                                                    "HF_HUB_OFFLINE": "1",
+                                                    "TRANSFORMERS_OFFLINE": "1",
+                                                    "HF_HUB_DISABLE_TELEMETRY": "1",
+                                                }
                                                 # Start with a sleeping entrypoint so we can
                                                 # copy the server script before launching it.
                                                 # This makes old images (no CMD) work without
@@ -818,6 +828,7 @@ class JobListener:
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,
                                                     command=["sleep", "infinity"],
+                                                    environment=wan2gp_env,
                                                 )
                                                 # Copy the latest wan2gp_server.py into the
                                                 # container, overwriting any baked-in version.

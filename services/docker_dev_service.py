@@ -136,6 +136,7 @@ class DockerDevManager:
         ports: dict = None,
         force_restart: bool = True,
         command: list = None,
+        environment: dict = None,
     ):
         compose_file = self._get_compose_file(service_type)
         logging.info(f"Starting container for service '{service_type}' using compose file: {compose_file}")

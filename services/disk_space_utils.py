@@ -140,6 +140,8 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "hunyuan-video-24gb": 180,
         "hunyuan-24gb": 180,
         "hunyuan": 180,  # Default Hunyuan
+        "ltx23-wan2gp-8gb": 160,
+        "ltx23-wan2gp": 170,
         "ltx2-8gb": 180,
         "ltx2-16gb": 180,
         "wan22-16gb": 190,

@@ -14,8 +14,8 @@ import logging
 
 from config import DEV_MODE
 from services.processors.wan2gp_processor import Wan2GPProcessor
+from services.processors.video.ltx23_common import get_ltx23_model_type
 
-_MODEL_TYPE = "ltx2_22B"
 _DEFAULT_STEPS = 8
 _DEFAULT_CFG = 3.0
 _FPS = 24
@@ -52,7 +52,7 @@ class LTX23TextToVideoWan2GPProcessor(Wan2GPProcessor):
         video_length = int(duration * _FPS) + 1
 
         settings = {
-            "model_type": _MODEL_TYPE,
+            "model_type": get_ltx23_model_type(service_type),
             "prompt": self.positive_prompt,
             "negative_prompt": self.negative_prompt,
             "resolution": self.aspect_to_resolution(

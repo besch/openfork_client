@@ -38,9 +38,9 @@ MAX_INPUT_ASSET_REDIRECTS = int(
 # None means uncapped for that policy.
 POLICY_MAX_CACHED_IMAGES = {
     "monetize": 3,
-    "all": 3,
-    "project": 3,
-    "users": 3,
+    "all": 5,
+    "project": 5,
+    "users": 5,
     "mine": None,
 }
 

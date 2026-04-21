@@ -451,6 +451,7 @@ class DockerProdManager:
         ports: dict = None,
         force_restart: bool = True,
         command: list = None,
+        environment: dict = None,
     ):
         if not self.client:
             logging.error(
@@ -544,6 +545,8 @@ class DockerProdManager:
             )
             if command:
                 run_kwargs["command"] = command
+            if environment:
+                run_kwargs["environment"] = environment
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
                 try:

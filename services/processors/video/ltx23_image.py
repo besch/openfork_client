@@ -13,9 +13,9 @@ from PIL import Image
 
 from config import DEV_MODE, SUPABASE_URL
 from services.processors.wan2gp_processor import Wan2GPProcessor
+from services.processors.video.ltx23_common import get_ltx23_model_type
 from utils.comfyui_workflow_utils import materialize_start_image
 
-_MODEL_TYPE = "ltx2_22B"
 _DEFAULT_STEPS = 8
 _DEFAULT_CFG = 3.0
 _FPS = 24
@@ -72,7 +72,7 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             image_prompt_type = inputs["image_prompt_type"]
 
         settings = {
-            "model_type": _MODEL_TYPE,
+            "model_type": get_ltx23_model_type(service_type),
             "prompt": self.positive_prompt,
             "negative_prompt": self.negative_prompt,
             "image_start": start_image,

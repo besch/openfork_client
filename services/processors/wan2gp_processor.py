@@ -155,6 +155,10 @@ class Wan2GPProcessor(BaseJobProcessor):
         local_paths = []
         for name in basenames:
             download_url = f"{WAN2GP_HTTP_URL}/output/{name}"
+            logging.info(
+                "Downloading generated Wan2GP output from local container: %s",
+                name,
+            )
             try:
                 dl = requests.get(download_url, timeout=300, stream=True)
                 dl.raise_for_status()
@@ -170,10 +174,20 @@ class Wan2GPProcessor(BaseJobProcessor):
                 delete=False, suffix=suffix, dir=self.cache_dir
             )
             try:
+                bytes_written = 0
+                started_at = time.monotonic()
                 for chunk in dl.iter_content(chunk_size=1 << 20):
+                    bytes_written += len(chunk)
                     tmp.write(chunk)
                 tmp.close()
                 local_paths.append(tmp.name)
+                elapsed = max(time.monotonic() - started_at, 0.001)
+                logging.info(
+                    "Saved Wan2GP output locally: %.1f MB in %.1fs (%.1f MB/s)",
+                    bytes_written / (1024 * 1024),
+                    elapsed,
+                    (bytes_written / (1024 * 1024)) / elapsed,
+                )
             except Exception as e:
                 tmp.close()
                 os.unlink(tmp.name)

@@ -1,16 +1,16 @@
-# OpenFork — LTX-2.3 22B Audio-Video on Wan2GP (multi-GPU)
+# OpenFork — LTX-2.3 22B Audio-Video on Wan2GP (8GB Q4)
 #
 # What this image provides:
 #   - Wan2GP (deepbeepmeep/Wan2GP) at /opt/wan2gp
-#   - LTX-2.3 22B Q8_0 GGUF transformer in ckpts/
+#   - LTX-2.3 22B Q4_K_M GGUF transformer in ckpts/
 #   - Gemma-3 12B QAT text encoder in ckpts/
 #   - All LTX-2.3 support files (VAE, audio VAE, vocoder, upscalers, LoRAs)
 #
 # Build:
 #   docker build \
 #     --build-arg HF_TOKEN=<token> \
-#     -t beschiak/openfork-ltx23-wan2gp:latest \
-#     -f Dockerfile.ltx23-wan2gp .
+#     -t beschiak/openfork-ltx23-wan2gp-8gb:latest \
+#     -f Dockerfile.ltx23-wan2gp-8gb .
 #
 # Notes:
 #   - HF_TOKEN is required to download from DeepBeepMeep/LTX-2 (gated repo)
@@ -84,10 +84,10 @@ RUN test -n "${HF_TOKEN}" \
     || { echo "ERROR: HF_TOKEN build-arg is required to download gated models. Pass --build-arg HF_TOKEN=<your_token>"; exit 1; }
 
 # ── Download LTX-2.3 22B model files (DeepBeepMeep/LTX-2) ────────────────────
-# Transformer: Q8_0 for the 16GB, 24GB, and 32GB tiers
+# Transformer: Q4_K_M for the 8GB tier
 RUN pip3 install -q "huggingface_hub[cli]" \
     && huggingface-cli download DeepBeepMeep/LTX-2 \
-        ltx-2.3-22b-distilled-Q8_0_light.gguf \
+        ltx-2.3-22b-distilled-Q4_K_M_light.gguf \
         ltx-2.3-22b_vae.safetensors \
         ltx-2.3-22b_audio_vae.safetensors \
         ltx-2.3-22b_vocoder.safetensors \
@@ -125,7 +125,7 @@ ENV HF_HUB_OFFLINE=1 \
 
 # ── Verify critical files are present and shared.api is importable ─────────────
 COPY verify_wan2gp.py /tmp/verify_wan2gp.py
-RUN LTX23_REQUIRED_TRANSFORMER=ltx-2.3-22b-distilled-Q8_0_light.gguf python3 /tmp/verify_wan2gp.py
+RUN LTX23_REQUIRED_TRANSFORMER=ltx-2.3-22b-distilled-Q4_K_M_light.gguf python3 /tmp/verify_wan2gp.py
 
 WORKDIR /opt/wan2gp
 
