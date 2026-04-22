@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -124,17 +125,37 @@ class Wan2GPProcessor(BaseJobProcessor):
             serialized[key] = val
 
         generate_url = f"{WAN2GP_HTTP_URL}/generate"
-        try:
-            resp = requests.post(
-                generate_url,
-                json={"settings": serialized},
-                timeout=self.MAX_GENERATION_SECONDS + 60,
-            )
-        except requests.exceptions.RequestException as e:
+        resp_holder: list = [None]
+        error_holder: list = [None]
+
+        def _do_generate():
+            try:
+                resp_holder[0] = requests.post(
+                    generate_url,
+                    json={"settings": serialized},
+                    timeout=self.MAX_GENERATION_SECONDS + 60,
+                )
+            except requests.exceptions.RequestException as e:
+                error_holder[0] = e
+
+        gen_thread = threading.Thread(target=_do_generate, daemon=True)
+        gen_thread.start()
+        while gen_thread.is_alive():
+            gen_thread.join(timeout=1.0)
+            if self.shutdown_event.is_set():
+                logging.info(
+                    "Shutdown event received during Wan2GP generation. Aborting job %s.",
+                    self.job_id,
+                )
+                return []
+
+        if error_holder[0]:
             logging.error(
-                f"Wan2GP generate request failed for job {self.job_id}: {e}"
+                f"Wan2GP generate request failed for job {self.job_id}: {error_holder[0]}"
             )
             return []
+
+        resp = resp_holder[0]
 
         if resp.status_code != 200:
             try:
