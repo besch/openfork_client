@@ -58,6 +58,30 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertEqual(client.interrupted_job_id, "job-race")
         self.assertEqual(client.interrupted_job_execution_token, "token-race")
 
+    def test_update_routing_config_ipc_hot_reloads_client_policy(self):
+        client = SimpleNamespace(
+            current_job=None,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            stop_requested=False,
+            orchestrator_service=Mock(),
+            download_manager=None,
+            apply_routing_config=Mock(),
+        )
+
+        original_stdin = sys.stdin
+        sys.stdin = io.StringIO(
+            '{"type":"UPDATE_ROUTING_CONFIG","payload":{"community_mode":"all","allowed_ids":[]}}\n'
+        )
+        try:
+            listen_for_ipc_commands(client)
+        finally:
+            sys.stdin = original_stdin
+
+        client.apply_routing_config.assert_called_once_with(
+            {"community_mode": "all", "allowed_ids": []}
+        )
+
     def test_cleanup_resets_interrupted_job_even_after_current_job_is_cleared(self):
         orchestrator_service = Mock()
         orchestrator_service.get_job.return_value = {"status": "processing"}

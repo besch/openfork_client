@@ -29,7 +29,7 @@ from services.docker_download_manager import (
     ImageAvailability,
 )
 from services.job_listener import JobListener
-from dgn_client import _get_max_cached_images_for_policy
+from dgn_client import DGNClient, _get_max_cached_images_for_policy
 
 
 class FakeImageStore:
@@ -184,13 +184,36 @@ class FakeDownloadManager:
 
 class DockerCachePolicyTests(unittest.TestCase):
     def test_cache_cap_policy_mapping_matches_routing_modes(self):
-        self.assertEqual(_get_max_cached_images_for_policy("all", False), 3)
+        self.assertEqual(_get_max_cached_images_for_policy("all", False), 5)
         self.assertEqual(
-            _get_max_cached_images_for_policy("trusted_projects", False), 3
+            _get_max_cached_images_for_policy("trusted_projects", False), 5
         )
-        self.assertEqual(_get_max_cached_images_for_policy("trusted_users", False), 3)
+        self.assertEqual(_get_max_cached_images_for_policy("trusted_users", False), 5)
         self.assertIsNone(_get_max_cached_images_for_policy("none", False))
         self.assertEqual(_get_max_cached_images_for_policy("none", True), 3)
+
+    def test_apply_routing_config_updates_allowed_ids_and_cache_cap(self):
+        client = DGNClient.__new__(DGNClient)
+        client.process_own_jobs = True
+        client.community_mode = "none"
+        client.monetize_mode = False
+        client.allowed_ids = ["owner-id"]
+        client.download_manager = SimpleNamespace(max_cached_images=None)
+        client.job_wakeup_event = threading.Event()
+
+        client.apply_routing_config(
+            {
+                "process_own_jobs": True,
+                "community_mode": "all",
+                "allowed_ids": [],
+                "monetize_mode": False,
+            }
+        )
+
+        self.assertEqual(client.community_mode, "all")
+        self.assertEqual(client.allowed_ids, [])
+        self.assertEqual(client.download_manager.max_cached_images, 5)
+        self.assertTrue(client.job_wakeup_event.is_set())
 
     def test_evicts_prefetched_untouched_image_before_used_images(self):
         docker_manager = FakeDockerManager(

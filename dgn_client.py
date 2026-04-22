@@ -108,30 +108,69 @@ class DGNClient:
 
     def apply_routing_config(self, config: dict) -> None:
         """Apply routing config received from heartbeat response (hot-reload)."""
-        new_process_own = config.get("process_own_jobs", self.process_own_jobs)
-        new_community = config.get("community_mode", self.community_mode)
-        new_monetize = config.get("monetize_mode", self.monetize_mode)
+        new_process_own = config.get(
+            "process_own_jobs",
+            config.get("processOwnJobs", self.process_own_jobs),
+        )
+        new_community = config.get(
+            "community_mode",
+            config.get("communityMode", self.community_mode),
+        )
+        new_monetize = config.get(
+            "monetize_mode",
+            config.get("monetizeMode", self.monetize_mode),
+        )
+        allowed_ids_supplied = any(
+            key in config for key in ("allowed_ids", "allowedIds", "trustedIds")
+        )
+        new_allowed_ids = config.get(
+            "allowed_ids",
+            config.get("allowedIds", config.get("trustedIds", self.allowed_ids)),
+        )
+        if new_allowed_ids is None:
+            new_allowed_ids = []
+        elif isinstance(new_allowed_ids, str):
+            new_allowed_ids = [
+                allowed_id.strip()
+                for allowed_id in new_allowed_ids.split(",")
+                if allowed_id.strip()
+            ]
+        elif not isinstance(new_allowed_ids, list):
+            new_allowed_ids = list(new_allowed_ids)
 
         changed = (
             new_process_own != self.process_own_jobs
             or new_community != self.community_mode
             or new_monetize != self.monetize_mode
+            or (allowed_ids_supplied and new_allowed_ids != self.allowed_ids)
         )
 
         if changed:
             logging.info(
                 f"Routing config updated: process_own_jobs={new_process_own}, "
-                f"community_mode={new_community}, monetize_mode={new_monetize}"
+                f"community_mode={new_community}, monetize_mode={new_monetize}, "
+                f"allowed_ids={len(new_allowed_ids) if allowed_ids_supplied else 'unchanged'}"
             )
             self.process_own_jobs = new_process_own
             self.community_mode = new_community
             self.monetize_mode = new_monetize
+            if allowed_ids_supplied:
+                self.allowed_ids = new_allowed_ids
 
-            # Refresh own user_id in allowed_ids if process_own_jobs toggled on
-            if new_process_own and not self.orchestrator_service.use_api_key:
-                user_id = self.orchestrator_service._get_user_id_from_token()
-                if user_id and user_id not in self.allowed_ids:
-                    self.allowed_ids.append(user_id)
+            download_manager = getattr(self, "download_manager", None)
+            if download_manager:
+                max_cached_images = _get_max_cached_images_for_policy(
+                    self.community_mode,
+                    self.monetize_mode,
+                )
+                download_manager.max_cached_images = (
+                    max_cached_images
+                    if max_cached_images and max_cached_images > 0
+                    else None
+                )
+
+            if hasattr(self, "job_wakeup_event"):
+                self.job_wakeup_event.set()
 
     def _build_processor_map(self):
         proc_map = {}

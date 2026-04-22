@@ -42,8 +42,6 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.mmaudio-8gb", "beschiak/openfork-mmaudio-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.mmaudio-16gb", "beschiak/openfork-mmaudio-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.lavasr", "beschiak/openfork-lavasr:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx23-wan2gp-8gb", "beschiak/openfork-ltx23-wan2gp-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.prismaudio-8gb", "beschiak/openfork-prismaudio-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.prismaudio-16gb", "beschiak/openfork-prismaudio-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.sparkvsr-24gb", "beschiak/openfork-sparkvsr-24gb:latest", build=True, push=True),
@@ -52,6 +50,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.anima-16gb", "beschiak/openfork-anima-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.anima-8gb", "beschiak/openfork-anima-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.llm", "beschiak/openfork-llm:latest", push=True),
+    # ImageConfig("Dockerfile.ltx23-wan2gp-8gb", "beschiak/openfork-ltx23-wan2gp-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True),
     # ERNIE-Image
     ImageConfig(
         "Dockerfile.ernie-image-8gb",

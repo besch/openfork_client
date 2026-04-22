@@ -49,6 +49,12 @@ def listen_for_ipc_commands(client: "DGNClient"):
                 logging.error("Received AUTH_FAILED_PERMANENTLY command from main process.")
                 client.orchestrator_service.mark_auth_failed_permanently()
                 SHUTDOWN_EVENT.set()
+            elif cmd_type == "UPDATE_ROUTING_CONFIG":
+                logging.info("Received UPDATE_ROUTING_CONFIG command from main process.")
+                if isinstance(payload, dict):
+                    client.apply_routing_config(payload)
+                else:
+                    logging.warning("UPDATE_ROUTING_CONFIG command received with invalid payload.")
             elif cmd_type == "REQUEST_STOP":
                 logging.info("Received REQUEST_STOP command from main process.")
                 client.stop_requested = True
@@ -199,6 +205,15 @@ def setup_client(args):
     
     provider_id = registration_result.get("provider_id")
     user_id = registration_result.get("user_id")
+    print(
+        json.dumps(
+            {
+                "type": "PROVIDER_REGISTERED",
+                "payload": {"provider_id": provider_id},
+            }
+        ),
+        flush=True,
+    )
     
     # For process_own_jobs, ensure allowed_ids contains the user's ID
     if client.process_own_jobs and user_id:
