@@ -215,6 +215,41 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertEqual(client.download_manager.max_cached_images, 5)
         self.assertTrue(client.job_wakeup_event.is_set())
 
+    def test_apply_routing_config_does_not_interrupt_active_job(self):
+        active_job = {"id": "job-active", "execution_token": "token-active"}
+        orchestrator_service = Mock()
+        client = DGNClient.__new__(DGNClient)
+        client.process_own_jobs = True
+        client.community_mode = "none"
+        client.monetize_mode = False
+        client.allowed_ids = ["owner-id"]
+        client.current_job = active_job
+        client.interrupted_job_id = None
+        client.interrupted_job_execution_token = None
+        client.stop_requested = False
+        client.active_service_type = "wan22"
+        client.download_manager = SimpleNamespace(max_cached_images=None)
+        client.job_wakeup_event = threading.Event()
+        client.orchestrator_service = orchestrator_service
+
+        client.apply_routing_config(
+            {
+                "process_own_jobs": True,
+                "community_mode": "all",
+                "allowed_ids": [],
+                "monetize_mode": False,
+            }
+        )
+
+        self.assertIs(client.current_job, active_job)
+        self.assertEqual(client.active_service_type, "wan22")
+        self.assertIsNone(client.interrupted_job_id)
+        self.assertIsNone(client.interrupted_job_execution_token)
+        self.assertFalse(client.stop_requested)
+        orchestrator_service.reset_interrupted_job.assert_not_called()
+        orchestrator_service.update_job_status.assert_not_called()
+        orchestrator_service.update_provider_status.assert_not_called()
+
     def test_evicts_prefetched_untouched_image_before_used_images(self):
         docker_manager = FakeDockerManager(
             service_types=["wan22", "foley", "hunyuan"],
