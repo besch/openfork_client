@@ -419,6 +419,18 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ltx23-video-16gb"
           log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/opt/ComfyUI/models/checkpoints/ltx-2.3-22b-distilled.safetensors" ]; then
+      log "Auto-mode: Detected LTX-2.3 ComfyUI image (BF16 safetensors present)."
+      if [ "$TOTAL_VRAM_MB" -gt 20000 ]; then
+          SERVICE_TYPE="ltx23-comfyui-video-24gb"
+          log "Auto-selected LTX-2.3 ComfyUI 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -gt 12000 ]; then
+          SERVICE_TYPE="ltx23-comfyui-video-16gb"
+          log "Auto-selected LTX-2.3 ComfyUI 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="ltx23-comfyui-video-8gb"
+          log "Auto-selected LTX-2.3 ComfyUI 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/app/davinci_magihuman_api.py" ]; then
       log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman 32GB service."
       START_DAVINCI="true"
@@ -463,10 +475,10 @@ else
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
-  # Wan2GP backend for all LTX-2.3 Audio-Video services
-  if [[ "$SERVICE_TYPE" == *"ltx23"* ]]; then
+  # Wan2GP backend for LTX-2.3 Audio-Video services (NOT the ComfyUI variants)
+  if [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; then
       START_WAN2GP="true"
-      log "LTX-2.3 service requested. Using Wan2GP backend."
+      log "LTX-2.3 Wan2GP service requested. Using Wan2GP backend."
   fi
   # daVinci-MagiHuman REST backend
   if [[ "$SERVICE_TYPE" == *"davinci"* ]]; then
@@ -670,6 +682,21 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
   
   case "$SERVICE_TYPE" in
+    # LTX-2.3 ComfyUI variants — must appear BEFORE generic ltx2*/8gb patterns
+    # Uses --use-pytorch-cross-attention (better than xformers for offloaded 46GB model)
+    # and --cpu-vae on 8/16GB to keep VRAM free for attention activations
+    *ltx23*comfyui*8gb*|*ltx23-comfyui*-8gb*)
+      log "Applying 8GB optimizations for LTX-2.3 ComfyUI (512x288, 65 frames)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention --cache-none"
+      ;;
+    *ltx23*comfyui*16gb*|*ltx23-comfyui*-16gb*)
+      log "Applying 16GB optimizations for LTX-2.3 ComfyUI (576x320, 97 frames)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention --cache-none"
+      ;;
+    *ltx23*comfyui*24gb*|*ltx23-comfyui*-24gb*)
+      log "Applying 24GB optimizations for LTX-2.3 ComfyUI (768x432, 121 frames)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention"
+      ;;
     *ltx23*-8gb*|*ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"

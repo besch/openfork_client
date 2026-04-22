@@ -1860,6 +1860,21 @@ def get_ltx23_dimensions(aspect_ratio: str, tier: str = "24gb") -> tuple[int, in
     16GB tier uses lower resolution to stay within VRAM activation budget.
     32GB tier uses higher resolution (~1.8x more pixels than 24GB).
     """
+    if tier == "8gb":
+        if aspect_ratio == "16:9":
+            return 512, 288
+        elif aspect_ratio == "9:16":
+            return 288, 512
+        elif aspect_ratio == "1:1":
+            return 384, 384
+        elif aspect_ratio == "4:3":
+            return 448, 320
+        elif aspect_ratio == "3:4":
+            return 320, 448
+        elif aspect_ratio == "21:9":
+            return 608, 256
+        else:
+            return 512, 288
     if tier == "16gb":
         if aspect_ratio == "16:9":
             return 576, 320
@@ -1922,12 +1937,12 @@ def inject_prompt_into_ltx23_video_workflow(
     """
     Injects prompts and parameters into an LTX-2.3 text-to-video workflow.
 
-    LTX-2.3 workflow node structure:
+    LTX-2.3 ComfyUI workflow node structure:
     - Node 3: Positive prompt (CLIPTextEncode)
     - Node 4: Negative prompt (CLIPTextEncode)
     - Node 6: EmptyLTXVLatentVideo (dimensions)
     - Node 8: LTXVEmptyLatentAudio (frame count + frame rate)
-    - Node 11: GuiderParameters VIDEO (cfg)
+    - Node 11: CFGGuider (cfg) — node 2 applies the distilled LoRA for correct colours
     - Node 13: LTXVScheduler (steps)
     - Node 15: RandomNoise (seed)
     """
@@ -1979,10 +1994,10 @@ def inject_prompt_into_ltx23_video_workflow(
                 logging.info(f"Injected seed={actual_seed} into LTX-2.3 RandomNoise node {node_id}")
                 break
 
-    # Inject video CFG into GuiderParameters VIDEO (Node 11)
-    if cfg_scale is not None and '11' in api_graph and api_graph['11'].get("class_type") == "GuiderParameters":
+    # Inject cfg into CFGGuider (Node 11)
+    if cfg_scale is not None and '11' in api_graph and api_graph['11'].get("class_type") in ("CFGGuider", "GuiderParameters"):
         api_graph['11']['inputs']['cfg'] = cfg_scale
-        logging.info(f"Injected video cfg={cfg_scale} into LTX-2.3 GuiderParameters node 11")
+        logging.info(f"Injected video cfg={cfg_scale} into LTX-2.3 CFGGuider node 11")
 
     # Replace date token in video save node filename prefix
     for node in api_graph.values():
