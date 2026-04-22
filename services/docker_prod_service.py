@@ -801,6 +801,11 @@ class DockerProdManager:
                                     f"Container '{container_name}' still present after "
                                     f"removal — proceeding anyway."
                                 )
+                            # Docker Desktop / WSL2: the TCP endpoint can still refuse
+                            # name creation for a few seconds after inspect says it's
+                            # gone. Wait before the next attempt to avoid burning all
+                            # retries in <1 s.
+                            time.sleep(3)
                             continue
 
                         logging.warning(
