@@ -397,9 +397,22 @@ class DockerProdManager:
             gone = self._wait_for_container_id_gone(container_id, timeout=timeout)
             if not gone:
                 return False
-            # Name slot may briefly outlast ID removal — add a short stabilization pause.
-            time.sleep(1.5)
-            return True
+            # Name slot may outlast ID removal on Docker Desktop / WSL2.
+            # Poll by name until the slot is confirmed free (up to 10 extra seconds).
+            name_deadline = time.monotonic() + 10.0
+            while time.monotonic() < name_deadline:
+                result = subprocess.run(
+                    ["docker", "inspect", container_name],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode != 0:
+                    time.sleep(0.3)  # brief final stabilisation
+                    return True
+                time.sleep(0.5)
+            logging.warning(
+                f"Container name '{container_name}' still occupied 10 s after ID removal."
+            )
+            return False
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
