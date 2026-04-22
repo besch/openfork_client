@@ -734,17 +734,66 @@ class DockerProdManager:
                             self._force_pull_image(image_name)
                             continue
                         if is_409:
-                            logging.warning(
-                                f"Container name conflict for "
-                                f"'{container_name}' (attempt {attempt}/{max_attempts}). "
-                                f"Force-removing stale container."
-                            )
-                            # Extract the container ID from the 409 error message so we can
-                            # remove by ID — more reliable than by name on Windows/WSL2.
                             _id_match = re.search(
                                 r'already in use by container "([0-9a-f]{64})"', str(e)
                             )
                             _conflict_id = _id_match.group(1) if _id_match else None
+
+                            # The transport timeout on the previous attempt may mean Docker
+                            # finished creating/starting the container after our connection
+                            # dropped. Check its state before deciding to remove it.
+                            _conflict_state = None
+                            if _conflict_id:
+                                _sr = subprocess.run(
+                                    ["docker", "inspect", "--format",
+                                     "{{.State.Status}}", _conflict_id],
+                                    capture_output=True, text=True, timeout=10,
+                                )
+                                if _sr.returncode == 0:
+                                    _conflict_state = _sr.stdout.strip()
+
+                            if _conflict_state in ("running", "restarting"):
+                                logging.info(
+                                    f"Container '{container_name}' is already running "
+                                    f"(id={_conflict_id[:12]}). Reusing it."
+                                )
+                                return
+
+                            if _conflict_state == "created":
+                                # Docker is still initialising the container (overlayfs / GPU
+                                # hooks for large images can take many minutes on WSL2).
+                                # Poll via CLI until it starts instead of removing and retrying.
+                                logging.info(
+                                    f"Container '{container_name}' is still initialising "
+                                    f"— polling up to 5 minutes for it to start..."
+                                )
+                                _poll_end = time.monotonic() + 300
+                                while time.monotonic() < _poll_end:
+                                    time.sleep(5)
+                                    _pr = subprocess.run(
+                                        ["docker", "inspect", "--format",
+                                         "{{.State.Status}}", _conflict_id],
+                                        capture_output=True, text=True, timeout=10,
+                                    )
+                                    if _pr.returncode != 0:
+                                        _conflict_state = "missing"
+                                        break
+                                    _ps = _pr.stdout.strip()
+                                    if _ps in ("running", "restarting",
+                                               "exited", "dead"):
+                                        _conflict_state = _ps
+                                        break
+                                if _conflict_state in ("running", "restarting"):
+                                    logging.info(
+                                        f"Container '{container_name}' started. Reusing it."
+                                    )
+                                    return
+
+                            logging.warning(
+                                f"Container name conflict for "
+                                f"'{container_name}' (attempt {attempt}/{max_attempts}), "
+                                f"state={_conflict_state!r}. Force-removing."
+                            )
                             self._force_remove_by_name(container_name, container_id=_conflict_id)
                             freed = self._wait_for_container_removal(container_name, container_id=_conflict_id)
                             if not freed:
