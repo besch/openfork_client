@@ -47,10 +47,13 @@ def main() -> None:
         print(f"ERROR: snapshots dir is empty: {SNAPSHOTS_DIR}", file=sys.stderr)
         sys.exit(1)
 
-    snap = snaps[-1]
-    print(f"Using snapshot: {snap.name}")
-    symlink_tree(snap, CKPTS)
-    print(f"ckpts/ populated from HF cache snapshot.")
+    # Merge ALL snapshots: separate huggingface-cli download calls can resolve to
+    # different commit hashes (e.g. repo updated between calls), producing separate
+    # snapshot dirs. Taking only snaps[-1] would miss files from earlier snapshots.
+    for snap in snaps:
+        print(f"Processing snapshot: {snap.name}")
+        symlink_tree(snap, CKPTS)
+    print(f"ckpts/ populated from {len(snaps)} HF cache snapshot(s).")
 
 
 if __name__ == "__main__":
