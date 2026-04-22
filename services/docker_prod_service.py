@@ -775,15 +775,38 @@ class DockerProdManager:
                                         status = "unknown"
 
                             if status == "created":
+                                # Try to kick off start in case the earlier call never reached
+                                # the daemon; idempotent if it's already starting.
                                 try:
                                     existing.start()
-                                    existing.reload()
-                                    status = existing.status
                                 except Exception as start_error:
                                     logging.debug(
                                         f"Could not start existing container "
                                         f"'{container_name}' after reconnect: {start_error}"
                                     )
+
+                                # Large GPU containers (Wan2GP etc.) can take many minutes to
+                                # complete Docker initialisation after the HTTP timeout fires.
+                                # Poll via CLI (avoids SDK timeout) for up to 5 minutes.
+                                logging.info(
+                                    f"Container '{container_name}' is still initialising "
+                                    f"after transport timeout — polling up to 5 minutes..."
+                                )
+                                _poll_end = time.monotonic() + 300
+                                while time.monotonic() < _poll_end:
+                                    time.sleep(5)
+                                    _r = subprocess.run(
+                                        ["docker", "inspect", "--format",
+                                         "{{.State.Status}}", container_name],
+                                        capture_output=True, text=True, timeout=10,
+                                    )
+                                    if _r.returncode != 0:
+                                        status = "missing"
+                                        break
+                                    _ps = _r.stdout.strip()
+                                    if _ps in ("running", "restarting", "exited", "dead"):
+                                        status = _ps
+                                        break
 
                             if status in ("running", "restarting"):
                                 logging.info(
@@ -792,7 +815,7 @@ class DockerProdManager:
                                 )
                                 return
 
-                            if status in ("created", "exited", "dead", "unknown"):
+                            if status in ("created", "exited", "dead", "unknown", "missing"):
                                 try:
                                     existing.remove(force=True)
                                     logging.info(
