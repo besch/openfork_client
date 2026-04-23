@@ -22,6 +22,9 @@ ENV ERNIE_DEFAULT_STEPS=28
 ENV ERNIE_DTYPE=fp16
 ENV ERNIE_USE_PE=false
 ENV ERNIE_ENABLE_CPU_OFFLOAD=true
+# Sequential offload unloads individual layers rather than whole submodules,
+# leaving enough VRAM headroom for inference activations on a 16GB card.
+ENV ERNIE_SEQUENTIAL_CPU_OFFLOAD=true
 ENV ERNIE_ENABLE_ATTENTION_SLICING=true
 ENV ERNIE_ENABLE_VAE_TILING=true
 ENV ERNIE_ALLOW_MODEL_DOWNLOAD=false

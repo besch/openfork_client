@@ -68,6 +68,7 @@ ALLOW_MODEL_DOWNLOAD = _env_flag("ERNIE_ALLOW_MODEL_DOWNLOAD", False)
 ENABLE_CPU_OFFLOAD = _env_flag("ERNIE_ENABLE_CPU_OFFLOAD", False)
 ENABLE_ATTENTION_SLICING = _env_flag("ERNIE_ENABLE_ATTENTION_SLICING", False)
 ENABLE_VAE_TILING = _env_flag("ERNIE_ENABLE_VAE_TILING", False)
+ENABLE_SEQUENTIAL_CPU_OFFLOAD = _env_flag("ERNIE_SEQUENTIAL_CPU_OFFLOAD", False)
 ENABLE_TORCH_COMPILE = _env_flag("ERNIE_TORCH_COMPILE", False)
 GENERATOR_DEVICE = os.environ.get(
     "ERNIE_GENERATOR_DEVICE",
@@ -196,7 +197,12 @@ def _configure_pipeline_memory(pipe_instance, device: str) -> None:
             logger.warning(f"enable_attention_slicing() failed: {exc}")
 
     if ENABLE_CPU_OFFLOAD:
-        for method_name in ("enable_model_cpu_offload", "enable_sequential_cpu_offload"):
+        offload_order = (
+            ("enable_sequential_cpu_offload", "enable_model_cpu_offload")
+            if ENABLE_SEQUENTIAL_CPU_OFFLOAD
+            else ("enable_model_cpu_offload", "enable_sequential_cpu_offload")
+        )
+        for method_name in offload_order:
             if not hasattr(pipe_instance, method_name):
                 continue
             try:
