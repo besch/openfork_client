@@ -214,6 +214,9 @@ class ErnieImageProcessor(BaseJobProcessor):
 
     def _submit_generation(self, inputs: dict) -> Optional[str]:
         try:
+            is_8gb_tier = bool(self.workflow_type and "8gb" in self.workflow_type)
+            is_16gb_tier = bool(self.workflow_type and "16gb" in self.workflow_type)
+            is_constrained_tier = is_8gb_tier or is_16gb_tier
             seed = inputs.get("seed")
             width, height = self._resolve_dimensions(inputs.get("aspect_ratio"))
             steps = inputs.get("steps")
@@ -222,7 +225,7 @@ class ErnieImageProcessor(BaseJobProcessor):
                 cfg = inputs.get("cfg_scale")
             # Turbo is distilled for CFG=1.0. Higher CFG doubles denoising work in
             # the Diffusers pipeline and is especially punishing on the 8GB tier.
-            if cfg is not None and self.workflow_type and "8gb" in self.workflow_type:
+            if cfg is not None and is_8gb_tier:
                 try:
                     if float(cfg) != 1.0:
                         logging.warning(
@@ -245,13 +248,14 @@ class ErnieImageProcessor(BaseJobProcessor):
             if seed is not None:
                 payload["seed"] = int(seed)
 
-            # 8GB tier: always disable PE regardless of job input. The Mistral3
-            # prompt enhancer consumes ~3GB of VRAM during text encoding and
-            # significantly extends that phase — not worth it on this tier.
-            if self.workflow_type and "8gb" in self.workflow_type:
+            # Constrained tiers: always disable PE regardless of job input. The
+            # Mistral3 prompt enhancer consumes several GiB of VRAM during text
+            # encoding and is the first thing to fall over on 8GB/16GB cards.
+            if is_constrained_tier:
                 if inputs.get("use_pe"):
                     logging.warning(
-                        "8GB tier: overriding use_pe=True to False (insufficient VRAM)"
+                        "%s tier: overriding use_pe=True to False (insufficient VRAM)",
+                        "8GB" if is_8gb_tier else "16GB",
                     )
                 payload["use_pe"] = False
             elif inputs.get("use_pe") is not None:

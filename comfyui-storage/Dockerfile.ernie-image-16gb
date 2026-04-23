@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# ERNIE-Image (16GB) - fp8 full model with PE, no cpu_offload
+# ERNIE-Image (16GB) - constrained full-model mode
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,15 +12,16 @@ ENV HF_HOME=/app/models
 ENV TRANSFORMERS_CACHE=/app/models
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image
 ENV ERNIE_DEFAULT_STEPS=28
-# fp8 cuts the full ERNIE-Image DiT from ~16GB (fp16) to ~8GB, so it fits
-# cleanly in 16GB VRAM with no cpu_offload. The freed headroom also lets us
-# run the Mistral3 PE (~3GB fp8) fully on GPU.
-ENV ERNIE_DTYPE=fp8
-ENV ERNIE_USE_PE=true
-ENV ERNIE_ENABLE_CPU_OFFLOAD=false
+# 16GB is still a constrained tier for the full checkpoint. Favor the same
+# low-VRAM runtime profile used by start_cloud.sh so the image is safe even
+# when launched directly: fp16 weights, PE disabled, and model CPU offload.
+ENV ERNIE_DTYPE=fp16
+ENV ERNIE_USE_PE=false
+ENV ERNIE_ENABLE_CPU_OFFLOAD=true
 ENV ERNIE_ENABLE_ATTENTION_SLICING=true
 ENV ERNIE_ENABLE_VAE_TILING=true
 ENV ERNIE_ALLOW_MODEL_DOWNLOAD=false
@@ -78,8 +79,9 @@ RUN python -m pip install --no-cache-dir \
 RUN mkdir -p /app/input /app/output /app/models
 
 # --- Bake model weights into the image at build time ---
-# 16GB is a constrained tier for the full ERNIE-Image checkpoint, so default
-# to memory-saving runtime behavior and leave PE opt-in.
+# The full checkpoint is still baked into the image, but the runtime defaults
+# above keep the 16GB tier in a compatibility mode instead of assuming there is
+# enough VRAM to run the full prompt-enhanced pipeline entirely on GPU.
 # Pass --build-arg HF_TOKEN=hf_xxx to avoid rate limits during build.
 ARG HF_TOKEN=""
 RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_TOKEN="$HF_TOKEN" python -c "\

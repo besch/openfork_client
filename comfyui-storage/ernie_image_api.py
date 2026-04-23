@@ -17,8 +17,12 @@ import uuid
 import logging
 import time
 import inspect
+import gc
+import threading
 from pathlib import Path
 from typing import Optional
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from fastapi import FastAPI, HTTPException
@@ -40,6 +44,7 @@ jobs: dict = {}
 pipe = None
 model_loading = False
 model_error: Optional[str] = None
+_inference_semaphore = threading.Semaphore(1)
 
 MODEL_ID = os.environ.get("ERNIE_MODEL_ID", "baidu/ERNIE-Image-Turbo")
 # local_files_only=True because weights are baked into the image.
@@ -87,6 +92,64 @@ class HealthResponse(BaseModel):
     model_id: str
     model_loaded: bool
     error: Optional[str] = None
+
+
+def _is_oom_error(exc: Exception) -> bool:
+    return isinstance(exc, torch.cuda.OutOfMemoryError) or "out of memory" in str(exc).lower()
+
+
+def _log_cuda_memory(context: str) -> None:
+    if not torch.cuda.is_available():
+        return
+
+    try:
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        allocated_bytes = torch.cuda.memory_allocated()
+        reserved_bytes = torch.cuda.memory_reserved()
+        logger.info(
+            "[%s] CUDA memory: allocated=%.2f GiB reserved=%.2f GiB free=%.2f GiB total=%.2f GiB",
+            context,
+            allocated_bytes / 1024**3,
+            reserved_bytes / 1024**3,
+            free_bytes / 1024**3,
+            total_bytes / 1024**3,
+        )
+    except Exception as exc:
+        logger.warning("Failed to query CUDA memory during %s: %s", context, exc)
+
+
+def _cleanup_cuda(context: str, synchronize: bool = False) -> None:
+    for _ in range(2):
+        gc.collect()
+
+    if not torch.cuda.is_available():
+        return
+
+    _log_cuda_memory(f"{context} (before cleanup)")
+
+    if synchronize:
+        try:
+            torch.cuda.synchronize()
+        except Exception as exc:
+            logger.warning("CUDA synchronize failed during %s: %s", context, exc)
+
+    try:
+        torch.cuda.empty_cache()
+    except Exception as exc:
+        logger.warning("torch.cuda.empty_cache() failed during %s: %s", context, exc)
+
+    if hasattr(torch.cuda, "ipc_collect"):
+        try:
+            torch.cuda.ipc_collect()
+        except Exception as exc:
+            logger.warning("torch.cuda.ipc_collect() failed during %s: %s", context, exc)
+
+    try:
+        torch.cuda.reset_peak_memory_stats()
+    except Exception:
+        pass
+
+    _log_cuda_memory(f"{context} (after cleanup)")
 
 
 def _fallback_load_dtype() -> torch.dtype:
@@ -308,9 +371,12 @@ def _make_step_callback(job_id: str, total_steps: int):
 
 
 def run_generation(job_id: str, request: GenerateRequest) -> None:
+    logger.info("Job %s waiting for ERNIE-Image inference slot", job_id)
+    _inference_semaphore.acquire()
     try:
         jobs[job_id]["status"] = "processing"
         logger.info(f"Starting generation for job {job_id}: {request.prompt[:80]}...")
+        _cleanup_cuda(f"job {job_id} preflight")
 
         steps = request.num_inference_steps or DEFAULT_STEPS
         cfg = request.guidance_scale if request.guidance_scale >= 0 else DEFAULT_CFG
@@ -348,17 +414,37 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
             logger.warning("Pipeline has no recognised callback parameter; step progress will not be logged.")
             cb_kwargs = {}
 
-        result = pipe(
-            prompt=request.prompt,
-            negative_prompt=request.negative_prompt or None,
-            width=request.width,
-            height=request.height,
-            num_inference_steps=steps,
-            guidance_scale=cfg,
-            generator=generator,
-            use_pe=use_pe,
-            **cb_kwargs,
-        )
+        def _invoke_pipeline(use_pe_value: bool):
+            with torch.inference_mode():
+                return pipe(
+                    prompt=request.prompt,
+                    negative_prompt=request.negative_prompt or None,
+                    width=request.width,
+                    height=request.height,
+                    num_inference_steps=steps,
+                    guidance_scale=cfg,
+                    generator=generator,
+                    use_pe=use_pe_value,
+                    **cb_kwargs,
+                )
+
+        try:
+            result = _invoke_pipeline(use_pe)
+        except Exception as exc:
+            if _is_oom_error(exc) and use_pe:
+                logger.warning(
+                    "ERNIE-Image job %s hit CUDA OOM with use_pe=True. "
+                    "Retrying once with use_pe=False.",
+                    job_id,
+                )
+                jobs[job_id]["warning"] = (
+                    "Prompt enhancer disabled after CUDA OOM; retried automatically."
+                )
+                _cleanup_cuda(f"job {job_id} after OOM retry trigger", synchronize=True)
+                use_pe = False
+                result = _invoke_pipeline(use_pe)
+            else:
+                raise
         elapsed = time.time() - start_time
         logger.info(
             f"Generation completed for job {job_id} in {elapsed:.1f}s ({steps} steps)"
@@ -376,6 +462,11 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
         logger.error(f"Generation failed for job {job_id}: {e}", exc_info=True)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
+        if _is_oom_error(e):
+            jobs[job_id]["error_code"] = "cuda_oom"
+    finally:
+        _cleanup_cuda(f"job {job_id} teardown", synchronize=True)
+        _inference_semaphore.release()
 
 
 @asynccontextmanager
