@@ -330,8 +330,21 @@ class DockerProdManager:
         except Exception as e:
             logging.warning(f"Container list fallback failed for '{container_name}': {e}")
 
-        # Try removing by container ID via CLI — on Windows/WSL2 this is more reliable
-        # than removing by name when the container is in a zombie/removing state.
+        # Try removing by container ID via SDK API — avoids CLI/daemon routing confusion.
+        for cid in ids_to_remove:
+            try:
+                self.client.api.remove_container(cid, force=True)
+                logging.info(
+                    f"Force-removed conflicting container '{container_name}' "
+                    f"(id={cid[:12]}) via SDK API."
+                )
+                return
+            except docker.errors.NotFound:
+                pass  # Already gone
+            except Exception as e:
+                logging.debug(f"SDK API remove failed for {cid[:12]}: {e}")
+
+        # Try removing by container ID via CLI — fallback for when SDK API fails.
         for cid in ids_to_remove:
             try:
                 # Explicitly kill first so the daemon isn't waiting for a graceful stop
@@ -379,37 +392,46 @@ class DockerProdManager:
         except Exception as e:
             logging.warning(f"docker rm -f subprocess failed for '{container_name}': {e}")
 
+        # Nuclear last resort: prune all stopped containers to release zombie name slots.
+        # This handles the Docker Desktop/WSL2 containerd-crash case where a container
+        # ID appears in 409 errors but is invisible to inspect and rm -f.
+        try:
+            pruned = self.client.containers.prune()
+            deleted = pruned.get("ContainersDeleted") or []
+            logging.info(
+                f"Pruned {len(deleted)} stopped container(s) to release zombie name "
+                f"slot for '{container_name}'."
+            )
+            if deleted:
+                return
+        except Exception as e:
+            logging.warning(f"Container prune failed for '{container_name}': {e}")
+
         logging.warning(
             f"Could not find or remove conflicting container '{container_name}' "
             f"by name. Docker may be in an inconsistent state."
         )
 
     def _wait_for_container_id_gone(self, container_id: str, timeout: float = 20.0) -> bool:
-        """Poll `docker inspect <ID>` until the container truly disappears.
+        """Poll via SDK inspect until the container ID truly disappears.
 
-        On Docker Desktop / WSL2, `docker rm -f` returns 0 while the daemon
-        finishes async cleanup — the name slot stays reserved until the inspect
-        endpoint stops returning data for that ID.
+        Uses the SDK (same daemon as containers.run) rather than CLI subprocess
+        to avoid cross-daemon confusion on Windows (Docker Desktop vs WSL daemon).
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.State.Status}}", container_id],
-                capture_output=True, text=True, timeout=10,
-                env=self._docker_cli_env(),
-            )
-            if result.returncode != 0:
-                combined = (result.stderr + result.stdout).lower()
-                if "no such" in combined or "not found" in combined:
-                    return True
-                # Inspect failed for another reason (daemon busy/overloaded) — keep polling
+            try:
+                info = self.client.api.inspect_container(container_id)
+                state = info.get("State", {}).get("Status", "unknown")
+                logging.debug(
+                    f"Container {container_id[:12]} still in state '{state}', waiting..."
+                )
+                time.sleep(0.5)
+            except docker.errors.NotFound:
+                return True
+            except Exception:
+                # Transient SDK connection error — keep polling
                 time.sleep(1)
-                continue
-            logging.debug(
-                f"Container {container_id[:12]} still in state "
-                f"'{result.stdout.strip()}', waiting for cleanup..."
-            )
-            time.sleep(0.5)
         return False
 
     def _wait_for_container_removal(
@@ -425,18 +447,17 @@ class DockerProdManager:
             if not gone:
                 return False
             # Name slot may outlast ID removal on Docker Desktop / WSL2.
-            # Poll by name until the slot is confirmed free (up to 10 extra seconds).
+            # Poll by name via SDK until the slot is confirmed free (up to 10 extra seconds).
             name_deadline = time.monotonic() + 10.0
             while time.monotonic() < name_deadline:
-                result = subprocess.run(
-                    ["docker", "inspect", container_name],
-                    capture_output=True, text=True, timeout=10,
-                    env=self._docker_cli_env(),
-                )
-                if result.returncode != 0:
+                try:
+                    self.client.api.inspect_container(container_name)
+                    time.sleep(0.5)
+                except docker.errors.NotFound:
                     time.sleep(0.3)  # brief final stabilisation
                     return True
-                time.sleep(0.5)
+                except Exception:
+                    time.sleep(0.5)
             logging.warning(
                 f"Container name '{container_name}' still occupied 10 s after ID removal."
             )
@@ -772,14 +793,13 @@ class DockerProdManager:
                             # dropped. Check its state before deciding to remove it.
                             _conflict_state = None
                             if _conflict_id:
-                                _sr = subprocess.run(
-                                    ["docker", "inspect", "--format",
-                                     "{{.State.Status}}", _conflict_id],
-                                    capture_output=True, text=True, timeout=10,
-                                    env=self._docker_cli_env(),
-                                )
-                                if _sr.returncode == 0:
-                                    _conflict_state = _sr.stdout.strip()
+                                try:
+                                    _info = self.client.api.inspect_container(_conflict_id)
+                                    _conflict_state = _info.get("State", {}).get("Status")
+                                except docker.errors.NotFound:
+                                    _conflict_state = "missing"
+                                except Exception:
+                                    pass  # _conflict_state stays None (daemon busy)
 
                             if _conflict_state in ("running", "restarting"):
                                 logging.info(
@@ -800,24 +820,17 @@ class DockerProdManager:
                                 _poll_end = time.monotonic() + 300
                                 while time.monotonic() < _poll_end:
                                     time.sleep(5)
-                                    _pr = subprocess.run(
-                                        ["docker", "inspect", "--format",
-                                         "{{.State.Status}}", _conflict_id],
-                                        capture_output=True, text=True, timeout=10,
-                                        env=self._docker_cli_env(),
-                                    )
-                                    if _pr.returncode != 0:
-                                        _combined = (_pr.stderr + _pr.stdout).lower()
-                                        if "no such" in _combined or "not found" in _combined:
-                                            _conflict_state = "missing"
+                                    try:
+                                        _pi = self.client.api.inspect_container(_conflict_id)
+                                        _ps = _pi.get("State", {}).get("Status", "")
+                                        if _ps in ("running", "restarting", "exited", "dead"):
+                                            _conflict_state = _ps
                                             break
-                                        # Daemon busy — keep polling
-                                        continue
-                                    _ps = _pr.stdout.strip()
-                                    if _ps in ("running", "restarting",
-                                               "exited", "dead"):
-                                        _conflict_state = _ps
+                                    except docker.errors.NotFound:
+                                        _conflict_state = "missing"
                                         break
+                                    except Exception:
+                                        continue  # SDK error — keep polling
                                 if _conflict_state in ("running", "restarting"):
                                     logging.info(
                                         f"Container '{container_name}' started. Reusing it."
@@ -851,50 +864,45 @@ class DockerProdManager:
 
                         existing = self._get_existing_container(container_name)
                         if existing is None:
-                            # SDK lookup failed; try CLI before giving up on this attempt.
-                            _cli = subprocess.run(
-                                ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
-                                capture_output=True, text=True, timeout=15,
-                                env=self._docker_cli_env(),
-                            )
-                            if _cli.returncode == 0:
-                                _cli_status = _cli.stdout.strip()
-                                if _cli_status in ("running", "restarting"):
+                            # SDK lookup failed; retry via API directly before giving up.
+                            try:
+                                _info = self.client.api.inspect_container(container_name)
+                                _api_status = _info.get("State", {}).get("Status", "")
+                                if _api_status in ("running", "restarting"):
                                     logging.info(
                                         f"Container '{container_name}' is running "
-                                        f"(CLI check after transport timeout). Reusing it."
+                                        f"(SDK API check after transport timeout). Reusing it."
                                     )
                                     return
-                                if _cli_status == "created":
+                                if _api_status in ("created", ""):
                                     logging.info(
                                         f"Container '{container_name}' is initialising "
-                                        f"(CLI, state=created) — polling up to 5 minutes..."
+                                        f"(SDK API, state={_api_status!r}) — polling up to 5 minutes..."
                                     )
                                     _poll_end = time.monotonic() + 300
-                                    _poll_status = _cli_status
+                                    _poll_status = _api_status or "created"
                                     while time.monotonic() < _poll_end:
                                         time.sleep(5)
-                                        _r = subprocess.run(
-                                            ["docker", "inspect", "--format",
-                                             "{{.State.Status}}", container_name],
-                                            capture_output=True, text=True, timeout=10,
-                                            env=self._docker_cli_env(),
-                                        )
-                                        if _r.returncode != 0:
-                                            _combined = (_r.stderr + _r.stdout).lower()
-                                            if "no such" in _combined or "not found" in _combined:
-                                                _poll_status = "missing"
+                                        try:
+                                            _ri = self.client.api.inspect_container(container_name)
+                                            _ps = _ri.get("State", {}).get("Status", "")
+                                            if _ps in ("running", "restarting", "exited", "dead"):
+                                                _poll_status = _ps
                                                 break
-                                            continue
-                                        _ps = _r.stdout.strip()
-                                        if _ps in ("running", "restarting", "exited", "dead"):
-                                            _poll_status = _ps
+                                        except docker.errors.NotFound:
+                                            _poll_status = "missing"
                                             break
+                                        except Exception:
+                                            continue
                                     if _poll_status in ("running", "restarting"):
                                         logging.info(
                                             f"Container '{container_name}' started. Reusing it."
                                         )
                                         return
+                            except docker.errors.NotFound:
+                                pass  # Container gone — retry containers.run below
+                            except Exception:
+                                pass  # SDK error — fall through to retry
                         if existing is not None:
                             # Reload with one retry — the fresh client may need a moment
                             for _reload_try in range(2):
@@ -929,23 +937,17 @@ class DockerProdManager:
                                 _poll_end = time.monotonic() + 300
                                 while time.monotonic() < _poll_end:
                                     time.sleep(5)
-                                    _r = subprocess.run(
-                                        ["docker", "inspect", "--format",
-                                         "{{.State.Status}}", container_name],
-                                        capture_output=True, text=True, timeout=10,
-                                        env=self._docker_cli_env(),
-                                    )
-                                    if _r.returncode != 0:
-                                        _combined = (_r.stderr + _r.stdout).lower()
-                                        if "no such" in _combined or "not found" in _combined:
-                                            status = "missing"
+                                    try:
+                                        _ri = self.client.api.inspect_container(container_name)
+                                        _ps = _ri.get("State", {}).get("Status", "")
+                                        if _ps in ("running", "restarting", "exited", "dead"):
+                                            status = _ps
                                             break
-                                        # Daemon busy — keep polling
-                                        continue
-                                    _ps = _r.stdout.strip()
-                                    if _ps in ("running", "restarting", "exited", "dead"):
-                                        status = _ps
+                                    except docker.errors.NotFound:
+                                        status = "missing"
                                         break
+                                    except Exception:
+                                        continue  # SDK error — keep polling
 
                             if status in ("running", "restarting"):
                                 logging.info(
