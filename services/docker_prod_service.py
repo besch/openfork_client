@@ -246,6 +246,25 @@ class DockerProdManager:
             logging.error(f"Failed to reconnect to Docker: {reconnect_error}")
             return False
 
+    def _docker_cli_env(self) -> dict:
+        """Return env for subprocess docker CLI calls, routing to the same daemon as the SDK.
+
+        On Windows the default `docker` CLI connects to Docker Desktop's named pipe,
+        not to the OpenFork WSL daemon at TCP 2375. Setting DOCKER_HOST ensures all
+        subprocess inspect/rm calls hit the same daemon the SDK is talking to.
+        """
+        env = os.environ.copy()
+        try:
+            base_url = getattr(getattr(self.client, "api", None), "base_url", None)
+            if base_url and "://" in base_url:
+                # SDK stores http:// internally; docker CLI env var expects tcp://
+                docker_host = base_url.replace("http://", "tcp://", 1)
+                if docker_host.startswith("tcp://"):
+                    env["DOCKER_HOST"] = docker_host
+        except Exception:
+            pass
+        return env
+
     def _get_existing_container(self, container_name: str):
         try:
             return self.client.containers.get(container_name)
@@ -320,6 +339,7 @@ class DockerProdManager:
                 subprocess.run(
                     ["docker", "kill", cid],
                     capture_output=True, text=True, timeout=10,
+                    env=self._docker_cli_env(),
                 )
             except Exception:
                 pass
@@ -327,6 +347,7 @@ class DockerProdManager:
                 result = subprocess.run(
                     ["docker", "rm", "-f", cid],
                     capture_output=True, text=True, timeout=30,
+                    env=self._docker_cli_env(),
                 )
                 if result.returncode == 0:
                     logging.info(
@@ -345,6 +366,7 @@ class DockerProdManager:
             result = subprocess.run(
                 ["docker", "rm", "-f", container_name],
                 capture_output=True, text=True, timeout=30,
+                env=self._docker_cli_env(),
             )
             if result.returncode == 0:
                 logging.info(
@@ -374,6 +396,7 @@ class DockerProdManager:
             result = subprocess.run(
                 ["docker", "inspect", "--format", "{{.State.Status}}", container_id],
                 capture_output=True, text=True, timeout=10,
+                env=self._docker_cli_env(),
             )
             if result.returncode != 0:
                 combined = (result.stderr + result.stdout).lower()
@@ -408,6 +431,7 @@ class DockerProdManager:
                 result = subprocess.run(
                     ["docker", "inspect", container_name],
                     capture_output=True, text=True, timeout=10,
+                    env=self._docker_cli_env(),
                 )
                 if result.returncode != 0:
                     time.sleep(0.3)  # brief final stabilisation
@@ -752,6 +776,7 @@ class DockerProdManager:
                                     ["docker", "inspect", "--format",
                                      "{{.State.Status}}", _conflict_id],
                                     capture_output=True, text=True, timeout=10,
+                                    env=self._docker_cli_env(),
                                 )
                                 if _sr.returncode == 0:
                                     _conflict_state = _sr.stdout.strip()
@@ -779,6 +804,7 @@ class DockerProdManager:
                                         ["docker", "inspect", "--format",
                                          "{{.State.Status}}", _conflict_id],
                                         capture_output=True, text=True, timeout=10,
+                                        env=self._docker_cli_env(),
                                     )
                                     if _pr.returncode != 0:
                                         _combined = (_pr.stderr + _pr.stdout).lower()
@@ -829,6 +855,7 @@ class DockerProdManager:
                             _cli = subprocess.run(
                                 ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
                                 capture_output=True, text=True, timeout=15,
+                                env=self._docker_cli_env(),
                             )
                             if _cli.returncode == 0:
                                 _cli_status = _cli.stdout.strip()
@@ -851,6 +878,7 @@ class DockerProdManager:
                                             ["docker", "inspect", "--format",
                                              "{{.State.Status}}", container_name],
                                             capture_output=True, text=True, timeout=10,
+                                            env=self._docker_cli_env(),
                                         )
                                         if _r.returncode != 0:
                                             _combined = (_r.stderr + _r.stdout).lower()
@@ -905,6 +933,7 @@ class DockerProdManager:
                                         ["docker", "inspect", "--format",
                                          "{{.State.Status}}", container_name],
                                         capture_output=True, text=True, timeout=10,
+                                        env=self._docker_cli_env(),
                                     )
                                     if _r.returncode != 0:
                                         _combined = (_r.stderr + _r.stdout).lower()
