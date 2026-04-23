@@ -19,7 +19,7 @@ ENV ERNIE_DEFAULT_STEPS=28
 # 16GB is still a constrained tier for the full checkpoint. Favor the same
 # low-VRAM runtime profile used by start_cloud.sh so the image is safe even
 # when launched directly: fp16 weights, PE disabled, and model CPU offload.
-ENV ERNIE_DTYPE=fp16
+ENV ERNIE_DTYPE=bf16
 ENV ERNIE_USE_PE=false
 ENV ERNIE_ENABLE_CPU_OFFLOAD=true
 # Sequential offload unloads individual layers rather than whole submodules,
