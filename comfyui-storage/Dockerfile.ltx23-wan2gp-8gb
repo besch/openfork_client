@@ -126,9 +126,9 @@ RUN pip3 install fastapi "uvicorn[standard]"
 # The runtime image should be self-contained. If Wan2GP or Transformers tries to
 # resolve missing model files from Hugging Face at startup, fail loudly instead
 # of silently downloading on every container run.
-ENV HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1 \
-    HF_HUB_DISABLE_TELEMETRY=1
+# ENV HF_HUB_OFFLINE=1 \
+#     TRANSFORMERS_OFFLINE=1 \
+#     HF_HUB_DISABLE_TELEMETRY=1
 
 # ── Verify critical files are present and shared.api is importable ─────────────
 COPY verify_wan2gp.py /tmp/verify_wan2gp.py
