@@ -376,8 +376,12 @@ class DockerProdManager:
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
-                # Non-zero means "no such container" — truly gone
-                return True
+                combined = (result.stderr + result.stdout).lower()
+                if "no such" in combined or "not found" in combined:
+                    return True
+                # Inspect failed for another reason (daemon busy/overloaded) — keep polling
+                time.sleep(1)
+                continue
             logging.debug(
                 f"Container {container_id[:12]} still in state "
                 f"'{result.stdout.strip()}', waiting for cleanup..."
@@ -759,13 +763,14 @@ class DockerProdManager:
                                 )
                                 return
 
-                            if _conflict_state == "created":
-                                # Docker is still initialising the container (overlayfs / GPU
-                                # hooks for large images can take many minutes on WSL2).
-                                # Poll via CLI until it starts instead of removing and retrying.
+                            if _conflict_state in ("created", None) and _conflict_id:
+                                # Either Docker is still initialising the container (overlayfs /
+                                # GPU hooks for large images can take many minutes on WSL2), or
+                                # the inspect call itself failed because the daemon is overloaded.
+                                # In both cases poll via CLI instead of removing and retrying.
                                 logging.info(
                                     f"Container '{container_name}' is still initialising "
-                                    f"— polling up to 5 minutes for it to start..."
+                                    f"(state={_conflict_state!r}) — polling up to 5 minutes..."
                                 )
                                 _poll_end = time.monotonic() + 300
                                 while time.monotonic() < _poll_end:
@@ -776,8 +781,12 @@ class DockerProdManager:
                                         capture_output=True, text=True, timeout=10,
                                     )
                                     if _pr.returncode != 0:
-                                        _conflict_state = "missing"
-                                        break
+                                        _combined = (_pr.stderr + _pr.stdout).lower()
+                                        if "no such" in _combined or "not found" in _combined:
+                                            _conflict_state = "missing"
+                                            break
+                                        # Daemon busy — keep polling
+                                        continue
                                     _ps = _pr.stdout.strip()
                                     if _ps in ("running", "restarting",
                                                "exited", "dead"):
@@ -815,6 +824,49 @@ class DockerProdManager:
                         self._refresh_client_connection()
 
                         existing = self._get_existing_container(container_name)
+                        if existing is None:
+                            # SDK lookup failed; try CLI before giving up on this attempt.
+                            _cli = subprocess.run(
+                                ["docker", "inspect", "--format", "{{.State.Status}}", container_name],
+                                capture_output=True, text=True, timeout=15,
+                            )
+                            if _cli.returncode == 0:
+                                _cli_status = _cli.stdout.strip()
+                                if _cli_status in ("running", "restarting"):
+                                    logging.info(
+                                        f"Container '{container_name}' is running "
+                                        f"(CLI check after transport timeout). Reusing it."
+                                    )
+                                    return
+                                if _cli_status == "created":
+                                    logging.info(
+                                        f"Container '{container_name}' is initialising "
+                                        f"(CLI, state=created) — polling up to 5 minutes..."
+                                    )
+                                    _poll_end = time.monotonic() + 300
+                                    _poll_status = _cli_status
+                                    while time.monotonic() < _poll_end:
+                                        time.sleep(5)
+                                        _r = subprocess.run(
+                                            ["docker", "inspect", "--format",
+                                             "{{.State.Status}}", container_name],
+                                            capture_output=True, text=True, timeout=10,
+                                        )
+                                        if _r.returncode != 0:
+                                            _combined = (_r.stderr + _r.stdout).lower()
+                                            if "no such" in _combined or "not found" in _combined:
+                                                _poll_status = "missing"
+                                                break
+                                            continue
+                                        _ps = _r.stdout.strip()
+                                        if _ps in ("running", "restarting", "exited", "dead"):
+                                            _poll_status = _ps
+                                            break
+                                    if _poll_status in ("running", "restarting"):
+                                        logging.info(
+                                            f"Container '{container_name}' started. Reusing it."
+                                        )
+                                        return
                         if existing is not None:
                             # Reload with one retry — the fresh client may need a moment
                             for _reload_try in range(2):
@@ -855,8 +907,12 @@ class DockerProdManager:
                                         capture_output=True, text=True, timeout=10,
                                     )
                                     if _r.returncode != 0:
-                                        status = "missing"
-                                        break
+                                        _combined = (_r.stderr + _r.stdout).lower()
+                                        if "no such" in _combined or "not found" in _combined:
+                                            status = "missing"
+                                            break
+                                        # Daemon busy — keep polling
+                                        continue
                                     _ps = _r.stdout.strip()
                                     if _ps in ("running", "restarting", "exited", "dead"):
                                         status = _ps
