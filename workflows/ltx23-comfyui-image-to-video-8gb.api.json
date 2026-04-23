@@ -64,7 +64,8 @@
       "inputs": {
         "frames_number": 65,
         "frame_rate": 25.0,
-        "batch_size": 1
+        "batch_size": 1,
+        "audio_vae": ["7", 0]
       }
     },
     "21": {

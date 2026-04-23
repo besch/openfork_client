@@ -1976,6 +1976,24 @@ def inject_prompt_into_ltx23_video_workflow(
             api_graph['8']['inputs']['frames_number'] = video_length
             logging.info(f"Synced audio latent frames to {video_length}")
 
+        audio_vae_input = api_graph['8']['inputs'].get('audio_vae')
+        if audio_vae_input is None:
+            decode_node = api_graph.get('19')
+            if decode_node and decode_node.get("class_type") == "LTXVAudioVAEDecode":
+                audio_vae_input = decode_node.get('inputs', {}).get('audio_vae')
+
+        if audio_vae_input is None:
+            for node_id, node in api_graph.items():
+                if node.get("class_type") in {"LowVRAMAudioVAELoader", "LTXVAudioVAELoader"}:
+                    audio_vae_input = [node_id, 0]
+                    break
+
+        if audio_vae_input is not None:
+            api_graph['8']['inputs']['audio_vae'] = audio_vae_input
+            logging.info(f"Wired audio VAE into LTX-2.3 audio latent node 8 from {audio_vae_input}")
+        else:
+            logging.warning("Could not find an audio VAE source for LTX-2.3 audio latent node 8")
+
     # Inject steps into LTXVScheduler (Node 13)
     if steps is not None and '13' in api_graph and api_graph['13'].get("class_type") == "LTXVScheduler":
         api_graph['13']['inputs']['steps'] = steps

@@ -53,9 +53,9 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx23-wan2gp-8gb", "beschiak/openfork-ltx23-wan2gp-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True),
     # LTX-2.3 ComfyUI tiers (colour-fixed via distilled LoRA at strength 0.5)
-    ImageConfig("Dockerfile.ltx23-comfyui-8gb", "beschiak/openfork-ltx23-comfyui-8gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx23-comfyui-16gb", "beschiak/openfork-ltx23-comfyui-16gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx23-comfyui-24gb", "beschiak/openfork-ltx23-comfyui-24gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.ltx23-comfyui-8gb", "beschiak/openfork-ltx23-comfyui-8gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.ltx23-comfyui-16gb", "beschiak/openfork-ltx23-comfyui-16gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.ltx23-comfyui-24gb", "beschiak/openfork-ltx23-comfyui-24gb:latest", build=True, push=True),
     # ERNIE-Image
     ImageConfig(
         "Dockerfile.ernie-image-8gb",
