@@ -70,6 +70,11 @@ RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git custo
     && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-LTXVideo/requirements.txt || true) \
     && rm -rf /tmp/* /var/tmp/*
 
+# ── Patch low_vram_loaders.py: AudioVAE(sd) not AudioVAE(sd, metadata) ───────
+RUN sed -i 's/AudioVAE(sd, metadata)/AudioVAE(sd)/g' \
+    custom_nodes/ComfyUI-LTXVideo/low_vram_loaders.py \
+    && grep -n "AudioVAE(" custom_nodes/ComfyUI-LTXVideo/low_vram_loaders.py
+
 # ── VideoHelperSuite (VHS_VideoCombine with audio output) ────────────────────
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git custom_nodes/VideoHelperSuite \
     && rm -rf custom_nodes/VideoHelperSuite/.git \
