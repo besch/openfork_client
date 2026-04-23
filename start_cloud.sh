@@ -424,9 +424,12 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       if [ "$TOTAL_VRAM_MB" -gt 20000 ]; then
           SERVICE_TYPE="ltx23-comfyui-video-24gb"
           log "Auto-selected LTX-2.3 ComfyUI 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      elif [ "$TOTAL_VRAM_MB" -gt 12000 ]; then
+      elif [ "$TOTAL_VRAM_MB" -gt 14000 ]; then
           SERVICE_TYPE="ltx23-comfyui-video-16gb"
           log "Auto-selected LTX-2.3 ComfyUI 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -gt 10000 ]; then
+          SERVICE_TYPE="ltx23-comfyui-video-12gb"
+          log "Auto-selected LTX-2.3 ComfyUI 12GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       else
           SERVICE_TYPE="ltx23-comfyui-video-8gb"
           log "Auto-selected LTX-2.3 ComfyUI 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
@@ -687,6 +690,10 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
     # and --cpu-vae on 8/16GB to keep VRAM free for attention activations
     *ltx23*comfyui*8gb*|*ltx23-comfyui*-8gb*)
       log "Applying 8GB optimizations for LTX-2.3 ComfyUI (512x288, 65 frames)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention --cache-none"
+      ;;
+    *ltx23*comfyui*12gb*|*ltx23-comfyui*-12gb*)
+      log "Applying 12GB optimizations for LTX-2.3 ComfyUI (544x304, 81 frames)"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention --cache-none"
       ;;
     *ltx23*comfyui*16gb*|*ltx23-comfyui*-16gb*)

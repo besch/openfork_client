@@ -25,6 +25,8 @@ from .video.ltx23_comfyui_text_16gb import LTX23ComfyUITextToVideoProcessor16GB
 from .video.ltx23_comfyui_image_16gb import LTX23ComfyUIImageToVideoProcessor16GB
 from .video.ltx23_comfyui_text_8gb import LTX23ComfyUITextToVideoProcessor8GB
 from .video.ltx23_comfyui_image_8gb import LTX23ComfyUIImageToVideoProcessor8GB
+from .video.ltx23_comfyui_text_12gb import LTX23ComfyUITextToVideoProcessor12GB
+from .video.ltx23_comfyui_image_12gb import LTX23ComfyUIImageToVideoProcessor12GB
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.sparkvsr import SparkVSRUpscalerJobProcessor
 from .video.turbodiffusion import (
@@ -99,6 +101,8 @@ __all__ = [
     "LTX23ComfyUIImageToVideoProcessor16GB",
     "LTX23ComfyUITextToVideoProcessor8GB",
     "LTX23ComfyUIImageToVideoProcessor8GB",
+    "LTX23ComfyUITextToVideoProcessor12GB",
+    "LTX23ComfyUIImageToVideoProcessor12GB",
     "VideoUpscalerJobProcessor",
     "SparkVSRUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",

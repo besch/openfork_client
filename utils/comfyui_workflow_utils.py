@@ -1856,7 +1856,8 @@ def inject_image_into_zimage_inpaint_workflow(
 
 def get_ltx23_dimensions(aspect_ratio: str, tier: str = "24gb") -> tuple[int, int]:
     """
-    Returns (width, height) for LTX-2.3 - dimensions must be divisible by 32.
+    Returns (width, height) for LTX-2.3 - dimensions must be divisible by 16.
+    12GB tier: 544x304 (between 8GB 512x288 and 16GB 576x320).
     16GB tier uses lower resolution to stay within VRAM activation budget.
     32GB tier uses higher resolution (~1.8x more pixels than 24GB).
     """
@@ -1875,6 +1876,21 @@ def get_ltx23_dimensions(aspect_ratio: str, tier: str = "24gb") -> tuple[int, in
             return 608, 256
         else:
             return 512, 288
+    if tier == "12gb":
+        if aspect_ratio == "16:9":
+            return 544, 304
+        elif aspect_ratio == "9:16":
+            return 304, 544
+        elif aspect_ratio == "1:1":
+            return 416, 416
+        elif aspect_ratio == "4:3":
+            return 448, 336
+        elif aspect_ratio == "3:4":
+            return 336, 448
+        elif aspect_ratio == "21:9":
+            return 640, 272
+        else:
+            return 544, 304
     if tier == "16gb":
         if aspect_ratio == "16:9":
             return 576, 320
