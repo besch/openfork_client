@@ -17,8 +17,8 @@ from .video.wan22_image import (
 )
 from .video.hunyuan_text import HunyuanTextToVideoJobProcessor
 from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
-# from .video.ltx23_text import LTX23TextToVideoWan2GPProcessor
-# from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
+from .video.ltx23_text import LTX23TextToVideoWan2GPProcessor
+from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
 from .video.ltx23_comfyui_text import LTX23ComfyUITextToVideoProcessor
 from .video.ltx23_comfyui_image import LTX23ComfyUIImageToVideoProcessor
 from .video.ltx23_comfyui_text_16gb import LTX23ComfyUITextToVideoProcessor16GB
