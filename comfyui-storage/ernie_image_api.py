@@ -89,6 +89,12 @@ class HealthResponse(BaseModel):
     error: Optional[str] = None
 
 
+def _fallback_load_dtype() -> torch.dtype:
+    if not torch.cuda.is_available():
+        return torch.float32
+    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
+
 def _resolve_dtype() -> torch.dtype:
     if MODEL_DTYPE == "bf16":
         return torch.bfloat16
@@ -97,13 +103,18 @@ def _resolve_dtype() -> torch.dtype:
     if MODEL_DTYPE == "fp8":
         # fp8 halves VRAM vs fp16 (~8GB for the 8B DiT vs ~16GB).
         # Supported for storage+compute on Ada/Ampere (RTX 30xx/40xx) with
-        # PyTorch 2.1+. If the GPU/driver rejects it we fall back to bf16.
+        # PyTorch 2.1+. If the GPU/driver rejects it we fall back to a
+        # compatibility dtype for the current runtime.
         if hasattr(torch, "float8_e4m3fn"):
             return torch.float8_e4m3fn
-        logger.warning("torch.float8_e4m3fn not available on this build; falling back to bf16")
-        return torch.bfloat16
+        fallback_dtype = _fallback_load_dtype()
+        logger.warning(
+            "torch.float8_e4m3fn not available on this build; falling back to %s",
+            fallback_dtype,
+        )
+        return fallback_dtype
     # auto
-    return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    return _fallback_load_dtype()
 
 
 def _configure_pipeline_memory(pipe_instance, device: str) -> None:
@@ -146,14 +157,16 @@ def _configure_pipeline_memory(pipe_instance, device: str) -> None:
     logger.info("Placed ERNIE-Image pipeline on %s without CPU offload", device)
 
 
-def _try_load_pipeline(model_id: str, load_kwargs: dict, device: str, local_only: bool):
+def _try_load_pipeline(
+    model_id: str, load_kwargs: dict, device: str, local_only: bool
+) -> tuple:
     """
     Attempt to load the pipeline, with OOM-aware dtype fallback.
 
     Load order:
       1. Requested dtype (fp8 or caller's choice) — full GPU placement if
          ENABLE_CPU_OFFLOAD=false, otherwise model_cpu_offload.
-      2. On OOM or fp8 rejection: retry with bf16 + model_cpu_offload.
+      2. On OOM or fp8 rejection: retry with a safer dtype + model_cpu_offload.
     """
     from diffusers import ErnieImagePipeline
 
@@ -167,22 +180,29 @@ def _try_load_pipeline(model_id: str, load_kwargs: dict, device: str, local_only
     try:
         p = _do_load(load_kwargs)
         _configure_pipeline_memory(p, device)
-        return p
-    except (RuntimeError, torch.cuda.OutOfMemoryError) as first_err:
+        return p, load_kwargs.get("torch_dtype")
+    except (TypeError, RuntimeError, torch.cuda.OutOfMemoryError) as first_err:
         # fp8 may be rejected by the pipeline internals on some driver versions;
-        # OOM means the dtype didn't save enough VRAM — both warrant a bf16 retry.
+        # OOM means the dtype didn't save enough VRAM — both warrant a safer retry.
         err_str = str(first_err).lower()
-        is_fp8_issue = "float8" in err_str or "fp8" in err_str or "dtype" in err_str
-        is_oom = "out of memory" in err_str or isinstance(first_err, torch.cuda.OutOfMemoryError)
+        is_fp8_issue = any(
+            token in err_str
+            for token in ("float8", "fp8", "e4m3", "storage object", "default dtype")
+        )
+        is_oom = "out of memory" in err_str or isinstance(
+            first_err, torch.cuda.OutOfMemoryError
+        )
 
         if is_fp8_issue or is_oom:
             reason = "fp8 unsupported by pipeline" if is_fp8_issue else "OOM with requested dtype"
             logger.warning(
-                "Initial load failed (%s: %s). Retrying with bf16 + cpu_offload.",
+                "Initial load failed (%s: %s). Retrying with %s + cpu_offload.",
                 reason, first_err,
+                _fallback_load_dtype(),
             )
             torch.cuda.empty_cache()
-            fallback_kwargs = {**load_kwargs, "torch_dtype": torch.bfloat16}
+            fallback_dtype = _fallback_load_dtype()
+            fallback_kwargs = {**load_kwargs, "torch_dtype": fallback_dtype}
             p = _do_load(fallback_kwargs)
             # Force cpu_offload on the fallback path regardless of env setting
             if hasattr(p, "enable_model_cpu_offload"):
@@ -192,8 +212,8 @@ def _try_load_pipeline(model_id: str, load_kwargs: dict, device: str, local_only
                     p.enable_model_cpu_offload()
             else:
                 p.to(device)
-            logger.info("Fallback load succeeded: bf16 + cpu_offload")
-            return p
+            logger.info("Fallback load succeeded: %s + cpu_offload", fallback_dtype)
+            return p, fallback_dtype
         raise
 
 
@@ -222,7 +242,9 @@ def load_model() -> None:
             load_kwargs["pe_tokenizer"] = None
 
         try:
-            pipe = _try_load_pipeline(MODEL_ID, load_kwargs, device, local_only=True)
+            pipe, loaded_dtype = _try_load_pipeline(
+                MODEL_ID, load_kwargs, device, local_only=True
+            )
             logger.info("Model loaded from local cache.")
         except Exception as local_err:
             if not ALLOW_MODEL_DOWNLOAD:
@@ -238,7 +260,9 @@ def load_model() -> None:
                 "Local cache load failed (%s). Falling back to HF download "
                 "because ERNIE_ALLOW_MODEL_DOWNLOAD=true...", local_err,
             )
-            pipe = _try_load_pipeline(MODEL_ID, load_kwargs, device, local_only=False)
+            pipe, loaded_dtype = _try_load_pipeline(
+                MODEL_ID, load_kwargs, device, local_only=False
+            )
             logger.info("Model downloaded and loaded from HuggingFace.")
 
         # Optional torch.compile — significant speedup after a one-time warmup.
@@ -255,7 +279,7 @@ def load_model() -> None:
             except Exception as compile_err:
                 logger.warning("torch.compile failed (%s); continuing without it.", compile_err)
 
-        logger.info("ERNIE-Image model ready on %s with dtype %s", device, dtype)
+        logger.info("ERNIE-Image model ready on %s with dtype %s", device, loaded_dtype)
     except Exception as e:
         logger.error("Failed to load ERNIE-Image model: %s", e, exc_info=True)
         model_error = str(e)

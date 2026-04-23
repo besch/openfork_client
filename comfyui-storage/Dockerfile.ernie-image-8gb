@@ -15,13 +15,14 @@ ENV TRANSFORMERS_OFFLINE=1
 
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image-Turbo
 ENV ERNIE_DEFAULT_STEPS=8
-# fp8 cuts DiT VRAM from ~16GB (fp16) to ~8GB, letting it fit in 8GB VRAM
-# without PCIe paging on every denoising step. Falls back to bf16 on load error.
-ENV ERNIE_DTYPE=fp8
+# Use fp16 by default because the current transformers/diffusers load path
+# cannot reliably initialize ERNIE-Image with torch_dtype=float8 on startup.
+# The API still retries safer dtypes automatically if load-time issues occur.
+ENV ERNIE_DTYPE=fp16
 ENV ERNIE_USE_PE=false
-# cpu_offload swaps text-encoder vs DiT (each ~3-8GB in fp8).
-# With fp8 the DiT fits in 8GB so all 8 denoising steps run entirely on GPU;
-# only the initial text-encoding triggers a CPU<->GPU transfer.
+# cpu_offload keeps the 8GB tier in compatibility mode by swapping the
+# text-encoder and denoiser rather than expecting the whole pipeline to fit
+# concurrently in VRAM.
 ENV ERNIE_ENABLE_CPU_OFFLOAD=true
 ENV ERNIE_ENABLE_ATTENTION_SLICING=true
 ENV ERNIE_ENABLE_VAE_TILING=true
@@ -93,6 +94,4 @@ from huggingface_hub import snapshot_download; \
 snapshot_download(os.environ['ERNIE_MODEL_ID'], cache_dir='/app/models', token=os.environ.get('HF_TOKEN') or None, ignore_patterns=['pe/*', 'pe_tokenizer/*'])" \
     && echo "Model downloaded successfully"
 
-COPY ernie_image_api.py /app/ernie_image_api.py
-
-CMD ["python", "ernie_image_api.py"]
+CMD ["/bin/bash", "-c", "curl -s -L -o /app/ernie_image_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/ernie_image_api.py && python /app/ernie_image_api.py"]

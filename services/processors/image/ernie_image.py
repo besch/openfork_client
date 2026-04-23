@@ -56,6 +56,7 @@ class ErnieImageProcessor(BaseJobProcessor):
         self.api_base_url = f"http://{api_host}:{api_port}"
         self.session = requests.Session()
         self.session.trust_env = False
+        self._api_startup_error: Optional[str] = None
 
     def process(self):
         if not self.job:
@@ -67,7 +68,10 @@ class ErnieImageProcessor(BaseJobProcessor):
         inputs = self.job.get("inputs") or {}
 
         if not self._wait_for_api(timeout=self.API_WAIT_TIMEOUT):
-            self._fail_job("ERNIE-Image API / model did not become ready in time")
+            self._fail_job(
+                self._api_startup_error
+                or "ERNIE-Image API / model did not become ready in time"
+            )
             return
 
         job_id = self._submit_generation(inputs)
@@ -144,6 +148,7 @@ class ErnieImageProcessor(BaseJobProcessor):
         logging.info(
             f"Waiting for ERNIE-Image API at {self.api_base_url} (timeout: {timeout}s)..."
         )
+        self._api_startup_error = None
 
         while time.monotonic() - start_time < timeout:
             if self.shutdown_event.is_set():
@@ -158,6 +163,22 @@ class ErnieImageProcessor(BaseJobProcessor):
                 )
                 if response.status_code == 200:
                     data = response.json()
+                    api_status = data.get("status", "unknown")
+                    api_error = data.get("error")
+
+                    if api_status == "error":
+                        self._api_startup_error = (
+                            "ERNIE-Image model failed to load"
+                            if not api_error
+                            else f"ERNIE-Image model failed to load: {api_error}"
+                        )
+                        logging.error(
+                            "%s (after %ss)",
+                            self._api_startup_error,
+                            elapsed,
+                        )
+                        return False
+
                     if data.get("model_loaded"):
                         logging.info(
                             f"ERNIE-Image API ready after {elapsed}s "
@@ -167,8 +188,6 @@ class ErnieImageProcessor(BaseJobProcessor):
 
                     # Server is up but model is still loading — log every 30s
                     if elapsed - last_log >= 30:
-                        api_status = data.get("status", "unknown")
-                        api_error = data.get("error")
                         msg = (
                             f"ERNIE-Image API reachable, model loading "
                             f"(status={api_status}, {elapsed}/{timeout}s)"
@@ -324,7 +343,7 @@ class ErnieImageProcessor(BaseJobProcessor):
             "2:3":  (832, 1216),
         }
         # 8GB tier: use the smallest ERNIE-supported non-square resolutions so
-        # the denoising loop stays well within 8GB even in fp8 with cpu_offload.
+        # the denoising loop stays within the low-VRAM compatibility envelope.
         ratios_8gb = {
             "1:1":  (1024, 1024),
             "16:9": (1264, 848),
