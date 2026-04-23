@@ -363,14 +363,29 @@ class DockerProdManager:
                     env=self._docker_cli_env(),
                 )
                 if result.returncode == 0:
-                    logging.info(
-                        f"Force-removed conflicting container '{container_name}' "
-                        f"(id={cid[:12]}) via docker CLI (by ID)."
+                    # Verify the name slot is actually freed — CLI exits 0 even for zombie
+                    # containers whose name persists in Docker's registry after a containerd crash.
+                    try:
+                        self.client.api.inspect_container(container_name)
+                        logging.debug(
+                            f"CLI rm exited 0 for {cid[:12]} but name slot still reserved — zombie state"
+                        )
+                    except docker.errors.NotFound:
+                        logging.info(
+                            f"Force-removed conflicting container '{container_name}' "
+                            f"(id={cid[:12]}) via docker CLI (by ID)."
+                        )
+                        return
+                    except Exception:
+                        logging.info(
+                            f"Force-removed conflicting container '{container_name}' "
+                            f"(id={cid[:12]}) via docker CLI (by ID)."
+                        )
+                        return
+                else:
+                    logging.warning(
+                        f"docker rm -f {cid[:12]} exited {result.returncode}: {result.stderr.strip()}"
                     )
-                    return
-                logging.warning(
-                    f"docker rm -f {cid[:12]} exited {result.returncode}: {result.stderr.strip()}"
-                )
             except Exception as e:
                 logging.warning(f"docker rm -f by ID subprocess failed for '{container_name}': {e}")
 
@@ -382,19 +397,27 @@ class DockerProdManager:
                 env=self._docker_cli_env(),
             )
             if result.returncode == 0:
-                logging.info(
-                    f"Force-removed conflicting container '{container_name}' via docker CLI (by name)."
+                try:
+                    self.client.api.inspect_container(container_name)
+                    logging.debug("CLI rm by name exited 0 but name slot still reserved — zombie state")
+                except docker.errors.NotFound:
+                    logging.info(
+                        f"Force-removed conflicting container '{container_name}' via docker CLI (by name)."
+                    )
+                    return
+                except Exception:
+                    logging.info(
+                        f"Force-removed conflicting container '{container_name}' via docker CLI (by name)."
+                    )
+                    return
+            else:
+                logging.warning(
+                    f"docker rm -f '{container_name}' exited {result.returncode}: {result.stderr.strip()}"
                 )
-                return
-            logging.warning(
-                f"docker rm -f '{container_name}' exited {result.returncode}: {result.stderr.strip()}"
-            )
         except Exception as e:
             logging.warning(f"docker rm -f subprocess failed for '{container_name}': {e}")
 
-        # Nuclear last resort: prune all stopped containers to release zombie name slots.
-        # This handles the Docker Desktop/WSL2 containerd-crash case where a container
-        # ID appears in 409 errors but is invisible to inspect and rm -f.
+        # Prune stopped containers to release zombie name slots.
         try:
             pruned = self.client.containers.prune()
             deleted = pruned.get("ContainersDeleted") or []
@@ -402,15 +425,24 @@ class DockerProdManager:
                 f"Pruned {len(deleted)} stopped container(s) to release zombie name "
                 f"slot for '{container_name}'."
             )
-            if deleted:
+            try:
+                self.client.api.inspect_container(container_name)
+            except docker.errors.NotFound:
+                return  # Prune freed the name slot
+            except Exception:
                 return
         except Exception as e:
             logging.warning(f"Container prune failed for '{container_name}': {e}")
 
+        # Final escalation: restart Docker daemon to flush the name registry.
+        # This is necessary when a containerd crash leaves a zombie container whose
+        # name slot survives all other removal attempts.
         logging.warning(
-            f"Could not find or remove conflicting container '{container_name}' "
-            f"by name. Docker may be in an inconsistent state."
+            f"Container '{container_name}' is stuck in zombie state. "
+            f"Restarting Docker daemon to flush name registry..."
         )
+        self._restart_docker_in_wsl()
+        # Caller will retry container creation after this returns.
 
     def _wait_for_container_id_gone(self, container_id: str, timeout: float = 20.0) -> bool:
         """Poll via SDK inspect until the container ID truly disappears.
@@ -495,6 +527,61 @@ class DockerProdManager:
             logging.info(f"Force-pull of '{image_name}' complete.")
         except Exception as e:
             logging.warning(f"Force-pull of '{image_name}' failed: {e}")
+
+    def _restart_docker_in_wsl(self, wait_timeout: float = 90.0) -> bool:
+        """Restart the Docker daemon inside the OpenFork WSL distro.
+
+        After a layer extraction error (grpc: the client connection is closing),
+        Docker's containerd backend gets into an inconsistent state — zombie
+        containers occupy name slots but are invisible to inspect/rm. Restarting
+        the daemon is the only reliable way to flush the name registry and restore
+        a clean state.
+
+        Returns True if the daemon is reachable after the restart.
+        """
+        import sys
+
+        if sys.platform != "win32":
+            return False
+
+        distro = os.environ.get("OPENFORK_WSL_DISTRO")
+        if not distro:
+            logging.warning("Cannot restart Docker in WSL: OPENFORK_WSL_DISTRO not set.")
+            return False
+
+        logging.info(f"Restarting Docker daemon in WSL distro '{distro}' to clear inconsistent state...")
+        try:
+            result = subprocess.run(
+                [
+                    "wsl", "-d", distro, "--user", "root", "--",
+                    "env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "bash", "-c",
+                    "systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+            logging.info(
+                f"Docker restart command exited {result.returncode}"
+                + (f": {result.stderr.strip()}" if result.stderr.strip() else "")
+            )
+        except Exception as e:
+            logging.warning(f"Docker restart command failed: {e}")
+
+        # Wait for daemon to become reachable again
+        logging.info("Waiting for Docker daemon to come back online...")
+        deadline = time.monotonic() + wait_timeout
+        while time.monotonic() < deadline:
+            time.sleep(3)
+            try:
+                self._refresh_client_connection()
+                self.client.ping()
+                logging.info("Docker daemon is back online after restart.")
+                return True
+            except Exception:
+                pass
+
+        logging.error(f"Docker daemon did not come back online within {wait_timeout}s after restart.")
+        return False
 
     def set_docker_image_map(self, image_map: dict):
         if image_map:
@@ -778,9 +865,24 @@ class DockerProdManager:
                             logging.warning(
                                 f"Layer extraction error creating '{container_name}' "
                                 f"(attempt {attempt}/{max_attempts}). "
-                                f"Re-pulling image to repair layer cache."
+                                f"Restarting Docker daemon to recover from containerd crash."
                             )
-                            self._force_pull_image(image_name)
+                            # The apply-layer-error crashes Docker's containerd backend,
+                            # leaving zombie containers and taking the daemon offline.
+                            # Restart is the only reliable recovery; after it completes
+                            # we force-pull to repair any damaged layer cache.
+                            daemon_back = self._restart_docker_in_wsl()
+                            if daemon_back:
+                                try:
+                                    self.client.containers.prune()
+                                    logging.info("Pruned stopped containers after daemon restart.")
+                                except Exception:
+                                    pass
+                                self._force_pull_image(image_name)
+                            else:
+                                # Daemon didn't come back via WSL restart; try reconnect
+                                self._refresh_client_connection()
+                                self._force_pull_image(image_name)
                             continue
                         if is_409:
                             _id_match = re.search(
