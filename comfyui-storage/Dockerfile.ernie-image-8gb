@@ -87,12 +87,10 @@ RUN mkdir -p /app/input /app/output /app/models
 # Pass --build-arg HF_TOKEN=hf_xxx to avoid rate limits during build.
 # If no token is provided the download still works but may be slower.
 ARG HF_TOKEN=""
-RUN if [ -n "$HF_TOKEN" ]; then \
-        python -c "from huggingface_hub import login; login('$HF_TOKEN')"; \
-    fi \
-    && HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c "\
+RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_TOKEN="$HF_TOKEN" python -c "\
+import os; \
 from huggingface_hub import snapshot_download; \
-snapshot_download('baidu/ERNIE-Image-Turbo', cache_dir='/app/models', ignore_patterns=['pe/*', 'pe_tokenizer/*'])" \
+snapshot_download(os.environ['ERNIE_MODEL_ID'], cache_dir='/app/models', token=os.environ.get('HF_TOKEN') or None, ignore_patterns=['pe/*', 'pe_tokenizer/*'])" \
     && echo "Model downloaded successfully"
 
 COPY ernie_image_api.py /app/ernie_image_api.py
