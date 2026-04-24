@@ -202,6 +202,7 @@ def _configure_pipeline_memory(pipe_instance, device: str) -> None:
             if ENABLE_SEQUENTIAL_CPU_OFFLOAD
             else ("enable_model_cpu_offload", "enable_sequential_cpu_offload")
         )
+        offload_applied = False
         for method_name in offload_order:
             if not hasattr(pipe_instance, method_name):
                 continue
@@ -213,14 +214,32 @@ def _configure_pipeline_memory(pipe_instance, device: str) -> None:
                 else:
                     method()
                 logger.info("Enabled ERNIE-Image CPU offload via %s()", method_name)
-                return
+                offload_applied = True
+                break
             except Exception as exc:
                 logger.warning("%s() failed: %s", method_name, exc)
 
-        logger.warning(
-            "ERNIE_ENABLE_CPU_OFFLOAD=true but no offload method could be applied; "
-            "falling back to full GPU placement."
-        )
+        if not offload_applied:
+            logger.warning(
+                "ERNIE_ENABLE_CPU_OFFLOAD=true but no offload method could be applied; "
+                "falling back to full GPU placement."
+            )
+            pipe_instance.to(device)
+            logger.info("Placed ERNIE-Image pipeline on %s without CPU offload", device)
+
+        # Upcast the VAE to fp32 regardless of whether offload was applied.
+        # Under sequential/model CPU offload, the VAE decoder runs in bf16 by
+        # default and its intermediate activations routinely exceed bf16's max
+        # (~65 504), producing NaN → all-black output images. Keeping the VAE
+        # in fp32 costs VRAM only during the short decode step and is fully
+        # compatible with all diffusers offload strategies.
+        if hasattr(pipe_instance, "vae"):
+            try:
+                pipe_instance.vae.to(dtype=torch.float32)
+                logger.info("Upcasted VAE to fp32 to prevent bf16 decode NaN")
+            except Exception as exc:
+                logger.warning("VAE fp32 upcast failed (images may be black): %s", exc)
+        return
 
     pipe_instance.to(device)
     logger.info("Placed ERNIE-Image pipeline on %s without CPU offload", device)

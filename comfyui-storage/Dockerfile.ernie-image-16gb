@@ -15,10 +15,13 @@ ENV TRANSFORMERS_OFFLINE=1
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 ENV ERNIE_MODEL_ID=baidu/ERNIE-Image
-ENV ERNIE_DEFAULT_STEPS=28
+ENV ERNIE_DEFAULT_STEPS=38
 # 16GB is still a constrained tier for the full checkpoint. Favor the same
 # low-VRAM runtime profile used by start_cloud.sh so the image is safe even
-# when launched directly: fp16 weights, PE disabled, and model CPU offload.
+# when launched directly: bf16 weights, PE disabled, and model CPU offload.
+# 38 steps is a quality/speed balance for the standard model (trained at 50);
+# lower values produce flat/muddy output rather than full black, but 28 was
+# too aggressive.
 ENV ERNIE_DTYPE=bf16
 ENV ERNIE_USE_PE=false
 ENV ERNIE_ENABLE_CPU_OFFLOAD=true
