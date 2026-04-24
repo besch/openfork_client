@@ -679,6 +679,15 @@ except Exception as e:
     fi
 fi
 
+# Fix AudioVAE(sd) → AudioVAE(sd, metadata) in low_vram_loaders.py.
+# ComfyUI's audio_vae.py now asserts metadata is present; older built images
+# had a Dockerfile patch that stripped the metadata arg — restore it here.
+LTX_LOADERS="/opt/ComfyUI/custom_nodes/ComfyUI-LTXVideo/low_vram_loaders.py"
+if [ -f "$LTX_LOADERS" ] && grep -q "AudioVAE(sd)" "$LTX_LOADERS"; then
+    sed -i 's/AudioVAE(sd)/AudioVAE(sd, metadata)/g' "$LTX_LOADERS"
+    log "Patched AudioVAE call in low_vram_loaders.py to include metadata"
+fi
+
 # Start ComfyUI
 if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   # Determine ComfyUI launch flags based on SERVICE_TYPE
