@@ -1,0 +1,142 @@
+# OpenFork — LTX-2.3 22B Audio-Video on Wan2GP (multi-GPU)
+#
+# What this image provides:
+#   - Wan2GP (deepbeepmeep/Wan2GP) at /opt/wan2gp
+#   - LTX-2.3 22B Q8_0 GGUF transformer in ckpts/
+#   - Gemma-3 12B QAT text encoder in ckpts/
+#   - All LTX-2.3 support files (VAE, audio VAE, vocoder, upscalers, LoRAs)
+#
+# Build:
+#   docker build \
+#     --build-arg HF_TOKEN=<token> \
+#     -t beschiak/openfork-ltx23-wan2gp:latest \
+#     -f Dockerfile.ltx23-wan2gp .
+#
+# Notes:
+#   - HF_TOKEN is required to download from DeepBeepMeep/LTX-2 (gated repo)
+#   - CUDA 12.8 + PyTorch 2.6 cu128 wheel covers sm_75–sm_90 out of the box
+#   - ComfyUI is NOT installed — this image uses the Wan2GP Python library directly
+
+ARG HF_TOKEN
+
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ARG HF_TOKEN
+
+# Supported GPU compute capabilities (via pre-built PyTorch cu128 wheel):
+#   7.5 = T4, RTX 20xx  |  8.0 = A100  |  8.6 = RTX 30xx, A10G
+#   8.9 = RTX 40xx, L40, L40S  |  9.0 = H100
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV WAN2GP_ROOT=/opt/wan2gp
+ENV WAN2GP_OUTPUT=/opt/wan2gp/outputs
+
+# ── System dependencies ──────────────────────────────────────────────────────
+# Drop the NVIDIA apt repo before updating — CUDA is already in the base image
+# and the NVIDIA mirror is often transiently inconsistent during docker builds.
+RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev \
+        git wget curl cmake ninja-build \
+        build-essential g++ \
+        libgl1 libglib2.0-0 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+RUN pip3 install --upgrade pip setuptools wheel
+
+# ── PyTorch (CUDA 12.8) ──────────────────────────────────────────────────────
+# Pre-built cu128 wheel (PyTorch 2.7) includes kernels for sm_75/8.0/8.6/8.9/9.0 —
+# no CUDA compilation needed at image build time.
+RUN pip3 install \
+        torch==2.7.0+cu128 \
+        torchvision==0.22.0+cu128 \
+        torchaudio==2.7.0+cu128 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+# ── Wan2GP source ─────────────────────────────────────────────────────────────
+RUN git clone https://github.com/deepbeepmeep/Wan2GP /opt/wan2gp \
+    && git -C /opt/wan2gp checkout main
+
+# ── Wan2GP Python dependencies ────────────────────────────────────────────────
+# Try with the custom ort-nightly index first; fall back to PyPI only on failure
+RUN pip3 install \
+        --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
+        -r /opt/wan2gp/requirements.txt \
+    || pip3 install -r /opt/wan2gp/requirements.txt
+
+# ── Re-pin PyTorch cu128 (wan2gp requirements.txt may downgrade it) ──────────
+# Wan2GP's requirements.txt can overwrite the cu128 build with a cpu/cu118 wheel
+# that lacks sm_89 in get_arch_list(), causing the GPU CC check to fail at startup.
+# Re-installing after requirements ensures the correct cu128 build is active.
+RUN pip3 install \
+        torch==2.7.0+cu128 \
+        torchvision==0.22.0+cu128 \
+        torchaudio==2.7.0+cu128 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+# ── Pre-create directories ────────────────────────────────────────────────────
+RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
+
+# ── Verify HF_TOKEN is set before attempting large downloads ──────────────────
+RUN test -n "${HF_TOKEN}" \
+    || { echo "ERROR: HF_TOKEN build-arg is required to download gated models. Pass --build-arg HF_TOKEN=<your_token>"; exit 1; }
+
+# ── Download LTX-2.3 22B model files (DeepBeepMeep/LTX-2) ────────────────────
+# Files go to the HF hub cache (no --local-dir) so that hf_hub_download() calls
+# inside Wan2GP at generation time can find them with HF_HUB_OFFLINE=1.
+# A symlink step below populates ckpts/ from the cache for direct-path access.
+RUN pip3 install -q "huggingface_hub[cli]" \
+    && huggingface-cli download DeepBeepMeep/LTX-2 \
+        ltx-2.3-22b-distilled-Q8_0_light.gguf \
+        ltx-2.3-22b_vae.safetensors \
+        ltx-2.3-22b_audio_vae.safetensors \
+        ltx-2.3-22b_vocoder.safetensors \
+        ltx-2.3-22b_text_embedding_projection.safetensors \
+        ltx-2.3-22b_embeddings_connector.safetensors \
+        ltx-2.3-22b-distilled-lora-384.safetensors \
+        ltx-2.3-spatial-upscaler-x2-1.1.safetensors \
+        ltx-2.3-temporal-upscaler-x2-1.0.safetensors \
+        ltx2_22b_config.json \
+        ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors \
+        ltx-2.3-22b-ic-lora-outpaint.safetensors \
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: LTX-2.3 model download failed. Verify HF_TOKEN is valid and has access to DeepBeepMeep/LTX-2."; exit 1; }
+
+# ── Download Gemma-3 12B QAT text encoder ─────────────────────────────────────
+RUN huggingface-cli download DeepBeepMeep/LTX-2 \
+        --include "gemma-3-12b-it-qat-q4_0-unquantized/*" \
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: Gemma-3 text encoder download failed. Verify HF_TOKEN and repo access."; exit 1; }
+
+# ── Symlink HF cache snapshot → ckpts/ for direct-path access ────────────────
+# Resolves to actual blob files so ckpts/ entries are usable without network.
+COPY setup_ckpts_symlinks.py /tmp/setup_ckpts_symlinks.py
+RUN python3 /tmp/setup_ckpts_symlinks.py
+
+# The Gemma folder contains merged quantized weights, not the original shard set.
+# Remove any stale shard index so local Transformers lookups cannot chase absent
+# model-0000x-of-00005.safetensors files at runtime.
+RUN rm -f /opt/wan2gp/ckpts/gemma-3-12b-it-qat-q4_0-unquantized/model.safetensors.index.json
+
+# ── FastAPI + uvicorn for the Wan2GP HTTP server ──────────────────────────────
+RUN pip3 install fastapi "uvicorn[standard]"
+
+# The runtime image should be self-contained. If Wan2GP or Transformers tries to
+# resolve missing model files from Hugging Face at startup, fail loudly instead
+# of silently downloading on every container run.
+# ENV HF_HUB_OFFLINE=1 \
+#     TRANSFORMERS_OFFLINE=1 \
+#     HF_HUB_DISABLE_TELEMETRY=1
+
+# ── Verify critical files are present and shared.api is importable ─────────────
+COPY verify_wan2gp.py /tmp/verify_wan2gp.py
+RUN LTX23_REQUIRED_TRANSFORMER=ltx-2.3-22b-distilled-Q8_0_light.gguf python3 /tmp/verify_wan2gp.py
+
+WORKDIR /opt/wan2gp
+
+# ── HTTP server that wraps shared.api (port 8188) ─────────────────────────────
+COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
+
+CMD ["python3", "/opt/wan2gp/wan2gp_server.py"]
