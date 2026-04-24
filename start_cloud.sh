@@ -1023,15 +1023,19 @@ if [ "$START_ERNIE_IMAGE" = "true" ]; then
     if [[ "${SERVICE_TYPE}" == *"8gb"* ]]; then
       export ERNIE_MODEL_ID="baidu/ERNIE-Image-Turbo"
       export ERNIE_DEFAULT_STEPS="8"
-      export ERNIE_DTYPE="fp16"
+      # bf16 is required: fp16 causes NaN latents in the transformer on this model,
+      # producing solid black output. bf16 upcasts the affected ops to fp32 internally.
+      export ERNIE_DTYPE="bf16"
       export ERNIE_USE_PE="false"
       export ERNIE_ENABLE_CPU_OFFLOAD="true"
       export ERNIE_ENABLE_ATTENTION_SLICING="true"
       export ERNIE_ENABLE_VAE_TILING="true"
     elif [[ "${SERVICE_TYPE}" == *"16gb"* ]]; then
       export ERNIE_MODEL_ID="baidu/ERNIE-Image"
-      export ERNIE_DEFAULT_STEPS="28"
-      export ERNIE_DTYPE="fp16"
+      export ERNIE_DEFAULT_STEPS="38"
+      # bf16 is required: fp16 causes NaN latents in the transformer on this model,
+      # producing solid black output. bf16 upcasts the affected ops to fp32 internally.
+      export ERNIE_DTYPE="bf16"
       export ERNIE_USE_PE="false"
       export ERNIE_ENABLE_CPU_OFFLOAD="true"
       export ERNIE_ENABLE_ATTENTION_SLICING="true"
