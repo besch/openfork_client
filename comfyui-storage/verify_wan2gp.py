@@ -14,6 +14,10 @@ CKPTS = "/opt/wan2gp/ckpts"
 DEFAULT_TRANSFORMER = "ltx-2.3-22b-distilled-Q8_0_light.gguf"
 
 
+def env_flag(name):
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def required_transformers():
     configured = os.environ.get("LTX23_REQUIRED_TRANSFORMERS") or os.environ.get(
         "LTX23_REQUIRED_TRANSFORMER"
@@ -39,10 +43,43 @@ COMMON_REQUIRED_FILES = [
     f"{CKPTS}/gemma-3-12b-it-qat-q4_0-unquantized/tokenizer.model",
 ]
 
+SHARED_RUNTIME_FILES = [
+    f"{CKPTS}/pose/dw-ll_ucoco_384.onnx",
+    f"{CKPTS}/pose/yolox_l.onnx",
+    f"{CKPTS}/scribble/netG_A_latest.pth",
+    f"{CKPTS}/flow/raft-things.pth",
+    f"{CKPTS}/depth/depth_anything_v2_vitl.pth",
+    f"{CKPTS}/depth/depth_anything_v2_vitb.pth",
+    f"{CKPTS}/wav2vec/config.json",
+    f"{CKPTS}/wav2vec/feature_extractor_config.json",
+    f"{CKPTS}/wav2vec/model.safetensors",
+    f"{CKPTS}/wav2vec/preprocessor_config.json",
+    f"{CKPTS}/wav2vec/special_tokens_map.json",
+    f"{CKPTS}/wav2vec/tokenizer_config.json",
+    f"{CKPTS}/wav2vec/vocab.json",
+    f"{CKPTS}/chinese-wav2vec2-base/config.json",
+    f"{CKPTS}/chinese-wav2vec2-base/pytorch_model.bin",
+    f"{CKPTS}/chinese-wav2vec2-base/preprocessor_config.json",
+    f"{CKPTS}/roformer/model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+    f"{CKPTS}/roformer/model_bs_roformer_ep_317_sdr_12.9755.yaml",
+    f"{CKPTS}/roformer/download_checks.json",
+    f"{CKPTS}/pyannote/pyannote_model_wespeaker-voxceleb-resnet34-LM.bin",
+    f"{CKPTS}/pyannote/pytorch_model_segmentation-3.0.bin",
+    f"{CKPTS}/det_align/detface.pt",
+    f"{CKPTS}/mask/sam_vit_h_4b8939_fp16.safetensors",
+    f"{CKPTS}/mask/matanyone.safetensors",
+    f"{CKPTS}/mask/config.json",
+    f"{CKPTS}/rife4.26.pkl",
+]
+
 REQUIRED_FILES = [
     *(f"{CKPTS}/{name}" for name in required_transformers()),
     *COMMON_REQUIRED_FILES,
 ]
+
+VERIFY_SHARED_RUNTIME_FILES = env_flag("LTX23_VERIFY_SHARED_RUNTIME_FILES")
+if VERIFY_SHARED_RUNTIME_FILES:
+    REQUIRED_FILES.extend(SHARED_RUNTIME_FILES)
 
 # Config file may vary by repo revision — match any *config*.json under ckpts/
 def find_config_json(root):
@@ -84,6 +121,13 @@ for dirpath, dirnames, filenames in os.walk(CKPTS):
 
 # ── Check required files ──────────────────────────────────────────────────────
 print("\n--- Checking required model files ---")
+if VERIFY_SHARED_RUNTIME_FILES:
+    print("Shared WanGP runtime file verification: enabled")
+else:
+    print(
+        "Shared WanGP runtime file verification: skipped "
+        "(set LTX23_VERIFY_SHARED_RUNTIME_FILES=1 to require it)"
+    )
 missing = [f for f in REQUIRED_FILES if not os.path.isfile(f)]
 if missing:
     for f in missing:

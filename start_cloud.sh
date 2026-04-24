@@ -554,7 +554,7 @@ if [ "$START_QWEN3TTS" = "true" ]; then
   fi
 fi
 
-# Wan2GP backend (LTX-2.3 Audio-Video 24GB)
+# Wan2GP backend (LTX-2.3 Audio-Video)
 if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
@@ -610,9 +610,16 @@ except Exception as e:
     # Set Wan2GP environment variables
     export WAN2GP_ROOT="/opt/wan2gp"
     export WAN2GP_OUTPUT="/opt/wan2gp/outputs"
-    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
-    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
     export HF_HUB_DISABLE_TELEMETRY="${HF_HUB_DISABLE_TELEMETRY:-1}"
+    if [ "${WAN2GP_STRICT_OFFLINE:-false}" = "true" ]; then
+        export HF_HUB_OFFLINE="1"
+        export TRANSFORMERS_OFFLINE="1"
+        log "Wan2GP strict offline mode enabled."
+    else
+        export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-0}"
+        export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-0}"
+        log "Wan2GP runtime downloads allowed when baked cache files are missing (set WAN2GP_STRICT_OFFLINE=true to disable)."
+    fi
     
     # Detailed diagnostics for Wan2GP installation
     log "Checking Wan2GP installation at $WAN2GP_ROOT..."
@@ -641,18 +648,24 @@ except Exception as e:
     if [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]]; then
         LTX23_Q4_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
         LTX23_Q8_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
-        if [[ "$SERVICE_TYPE" == *"8gb"* ]]; then
-            LTX23_REQUIRED_TRANSFORMER="$LTX23_Q4_TRANSFORMER"
-            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-8gb:latest"
-        else
-            LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
-            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
-        fi
+        # if [[ "$SERVICE_TYPE" == *"8gb"* ]]; then
+        #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q4_TRANSFORMER"
+        #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-8gb:latest"
+        # elif [[ "$SERVICE_TYPE" == *"32gb"* ]]; then
+        #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
+        #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
+        # else
+        #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
+        #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-original:latest"
+        # fi
+        LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
+        LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-original:latest"
 
         if [ ! -f "$LTX23_REQUIRED_TRANSFORMER" ]; then
             log "ERROR: $SERVICE_TYPE requires $(basename "$LTX23_REQUIRED_TRANSFORMER"), but this image does not contain it."
             log "Use beschiak/openfork-ltx23-wan2gp-8gb:latest for the 8GB tier."
-            log "Use beschiak/openfork-ltx23-wan2gp:latest for the 16GB, 24GB, and 32GB tiers."
+            log "Use beschiak/openfork-ltx23-wan2gp-original:latest for the 16GB and 24GB tiers."
+            log "Use beschiak/openfork-ltx23-wan2gp:latest for the 32GB tier."
             log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
             WAN2GP_CHECK_FAILED=1
         fi

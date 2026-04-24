@@ -120,6 +120,40 @@ RUN python3 /tmp/setup_ckpts_symlinks.py
 # model-0000x-of-00005.safetensors files at runtime.
 RUN rm -f /opt/wan2gp/ckpts/gemma-3-12b-it-qat-q4_0-unquantized/model.safetensors.index.json
 
+# ── Download shared WanGP runtime assets ─────────────────────────────────────
+# WanGP resolves these unconditionally while preparing a generation. Bake them
+# into ckpts/ so HF_HUB_OFFLINE=1 remains safe when strict offline mode is used.
+RUN huggingface-cli download DeepBeepMeep/Wan2.1 \
+        pose/dw-ll_ucoco_384.onnx \
+        pose/yolox_l.onnx \
+        scribble/netG_A_latest.pth \
+        flow/raft-things.pth \
+        depth/depth_anything_v2_vitl.pth \
+        depth/depth_anything_v2_vitb.pth \
+        wav2vec/config.json \
+        wav2vec/feature_extractor_config.json \
+        wav2vec/model.safetensors \
+        wav2vec/preprocessor_config.json \
+        wav2vec/special_tokens_map.json \
+        wav2vec/tokenizer_config.json \
+        wav2vec/vocab.json \
+        chinese-wav2vec2-base/config.json \
+        chinese-wav2vec2-base/pytorch_model.bin \
+        chinese-wav2vec2-base/preprocessor_config.json \
+        roformer/model_bs_roformer_ep_317_sdr_12.9755.ckpt \
+        roformer/model_bs_roformer_ep_317_sdr_12.9755.yaml \
+        roformer/download_checks.json \
+        pyannote/pyannote_model_wespeaker-voxceleb-resnet34-LM.bin \
+        pyannote/pytorch_model_segmentation-3.0.bin \
+        det_align/detface.pt \
+        mask/sam_vit_h_4b8939_fp16.safetensors \
+        mask/matanyone.safetensors \
+        mask/config.json \
+        rife4.26.pkl \
+        --local-dir /opt/wan2gp/ckpts \
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: WanGP shared runtime asset download failed."; exit 1; }
+
 # ── FastAPI + uvicorn for the Wan2GP HTTP server ──────────────────────────────
 RUN pip3 install fastapi "uvicorn[standard]"
 
