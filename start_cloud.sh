@@ -648,18 +648,18 @@ except Exception as e:
     if [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]]; then
         LTX23_Q4_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
         LTX23_Q8_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
-        # if [[ "$SERVICE_TYPE" == *"8gb"* ]]; then
-        #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q4_TRANSFORMER"
-        #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-8gb:latest"
+        if [[ "$SERVICE_TYPE" == *"8gb"* ]]; then
+            LTX23_REQUIRED_TRANSFORMER="$LTX23_Q4_TRANSFORMER"
+            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-8gb:latest"
         # elif [[ "$SERVICE_TYPE" == *"32gb"* ]]; then
         #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
         #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
-        # else
-        #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
-        #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-original:latest"
-        # fi
-        LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
-        LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-original:latest"
+        else
+            LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
+            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
+        fi
+        # LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
+        # LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-original:latest"
 
         if [ ! -f "$LTX23_REQUIRED_TRANSFORMER" ]; then
             log "ERROR: $SERVICE_TYPE requires $(basename "$LTX23_REQUIRED_TRANSFORMER"), but this image does not contain it."
