@@ -12,12 +12,22 @@
 #     -t beschiak/openfork-ltx23-wan2gp-12gb:latest \
 #     -f Dockerfile.ltx23-wan2gp-12gb .
 #
+# Run flags (CRITICAL for 12GB OOM avoidance):
+#   The Q6_K_light GGUF (~16.1 GB) is larger than 12 GB VRAM. Wan2GP's mmgp pins host
+#   RAM for fast CPU↔GPU transfers when offloading. Default Docker memlock
+#   ulimit (~64 MB) is too low — pinning fails partially and the offload swap
+#   silently OOMs mid-generation. Always run with:
+#       --gpus all
+#       --ipc=host
+#       --ulimit memlock=-1:-1
+#       --shm-size=16g
+#
 # Notes:
 #   - HF_TOKEN is required to download from DeepBeepMeep/LTX-2 (gated repo)
 #   - CUDA 12.8 + PyTorch 2.6 cu128 wheel covers sm_75–sm_90 out of the box
 #   - ComfyUI is NOT installed — this image uses the Wan2GP Python library directly
-#   - Q6_K_light weights (~16.1 GB) > 12 GB VRAM — Wan2GP profile 4.5 streams
-#     the rest from system RAM. Requires ≥48 GB system RAM for stable runtime.
+#   - Requires ≥48 GB system RAM (the 16.1 GB transformer streams from RAM via
+#     pinned/reserved memory; tighter system RAM forces deeper page-cache thrash)
 
 ARG HF_TOKEN
 
@@ -33,9 +43,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV WAN2GP_ROOT=/opt/wan2gp
 ENV WAN2GP_OUTPUT=/opt/wan2gp/outputs
 ENV CUDA_MODULE_LOADING=LAZY
-ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128
+# expandable_segments + GC threshold reduce fragmentation under heavy offload swap.
+# Forcing GC at 80% gives the allocator headroom to coalesce blocks before the
+# next large allocation (VAE decode, audio decode) hits.
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.8
 ENV MALLOC_ARENA_MAX=2
-ENV WAN2GP_CLI_ARGS="--profile 4.5 --attention sdpa --perc-reserved-mem-max 0.55"
+# --vram-safety-coefficient 0.7 caps Wan2GP VRAM allocation at 70% of the GPU
+# (vs default 0.8). Costs ~1.2 GB of theoretical capacity, buys headroom for the
+# transient burst at end-of-job VAE+audio decode where 12 GB cards typically OOM.
+# --profile 4.5 saves up to 1 GB VRAM vs profile 4 (per Wan2GP docs).
+# --perc-reserved-mem-max 0.55 pins system RAM for offload (requires
+# --ulimit memlock=-1:-1 at docker run; without it, pinning silently fails).
+ENV WAN2GP_CLI_ARGS="--profile 4.5 --attention sdpa --perc-reserved-mem-max 0.55 --vram-safety-coefficient 0.7"
 
 # ── System dependencies ──────────────────────────────────────────────────────
 # Drop the NVIDIA apt repo before updating — CUDA is already in the base image

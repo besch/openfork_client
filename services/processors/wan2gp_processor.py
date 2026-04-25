@@ -89,13 +89,21 @@ class Wan2GPProcessor(BaseJobProcessor):
 
     @staticmethod
     def aspect_to_resolution(aspect_ratio: str, vram_tier: str = "") -> str:
+        # Empty / unrecognized vram_tier silently selects 1280x720, which OOMs
+        # any 8 GB card. Log the selection so misrouted jobs surface in logs.
         if "8gb" in vram_tier:
-            return _ASPECT_RESOLUTIONS_8GB.get(aspect_ratio, "512x288")
-        if "12gb" in vram_tier:
-            return _ASPECT_RESOLUTIONS_12GB.get(aspect_ratio, "544x304")
-        if "16gb" in vram_tier:
-            return _ASPECT_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
-        return _ASPECT_RESOLUTIONS.get(aspect_ratio, "1280x720")
+            tier, resolution = "8gb", _ASPECT_RESOLUTIONS_8GB.get(aspect_ratio, "512x288")
+        elif "12gb" in vram_tier:
+            tier, resolution = "12gb", _ASPECT_RESOLUTIONS_12GB.get(aspect_ratio, "544x304")
+        elif "16gb" in vram_tier:
+            tier, resolution = "16gb", _ASPECT_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
+        else:
+            tier, resolution = "default(24+gb)", _ASPECT_RESOLUTIONS.get(aspect_ratio, "1280x720")
+        logging.info(
+            "Wan2GP resolution: vram_tier=%r aspect=%s tier=%s -> %s",
+            vram_tier, aspect_ratio, tier, resolution,
+        )
+        return resolution
 
     def _wait_for_server(self) -> bool:
         """Poll /health until the Wan2GP server responds or timeout is reached."""
