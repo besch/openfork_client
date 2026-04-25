@@ -49,6 +49,16 @@ _ASPECT_RESOLUTIONS_16GB = {
     "2:1": "768x384",
 }
 
+_ASPECT_RESOLUTIONS_12GB = {
+    "16:9": "544x304",
+    "9:16": "304x544",
+    "1:1": "480x480",
+    "4:3": "480x368",
+    "3:4": "368x480",
+    "21:9": "544x240",
+    "2:1": "544x272",
+}
+
 _ASPECT_RESOLUTIONS_8GB = {
     "16:9": "512x288",
     "9:16": "288x512",
@@ -81,6 +91,8 @@ class Wan2GPProcessor(BaseJobProcessor):
     def aspect_to_resolution(aspect_ratio: str, vram_tier: str = "") -> str:
         if "8gb" in vram_tier:
             return _ASPECT_RESOLUTIONS_8GB.get(aspect_ratio, "512x288")
+        if "12gb" in vram_tier:
+            return _ASPECT_RESOLUTIONS_12GB.get(aspect_ratio, "544x304")
         if "16gb" in vram_tier:
             return _ASPECT_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
         return _ASPECT_RESOLUTIONS.get(aspect_ratio, "1280x720")

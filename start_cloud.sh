@@ -402,19 +402,26 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
       LTX23_Q4_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
+      LTX23_Q6_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q6_K_light.gguf"
       LTX23_Q8_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
-      if [ -f "$LTX23_Q4_TRANSFORMER" ] && [ ! -f "$LTX23_Q8_TRANSFORMER" ]; then
+      if [ -f "$LTX23_Q4_TRANSFORMER" ] && [ ! -f "$LTX23_Q6_TRANSFORMER" ] && [ ! -f "$LTX23_Q8_TRANSFORMER" ]; then
           SERVICE_TYPE="ltx23-video-8gb"
           log "Auto-selected LTX-2.3 8GB tier (Q4_K_M image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ -f "$LTX23_Q6_TRANSFORMER" ] && [ ! -f "$LTX23_Q8_TRANSFORMER" ]; then
+          SERVICE_TYPE="ltx23-video-12gb"
+          log "Auto-selected LTX-2.3 12GB tier (Q6_K image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
       elif [ "$TOTAL_VRAM_MB" -gt 28000 ]; then
           SERVICE_TYPE="ltx23-video-32gb"
           log "Auto-selected LTX-2.3 32GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       elif [ "$TOTAL_VRAM_MB" -gt 18000 ]; then
           SERVICE_TYPE="ltx23-video-24gb"
           log "Auto-selected LTX-2.3 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      elif [ "$TOTAL_VRAM_MB" -lt 12000 ] && [ -f "$LTX23_Q4_TRANSFORMER" ]; then
+      elif [ "$TOTAL_VRAM_MB" -lt 10000 ] && [ -f "$LTX23_Q4_TRANSFORMER" ]; then
           SERVICE_TYPE="ltx23-video-8gb"
           log "Auto-selected LTX-2.3 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -lt 14000 ] && [ -f "$LTX23_Q6_TRANSFORMER" ]; then
+          SERVICE_TYPE="ltx23-video-12gb"
+          log "Auto-selected LTX-2.3 12GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       else
           SERVICE_TYPE="ltx23-video-16gb"
           log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
@@ -647,10 +654,14 @@ except Exception as e:
 
     if [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]]; then
         LTX23_Q4_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
+        LTX23_Q6_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q6_K_light.gguf"
         LTX23_Q8_TRANSFORMER="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
         if [[ "$SERVICE_TYPE" == *"8gb"* ]]; then
             LTX23_REQUIRED_TRANSFORMER="$LTX23_Q4_TRANSFORMER"
             LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-8gb:latest"
+        elif [[ "$SERVICE_TYPE" == *"12gb"* ]]; then
+            LTX23_REQUIRED_TRANSFORMER="$LTX23_Q6_TRANSFORMER"
+            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-12gb:latest"
         # elif [[ "$SERVICE_TYPE" == *"32gb"* ]]; then
         #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
         #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
@@ -664,6 +675,7 @@ except Exception as e:
         if [ ! -f "$LTX23_REQUIRED_TRANSFORMER" ]; then
             log "ERROR: $SERVICE_TYPE requires $(basename "$LTX23_REQUIRED_TRANSFORMER"), but this image does not contain it."
             log "Use beschiak/openfork-ltx23-wan2gp-8gb:latest for the 8GB tier."
+            log "Use beschiak/openfork-ltx23-wan2gp-12gb:latest for the 12GB tier."
             log "Use beschiak/openfork-ltx23-wan2gp-original:latest for the 16GB and 24GB tiers."
             log "Use beschiak/openfork-ltx23-wan2gp:latest for the 32GB tier."
             log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
