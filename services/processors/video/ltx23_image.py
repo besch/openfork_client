@@ -13,10 +13,13 @@ from PIL import Image
 
 from config import DEV_MODE, SUPABASE_URL
 from services.processors.wan2gp_processor import Wan2GPProcessor
-from services.processors.video.ltx23_common import get_ltx23_model_type
+from services.processors.video.ltx23_common import (
+    clamp_ltx23_duration,
+    clamp_ltx23_steps,
+    get_ltx23_model_type,
+)
 from utils.comfyui_workflow_utils import materialize_start_image
 
-_DEFAULT_STEPS = 8
 _DEFAULT_CFG = 3.0
 _FPS = 24
 
@@ -35,24 +38,7 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
         inputs = self.job.get("inputs", {})
         service_type = self.job.get("service_type", "")
 
-        # Determine dynamic constraints based on the service tier
-        if "8gb" in service_type:
-            duration_max = 3
-            duration_default = 2
-        elif "16gb" in service_type:
-            duration_max = 5
-            duration_default = 4
-        elif "32gb" in service_type:
-            duration_max = 10
-            duration_default = 7
-        else:
-            # 24GB fallback
-            duration_max = 7
-            duration_default = 5
-
-        # Calculate exact frame count based on requested duration
-        requested_duration = float(inputs.get("duration", duration_default))
-        duration = max(1.0, min(requested_duration, float(duration_max)))
+        duration = clamp_ltx23_duration(inputs.get("duration"), service_type)
         video_length = int(duration * _FPS) + 1
 
         image_path = self._resolve_start_image(inputs)
@@ -80,7 +66,9 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             "resolution": self.aspect_to_resolution(
                 inputs.get("aspect_ratio", "16:9"), service_type
             ),
-            "num_inference_steps": inputs.get("steps", _DEFAULT_STEPS),
+            "num_inference_steps": clamp_ltx23_steps(
+                inputs.get("steps"), service_type
+            ),
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
             "video_length": video_length,
             "force_fps": _FPS,
@@ -88,7 +76,10 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
 
         files = self._run_task(settings)
         if not files:
-            if not self.shutdown_event.is_set():
+            if (
+                not self.shutdown_event.is_set()
+                and not self.infrastructure_interrupted
+            ):
                 self._fail_job(f"Wan2GP produced no output for job {self.job_id}")
             return
 

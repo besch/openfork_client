@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from cli import SHUTDOWN_EVENT, cleanup, listen_for_ipc_commands
+from exceptions import InfrastructureError
 from services.job_listener import JobListener
 
 
@@ -205,6 +206,95 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertIn("JOB_CLEARED", output.getvalue())
         self.assertIn("deleted", output.getvalue())
         self.assertNotIn("JOB_FAILED", output.getvalue())
+
+    def test_job_listener_skips_completion_after_infrastructure_interrupt(self):
+        shutdown_event = threading.Event()
+
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={"id": "job-oom", "execution_token": "token-oom"},
+            orchestrator_service=Mock(),
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "ltx23-video-8gb",
+            download_manager=None,
+        )
+
+        class InterruptedProcessor:
+            def process(self_inner):
+                client.interrupted_job_id = "job-oom"
+                client.interrupted_job_execution_token = "token-oom"
+
+            def close(self_inner):
+                return None
+
+        client._get_job_processor = lambda job, event: InterruptedProcessor()
+        client.orchestrator_service.get_job.return_value = {"status": "pending"}
+
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {"id": "job-oom", "workflow_type": "ltx23-text-to-video-8gb"}
+            )
+
+        self.assertTrue(result)
+        self.assertIsNone(client.current_job)
+        self.assertNotIn("JOB_COMPLETE", output.getvalue())
+        self.assertNotIn("JOB_FAILED", output.getvalue())
+
+    def test_job_listener_requeues_infrastructure_error_from_processor(self):
+        shutdown_event = threading.Event()
+
+        class OomProcessor:
+            def process(self_inner):
+                raise InfrastructureError("Wan2GP CUDA out of memory")
+
+            def close(self_inner):
+                return None
+
+        orchestrator_service = Mock()
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={"id": "job-gpu-oom", "execution_token": "token-gpu-oom"},
+            active_service_type=None,
+            orchestrator_service=orchestrator_service,
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "ltx23-video-8gb",
+            _get_job_processor=lambda job, event: OomProcessor(),
+            download_manager=None,
+        )
+
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {
+                    "id": "job-gpu-oom",
+                    "workflow_type": "ltx23-text-to-video-8gb",
+                    "execution_token": "token-gpu-oom",
+                }
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(client.interrupted_job_id, "job-gpu-oom")
+        orchestrator_service.reset_interrupted_job.assert_called_once_with(
+            "job-gpu-oom",
+            execution_token="token-gpu-oom",
+            reason="provider_gpu_oom",
+        )
+        orchestrator_service.update_job_status.assert_not_called()
+        self.assertIn("JOB_FAILED", output.getvalue())
+        self.assertIn("job requeued", output.getvalue())
 
 
 if __name__ == "__main__":

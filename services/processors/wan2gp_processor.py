@@ -21,6 +21,7 @@ from typing import List, Optional, Tuple
 import requests
 
 from config import THUMBNAIL_WIDTH
+from exceptions import InfrastructureError
 from services.processors.base import BaseJobProcessor
 from utils.media_utils import generate_thumbnail, get_video_duration
 
@@ -72,6 +73,10 @@ class Wan2GPProcessor(BaseJobProcessor):
 
     MAX_GENERATION_SECONDS = 7200  # 2 hours
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.infrastructure_interrupted = False
+
     @staticmethod
     def aspect_to_resolution(aspect_ratio: str, vram_tier: str = "") -> str:
         if "8gb" in vram_tier:
@@ -87,6 +92,13 @@ class Wan2GPProcessor(BaseJobProcessor):
         last_log = time.monotonic()
         while time.monotonic() < deadline:
             if self.shutdown_event.is_set():
+                return False
+            if self._job_was_interrupted_by_infrastructure():
+                logging.warning(
+                    "Wan2GP server wait stopped because job %s was interrupted "
+                    "by a container-level failure.",
+                    self.job_id,
+                )
                 return False
             try:
                 resp = requests.get(url, timeout=5)
@@ -105,6 +117,23 @@ class Wan2GPProcessor(BaseJobProcessor):
             f"Wan2GP server did not become ready within {WAN2GP_READY_TIMEOUT}s."
         )
         return False
+
+    def _job_was_interrupted_by_infrastructure(self) -> bool:
+        if getattr(self.client, "interrupted_job_id", None) == self.job_id:
+            self.infrastructure_interrupted = True
+            return True
+        return False
+
+    @staticmethod
+    def _is_wan2gp_cuda_oom(detail) -> bool:
+        text = str(detail).lower()
+        oom_markers = (
+            "cuda driver error: out of memory",
+            "cuda out of memory",
+            "torch.cuda.outofmemoryerror",
+            "cublas_status_alloc_failed",
+        )
+        return any(marker in text for marker in oom_markers)
 
     def _run_task(self, settings: dict) -> List[str]:
         """Submit a generation task and return local paths to the output files."""
@@ -150,6 +179,13 @@ class Wan2GPProcessor(BaseJobProcessor):
                 return []
 
         if error_holder[0]:
+            if self._job_was_interrupted_by_infrastructure():
+                logging.warning(
+                    "Wan2GP generate request stopped after container-level "
+                    "failure for job %s.",
+                    self.job_id,
+                )
+                return []
             logging.error(
                 f"Wan2GP generate request failed for job {self.job_id}: {error_holder[0]}"
             )
@@ -162,6 +198,13 @@ class Wan2GPProcessor(BaseJobProcessor):
                 detail = resp.json()
             except Exception:
                 detail = resp.text
+
+            if self._is_wan2gp_cuda_oom(detail):
+                self.infrastructure_interrupted = True
+                raise InfrastructureError(
+                    f"Wan2GP CUDA out of memory for job {self.job_id}: {detail}"
+                )
+
             logging.error(
                 f"Wan2GP server returned error for job {self.job_id}: {detail}"
             )

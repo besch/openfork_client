@@ -743,6 +743,69 @@ class DockerProdManager:
             logging.error(f"exec_run failed in '{container_name}': {e}")
             return None
 
+    def _copy_pre_start_files(
+        self,
+        container,
+        pre_start_copies: list[tuple[str, str]],
+        shutdown_event: threading.Event = None,
+    ) -> None:
+        if not pre_start_copies:
+            return
+
+        copy_shutdown_event = shutdown_event or threading.Event()
+        container_ref = getattr(container, "name", None) or getattr(container, "id", "")
+
+        for source_on_host, dest_in_container in pre_start_copies:
+            if self._use_api_file_copy:
+                copy_file_to_container_api(
+                    container,
+                    source_on_host,
+                    dest_in_container,
+                    copy_shutdown_event,
+                )
+            else:
+                docker_cp(
+                    source_on_host,
+                    f"{container_ref}:{dest_in_container}",
+                    copy_shutdown_event,
+                )
+
+    def _create_copy_and_start_container(
+        self,
+        run_kwargs: dict,
+        pre_start_copies: list[tuple[str, str]],
+        shutdown_event: threading.Event = None,
+    ):
+        """Create a container, copy files into it while stopped, then start it.
+
+        This is used for Wan2GP so the HTTP server runs as PID 1 while still
+        allowing the client to inject the latest server wrapper before startup.
+        If model loading OOMs, Docker marks the container exited/OOMKilled and
+        the existing crash monitor can requeue the job.
+        """
+        create_kwargs = dict(run_kwargs)
+        create_kwargs.pop("detach", None)
+        container_name = create_kwargs.get("name")
+
+        container = self.client.containers.create(**create_kwargs)
+        try:
+            self._copy_pre_start_files(container, pre_start_copies, shutdown_event)
+        except Exception:
+            try:
+                container.remove(force=True)
+                if container_name:
+                    self._wait_for_container_removal(
+                        container_name,
+                        container_id=getattr(container, "id", None),
+                        timeout=30.0,
+                    )
+            except Exception:
+                pass
+            raise
+
+        container.start()
+        return container
+
     def run_container(
         self,
         service_type: str,
@@ -750,6 +813,8 @@ class DockerProdManager:
         force_restart: bool = True,
         command: list = None,
         environment: dict = None,
+        pre_start_copies: list[tuple[str, str]] = None,
+        shutdown_event: threading.Event = None,
     ):
         if not self.client:
             logging.error(
@@ -770,7 +835,11 @@ class DockerProdManager:
                 logging.info(
                     f"Found existing container '{container_name}' with status '{container.status}'. Removing it before starting a new one."
                 )
+                removed_id = container.id
                 container.remove(force=True)
+                self._wait_for_container_removal(
+                    container_name, container_id=removed_id, timeout=30.0
+                )
             else:
                 if container.status == "running":
                     logging.info(
@@ -781,7 +850,11 @@ class DockerProdManager:
                     logging.info(
                         f"Container '{container_name}' exists but is '{container.status}'. Removing and restarting."
                     )
+                    removed_id = container.id
                     container.remove(force=True)
+                    self._wait_for_container_removal(
+                        container_name, container_id=removed_id, timeout=30.0
+                    )
 
         except docker.errors.NotFound:
             matches = self._list_containers_by_name(container_name)
@@ -846,9 +919,17 @@ class DockerProdManager:
             if environment:
                 run_kwargs["environment"] = environment
             max_attempts = 5
+            last_missing_conflict_id = None
+            missing_conflict_count = 0
+            zombie_restart_attempted = False
             for attempt in range(1, max_attempts + 1):
                 try:
-                    self.client.containers.run(**run_kwargs)
+                    if pre_start_copies:
+                        self._create_copy_and_start_container(
+                            run_kwargs, pre_start_copies, shutdown_event
+                        )
+                    else:
+                        self.client.containers.run(**run_kwargs)
                     logging.info(f"Container '{container_name}' started successfully.")
                     return
                 except Exception as e:
@@ -910,7 +991,55 @@ class DockerProdManager:
                                 )
                                 return
 
+                            if _conflict_state == "missing" and _conflict_id:
+                                if _conflict_id == last_missing_conflict_id:
+                                    missing_conflict_count += 1
+                                else:
+                                    last_missing_conflict_id = _conflict_id
+                                    missing_conflict_count = 1
+
+                                if (
+                                    missing_conflict_count >= 2
+                                    and not zombie_restart_attempted
+                                ):
+                                    logging.warning(
+                                        f"Container name '{container_name}' is still "
+                                        f"reserved by invisible container "
+                                        f"{_conflict_id[:12]} after removal. "
+                                        "Restarting Docker daemon before retrying."
+                                    )
+                                    zombie_restart_attempted = True
+                                    if not self._restart_docker_in_wsl():
+                                        self._refresh_client_connection()
+                                    try:
+                                        self.client.containers.prune()
+                                    except Exception:
+                                        pass
+                                    time.sleep(3)
+                                    continue
+
                             if _conflict_state in ("created", None) and _conflict_id:
+                                if _conflict_state == "created" and pre_start_copies:
+                                    try:
+                                        _created = self.client.containers.get(
+                                            _conflict_id
+                                        )
+                                        self._copy_pre_start_files(
+                                            _created,
+                                            pre_start_copies,
+                                            shutdown_event,
+                                        )
+                                        _created.start()
+                                        logging.info(
+                                            f"Started previously created container "
+                                            f"'{container_name}' after pre-start copy."
+                                        )
+                                    except Exception as start_error:
+                                        logging.debug(
+                                            f"Could not prepare/start created "
+                                            f"container '{container_name}': "
+                                            f"{start_error}"
+                                        )
                                 # Either Docker is still initialising the container (overlayfs /
                                 # GPU hooks for large images can take many minutes on WSL2), or
                                 # the inspect call itself failed because the daemon is overloaded.
@@ -1019,6 +1148,30 @@ class DockerProdManager:
                                         status = "unknown"
 
                             if status == "created":
+                                if pre_start_copies:
+                                    try:
+                                        self._copy_pre_start_files(
+                                            existing,
+                                            pre_start_copies,
+                                            shutdown_event,
+                                        )
+                                    except Exception as copy_error:
+                                        logging.warning(
+                                            f"Pre-start copy failed for "
+                                            f"'{container_name}': {copy_error}. "
+                                            "Removing partial container before retry."
+                                        )
+                                        try:
+                                            existing.remove(force=True)
+                                            self._wait_for_container_removal(
+                                                container_name,
+                                                container_id=existing.id,
+                                                timeout=30.0,
+                                            )
+                                        except Exception:
+                                            pass
+                                        time.sleep(2)
+                                        continue
                                 # Try to kick off start in case the earlier call never reached
                                 # the daemon; idempotent if it's already starting.
                                 try:

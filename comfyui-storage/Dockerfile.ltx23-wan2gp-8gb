@@ -30,6 +30,10 @@ ARG HF_TOKEN
 ENV DEBIAN_FRONTEND=noninteractive
 ENV WAN2GP_ROOT=/opt/wan2gp
 ENV WAN2GP_OUTPUT=/opt/wan2gp/outputs
+ENV CUDA_MODULE_LOADING=LAZY
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128
+ENV MALLOC_ARENA_MAX=2
+ENV WAN2GP_CLI_ARGS="--profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45"
 
 # ── System dependencies ──────────────────────────────────────────────────────
 # Drop the NVIDIA apt repo before updating — CUDA is already in the base image

@@ -32,6 +32,18 @@ class TransientError(DGNError):
     pass
 
 
+class InfrastructureError(TransientError):
+    """
+    Provider-side infrastructure errors that should requeue the job.
+
+    Raised when:
+        - Docker/container runtime fails
+        - GPU runtime hits CUDA out-of-memory or a broken CUDA context
+        - A local model server fails in a way that is provider-specific
+    """
+    pass
+
+
 class PermanentError(DGNError):
     """
     Permanent errors that will not succeed on retry.

@@ -10,7 +10,7 @@ from config import HEADLESS_MODE, TimeoutConfig
 from services.docker_manager import docker_manager
 from services.container_monitor import ContainerMonitor
 from services.docker_download_manager import ImageAvailability
-from exceptions import AuthError, ProviderError
+from exceptions import AuthError, InfrastructureError, ProviderError
 
 
 # Cap on backoff so a long outage still polls every 5 minutes.
@@ -227,6 +227,17 @@ class JobListener:
                 processor.close()
 
             if (
+                job_id
+                and getattr(self.client, "interrupted_job_id", None) == job_id
+            ):
+                logging.info(
+                    f"Job {job_id} was interrupted by an infrastructure "
+                    "failure. Skipping completion/failure notification because "
+                    "the crash handler already reset it."
+                )
+                return True
+
+            if (
                 self.shutdown_event.is_set()
                 and getattr(self.client, "stop_requested", False)
                 and not self._job_has_terminal_status(job_id)
@@ -292,6 +303,13 @@ class JobListener:
             self.orchestrator_service.signal_auth_expired()
             logging.warning(f"Auth expired during processing of job {job.get('id')}.")
             raise  # Re-raise to be caught by outer exception handler
+        except InfrastructureError as e:
+            self._requeue_job_after_infrastructure_error(
+                job,
+                e,
+                reason="provider_gpu_oom",
+            )
+            return True
         except Exception as e:
             if (
                 self.shutdown_event.is_set()
@@ -312,6 +330,17 @@ class JobListener:
             # Processor threw because the container/workflow was stopped by the
             # cancellation monitor.  If the job is already terminal in the DB,
             # don't report it as a failure — just clean up quietly.
+            if (
+                job_id
+                and getattr(self.client, "interrupted_job_id", None) == job_id
+            ):
+                logging.info(
+                    f"Job {job_id} raised after an infrastructure failure: {e}. "
+                    "Skipping failure notification because the crash handler "
+                    "already reset it."
+                )
+                return True
+
             terminal_status = self._get_terminal_job_status(job_id)
             if terminal_status:
                 logging.info(
@@ -848,18 +877,26 @@ class JobListener:
                                                     "HF_HUB_OFFLINE": "1",
                                                     "TRANSFORMERS_OFFLINE": "1",
                                                     "HF_HUB_DISABLE_TELEMETRY": "1",
+                                                    "CUDA_MODULE_LOADING": "LAZY",
+                                                    "PYTORCH_CUDA_ALLOC_CONF": (
+                                                        "expandable_segments:True,"
+                                                        "max_split_size_mb:128"
+                                                    ),
+                                                    "MALLOC_ARENA_MAX": "2",
                                                 }
-                                                # Start with a sleeping entrypoint so we can
-                                                # copy the server script before launching it.
-                                                # This makes old images (no CMD) work without
-                                                # a rebuild.
-                                                docker_manager.run_container(
-                                                    service_type=actual_service_type,
-                                                    command=["sleep", "infinity"],
-                                                    environment=wan2gp_env,
-                                                )
-                                                # Copy the latest wan2gp_server.py into the
-                                                # container, overwriting any baked-in version.
+
+                                                if "8gb" in actual_service_type.lower():
+                                                    # WanGP's documented low-memory path:
+                                                    # profile 4/4.5 + sdpa + low reserved RAM.
+                                                    wan2gp_env["WAN2GP_CLI_ARGS"] = (
+                                                        "--profile 4.5 --attention sdpa "
+                                                        "--perc-reserved-mem-max 0.45"
+                                                    )
+                                                else:
+                                                    wan2gp_env["WAN2GP_CLI_ARGS"] = (
+                                                        "--profile 4 --attention sdpa"
+                                                    )
+
                                                 import os as _os
 
                                                 server_src = _os.path.join(
@@ -867,31 +904,31 @@ class JobListener:
                                                     "comfyui-storage",
                                                     "wan2gp_server.py",
                                                 )
+                                                pre_start_copies = []
                                                 if _os.path.isfile(server_src):
-                                                    docker_manager.copy_file_to_container(
-                                                        actual_service_type,
-                                                        server_src,
-                                                        "/opt/wan2gp/wan2gp_server.py",
-                                                        self.shutdown_event,
-                                                    )
-                                                    logging.info(
-                                                        "Copied wan2gp_server.py into container."
+                                                    pre_start_copies.append(
+                                                        (
+                                                            server_src,
+                                                            "/opt/wan2gp/wan2gp_server.py",
+                                                        )
                                                     )
                                                 else:
                                                     logging.warning(
                                                         f"wan2gp_server.py not found at {server_src}; using baked-in version."
                                                     )
-                                                # Launch the server detached inside the container
-                                                docker_manager.exec_in_container(
-                                                    actual_service_type,
-                                                    [
+
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    command=[
                                                         "python3",
                                                         "/opt/wan2gp/wan2gp_server.py",
                                                     ],
-                                                    detach=True,
+                                                    environment=wan2gp_env,
+                                                    pre_start_copies=pre_start_copies,
+                                                    shutdown_event=self.shutdown_event,
                                                 )
                                                 logging.info(
-                                                    "Launched wan2gp_server.py inside container."
+                                                    "Started wan2gp_server.py as the Wan2GP container main process."
                                                 )
                                             else:
                                                 docker_manager.run_container(

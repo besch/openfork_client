@@ -12,6 +12,7 @@ import base64
 import io
 import logging
 import os
+import shlex
 import sys
 import threading
 from pathlib import Path
@@ -35,6 +36,20 @@ os.makedirs(WAN2GP_OUTPUT, exist_ok=True)
 if WAN2GP_ROOT not in sys.path:
     sys.path.insert(0, WAN2GP_ROOT)
 
+
+def _wan2gp_cli_args() -> tuple[str, ...]:
+    raw_args = os.environ.get("WAN2GP_CLI_ARGS", "").strip()
+    if not raw_args:
+        return ()
+    try:
+        parsed = tuple(shlex.split(raw_args))
+        logging.info("Using Wan2GP CLI args: %s", " ".join(parsed))
+        return parsed
+    except ValueError as exc:
+        logging.warning("Ignoring invalid WAN2GP_CLI_ARGS=%r: %s", raw_args, exc)
+        return ()
+
+
 # ── Wan2GP session init (blocking — server starts only after model is loaded) ─
 logging.info("Initialising Wan2GP session (this may take several minutes)...")
 from shared.api import init  # noqa: E402
@@ -42,6 +57,7 @@ from shared.api import init  # noqa: E402
 _session = init(
     root=Path(WAN2GP_ROOT),
     output_dir=Path(WAN2GP_OUTPUT),
+    cli_args=_wan2gp_cli_args(),
     console_output=True,
 )
 logging.info("Wan2GP session ready.")
