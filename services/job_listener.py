@@ -1,5 +1,6 @@
 import logging
 import json
+import random
 import threading
 import time
 import traceback
@@ -10,6 +11,26 @@ from services.docker_manager import docker_manager
 from services.container_monitor import ContainerMonitor
 from services.docker_download_manager import ImageAvailability
 from exceptions import AuthError, ProviderError
+
+
+# Cap on backoff so a long outage still polls every 5 minutes.
+JOB_POLL_BACKOFF_CAP_SECONDS = 300
+
+
+def _compute_poll_interval(base_seconds: int, consecutive_empty_polls: int) -> float:
+    """Exponential backoff with jitter for empty job polls.
+
+    Reasoning: a fleet of clients all polling every 10 s during an orchestrator
+    outage is a thundering herd. Backing off (capped at 5 min, ±20% jitter)
+    spreads load and avoids hammering the API while still recovering quickly
+    once jobs reappear.
+    """
+    if consecutive_empty_polls <= 0:
+        return float(base_seconds)
+    multiplier = min(1.5 ** consecutive_empty_polls, JOB_POLL_BACKOFF_CAP_SECONDS / max(base_seconds, 1))
+    interval = base_seconds * multiplier
+    jitter = interval * random.uniform(-0.2, 0.2)
+    return max(float(base_seconds), min(interval + jitter, float(JOB_POLL_BACKOFF_CAP_SECONDS)))
 
 
 class JobListener:
@@ -471,6 +492,7 @@ class JobListener:
 
     def listen_for_jobs(self) -> None:
         """Listen for jobs from the orchestrator (for dedicated providers)."""
+        consecutive_empty_polls = 0
         while not self.shutdown_event.is_set():
             # Clear wakeup event at start of loop
             if hasattr(self.client, "job_wakeup_event"):
@@ -540,12 +562,14 @@ class JobListener:
                 logging.error(f"Could not connect to the Orchestrator: {e}")
 
             if not (job and job.get("id")):
+                consecutive_empty_polls += 1
                 # Use faster polling frequency for headless cloud instances
-                poll_interval = (
+                base_interval = (
                     TimeoutConfig.HEADLESS_JOB_POLL_INTERVAL
                     if HEADLESS_MODE
                     else TimeoutConfig.JOB_POLL_INTERVAL
                 )
+                poll_interval = _compute_poll_interval(base_interval, consecutive_empty_polls - 1)
 
                 # Wait for poll interval, but interrupt if shutdown OR if a download completes
                 # We check in 0.5s increments to handle both events responsively
@@ -560,6 +584,8 @@ class JobListener:
                         )
                         break
                     self.shutdown_event.wait(0.5)
+            else:
+                consecutive_empty_polls = 0
         logging.info("Shutdown event received. Exiting job listening loop.")
 
     def _get_service_type_for_job(self, job: Dict[str, Any]) -> Optional[str]:
@@ -646,6 +672,8 @@ class JobListener:
 
         # Get download manager from client (may be None in headless mode)
         download_manager = getattr(self.client, "download_manager", None)
+
+        consecutive_empty_polls = 0
 
         try:
             while not self.shutdown_event.is_set():
@@ -1227,12 +1255,14 @@ class JobListener:
                         self.client.current_job = None
 
                 if not found_processable_job:
+                    consecutive_empty_polls += 1
                     # Use faster polling frequency for headless cloud instances
-                    poll_interval = (
+                    base_interval = (
                         TimeoutConfig.HEADLESS_JOB_POLL_INTERVAL
                         if HEADLESS_MODE
                         else TimeoutConfig.JOB_POLL_INTERVAL
                     )
+                    poll_interval = _compute_poll_interval(base_interval, consecutive_empty_polls - 1)
 
                     # Wait for poll interval, but interrupt if shutdown OR if a download completes
                     wait_until = time.time() + poll_interval
@@ -1246,6 +1276,8 @@ class JobListener:
                             )
                             break
                         self.shutdown_event.wait(0.5)
+                else:
+                    consecutive_empty_polls = 0
         finally:
             logging.info(
                 "Shutdown event received or loop exited. Exiting auto job listening loop."

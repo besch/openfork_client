@@ -12,7 +12,7 @@ import uuid
 from typing import Union, Dict, Optional, Any, List, Tuple
 from urllib.parse import urljoin, urlparse, unquote
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 
 from config import (
     TimeoutConfig,
@@ -146,9 +146,10 @@ class OrchestratorService:
 
     @retry(
         stop=stop_after_attempt(TimeoutConfig.API_MAX_RETRIES),
-        wait=wait_exponential(
-            multiplier=1,
-            min=TimeoutConfig.API_RETRY_MIN_WAIT,
+        # wait_random_exponential adds full jitter so a fleet of clients does
+        # not synchronise their retries during a shared orchestrator outage.
+        wait=wait_random_exponential(
+            multiplier=TimeoutConfig.API_RETRY_MIN_WAIT,
             max=TimeoutConfig.API_RETRY_MAX_WAIT
         ),
         retry=retry_if_exception_type((requests.exceptions.ConnectionError, requests.exceptions.Timeout, TransientError)),

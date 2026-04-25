@@ -3,6 +3,11 @@ import logging
 import json
 from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
 
+# Number of consecutive failed heartbeats before we escalate. At 30s/heartbeat,
+# 4 misses means the orchestrator has been unreachable for ~2 minutes.
+HEARTBEAT_DEGRADED_THRESHOLD = 4
+
+
 class HeartbeatManager:
     def __init__(self, orchestrator_service, provider_id, shutdown_event, client=None):
         self.orchestrator_service = orchestrator_service
@@ -19,12 +24,20 @@ class HeartbeatManager:
 
     def _heartbeat_loop(self):
         """The loop that sends heartbeats periodically."""
+        consecutive_failures = 0
+        degraded_emitted = False
         while not self.shutdown_event.is_set():
             try:
                 routing_config = self.orchestrator_service.send_heartbeat(self.provider_id)
                 # Apply routing config hot-reload if client reference is available
                 if routing_config and self.client and hasattr(self.client, "apply_routing_config"):
                     self.client.apply_routing_config(routing_config)
+                if consecutive_failures > 0:
+                    logging.info(f"Heartbeat recovered after {consecutive_failures} failure(s).")
+                    if degraded_emitted:
+                        print(json.dumps({"status": "PROVIDER_RECOVERED"}), flush=True)
+                consecutive_failures = 0
+                degraded_emitted = False
             except TokenExpiredError:
                 self.orchestrator_service.signal_auth_expired()
                 logging.warning("Heartbeat failed due to expired token.")
@@ -37,7 +50,30 @@ class HeartbeatManager:
                 self.shutdown_event.set()  # Trigger shutdown
                 break
             except Exception as e:
-                logging.error(f"An error occurred in the heartbeat loop: {e}")
+                consecutive_failures += 1
+                if consecutive_failures >= HEARTBEAT_DEGRADED_THRESHOLD:
+                    if not degraded_emitted:
+                        logging.error(
+                            f"Heartbeat has failed {consecutive_failures} times in a row "
+                            f"(~{consecutive_failures * 30}s). Marking provider as degraded."
+                        )
+                        print(
+                            json.dumps({
+                                "status": "PROVIDER_DEGRADED",
+                                "payload": {
+                                    "consecutive_failures": consecutive_failures,
+                                    "last_error": str(e),
+                                },
+                            }),
+                            flush=True,
+                        )
+                        degraded_emitted = True
+                    else:
+                        logging.warning(
+                            f"Heartbeat still failing ({consecutive_failures} consecutive): {e}"
+                        )
+                else:
+                    logging.error(f"An error occurred in the heartbeat loop: {e}")
             # Wait for 30 seconds or until shutdown event is set
             self.shutdown_event.wait(30)
 
