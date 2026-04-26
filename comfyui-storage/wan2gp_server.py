@@ -32,6 +32,9 @@ logging.basicConfig(
 WAN2GP_ROOT = os.environ.get("WAN2GP_ROOT", "/opt/wan2gp")
 WAN2GP_OUTPUT = os.environ.get("WAN2GP_OUTPUT", "/opt/wan2gp/outputs")
 
+_HDR_LORA_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-0.9.safetensors")
+_HDR_SCENE_EMB_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors")
+
 os.makedirs(WAN2GP_OUTPUT, exist_ok=True)
 if WAN2GP_ROOT not in sys.path:
     sys.path.insert(0, WAN2GP_ROOT)
@@ -62,6 +65,14 @@ _session = init(
 )
 logging.info("Wan2GP session ready.")
 
+# Verify HDR IC-LoRA is present (if built into the image)
+if not os.path.isfile(os.path.normpath(_HDR_LORA_PATH)):
+    logging.warning(
+        "HDR IC-LoRA not found at %s — HDR jobs will fail. "
+        "Rebuild the image to include Lightricks/LTX-2.3-22b-IC-LoRA-HDR.",
+        _HDR_LORA_PATH,
+    )
+
 _gen_lock = threading.Lock()
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
@@ -91,6 +102,17 @@ def generate(req: GenerateRequest):
             _, b64 = val.split(",", 1)
             img_bytes = base64.b64decode(b64)
             settings[key] = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+    # Inject HDR IC-LoRA if requested
+    if settings.get("hdr"):
+        settings["lora_filename"] = _HDR_LORA_PATH
+        settings["lora_scene_emb_filename"] = _HDR_SCENE_EMB_PATH
+        settings["lora_weight"] = settings.get("lora_weight", 1.0)
+        logging.info(
+            "HDR IC-LoRA enabled: %s (weight=%.2f)",
+            _HDR_LORA_PATH,
+            settings["lora_weight"],
+        )
 
     with _gen_lock:
         job = _session.submit_task(settings)
