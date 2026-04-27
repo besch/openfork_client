@@ -107,6 +107,8 @@ workflows/ltx23-comfyui-image-to-video-8gb.api.json
 workflows/ltx23-comfyui-text-to-video-12gb.api.json
 workflows/ltx23-comfyui-text-to-video-16gb.api.json
 workflows/ltx23-comfyui-text-to-video-24gb.api.json
+workflows/ltx23-comfyui-text-to-video-8gb-hdr.api.json
+workflows/ltx23-comfyui-text-to-video-8gb-twostage.api.json
 workflows/ltx23-comfyui-text-to-video-8gb.api.json
 workflows/ltxv2-uncensored-workspace.json
 workflows/qwen-image-edit-8gb-turbo_api.json
