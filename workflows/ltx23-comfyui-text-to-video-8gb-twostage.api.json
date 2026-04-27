@@ -76,33 +76,10 @@
         "audio_vae": ["7", 0]
       }
     },
-    "21": {
-      "class_type": "LoadImage",
-      "inputs": {
-        "image": "start_frame.png"
-      }
-    },
-    "22": {
-      "class_type": "LTXVPreprocess",
-      "inputs": {
-        "image": ["21", 0],
-        "img_compression": 35
-      }
-    },
-    "23": {
-      "class_type": "LTXVImgToVideoConditionOnly",
-      "inputs": {
-        "vae": ["30", 0],
-        "image": ["22", 0],
-        "latent": ["6", 0],
-        "strength": 0.85,
-        "bypass": false
-      }
-    },
     "10": {
       "class_type": "LTXVConcatAVLatent",
       "inputs": {
-        "video_latent": ["23", 0],
+        "video_latent": ["6", 0],
         "audio_latent": ["8", 0]
       }
     },
@@ -154,11 +131,73 @@
         "av_latent": ["16", 0]
       }
     },
+    "50": {
+      "class_type": "LatentUpscaleModelLoader",
+      "inputs": {
+        "model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+      }
+    },
+    "51": {
+      "class_type": "LTXVSpatialUpscale",
+      "inputs": {
+        "latents": ["17", 0],
+        "model": ["50", 0],
+        "vae": ["30", 0]
+      }
+    },
+    "52": {
+      "class_type": "CFGGuider",
+      "inputs": {
+        "model": ["2", 0],
+        "positive": ["9", 0],
+        "negative": ["9", 1],
+        "cfg": 1.0
+      }
+    },
+    "53": {
+      "class_type": "KSamplerSelect",
+      "inputs": {
+        "sampler_name": "euler_ancestral_cfg_pp"
+      }
+    },
+    "54": {
+      "class_type": "LTXVScheduler",
+      "inputs": {
+        "steps": 8,
+        "max_shift": 2.05,
+        "base_shift": 0.95,
+        "stretch": true,
+        "terminal": 0.1,
+        "latent": ["51", 0]
+      }
+    },
+    "55": {
+      "class_type": "RandomNoise",
+      "inputs": {
+        "noise_seed": 0
+      }
+    },
+    "56": {
+      "class_type": "SamplerCustomAdvanced",
+      "inputs": {
+        "noise": ["55", 0],
+        "guider": ["52", 0],
+        "sampler": ["53", 0],
+        "sigmas": ["54", 0],
+        "latent_image": ["51", 0]
+      }
+    },
+    "57": {
+      "class_type": "LTXVSeparateAVLatent",
+      "inputs": {
+        "av_latent": ["56", 0]
+      }
+    },
     "18": {
       "class_type": "LTXVTiledVAEDecode",
       "inputs": {
         "vae": ["30", 0],
-        "latents": ["17", 0],
+        "latents": ["57", 0],
         "horizontal_tiles": 1,
         "vertical_tiles": 1,
         "overlap": 1,
@@ -178,7 +217,7 @@
         "images": ["18", 0],
         "frame_rate": 25,
         "loop_count": 0,
-        "filename_prefix": "%date:yyyy-MM-dd%/ltx23_comfyui_i2v_",
+        "filename_prefix": "%date:yyyy-MM-dd%/ltx23_comfyui_t2v_upscaled_",
         "format": "video/h264-mp4",
         "pix_fmt": "yuv420p",
         "crf": 19,

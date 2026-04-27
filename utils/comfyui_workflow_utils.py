@@ -1953,14 +1953,21 @@ def inject_prompt_into_ltx23_video_workflow(
     """
     Injects prompts and parameters into an LTX-2.3 text-to-video workflow.
 
-    LTX-2.3 ComfyUI workflow node structure:
+    LTX-2.3 ComfyUI workflow node structure (GGUF-based):
+    - Node 1: UNETLoader (GGUF Q4_K_M transformer)
+    - Node 2: LoraLoaderModelOnly (distilled LoRA v1.1)
     - Node 3: Positive prompt (CLIPTextEncode)
     - Node 4: Negative prompt (CLIPTextEncode)
+    - Node 5: LTXVGemmaCLIPModelLoader (Gemma FP8 + embeddings connectors)
     - Node 6: EmptyLTXVLatentVideo (dimensions)
+    - Node 7: LowVRAMAudioVAELoader (sequential audio VAE loading)
     - Node 8: LTXVEmptyLatentAudio (frame count + frame rate)
     - Node 11: CFGGuider (cfg) — node 2 applies the distilled LoRA for correct colours
     - Node 13: LTXVScheduler (steps)
     - Node 15: RandomNoise (seed)
+    - Node 30: VAELoader (separate video VAE)
+    - Node 40: LTXICLoRALoaderModelOnly (HDR IC-LoRA, HDR workflow only)
+    - Node 55: RandomNoise (seed, two-stage upscaler second pass)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
@@ -2017,10 +2024,19 @@ def inject_prompt_into_ltx23_video_workflow(
 
     # Inject seed into RandomNoise (Node 15)
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
+    injected_seed = False
     if '15' in api_graph and api_graph['15'].get("class_type") == "RandomNoise":
         api_graph['15']['inputs']['noise_seed'] = actual_seed
         logging.info(f"Injected seed={actual_seed} into LTX-2.3 RandomNoise node 15")
-    else:
+        injected_seed = True
+
+    # Two-stage upscaler: sync seed into second-stage RandomNoise (Node 55)
+    if '55' in api_graph and api_graph['55'].get("class_type") == "RandomNoise":
+        api_graph['55']['inputs']['noise_seed'] = actual_seed
+        logging.info(f"Injected seed={actual_seed} into LTX-2.3 two-stage RandomNoise node 55")
+        injected_seed = True
+
+    if not injected_seed:
         # Fallback: find any RandomNoise node
         for node_id, node in api_graph.items():
             if node.get("class_type") == "RandomNoise":

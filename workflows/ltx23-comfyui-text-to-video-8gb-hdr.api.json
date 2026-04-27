@@ -15,6 +15,14 @@
         "strength_model": 0.5
       }
     },
+    "40": {
+      "class_type": "LTXICLoRALoaderModelOnly",
+      "inputs": {
+        "model": ["2", 0],
+        "lora_name": "ltx-2.3-22b-ic-lora-hdr-0.9.safetensors",
+        "strength_model": 1.0
+      }
+    },
     "5": {
       "class_type": "LTXVGemmaCLIPModelLoader",
       "inputs": {
@@ -76,40 +84,17 @@
         "audio_vae": ["7", 0]
       }
     },
-    "21": {
-      "class_type": "LoadImage",
-      "inputs": {
-        "image": "start_frame.png"
-      }
-    },
-    "22": {
-      "class_type": "LTXVPreprocess",
-      "inputs": {
-        "image": ["21", 0],
-        "img_compression": 35
-      }
-    },
-    "23": {
-      "class_type": "LTXVImgToVideoConditionOnly",
-      "inputs": {
-        "vae": ["30", 0],
-        "image": ["22", 0],
-        "latent": ["6", 0],
-        "strength": 0.85,
-        "bypass": false
-      }
-    },
     "10": {
       "class_type": "LTXVConcatAVLatent",
       "inputs": {
-        "video_latent": ["23", 0],
+        "video_latent": ["6", 0],
         "audio_latent": ["8", 0]
       }
     },
     "11": {
       "class_type": "CFGGuider",
       "inputs": {
-        "model": ["2", 0],
+        "model": ["40", 0],
         "positive": ["9", 0],
         "negative": ["9", 1],
         "cfg": 1.0
@@ -165,6 +150,14 @@
         "last_frame_fix": false
       }
     },
+    "41": {
+      "class_type": "LTXVHDRDecodePostprocess",
+      "inputs": {
+        "images": ["18", 0],
+        "tonemap": true,
+        "output_exr": false
+      }
+    },
     "19": {
       "class_type": "LTXVAudioVAEDecode",
       "inputs": {
@@ -175,10 +168,10 @@
     "20": {
       "class_type": "VHS_VideoCombine",
       "inputs": {
-        "images": ["18", 0],
+        "images": ["41", 0],
         "frame_rate": 25,
         "loop_count": 0,
-        "filename_prefix": "%date:yyyy-MM-dd%/ltx23_comfyui_i2v_",
+        "filename_prefix": "%date:yyyy-MM-dd%/ltx23_comfyui_hdr_",
         "format": "video/h264-mp4",
         "pix_fmt": "yuv420p",
         "crf": 19,

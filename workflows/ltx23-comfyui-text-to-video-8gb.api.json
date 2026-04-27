@@ -1,16 +1,17 @@
 {
   "prompt": {
     "1": {
-      "class_type": "CheckpointLoaderSimple",
+      "class_type": "UNETLoader",
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+        "unet_name": "ltx-2.3-22b-dev-Q4_K_M.gguf",
+        "weight_dtype": "default"
       }
     },
     "2": {
       "class_type": "LoraLoaderModelOnly",
       "inputs": {
         "model": ["1", 0],
-        "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
+        "lora_name": "ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
         "strength_model": 0.5
       }
     },
@@ -18,14 +19,21 @@
       "class_type": "LTXVGemmaCLIPModelLoader",
       "inputs": {
         "gemma_path": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "ltxv_path": "ltx-2.3-22b-distilled.safetensors",
+        "ltxv_path": "ltx-2.3-22b-dev_embeddings_connectors.safetensors",
         "max_length": 1024
       }
     },
     "7": {
       "class_type": "LowVRAMAudioVAELoader",
       "inputs": {
-        "ckpt_name": "ltx-2.3-22b-distilled.safetensors"
+        "ckpt_name": "ltx-2.3-22b-dev_audio_vae.safetensors",
+        "dependencies": ["5", 0]
+      }
+    },
+    "30": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "ltx-2.3-22b-dev_video_vae.safetensors"
       }
     },
     "3": {
@@ -126,7 +134,7 @@
     "18": {
       "class_type": "LTXVTiledVAEDecode",
       "inputs": {
-        "vae": ["1", 2],
+        "vae": ["30", 0],
         "latents": ["17", 0],
         "horizontal_tiles": 1,
         "vertical_tiles": 1,
