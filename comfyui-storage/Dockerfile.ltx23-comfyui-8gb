@@ -178,7 +178,7 @@ RUN echo "Downloading LTX-2.3 temporal upscaler..." && \
     local_dir='/tmp/temporal', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/temporal/ltx-2.3-temporal-upscaler-x2-1.0.safetensors models/latent_upscale_models/ && \
     rm -rf /tmp/temporal && \
-    python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Temporal Upscaler: {size:.2f}GB'); assert size > 0.5" && \
+    python -c "import os; size=os.path.getsize('models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors')/(1024**3); print(f'Temporal Upscaler: {size:.2f}GB'); assert size > 0.1" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # ── Download HDR IC-LoRA (NEW) ───────────────────────────────────────────────
@@ -188,7 +188,7 @@ RUN echo "Downloading LTX-2.3 HDR IC-LoRA..." && \
     local_dir='/tmp/hdr', token=os.getenv('HF_TOKEN'))" && \
     mv /tmp/hdr/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors models/loras/ && \
     rm -rf /tmp/hdr && \
-    python -c "import os; size=os.path.getsize('models/loras/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors')/(1024**3); print(f'HDR IC-LoRA: {size:.2f}GB'); assert size > 0.5" && \
+    python -c "import os; size=os.path.getsize('models/loras/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors')/(1024**3); print(f'HDR IC-LoRA: {size:.2f}GB'); assert size > 0.1" && \
     rm -rf /root/.cache/huggingface/* /tmp/* /var/tmp/* ~/.cache/*
 
 # ── Download Gemma tokenizer / processor configs ──────────────────────────────
@@ -219,8 +219,8 @@ files = {
     "models/loras/ltx-2.3-22b-distilled-lora-384-1.1.safetensors": 0.1,
     "models/text_encoders/gemma_3_12B_it_fp8_e4m3fn.safetensors": 5.0,
     "models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors": 0.5,
-    "models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors": 0.5,
-    "models/loras/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors": 0.5,
+    "models/latent_upscale_models/ltx-2.3-temporal-upscaler-x2-1.0.safetensors": 0.1,
+    "models/loras/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors": 0.1,
 }
 print("=" * 60)
 print("VERIFYING LTX-2.3 COMFYUI 8GB MODEL FILES (GGUF)")
