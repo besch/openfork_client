@@ -66,6 +66,7 @@ class DGNClient:
         self.allowed_targets = allowed_targets or []
         self.allowed_ids = []
         self.processing_lock = threading.Lock()
+        self.compaction_pending = False
 
         self.processor_map = {}
         self.services_config = {}

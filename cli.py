@@ -75,6 +75,10 @@ def listen_for_ipc_commands(client: "DGNClient"):
                 logging.info(f"Received CANCEL_DOWNLOAD command for {service_type}.")
                 if client.download_manager:
                     client.download_manager.cancel_download(service_type)
+            elif cmd_type == "SET_COMPACTION_PENDING":
+                pending = bool(payload.get("pending")) if isinstance(payload, dict) else False
+                client.compaction_pending = pending
+                logging.info(f"Set compaction_pending={pending}.")
             else:
                 logging.warning(f"Received unknown IPC command type: {cmd_type}")
 

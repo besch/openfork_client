@@ -748,7 +748,11 @@ class OrchestratorService:
         """Upload the thumbnail file to the orchestrator."""
         return self.upload_output(file_path, job_id, 'image/jpeg')
 
-    def send_heartbeat(self, provider_id: str) -> Optional[Dict[str, Any]]:
+    def send_heartbeat(
+        self,
+        provider_id: str,
+        compaction_pending: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         """Sends a heartbeat to the orchestrator.
 
         Returns the routing_config from the response, or None if no config was returned.
@@ -758,6 +762,8 @@ class OrchestratorService:
             active_token = self.get_active_execution_token()
             if active_token:
                 payload["executionToken"] = active_token
+            if compaction_pending:
+                payload["compactionPending"] = True
 
             response = self._make_request(
                 'post',

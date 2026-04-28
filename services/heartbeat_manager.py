@@ -28,7 +28,12 @@ class HeartbeatManager:
         degraded_emitted = False
         while not self.shutdown_event.is_set():
             try:
-                routing_config = self.orchestrator_service.send_heartbeat(self.provider_id)
+                routing_config = self.orchestrator_service.send_heartbeat(
+                    self.provider_id,
+                    compaction_pending=bool(
+                        getattr(self.client, "compaction_pending", False)
+                    ),
+                )
                 # Apply routing config hot-reload if client reference is available
                 if routing_config and self.client and hasattr(self.client, "apply_routing_config"):
                     self.client.apply_routing_config(routing_config)
