@@ -744,49 +744,6 @@ class JobListener:
                                 f"Peeked {len(available_jobs)} available jobs."
                             )
 
-                            # Step 2a: Fetch network download coverage ONCE before
-                            # iterating so the peeked-job download path can gate on it.
-                            #
-                            # get_prefetch_suggestions returns service types where:
-                            #   effective_deficit = pending - cached - downloading > 0
-                            # (i.e. uncovered demand after accounting for in-flight pulls)
-                            #
-                            # A None result means "skip the gate" — either the fetch
-                            # failed (fail-open) or this provider uses a private policy
-                            # and the global coverage state is not relevant to it.
-                            #
-                            # Private-policy providers (mine, users, project) only
-                            # process jobs that no other policy type can handle.  An
-                            # 'all' provider pulling the same image does NOT cover the
-                            # demand for a 'mine' job, so the global deficit stat would
-                            # falsely suppress the private provider's download.  Skip
-                            # the gate entirely for private policies — always download.
-                            #
-                            # NOTE: only relevant in non-headless mode where Docker exists.
-                            network_download_needed: Optional[set] = None
-                            if not HEADLESS_MODE and download_manager:
-                                open_network_policy = getattr(
-                                    self.client, "community_mode", "all"
-                                ) == "all" or getattr(
-                                    self.client, "monetize_mode", False
-                                )
-                                if open_network_policy:
-                                    try:
-                                        raw_suggestions = self.orchestrator_service.get_prefetch_suggestions(
-                                            self.provider_id, limit=20
-                                        )
-                                        network_download_needed = set(raw_suggestions)
-                                        logging.debug(
-                                            f"Network download coverage check: {network_download_needed or 'none needed'}"
-                                        )
-                                    except Exception as _e:
-                                        logging.debug(
-                                            f"Could not fetch network coverage (fail-open): {_e}"
-                                        )
-                                        # network_download_needed stays None → fail-open below
-                                # else: private policy → network_download_needed stays None
-                                #   → network_needs_this = True → always download
-
                             # Step 2b: Find first job with available Docker image
                             for peeked_job in available_jobs:
                                 service_type = self._get_service_type_for_job(
@@ -1124,47 +1081,18 @@ class JobListener:
                                                 logging.warning(
                                                     f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
                                                 )
-                                                # start_background_download will no-op for permanently_failed
                                             elif status and status.value == "failed":
                                                 logging.info(
                                                     f"Image for service '{service_type}' previously failed. Retrying download..."
                                                 )
 
-                                            # Network coverage gate: only start a download
-                                            # if the server tells us demand is not already
-                                            # covered by other providers that are cached or
-                                            # currently downloading.
-                                            #
-                                            # network_download_needed is:
-                                            #   set  → use it (empty set = nothing needed)
-                                            #   None → check failed; fail-open (allow download)
-                                            network_needs_this = (
-                                                network_download_needed is None
-                                                or service_type
-                                                in network_download_needed
+                                            logging.info(
+                                                f"Image for service '{service_type}' not available locally. "
+                                                f"Starting background download for peeked job..."
                                             )
-
-                                            if network_needs_this:
-                                                logging.info(
-                                                    f"Image for service '{service_type}' not available locally "
-                                                    f"and network has uncovered demand. Starting background download..."
-                                                )
-                                                download_manager.start_background_download(
-                                                    service_type
-                                                )
-                                                # Mark as handled so we don't double-trigger
-                                                # if the same service_type appears in later
-                                                # peeked jobs this iteration.
-                                                if network_download_needed is not None:
-                                                    network_download_needed.discard(
-                                                        service_type
-                                                    )
-                                            else:
-                                                logging.debug(
-                                                    f"Skipping download for '{service_type}': "
-                                                    f"another provider is already covering it "
-                                                    f"(effective network deficit = 0)."
-                                                )
+                                            download_manager.start_background_download(
+                                                service_type
+                                            )
                                         else:
                                             logging.debug(
                                                 f"Image for service '{service_type}' already downloading/queued (status: {status.value if status else 'unknown'})."
