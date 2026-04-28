@@ -9,22 +9,20 @@ from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 from services.docker_download_manager import DockerDownloadManager
 from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display, get_service_incompatibility_reason, get_available_system_ram
+from services import disk_pressure
 import services.processors as job_processors_module
 
 
 def _get_max_cached_images_for_policy(community_mode: str, monetize_mode: bool):
-    """Return the local Docker image cache cap for the current routing policy."""
-    if monetize_mode:
-        policy_key = "monetize"
-    else:
-        policy_key = {
-            "all": "all",
-            "trusted_projects": "project",
-            "trusted_users": "users",
-            "none": "mine",
-        }.get(community_mode, "mine")
+    """Return the local Docker image cache cap for the current routing policy.
 
-    return POLICY_MAX_CACHED_IMAGES.get(policy_key)
+    The returned value already reflects the active disk-pressure tier — at
+    Healthy it matches POLICY_MAX_CACHED_IMAGES, at Pressure / Critical it
+    follows the multipliers in services.disk_pressure.
+    """
+    policy_key = disk_pressure.policy_key_for(community_mode, monetize_mode)
+    tier = disk_pressure.get_disk_pressure_tier()
+    return disk_pressure.get_effective_cap(policy_key, tier)
 
 
 class DGNClient:
@@ -88,6 +86,9 @@ class DGNClient:
                 docker_manager,
                 wakeup_event=self.job_wakeup_event,
                 max_cached_images=max_cached_images,
+                community_mode=self.community_mode,
+                monetize_mode=self.monetize_mode,
+                data_dir=self.data_dir,
             )
             if docker_manager
             else None
@@ -159,14 +160,10 @@ class DGNClient:
 
             download_manager = getattr(self, "download_manager", None)
             if download_manager:
-                max_cached_images = _get_max_cached_images_for_policy(
-                    self.community_mode,
-                    self.monetize_mode,
-                )
-                download_manager.max_cached_images = (
-                    max_cached_images
-                    if max_cached_images and max_cached_images > 0
-                    else None
+                # update_routing_config also applies the disk-pressure-aware cap.
+                download_manager.update_routing_config(
+                    community_mode=self.community_mode,
+                    monetize_mode=self.monetize_mode,
                 )
 
             if hasattr(self, "job_wakeup_event"):

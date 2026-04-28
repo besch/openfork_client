@@ -5,6 +5,10 @@ Manages background Docker image downloads with concurrency limiting.
 Downloads are performed in daemon threads that don't block app exit.
 """
 
+import json
+import os
+import sys
+import tempfile
 import threading
 import logging
 import time
@@ -12,6 +16,8 @@ from typing import Dict, Optional, Set
 from enum import Enum
 import docker
 from services.disk_space_utils import estimate_image_size_bytes, check_sufficient_space
+from services import disk_pressure
+from config import DISK_PRESSURE_HEALTHY_GB, DISK_PRESSURE_CRITICAL_GB
 
 _docker_errors = getattr(docker, "errors", None)
 DockerImageNotFound = getattr(
@@ -59,7 +65,10 @@ class DockerDownloadManager:
     """
     
     MAX_CONCURRENT_DOWNLOADS = 1
-    
+
+    # Cache metadata file format version — bump if schema changes.
+    _CACHE_METADATA_VERSION = 1
+
     def __init__(
         self,
         docker_manager,
@@ -67,10 +76,13 @@ class DockerDownloadManager:
         provider_id=None,
         wakeup_event=None,
         max_cached_images: Optional[int] = None,
+        community_mode: str = "all",
+        monetize_mode: bool = False,
+        data_dir: Optional[str] = None,
     ):
         """
         Initialize the download manager.
-        
+
         Args:
             docker_manager: The DockerProdManager instance for Docker operations
             orchestrator_service: Optional OrchestratorService for reporting cached images
@@ -79,6 +91,13 @@ class DockerDownloadManager:
             max_cached_images: Optional hard cap for locally cached Docker images.
                 When set, least-recently-used images are evicted before starting
                 a new download so disk usage stays bounded.
+            community_mode: Provider's current community routing mode. Used by
+                the disk-pressure layer to compute the effective per-policy cap.
+            monetize_mode: True when the provider is currently in monetize mode.
+            data_dir: Path of the OpenFork data directory. Cache metadata
+                (per-image last-used timestamps) is persisted here so LRU
+                ordering survives client restarts. When None, persistence is
+                disabled and LRU stays session-local.
         """
         self.docker_manager = docker_manager
         self.orchestrator_service = orchestrator_service
@@ -87,6 +106,8 @@ class DockerDownloadManager:
         self.max_cached_images = (
             max_cached_images if max_cached_images and max_cached_images > 0 else None
         )
+        self.community_mode = community_mode or "all"
+        self.monetize_mode = bool(monetize_mode)
         self._lock = threading.RLock()
         self._active_downloads: Set[str] = set()  # service_types currently downloading
         self._download_queue: list[str] = []  # service_types waiting to download
@@ -94,6 +115,21 @@ class DockerDownloadManager:
         self._cancellation_events: Dict[str, threading.Event] = {}
         self._last_job_times: Dict[str, float] = {}
         self._shutdown = False
+
+        # Persisted LRU metadata
+        self._cache_metadata_path: Optional[str] = None
+        if data_dir:
+            try:
+                os.makedirs(data_dir, exist_ok=True)
+                self._cache_metadata_path = os.path.join(data_dir, "cache_metadata.json")
+                self._load_cache_metadata()
+            except OSError as e:
+                logging.warning(f"Could not initialise cache metadata at {data_dir}: {e}")
+                self._cache_metadata_path = None
+
+        # Disk pressure tracking
+        self._last_disk_tier: Optional[str] = None
+        self._last_pressure_check_ts: float = 0.0
         
     def _check_image_once(
         self,
@@ -173,12 +209,184 @@ class DockerDownloadManager:
         return self.get_image_availability(service_type) == ImageAvailability.AVAILABLE
 
     def notify_job_complete(self, service_type: str):
-        """Record that a service type was actually used to process a job this session."""
+        """Record that a service type was actually used to process a job."""
         if not service_type:
             return
 
         with self._lock:
             self._last_job_times[service_type] = time.time()
+            self._save_cache_metadata_locked()
+
+    # ── LRU persistence ───────────────────────────────────────────────────
+
+    def _load_cache_metadata(self) -> None:
+        """Load `_last_job_times` from disk. Silently ignores corrupted or absent files."""
+        path = self._cache_metadata_path
+        if not path or not os.path.exists(path):
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logging.warning(f"Could not read cache metadata at {path}: {e}. Starting fresh.")
+            return
+
+        if not isinstance(data, dict):
+            return
+
+        # Ignore version sentinel + non-numeric values; everything else is a timestamp.
+        loaded = 0
+        for key, value in data.items():
+            if key == "_version":
+                continue
+            if isinstance(value, (int, float)) and value > 0:
+                self._last_job_times[key] = float(value)
+                loaded += 1
+        if loaded:
+            logging.info(f"Loaded {loaded} LRU entries from cache metadata.")
+
+    def _save_cache_metadata_locked(self) -> None:
+        """Atomically persist `_last_job_times`. Caller must hold `self._lock`."""
+        path = self._cache_metadata_path
+        if not path:
+            return
+
+        payload = {"_version": self._CACHE_METADATA_VERSION}
+        payload.update(self._last_job_times)
+
+        # Atomic write: temp file in the same directory, then rename.
+        directory = os.path.dirname(path) or "."
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix="cache_metadata.", suffix=".tmp", dir=directory)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f)
+                os.replace(tmp_path, path)
+            except Exception:
+                # Best effort cleanup of the temp file
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except OSError as e:
+            logging.debug(f"Could not persist cache metadata: {e}")
+
+    # ── Routing config / pressure-aware caps ──────────────────────────────
+
+    def update_routing_config(
+        self, community_mode: str, monetize_mode: bool
+    ) -> None:
+        """Hot-reload policy state used by disk-pressure cap calculations."""
+        with self._lock:
+            self.community_mode = community_mode or "all"
+            self.monetize_mode = bool(monetize_mode)
+            tier = disk_pressure.get_disk_pressure_tier()
+            policy = disk_pressure.policy_key_for(self.community_mode, self.monetize_mode)
+            effective = disk_pressure.get_effective_cap(policy, tier)
+            self.max_cached_images = effective if effective and effective > 0 else None
+            logging.debug(
+                f"Routing config applied to download manager: "
+                f"policy={policy} tier={tier} effective_cap={self.max_cached_images}"
+            )
+
+    def _current_policy_key(self) -> str:
+        return disk_pressure.policy_key_for(self.community_mode, self.monetize_mode)
+
+    def _refresh_effective_cap(self, tier: str) -> None:
+        """Recompute and apply the effective image cap for the current policy + tier."""
+        effective = disk_pressure.get_effective_cap(self._current_policy_key(), tier)
+        new_cap = effective if effective and effective > 0 else None
+        if new_cap != self.max_cached_images:
+            logging.info(
+                f"Effective image cap updated: policy={self._current_policy_key()} "
+                f"tier={tier} cap={new_cap}"
+            )
+            self.max_cached_images = new_cap
+
+    # ── Disk-pressure-driven eviction ─────────────────────────────────────
+
+    def check_and_evict_for_pressure(self) -> int:
+        """
+        Idle-loop hook: compute current disk tier, update the effective cap,
+        and evict LRU images to bring disk back above the Pressure threshold
+        when at Critical. Returns the number of images evicted on this call.
+
+        Cheap when at Healthy: a single `shutil.disk_usage` call. Skips any
+        work if a download is currently in flight (eviction would race with
+        `_download_worker`).
+        """
+        if self._shutdown:
+            return 0
+        if not self.docker_manager or not getattr(self.docker_manager, "client", None):
+            return 0
+
+        tier = disk_pressure.get_disk_pressure_tier()
+        free_gb = disk_pressure.get_free_disk_gb()
+        disk_pressure.log_tier_transition(self._last_disk_tier, tier, free_gb)
+        self._last_disk_tier = tier
+        self._last_pressure_check_ts = time.time()
+
+        # Always sync the cap to the current tier so subsequent pulls honor it.
+        self._refresh_effective_cap(tier)
+
+        if tier == disk_pressure.HEALTHY:
+            # Honor caps but don't evict reactively at Healthy unless cap is exceeded.
+            return self._evict_until_under_cap()
+
+        # PRESSURE / CRITICAL — additionally try to claw back to Healthy / Pressure.
+        evicted = self._evict_until_under_cap()
+
+        if tier == disk_pressure.CRITICAL:
+            # Aggressive eviction: keep going until free space exceeds Pressure threshold,
+            # or we run out of evictable images. Each eviction may take a few seconds
+            # (docker rmi + container removal) so we cap the loop to avoid wedging.
+            target_free_gb = max(DISK_PRESSURE_HEALTHY_GB, DISK_PRESSURE_CRITICAL_GB + 5)
+            for _ in range(10):
+                current_free = disk_pressure.get_free_disk_gb()
+                if current_free >= target_free_gb:
+                    break
+                victim = self._evict_lru_image(reason="disk_critical")
+                if not victim:
+                    break
+                evicted += 1
+
+        return evicted
+
+    def _evict_until_under_cap(self, reason: str = "image_cap") -> int:
+        """Evict LRU images while we exceed the current `max_cached_images` cap."""
+        if not self.max_cached_images:
+            return 0
+
+        evicted = 0
+        with self._lock:
+            cached = self._get_cached_service_types()
+            while len(cached) > self.max_cached_images:
+                victim = self._evict_lru_image(reason=reason)
+                if not victim:
+                    break
+                evicted += 1
+                cached = self._get_cached_service_types()
+        return evicted
+
+    @staticmethod
+    def _emit_image_evicted(service_type: str, image_name: str, freed_bytes: int, reason: str) -> None:
+        """Print a JSON event so the Electron auto-compact manager can react."""
+        payload = {
+            "type": "IMAGE_EVICTED",
+            "payload": {
+                "service_type": service_type,
+                "image": image_name,
+                "freed_bytes": int(freed_bytes),
+                "reason": reason,
+            },
+        }
+        try:
+            print(json.dumps(payload), flush=True)
+        except Exception:
+            # Never fail eviction because stdout is gone (test harnesses, etc.).
+            pass
 
     def _get_known_service_types(self) -> list[str]:
         """Return all service types known to this client for cache accounting."""
@@ -239,8 +447,23 @@ class DockerDownloadManager:
         except Exception as e:
             logging.warning(f"Failed to sync cached images after eviction: {e}")
 
+    def _lookup_image_size_bytes(self, image_name: str) -> int:
+        """Best-effort image size lookup. Falls back to the heuristic estimate."""
+        try:
+            client = getattr(self.docker_manager, "client", None)
+            if client:
+                image = client.images.get(image_name)
+                size = getattr(image, "attrs", {}).get("Size")
+                if isinstance(size, (int, float)) and size > 0:
+                    return int(size)
+        except Exception:
+            pass
+        return estimate_image_size_bytes(image_name)
+
     def _evict_lru_image(
-        self, exclude_service_types: Optional[Set[str]] = None
+        self,
+        exclude_service_types: Optional[Set[str]] = None,
+        reason: str = "image_cap",
     ) -> Optional[str]:
         """
         Evict one cached image using session-local LRU ordering.
@@ -250,6 +473,9 @@ class DockerDownloadManager:
         2. Otherwise, the image with the oldest last completed job time
 
         Images are never evicted if they are currently running, downloading, or queued.
+
+        On success, emits an `IMAGE_EVICTED` JSON event with the freed bytes so the
+        Electron auto-compact manager can decide when to schedule VHDX compaction.
         """
         if not self.docker_manager or not getattr(self.docker_manager, "client", None):
             return None
@@ -280,6 +506,7 @@ class DockerDownloadManager:
 
         _, service_type_to_evict = min(candidates, key=lambda item: item[0])
         image_name = self.docker_manager.get_image_name(service_type_to_evict)
+        freed_bytes = self._lookup_image_size_bytes(image_name)
 
         try:
             referencing_containers = self.docker_manager.client.containers.list(
@@ -296,13 +523,28 @@ class DockerDownloadManager:
             self.docker_manager.client.images.remove(image=image_name, force=True)
             self._download_status.pop(service_type_to_evict, None)
             self._sync_cached_images_with_server()
+            self._emit_image_evicted(
+                service_type=service_type_to_evict,
+                image_name=image_name,
+                freed_bytes=freed_bytes,
+                reason=reason,
+            )
             logging.info(
-                f"Evicted cached image for {service_type_to_evict} to honor image cap."
+                f"Evicted cached image for {service_type_to_evict} "
+                f"(reason={reason}, freed≈{freed_bytes / 1024**3:.1f} GB)."
             )
             return service_type_to_evict
         except DockerImageNotFound:
+            # Image already gone; still surface the cleanup so the compaction tracker
+            # doesn't think nothing happened. Use 0 freed bytes since we can't measure.
             self._download_status.pop(service_type_to_evict, None)
             self._sync_cached_images_with_server()
+            self._emit_image_evicted(
+                service_type=service_type_to_evict,
+                image_name=image_name,
+                freed_bytes=0,
+                reason=reason,
+            )
             return service_type_to_evict
         except Exception as e:
             logging.warning(f"Failed to evict cached image for {service_type_to_evict}: {e}")

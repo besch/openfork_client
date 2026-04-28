@@ -1177,6 +1177,17 @@ class JobListener:
                         if not found_processable_job:
                             self._handle_prefetch_suggestions(download_manager)
 
+                            # Disk-pressure cleanup runs in the same idle window as
+                            # prefetching. Cheap when at Healthy (one disk_usage call),
+                            # only evicts at Pressure / Critical tiers.
+                            if download_manager:
+                                try:
+                                    download_manager.check_and_evict_for_pressure()
+                                except Exception as pressure_err:
+                                    logging.debug(
+                                        f"check_and_evict_for_pressure failed: {pressure_err}"
+                                    )
+
                         if not found_processable_job:
                             if available_jobs:
                                 # Count how many were actually ready vs downloading

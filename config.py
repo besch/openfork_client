@@ -34,15 +34,41 @@ MAX_INPUT_ASSET_REDIRECTS = int(
     os.getenv("MAX_INPUT_ASSET_REDIRECTS", "3")
 )
 
-# Policy-specific cache caps for local Docker images in auto mode.
-# None means uncapped for that policy.
+# Policy-specific cache caps for local Docker images at the Healthy disk-pressure tier.
+# None means uncapped for that policy at Healthy. Caps may shrink under disk pressure
+# (see services.disk_pressure.get_effective_cap).
 POLICY_MAX_CACHED_IMAGES = {
     "monetize": 3,
-    "all": 5,
-    "project": 5,
-    "users": 5,
+    "all": 4,
+    "project": 6,
+    "users": 6,
     "mine": None,
 }
+
+# Policy-specific idle timeouts for the Electron-side cleanup notifier (minutes).
+# Mirrored on the desktop side via /api/config so both layers stay in sync.
+# None means idle eviction is disabled at Healthy tier.
+POLICY_IDLE_TIMEOUT_MINUTES = {
+    "monetize": 90,
+    "all": 120,
+    "project": 240,
+    "users": 240,
+    "mine": None,
+}
+
+# Disk-pressure thresholds (GB free at the Docker storage path).
+# These trigger LRU eviction independent of policy caps.
+#   Healthy:  free > DISK_PRESSURE_HEALTHY_GB         → honor per-policy caps as-is.
+#   Pressure: CRITICAL < free <= HEALTHY              → cap × 0.6 (min 2), idle × 0.5.
+#   Critical: free <= DISK_PRESSURE_CRITICAL_GB        → evict until back above pressure;
+#                                                        block new pulls; signal compaction.
+DISK_PRESSURE_HEALTHY_GB = int(os.getenv("DISK_PRESSURE_HEALTHY_GB", "50"))
+DISK_PRESSURE_CRITICAL_GB = int(os.getenv("DISK_PRESSURE_CRITICAL_GB", "20"))
+
+# Effective cap for "mine" policy at non-Healthy tiers. Cannot be None because we
+# need a finite number to drive eviction. At Pressure use this directly; at Critical
+# use floor(this × 0.6) (so eviction is more aggressive even for the user's own images).
+MINE_POLICY_PRESSURE_CAP = int(os.getenv("MINE_POLICY_PRESSURE_CAP", "8"))
 
 # Headless mode detection - when running inside a cloud container (RunPod/Vast.ai),
 # Docker operations should be skipped as ComfyUI is already running in the same container.
