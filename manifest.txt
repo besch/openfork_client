@@ -22,6 +22,7 @@ exceptions.py
 requirements.txt
 services/comfyui_service.py
 services/container_monitor.py
+services/disk_pressure.py
 services/disk_space_utils.py
 services/docker_dev_service.py
 services/docker_download_manager.py
