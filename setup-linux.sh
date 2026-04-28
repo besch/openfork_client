@@ -171,6 +171,14 @@ echo "[OpenFork] Ensuring Docker daemon is enabled and running..."
 if docker_ready || docker_ready_for_user; then
     echo "[OpenFork] Docker is already accessible."
 else
+    if command -v systemctl >/dev/null 2>&1; then
+        mkdir -p /etc/systemd/system/docker.service.d
+        cat > /etc/systemd/system/docker.service.d/openfork-override.conf <<'EOF'
+[Service]
+# OpenFork manages Docker lifecycle on native Linux installs.
+EOF
+    fi
+
     if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^docker\.service'; then
         systemctl daemon-reload || true
         systemctl enable docker
@@ -202,6 +210,15 @@ if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '
     systemctl enable fstrim.timer >/dev/null 2>&1 || true
     systemctl start fstrim.timer >/dev/null 2>&1 || true
 fi
+
+# Write a marker file indicating this is an OpenFork-managed system
+# This is used by the uninstall script to verify before cleanup
+cat > /etc/openfork-managed <<EOF
+managed-by=openfork
+real-user=${REAL_USER:-unknown}
+package-manager=${PACKAGE_MANAGER:-unknown}
+EOF
+chmod 644 /etc/openfork-managed
 
 echo "[OpenFork] Setup Complete!"
 echo "[OpenFork] Note: If Docker was just installed, you may need to LOG OUT and LOG BACK IN to apply user permissions."
