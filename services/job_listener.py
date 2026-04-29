@@ -719,23 +719,58 @@ class JobListener:
                     with self.client.processing_lock:
                         logging.info("Auto mode: Peeking at available jobs...")
 
-                        # Step 1: Peek at available jobs without reserving
-                        # Determine effective peek policy from community_mode
+                        # Step 1: Peek at available jobs without reserving.
+                        # Build an ordered list of (job, policy) pairs — own jobs first
+                        # when process_own_jobs=True so they aren't starved by community work.
                         _community_mode = getattr(self.client, "community_mode", "all")
-                        _peek_policy = {
-                            "trusted_users": "users",
-                            "trusted_projects": "project",
-                            "none": "mine",
-                            "all": "all",
-                        }.get(_community_mode, "all")
-                        if getattr(self.client, "monetize_mode", False):
+                        _process_own_jobs = getattr(self.client, "process_own_jobs", False)
+                        _monetize_mode = getattr(self.client, "monetize_mode", False)
+                        if _monetize_mode:
                             _peek_policy = "monetize"
-                        available_jobs = self.orchestrator_service.peek_available_jobs(
-                            provider_id=self.provider_id,
-                            accept_policy=_peek_policy,
-                            allowed_ids=self.client.allowed_ids,
-                            limit=10,
-                        )
+                        elif _community_mode == "none":
+                            _peek_policy = "mine"
+                        else:
+                            _peek_policy = {
+                                "trusted_users": "users",
+                                "trusted_projects": "project",
+                                "all": "all",
+                            }.get(_community_mode, "all")
+
+                        _available_with_policy: list = []
+                        if _process_own_jobs and _peek_policy not in ("mine", "monetize"):
+                            _mine_jobs = self.orchestrator_service.peek_available_jobs(
+                                provider_id=self.provider_id,
+                                accept_policy="mine",
+                                allowed_ids=self.client.allowed_ids,
+                                limit=10,
+                            )
+                            _mine_ids = {j.get("id") for j in _mine_jobs}
+                            _available_with_policy.extend(
+                                (j, "mine") for j in _mine_jobs
+                            )
+                            _community_jobs = self.orchestrator_service.peek_available_jobs(
+                                provider_id=self.provider_id,
+                                accept_policy=_peek_policy,
+                                allowed_ids=self.client.allowed_ids,
+                                limit=10,
+                            )
+                            _available_with_policy.extend(
+                                (j, _peek_policy)
+                                for j in _community_jobs
+                                if j.get("id") not in _mine_ids
+                            )
+                        else:
+                            _peeked = self.orchestrator_service.peek_available_jobs(
+                                provider_id=self.provider_id,
+                                accept_policy=_peek_policy,
+                                allowed_ids=self.client.allowed_ids,
+                                limit=10,
+                            )
+                            _available_with_policy.extend(
+                                (j, _peek_policy) for j in _peeked
+                            )
+
+                        available_jobs = [j for j, _ in _available_with_policy]
 
                         if not available_jobs:
                             logging.info("No available jobs found in peek.")
@@ -745,7 +780,7 @@ class JobListener:
                             )
 
                             # Step 2b: Find first job with available Docker image
-                            for peeked_job in available_jobs:
+                            for peeked_job, _job_policy in _available_with_policy:
                                 service_type = self._get_service_type_for_job(
                                     peeked_job
                                 )
@@ -772,7 +807,7 @@ class JobListener:
 
                                     job = self.orchestrator_service.get_next_job(
                                         provider_id=self.provider_id,
-                                        accept_policy=_peek_policy,
+                                        accept_policy=_job_policy,
                                         allowed_ids=self.client.allowed_ids,
                                         job_id=peeked_job.get("id"),
                                         monetize_mode=getattr(

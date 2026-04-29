@@ -1,7 +1,13 @@
 import os
+import re
 import logging
 import threading
 import requests
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 from config import POLICY_MAX_CACHED_IMAGES
 from services.orchestrator_service import OrchestratorService, TokenExpiredError
@@ -101,12 +107,17 @@ class DGNClient:
                 self.allowed_ids.append(user_id)
 
         if self.community_mode in ("trusted_users", "trusted_projects") and self.allowed_targets:
-            target_type = "project" if self.community_mode == "trusted_projects" else "user"
-            logging.info(f"Resolving {target_type} targets: {self.allowed_targets}")
-            self.allowed_ids = self.orchestrator_service.resolve_targets(
-                self.allowed_targets, target_type
-            )
-            logging.info(f"Resolved targets to IDs: {self.allowed_ids}")
+            if all(_UUID_RE.match(t) for t in self.allowed_targets):
+                # Electron already sends UUIDs — use them directly, no API lookup needed.
+                self.allowed_ids = list(self.allowed_targets)
+                logging.info(f"Using {len(self.allowed_ids)} pre-resolved trusted IDs directly.")
+            else:
+                target_type = "project" if self.community_mode == "trusted_projects" else "user"
+                logging.info(f"Resolving {target_type} targets: {self.allowed_targets}")
+                self.allowed_ids = self.orchestrator_service.resolve_targets(
+                    self.allowed_targets, target_type
+                )
+                logging.info(f"Resolved targets to IDs: {self.allowed_ids}")
 
     def apply_routing_config(self, config: dict) -> None:
         """Apply routing config received from heartbeat response (hot-reload)."""
