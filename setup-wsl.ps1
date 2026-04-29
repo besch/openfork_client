@@ -61,7 +61,7 @@ if ($requiresReboot) {
 }
 
 if ($null -eq $InstallPath -or $InstallPath -eq "") {
-    $InstallPath = Join-Path $env:SystemDrive "OpenFork\wsl"
+    $InstallPath = Join-Path $env:SystemDrive "OpenForkEngine\wsl"
     Write-Log "No install path provided. Using default path: $InstallPath"
 }
 
@@ -150,6 +150,7 @@ fi
 mkdir -p /etc
 echo -e "[boot]\nsystemd=true\n[user]\ndefault=openfork" > /etc/wsl.conf
 echo "managed-by=openfork" > /etc/openfork-managed
+echo '{"exclude":["/**"]}' > /pyrightconfig.json
 "@
         $provisionScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/provision.sh && bash /tmp/provision.sh"
 
@@ -174,6 +175,7 @@ systemd=true
 default=openfork
 EOF
 echo "managed-by=openfork" > /etc/openfork-managed
+echo '{"exclude":["/**"]}' > /pyrightconfig.json
 "@
          $repairScript | wsl -d $DistroName --user root -e bash -c "cat > /tmp/repair.sh && bash /tmp/repair.sh"
 
