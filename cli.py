@@ -6,6 +6,20 @@ import threading
 import json
 import os
 
+def _configure_stdio_encoding() -> None:
+    """Keep Electron pipe output UTF-8 on Windows codepages."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_configure_stdio_encoding()
+
 # Force reset logging to ensure our config takes effect regardless of module import order
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
@@ -58,6 +72,9 @@ def listen_for_ipc_commands(client: "DGNClient"):
             elif cmd_type == "REQUEST_STOP":
                 logging.info("Received REQUEST_STOP command from main process.")
                 client.stop_requested = True
+                download_manager = getattr(client, "download_manager", None)
+                if download_manager:
+                    download_manager.shutdown()
 
                 if client.current_job:
                     job_id = client.current_job.get("id")

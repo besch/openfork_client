@@ -101,8 +101,51 @@ class JobListener:
             "named pipe",
             "docker daemon",
             "protocolerror",
+            "out of memory",
+            "oom",
+            "cannot allocate memory",
+            "container exited unexpectedly",
+            "container killed",
         )
         return any(marker in text for marker in transient_markers)
+
+    def _job_was_interrupted_by_infrastructure(self, job_id: Optional[str]) -> bool:
+        return bool(
+            job_id
+            and getattr(self.client, "interrupted_job_id", None) == job_id
+        )
+
+    def _handle_service_startup_failure(
+        self,
+        job: Dict[str, Any],
+        service_type: str,
+    ) -> None:
+        job_id = job.get("id")
+        if self._job_was_interrupted_by_infrastructure(job_id):
+            logging.info(
+                f"Job {job_id} was already requeued after a local container "
+                "failure during startup. Skipping failed status update."
+            )
+            return
+
+        if self.shutdown_event.is_set():
+            return
+
+        logging.error(
+            f"ComfyUI for service '{service_type}' failed to start. Failing job."
+        )
+
+        self._emit_job_event(
+            "JOB_FAILED",
+            {
+                "id": job_id,
+                "service_type": service_type,
+                "error": "ComfyUI failed to start",
+            },
+        )
+
+        self.orchestrator_service.update_job_status(job_id, "failed")
+        self.client.current_job = None
 
     def _requeue_job_after_infrastructure_error(
         self,
@@ -228,7 +271,7 @@ class JobListener:
 
             if (
                 job_id
-                and getattr(self.client, "interrupted_job_id", None) == job_id
+                and self._job_was_interrupted_by_infrastructure(job_id)
             ):
                 logging.info(
                     f"Job {job_id} was interrupted by an infrastructure "
@@ -332,7 +375,7 @@ class JobListener:
             # don't report it as a failure — just clean up quietly.
             if (
                 job_id
-                and getattr(self.client, "interrupted_job_id", None) == job_id
+                and self._job_was_interrupted_by_infrastructure(job_id)
             ):
                 logging.info(
                     f"Job {job_id} raised after an infrastructure failure: {e}. "
@@ -850,6 +893,7 @@ class JobListener:
 
                                         if not HEADLESS_MODE:
                                             logging.info("Starting container...")
+                                            container_crash_event = threading.Event()
                                             service_cfg = (
                                                 self.client.services_config.get(
                                                     actual_service_type, {}
@@ -935,43 +979,16 @@ class JobListener:
                                                 container_logs: Optional[str],
                                             ):
                                                 """Called when container crashes unexpectedly."""
+                                                container_crash_event.set()
                                                 logging.error(
                                                     f"Container crash detected for job {crashed_job_id}: {reason}"
                                                 )
 
-                                                # Emit JOB_FAILED event
-                                                self._emit_job_event(
-                                                    "JOB_FAILED",
-                                                    {
-                                                        "id": crashed_job_id,
-                                                        "service_type": actual_service_type,
-                                                        "error": reason,
-                                                    },
+                                                self._requeue_job_after_infrastructure_error(
+                                                    job,
+                                                    InfrastructureError(reason),
+                                                    reason="provider_container_crash",
                                                 )
-
-                                                # Requeue infrastructure crashes so another healthy
-                                                # provider can pick the job back up.
-                                                try:
-                                                    self.orchestrator_service.reset_interrupted_job(
-                                                        crashed_job_id,
-                                                        execution_token=job.get(
-                                                            "execution_token"
-                                                        ),
-                                                        reason="provider_container_crash",
-                                                    )
-                                                except Exception as e:
-                                                    logging.error(
-                                                        f"Failed to requeue job after crash: {e}"
-                                                    )
-
-                                                # Clean up current job
-                                                self.client.interrupted_job_id = (
-                                                    crashed_job_id
-                                                )
-                                                self.client.interrupted_job_execution_token = job.get(
-                                                    "execution_token"
-                                                )
-                                                self.client.current_job = None
 
                                             container_monitor = ContainerMonitor(
                                                 docker_client=docker_manager.client,
@@ -1026,30 +1043,20 @@ class JobListener:
 
                                         if uses_comfyui:
                                             if self.client.comfyui_client.wait_for_ready(
-                                                self.shutdown_event
+                                                self.shutdown_event,
+                                                abort_event=(
+                                                    container_crash_event
+                                                    if not HEADLESS_MODE
+                                                    else None
+                                                ),
                                             ):
                                                 # Process the job using shared helper
                                                 self._process_job_safely(job)
                                             else:
-                                                if not self.shutdown_event.is_set():
-                                                    logging.error(
-                                                        f"ComfyUI for service '{actual_service_type}' failed to start. Failing job."
-                                                    )
-
-                                                    # Emit JOB_FAILED since we started the job in UI
-                                                    self._emit_job_event(
-                                                        "JOB_FAILED",
-                                                        {
-                                                            "id": job.get("id"),
-                                                            "service_type": actual_service_type,
-                                                            "error": "ComfyUI failed to start",
-                                                        },
-                                                    )
-
-                                                    self.orchestrator_service.update_job_status(
-                                                        job_id, "failed"
-                                                    )
-                                                    self.client.current_job = None
+                                                self._handle_service_startup_failure(
+                                                    job,
+                                                    actual_service_type,
+                                                )
                                         else:
                                             # For text_generation, directly process the job (no ComfyUI needed)
                                             self._process_job_safely(job)

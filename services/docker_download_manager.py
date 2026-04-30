@@ -388,6 +388,32 @@ class DockerDownloadManager:
             # Never fail eviction because stdout is gone (test harnesses, etc.).
             pass
 
+    @staticmethod
+    def _emit_download_state(
+        service_type: str,
+        image_name: str,
+        status: str,
+    ) -> None:
+        """
+        Emit coarse download lifecycle state for Electron-side idle detection.
+
+        Docker pull progress only starts once the worker reaches Docker. This
+        event is emitted earlier so auto-compact can see accepted/queued
+        downloads before image eviction opens a false idle window.
+        """
+        payload = {
+            "type": "DOCKER_DOWNLOAD_STATE",
+            "payload": {
+                "service_type": service_type,
+                "image": image_name,
+                "status": status,
+            },
+        }
+        try:
+            print(json.dumps(payload), flush=True)
+        except Exception:
+            pass
+
     def _get_known_service_types(self) -> list[str]:
         """Return all service types known to this client for cache accounting."""
         if not self.docker_manager:
@@ -531,7 +557,7 @@ class DockerDownloadManager:
             )
             logging.info(
                 f"Evicted cached image for {service_type_to_evict} "
-                f"(reason={reason}, freed≈{freed_bytes / 1024**3:.1f} GB)."
+                f"(reason={reason}, freed~{freed_bytes / 1024**3:.1f} GB)."
             )
             return service_type_to_evict
         except DockerImageNotFound:
@@ -608,6 +634,9 @@ class DockerDownloadManager:
             return False  # Headless mode
         
         with self._lock:
+            if self._shutdown:
+                return False
+
             # Check if already downloading or queued
             if service_type in self._active_downloads:
                 logging.debug(f"Image for {service_type} already downloading")
@@ -644,18 +673,26 @@ class DockerDownloadManager:
                 if prev_status == DownloadStatus.FAILED:
                     logging.info(f"Clearing previous FAILED status for {service_type} to allow retry")
                     del self._download_status[service_type]
+
+            try:
+                image_name = self.docker_manager.get_image_name(service_type)
+            except Exception as e:
+                logging.warning(f"Could not resolve image name for {service_type}: {e}")
+                return False
             
             # Check if we can start a new download
             if len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS:
+                self._emit_download_state(service_type, image_name, "starting")
+
                 if not self._ensure_cache_capacity(service_type):
                     self._download_status[service_type] = DownloadStatus.FAILED
+                    self._emit_download_state(service_type, image_name, "failed")
                     return False
 
                 # Check for sufficient disk space before starting.
                 # Prefer disk_required_gb from services_config (authoritative, from services.json)
                 # over the hardcoded estimate map, which can be significantly off (e.g. wan22-24gb:
                 # estimate=120 GB, actual disk_required_gb=220 GB).
-                image_name = self.docker_manager.get_image_name(service_type)
                 service_config = (self.docker_manager.services_config or {}).get(service_type, {})
                 disk_required_gb = service_config.get("disk_required_gb")
                 if disk_required_gb:
@@ -674,6 +711,7 @@ class DockerDownloadManager:
                     )
                     self._emit_disk_space_error(image_name, required_gb, available_gb)
                     self._download_status[service_type] = DownloadStatus.FAILED
+                    self._emit_download_state(service_type, image_name, "failed")
                     return False
 
                 self._active_downloads.add(service_type)
@@ -695,6 +733,7 @@ class DockerDownloadManager:
                 # Queue the download
                 self._download_queue.append(service_type)
                 self._download_status[service_type] = DownloadStatus.PENDING
+                self._emit_download_state(service_type, image_name, "queued")
                 logging.info(f"Queued download for {service_type} (max concurrent reached)")
                 return True
 
@@ -711,6 +750,11 @@ class DockerDownloadManager:
             if service_type in self._download_queue:
                 self._download_queue.remove(service_type)
                 self._download_status[service_type] = DownloadStatus.FAILED
+                try:
+                    image_name = self.docker_manager.get_image_name(service_type)
+                    self._emit_download_state(service_type, image_name, "cancelled")
+                except Exception:
+                    pass
                 logging.info(f"Removed {service_type} from download queue")
                 return
 
@@ -754,16 +798,28 @@ class DockerDownloadManager:
         NOTE: This does NOT affect credits. Credits are based on processing
         time and VRAM, not cache state. This is purely for routing efficiency.
         """
+        image_name = None
         try:
-            # Set status to DOWNLOADING immediately
+            image_name = self.docker_manager.get_image_name(service_type)
+
+            # Set status to DOWNLOADING immediately, unless shutdown/cancel won
+            # the race before this worker had a chance to touch Docker.
             with self._lock:
+                if self._shutdown or cancel_event.is_set():
+                    self._download_status[service_type] = DownloadStatus.FAILED
+                    self._emit_download_state(service_type, image_name, "cancelled")
+                    logging.info(
+                        f"Download worker for {service_type} exiting before pull "
+                        "because shutdown/cancellation was requested."
+                    )
+                    return
                 self._download_status[service_type] = DownloadStatus.DOWNLOADING
+                self._emit_download_state(service_type, image_name, "downloading")
                 logging.info(f"Download worker started for {service_type}, status set to DOWNLOADING")
             
             # Report download start to server (enables tier 1 routing)
             self._report_download_state(service_type, "start")
             
-            image_name = self.docker_manager.get_image_name(service_type)
             logging.info(f"Background download starting for image: {image_name}")
             
             # Use the existing pull_image method which handles progress reporting
@@ -771,6 +827,7 @@ class DockerDownloadManager:
             
             with self._lock:
                 self._download_status[service_type] = DownloadStatus.COMPLETED
+                self._emit_download_state(service_type, image_name, "completed")
                 logging.info(f"Background download completed for {service_type}")
             
             # Report download completion to server (moves to tier 0 - cached)
@@ -785,17 +842,29 @@ class DockerDownloadManager:
                 isinstance(e, DockerAPIError) and getattr(e.response, "status_code", None) == 404
             )
             if is_image_not_found:
-                image_name = self.docker_manager.get_image_name(service_type)
+                image_name = image_name or self.docker_manager.get_image_name(service_type)
                 logging.error(
                     f"Image '{image_name}' does not exist on the registry "
                     f"(404). Will not retry until config is corrected."
                 )
                 with self._lock:
                     self._download_status[service_type] = DownloadStatus.PERMANENTLY_FAILED
+                    self._emit_download_state(service_type, image_name, "failed")
             else:
                 logging.error(f"Background download failed for {service_type}: {e}")
                 with self._lock:
                     self._download_status[service_type] = DownloadStatus.FAILED
+                    terminal_status = (
+                        "cancelled"
+                        if self._shutdown or cancel_event.is_set()
+                        else "failed"
+                    )
+                    if image_name:
+                        self._emit_download_state(
+                            service_type,
+                            image_name,
+                            terminal_status,
+                        )
 
             # Report download failure to server (removes from downloading)
             self._report_download_state(service_type, "cancel")
@@ -895,6 +964,11 @@ class DockerDownloadManager:
                 availability = self.get_image_availability(next_service)
                 if availability == ImageAvailability.AVAILABLE:
                     self._download_status.pop(next_service, None)
+                    try:
+                        next_image_name = self.docker_manager.get_image_name(next_service)
+                        self._emit_download_state(next_service, next_image_name, "completed")
+                    except Exception:
+                        pass
                     continue
                 if availability == ImageAvailability.UNKNOWN:
                     self._download_queue.insert(0, next_service)
@@ -907,6 +981,11 @@ class DockerDownloadManager:
 
                 if not self._ensure_cache_capacity(next_service):
                     self._download_status[next_service] = DownloadStatus.FAILED
+                    try:
+                        next_image_name = self.docker_manager.get_image_name(next_service)
+                        self._emit_download_state(next_service, next_image_name, "failed")
+                    except Exception:
+                        pass
                     self._report_download_state(next_service, "cancel")
                     continue
 
@@ -928,11 +1007,13 @@ class DockerDownloadManager:
                     )
                     self._emit_disk_space_error(next_image_name, req_gb, avail_gb)
                     self._download_status[next_service] = DownloadStatus.FAILED
+                    self._emit_download_state(next_service, next_image_name, "failed")
                     self._report_download_state(next_service, "cancel")
                     continue
 
                 self._active_downloads.add(next_service)
                 self._download_status[next_service] = DownloadStatus.DOWNLOADING
+                self._emit_download_state(next_service, next_image_name, "starting")
 
                 # Create and store a cancellation event for this download
                 cancel_event = threading.Event()
@@ -988,7 +1069,14 @@ class DockerDownloadManager:
         logging.info("DockerDownloadManager shutting down")
         with self._lock:
             self._shutdown = True
+            queued_services = list(self._download_queue)
             self._download_queue.clear()
+            for service_type in queued_services:
+                try:
+                    image_name = self.docker_manager.get_image_name(service_type)
+                    self._emit_download_state(service_type, image_name, "cancelled")
+                except Exception:
+                    pass
             # Signal all active downloads to stop
             for event in self._cancellation_events.values():
                 event.set()

@@ -30,12 +30,19 @@ class ComfyUIClient:
             return base.replace("wss://", "https://")
         return base.replace("ws://", "http://")
 
-    def wait_for_ready(self, shutdown_event: threading.Event, timeout: Optional[int] = None) -> bool:
+    def wait_for_ready(
+        self,
+        shutdown_event: threading.Event,
+        timeout: Optional[int] = None,
+        abort_event: Optional[threading.Event] = None,
+    ) -> bool:
         """Waits for the ComfyUI server to be available.
         
         Args:
             shutdown_event: Event to signal shutdown
             timeout: Maximum seconds to wait (default: TimeoutConfig.COMFYUI_READY_TIMEOUT)
+            abort_event: Optional event for provider-local aborts, such as a
+                monitored container crash during startup.
             
         Returns:
             True if server became ready, False otherwise
@@ -49,6 +56,9 @@ class ComfyUIClient:
             if shutdown_event.is_set():
                 logging.warning("Shutdown requested while waiting for ComfyUI.")
                 return False
+            if abort_event and abort_event.is_set():
+                logging.warning("ComfyUI readiness wait aborted by local container failure.")
+                return False
             try:
                 response = requests.get(url, timeout=5)
                 if response.status_code == 200:
@@ -59,7 +69,15 @@ class ComfyUIClient:
             except requests.exceptions.RequestException as e:
                 logging.debug(f"ComfyUI not ready yet (connection error: {e}). Retrying...")
 
-            shutdown_event.wait(5)
+            wait_until = time.time() + 5
+            while time.time() < wait_until:
+                if shutdown_event.is_set():
+                    logging.warning("Shutdown requested while waiting for ComfyUI.")
+                    return False
+                if abort_event and abort_event.is_set():
+                    logging.warning("ComfyUI readiness wait aborted by local container failure.")
+                    return False
+                shutdown_event.wait(0.5)
         logging.error(f"ComfyUI server did not become ready in {timeout} seconds.")
         return False
 

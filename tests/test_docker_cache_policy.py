@@ -1,7 +1,11 @@
+import contextlib
+import io
+import json
 import threading
+import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import docker
 import requests
@@ -26,6 +30,7 @@ if not hasattr(docker, "errors"):
 
 from services.docker_download_manager import (
     DockerDownloadManager,
+    DownloadStatus,
     ImageAvailability,
 )
 from services.job_listener import JobListener
@@ -101,6 +106,26 @@ class FakeDockerManager:
 
     def get_container_name(self, service_type):
         return f"dgn-client-{service_type}"
+
+
+class PullRecordingDockerManager(FakeDockerManager):
+    def __init__(self, service_types, cached_service_types=None, running_service_types=None):
+        super().__init__(
+            service_types,
+            cached_service_types=cached_service_types,
+            running_service_types=running_service_types,
+        )
+        self.pull_calls = []
+
+    def pull_image(self, image_name, shutdown_event=None, service_type=None):
+        self.pull_calls.append(
+            {
+                "image_name": image_name,
+                "shutdown_event": shutdown_event,
+                "service_type": service_type,
+            }
+        )
+        self.client.images.present.add(image_name)
 
 
 class FlakyImageStore:
@@ -184,13 +209,14 @@ class FakeDownloadManager:
 
 class DockerCachePolicyTests(unittest.TestCase):
     def test_cache_cap_policy_mapping_matches_routing_modes(self):
-        self.assertEqual(_get_max_cached_images_for_policy("all", False), 5)
-        self.assertEqual(
-            _get_max_cached_images_for_policy("trusted_projects", False), 5
-        )
-        self.assertEqual(_get_max_cached_images_for_policy("trusted_users", False), 5)
-        self.assertIsNone(_get_max_cached_images_for_policy("none", False))
-        self.assertEqual(_get_max_cached_images_for_policy("none", True), 3)
+        with patch("services.disk_pressure.get_disk_pressure_tier", return_value="healthy"):
+            self.assertEqual(_get_max_cached_images_for_policy("all", False), 4)
+            self.assertEqual(
+                _get_max_cached_images_for_policy("trusted_projects", False), 6
+            )
+            self.assertEqual(_get_max_cached_images_for_policy("trusted_users", False), 6)
+            self.assertIsNone(_get_max_cached_images_for_policy("none", False))
+            self.assertEqual(_get_max_cached_images_for_policy("none", True), 3)
 
     def test_apply_routing_config_updates_allowed_ids_and_cache_cap(self):
         client = DGNClient.__new__(DGNClient)
@@ -198,7 +224,10 @@ class DockerCachePolicyTests(unittest.TestCase):
         client.community_mode = "none"
         client.monetize_mode = False
         client.allowed_ids = ["owner-id"]
-        client.download_manager = SimpleNamespace(max_cached_images=None)
+        client.download_manager = SimpleNamespace(
+            max_cached_images=None,
+            update_routing_config=Mock(),
+        )
         client.job_wakeup_event = threading.Event()
 
         client.apply_routing_config(
@@ -212,7 +241,10 @@ class DockerCachePolicyTests(unittest.TestCase):
 
         self.assertEqual(client.community_mode, "all")
         self.assertEqual(client.allowed_ids, [])
-        self.assertEqual(client.download_manager.max_cached_images, 5)
+        client.download_manager.update_routing_config.assert_called_once_with(
+            community_mode="all",
+            monetize_mode=False,
+        )
         self.assertTrue(client.job_wakeup_event.is_set())
 
     def test_apply_routing_config_does_not_interrupt_active_job(self):
@@ -228,7 +260,10 @@ class DockerCachePolicyTests(unittest.TestCase):
         client.interrupted_job_execution_token = None
         client.stop_requested = False
         client.active_service_type = "wan22"
-        client.download_manager = SimpleNamespace(max_cached_images=None)
+        client.download_manager = SimpleNamespace(
+            max_cached_images=None,
+            update_routing_config=Mock(),
+        )
         client.job_wakeup_event = threading.Event()
         client.orchestrator_service = orchestrator_service
 
@@ -319,6 +354,71 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertFalse(manager.start_background_download("ltx23-video-8gb"))
         self.assertEqual(docker_manager.refresh_calls, 2)
         self.assertEqual(manager.get_all_statuses(), {})
+
+    def test_download_state_is_emitted_before_image_eviction(self):
+        docker_manager = PullRecordingDockerManager(
+            service_types=["wan22", "foley", "hunyuan", "stream-diffvsr-upscaler"],
+            cached_service_types=["wan22", "foley", "hunyuan"],
+        )
+        docker_manager.services_config["stream-diffvsr-upscaler"] = {
+            "disk_required_gb": 0.001,
+        }
+        manager = DockerDownloadManager(docker_manager, max_cached_images=3)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertTrue(manager.start_background_download("stream-diffvsr-upscaler"))
+            for _ in range(100):
+                if (
+                    manager.get_download_status("stream-diffvsr-upscaler")
+                    == DownloadStatus.COMPLETED
+                ):
+                    break
+                time.sleep(0.01)
+
+        events = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        first_download_state = next(
+            i
+            for i, event in enumerate(events)
+            if event.get("type") == "DOCKER_DOWNLOAD_STATE"
+            and event.get("payload", {}).get("status") == "starting"
+        )
+        first_eviction = next(
+            i for i, event in enumerate(events) if event.get("type") == "IMAGE_EVICTED"
+        )
+
+        self.assertLess(first_download_state, first_eviction)
+
+    def test_cancelled_worker_exits_before_touching_docker_pull(self):
+        docker_manager = PullRecordingDockerManager(
+            service_types=["stream-diffvsr-upscaler"],
+        )
+        manager = DockerDownloadManager(docker_manager)
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            manager._download_worker("stream-diffvsr-upscaler", cancel_event)
+
+        events = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+
+        self.assertEqual(docker_manager.pull_calls, [])
+        self.assertTrue(
+            any(
+                event.get("type") == "DOCKER_DOWNLOAD_STATE"
+                and event.get("payload", {}).get("status") == "cancelled"
+                for event in events
+            )
+        )
 
 
 class PrefetchPolicyTests(unittest.TestCase):

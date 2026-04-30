@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 from cli import SHUTDOWN_EVENT, cleanup, listen_for_ipc_commands
 from exceptions import InfrastructureError
+from services.comfyui_service import ComfyUIClient
 from services.job_listener import JobListener
 
 
@@ -295,6 +296,79 @@ class StopResetBehaviorTests(unittest.TestCase):
         orchestrator_service.update_job_status.assert_not_called()
         self.assertIn("JOB_FAILED", output.getvalue())
         self.assertIn("job requeued", output.getvalue())
+
+    def test_service_startup_failure_skips_failed_status_after_container_requeue(self):
+        shutdown_event = threading.Event()
+        orchestrator_service = Mock()
+        client = SimpleNamespace(
+            interrupted_job_id="job-startup-oom",
+            current_job={"id": "job-startup-oom"},
+            orchestrator_service=orchestrator_service,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
+        )
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            listener._handle_service_startup_failure(
+                {"id": "job-startup-oom", "workflow_type": "wan_video"},
+                "wan22",
+            )
+
+        orchestrator_service.update_job_status.assert_not_called()
+        self.assertNotIn("JOB_FAILED", output.getvalue())
+
+    def test_service_startup_failure_marks_failed_without_container_requeue(self):
+        shutdown_event = threading.Event()
+        orchestrator_service = Mock()
+        client = SimpleNamespace(
+            interrupted_job_id=None,
+            current_job={"id": "job-startup-timeout"},
+            orchestrator_service=orchestrator_service,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
+        )
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            listener._handle_service_startup_failure(
+                {"id": "job-startup-timeout", "workflow_type": "wan_video"},
+                "wan22",
+            )
+
+        orchestrator_service.update_job_status.assert_called_once_with(
+            "job-startup-timeout",
+            "failed",
+        )
+        self.assertIsNone(client.current_job)
+        self.assertIn("JOB_FAILED", output.getvalue())
+
+    def test_comfyui_wait_for_ready_aborts_on_container_crash_event(self):
+        shutdown_event = threading.Event()
+        abort_event = threading.Event()
+        abort_event.set()
+        client = ComfyUIClient("ws://127.0.0.1:65535/ws")
+
+        self.assertFalse(
+            client.wait_for_ready(
+                shutdown_event,
+                timeout=30,
+                abort_event=abort_event,
+            )
+        )
+
+    def test_oom_text_is_requeueable_infrastructure_error(self):
+        listener = JobListener(
+            SimpleNamespace(orchestrator_service=Mock()),
+            provider_id="provider-1",
+            shutdown_event=threading.Event(),
+        )
+
+        self.assertTrue(
+            listener._is_requeueable_infrastructure_error(
+                RuntimeError("container killed by OOM")
+            )
+        )
 
 
 if __name__ == "__main__":
