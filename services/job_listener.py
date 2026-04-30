@@ -738,6 +738,70 @@ class JobListener:
             # Non-critical - just log and continue
             logging.debug(f"Failed to get/apply pre-fetch suggestions: {e}")
 
+    @staticmethod
+    def _uses_global_download_gate(accept_policy: str) -> bool:
+        return accept_policy in ("all", "monetize")
+
+    def _get_download_gate_for_jobs(self, available_with_policy: list) -> Optional[set[str]]:
+        """
+        Return service types this provider may download for public/monetize jobs.
+
+        Private/trusted/own jobs intentionally bypass this because global cache
+        coverage cannot represent provider-specific trust visibility. None means
+        "gate unavailable / fail open"; an empty set means "server says coverage
+        is already sufficient."
+        """
+        should_gate = any(
+            self._uses_global_download_gate(policy)
+            for _, policy in available_with_policy
+        )
+        if not should_gate:
+            return None
+
+        try:
+            suggestions = self.orchestrator_service.get_prefetch_suggestions(
+                self.provider_id,
+                limit=20,
+                return_none_on_error=True,
+            )
+        except TypeError:
+            # Test doubles or older service shims may not accept the explicit
+            # fail-open flag. Keep the runtime behavior permissive.
+            try:
+                suggestions = self.orchestrator_service.get_prefetch_suggestions(
+                    self.provider_id,
+                    20,
+                )
+            except Exception as e:
+                logging.debug(f"Download coverage gate failed: {e}")
+                return None
+        except Exception as e:
+            logging.debug(f"Download coverage gate failed: {e}")
+            return None
+
+        if suggestions is None:
+            return None
+        return set(suggestions)
+
+    def _should_download_missing_image(
+        self,
+        service_type: str,
+        accept_policy: str,
+        download_gate: Optional[set[str]],
+    ) -> bool:
+        if not self._uses_global_download_gate(accept_policy):
+            return True
+        if download_gate is None:
+            return True
+        if service_type in download_gate:
+            return True
+
+        logging.info(
+            f"Skipping download for '{service_type}' because server-side "
+            "cache coverage is already sufficient."
+        )
+        return False
+
     def listen_for_jobs_auto(self) -> None:
         """Listen for jobs and dynamically start/stop containers with image pre-fetching."""
         logging.info("Entering auto job listening loop with Docker image pre-fetching.")
@@ -820,6 +884,10 @@ class JobListener:
                         else:
                             logging.info(
                                 f"Peeked {len(available_jobs)} available jobs."
+                            )
+
+                            download_gate = self._get_download_gate_for_jobs(
+                                _available_with_policy
                             )
 
                             # Step 2b: Find first job with available Docker image
@@ -1116,6 +1184,13 @@ class JobListener:
                                         )
 
                                         if not is_downloading and not is_queued:
+                                            if not self._should_download_missing_image(
+                                                service_type,
+                                                _job_policy,
+                                                download_gate,
+                                            ):
+                                                continue
+
                                             if (
                                                 status
                                                 and status.value == "permanently_failed"
@@ -1133,7 +1208,8 @@ class JobListener:
                                                 f"Starting background download for peeked job..."
                                             )
                                             download_manager.start_background_download(
-                                                service_type
+                                                service_type,
+                                                accept_policy=_job_policy,
                                             )
                                         else:
                                             logging.debug(

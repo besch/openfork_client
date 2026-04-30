@@ -613,8 +613,46 @@ class DockerDownloadManager:
         """Get the download status for a service type."""
         with self._lock:
             return self._download_status.get(service_type)
-    
-    def start_background_download(self, service_type: str) -> bool:
+
+    def _claim_download_slot(
+        self,
+        service_type: str,
+        accept_policy: Optional[str] = None,
+    ) -> bool:
+        """
+        Ask the orchestrator whether this provider should download this image.
+
+        The server performs the network-wide cache-deficit check atomically for
+        public/monetize pools. If the server is unreachable we fail open so a
+        transient API problem cannot strand pending jobs forever.
+        """
+        if not self.orchestrator_service or not self.provider_id:
+            return True
+
+        accepted = self.orchestrator_service.report_download_state(
+            provider_id=self.provider_id,
+            service_type=service_type,
+            action="start",
+            accept_policy=accept_policy,
+            return_none_on_error=True,
+        )
+        if accepted is None:
+            logging.warning(
+                f"Could not claim download slot for {service_type}; allowing download."
+            )
+            return True
+        if not accepted:
+            logging.info(
+                f"Skipping download for {service_type}; network coverage is already sufficient."
+            )
+            return False
+        return True
+     
+    def start_background_download(
+        self,
+        service_type: str,
+        accept_policy: Optional[str] = None,
+    ) -> bool:
         """
         Start downloading the Docker image for a service in the background.
         
@@ -623,6 +661,8 @@ class DockerDownloadManager:
         
         Args:
             service_type: The service type to download image for
+            accept_policy: Optional job routing policy for this download. Own
+                and trusted-policy jobs bypass global public-pool coverage.
             
         Returns:
             True if download was started or queued, False if already in progress
@@ -714,6 +754,9 @@ class DockerDownloadManager:
                     self._emit_download_state(service_type, image_name, "failed")
                     return False
 
+                if not self._claim_download_slot(service_type, accept_policy):
+                    return False
+
                 self._active_downloads.add(service_type)
                 # Create and store a cancellation event for this download
                 cancel_event = threading.Event()
@@ -730,6 +773,9 @@ class DockerDownloadManager:
                 logging.info(f"Started background download for {service_type}")
                 return True
             else:
+                if not self._claim_download_slot(service_type, accept_policy):
+                    return False
+
                 # Queue the download
                 self._download_queue.append(service_type)
                 self._download_status[service_type] = DownloadStatus.PENDING
@@ -750,6 +796,7 @@ class DockerDownloadManager:
             if service_type in self._download_queue:
                 self._download_queue.remove(service_type)
                 self._download_status[service_type] = DownloadStatus.FAILED
+                self._report_download_state(service_type, "cancel")
                 try:
                     image_name = self.docker_manager.get_image_name(service_type)
                     self._emit_download_state(service_type, image_name, "cancelled")
@@ -964,6 +1011,7 @@ class DockerDownloadManager:
                 availability = self.get_image_availability(next_service)
                 if availability == ImageAvailability.AVAILABLE:
                     self._download_status.pop(next_service, None)
+                    self._report_download_state(next_service, "finish")
                     try:
                         next_image_name = self.docker_manager.get_image_name(next_service)
                         self._emit_download_state(next_service, next_image_name, "completed")
@@ -1072,6 +1120,7 @@ class DockerDownloadManager:
             queued_services = list(self._download_queue)
             self._download_queue.clear()
             for service_type in queued_services:
+                self._report_download_state(service_type, "cancel")
                 try:
                     image_name = self.docker_manager.get_image_name(service_type)
                     self._emit_download_state(service_type, image_name, "cancelled")

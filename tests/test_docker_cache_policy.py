@@ -189,6 +189,7 @@ class FakeDownloadManager:
         self._active_downloads = set()
         self._download_queue = []
         self.started = []
+        self.accept_policies = []
         self.availability = availability
 
     def has_image(self, service_type):
@@ -203,8 +204,9 @@ class FakeDownloadManager:
     def is_queued(self, service_type):
         return False
 
-    def start_background_download(self, service_type):
+    def start_background_download(self, service_type, accept_policy=None):
         self.started.append(service_type)
+        self.accept_policies.append(accept_policy)
 
 
 class DockerCachePolicyTests(unittest.TestCase):
@@ -488,6 +490,122 @@ class PrefetchPolicyTests(unittest.TestCase):
 
         orchestrator_service.get_prefetch_suggestions.assert_called_once_with("provider-1")
         self.assertEqual(download_manager.started, [])
+
+    def test_public_peek_download_gate_uses_server_coverage(self):
+        orchestrator_service = Mock()
+        orchestrator_service.get_prefetch_suggestions.return_value = ["wan22"]
+        client = SimpleNamespace(orchestrator_service=orchestrator_service)
+        listener = JobListener(
+            client, provider_id="provider-1", shutdown_event=threading.Event()
+        )
+
+        gate = listener._get_download_gate_for_jobs(
+            [({"id": "job-1"}, "all")]
+        )
+
+        self.assertEqual(gate, {"wan22"})
+        orchestrator_service.get_prefetch_suggestions.assert_called_once_with(
+            "provider-1",
+            limit=20,
+            return_none_on_error=True,
+        )
+        self.assertTrue(
+            listener._should_download_missing_image("wan22", "all", gate)
+        )
+        self.assertFalse(
+            listener._should_download_missing_image("foley", "all", gate)
+        )
+
+    def test_private_peek_downloads_bypass_global_coverage_gate(self):
+        orchestrator_service = Mock()
+        client = SimpleNamespace(orchestrator_service=orchestrator_service)
+        listener = JobListener(
+            client, provider_id="provider-1", shutdown_event=threading.Event()
+        )
+
+        gate = listener._get_download_gate_for_jobs(
+            [({"id": "job-1"}, "mine")]
+        )
+
+        orchestrator_service.get_prefetch_suggestions.assert_not_called()
+        self.assertIsNone(gate)
+        self.assertTrue(
+            listener._should_download_missing_image("wan22", "mine", set())
+        )
+
+    def test_download_gate_fails_open_when_server_unavailable(self):
+        orchestrator_service = Mock()
+        orchestrator_service.get_prefetch_suggestions.return_value = None
+        client = SimpleNamespace(orchestrator_service=orchestrator_service)
+        listener = JobListener(
+            client, provider_id="provider-1", shutdown_event=threading.Event()
+        )
+
+        gate = listener._get_download_gate_for_jobs(
+            [({"id": "job-1"}, "all")]
+        )
+
+        self.assertIsNone(gate)
+        self.assertTrue(
+            listener._should_download_missing_image("wan22", "all", gate)
+        )
+
+    def test_download_manager_respects_rejected_download_claim(self):
+        docker_manager = PullRecordingDockerManager(service_types=["wan22"])
+        docker_manager.services_config["wan22"] = {"disk_required_gb": 0.001}
+        orchestrator_service = Mock()
+        orchestrator_service.report_download_state.return_value = False
+        manager = DockerDownloadManager(
+            docker_manager,
+            orchestrator_service=orchestrator_service,
+            provider_id="provider-1",
+        )
+
+        self.assertFalse(
+            manager.start_background_download("wan22", accept_policy="all")
+        )
+
+        orchestrator_service.report_download_state.assert_called_once_with(
+            provider_id="provider-1",
+            service_type="wan22",
+            action="start",
+            accept_policy="all",
+            return_none_on_error=True,
+        )
+        self.assertEqual(docker_manager.pull_calls, [])
+        self.assertEqual(manager.get_all_statuses(), {})
+
+    def test_download_manager_passes_private_policy_to_download_claim(self):
+        docker_manager = PullRecordingDockerManager(service_types=["wan22"])
+        docker_manager.services_config["wan22"] = {"disk_required_gb": 0.001}
+        orchestrator_service = Mock()
+        orchestrator_service.report_download_state.return_value = True
+        manager = DockerDownloadManager(
+            docker_manager,
+            orchestrator_service=orchestrator_service,
+            provider_id="provider-1",
+        )
+
+        self.assertTrue(
+            manager.start_background_download("wan22", accept_policy="mine")
+        )
+        for _ in range(100):
+            if manager.get_download_status("wan22") == DownloadStatus.COMPLETED:
+                break
+            time.sleep(0.01)
+
+        first_call = orchestrator_service.report_download_state.call_args_list[0]
+        self.assertEqual(
+            first_call.kwargs,
+            {
+                "provider_id": "provider-1",
+                "service_type": "wan22",
+                "action": "start",
+                "accept_policy": "mine",
+                "return_none_on_error": True,
+            },
+        )
+        self.assertEqual(docker_manager.pull_calls[0]["service_type"], "wan22")
 
 
 if __name__ == "__main__":

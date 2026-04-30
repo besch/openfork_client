@@ -1035,9 +1035,9 @@ class OrchestratorService:
             provider_id: The provider's ID
             cached_images: List of service types with cached images
             mode: 'replace' to overwrite, 'add' to append new images
-            
+
         Returns:
-            True if successful, False otherwise
+            True if successful, False otherwise.
         """
         try:
             response = self._make_request(
@@ -1055,7 +1055,14 @@ class OrchestratorService:
             logging.warning(f"Failed to report cached images: {e}")
             return False
 
-    def report_download_state(self, provider_id: str, service_type: str, action: str) -> bool:
+    def report_download_state(
+        self,
+        provider_id: str,
+        service_type: str,
+        action: str,
+        accept_policy: Optional[str] = None,
+        return_none_on_error: bool = False,
+    ) -> Optional[bool]:
         """
         Report Docker image download state change to the server.
         
@@ -1069,29 +1076,50 @@ class OrchestratorService:
             provider_id: The provider's ID
             service_type: The service type being downloaded (e.g., 'wan22-12gb')
             action: One of 'start', 'finish', or 'cancel'
+            accept_policy: Optional job policy for start requests. This lets
+                own/trusted jobs bypass global public-pool coverage checks.
+            return_none_on_error: Return None instead of False when the server
+                cannot be reached.
             
         Returns:
-            True if successful, False otherwise
+            True if accepted, False if intentionally declined, None on
+            transport error when requested.
         """
         try:
+            payload = {
+                "providerId": provider_id,
+                "service_type": service_type,
+                "action": action,
+            }
+            if accept_policy:
+                payload["accept_policy"] = accept_policy
+
             response = self._make_request(
                 'post',
                 f"{self.orchestrator_url}/api/dgn/provider-download-state",
-                json={
-                    "providerId": provider_id,
-                    "service_type": service_type,
-                    "action": action
-                }
+                json=payload,
             )
             response.raise_for_status()
+            accepted = True
+            if response.content:
+                try:
+                    data = response.json()
+                    accepted = data.get("accepted", True) is not False
+                except json.JSONDecodeError:
+                    accepted = True
             logging.debug(f"Reported download state: {service_type} - {action}")
-            return True
+            return accepted
         except requests.exceptions.RequestException as e:
             # Non-critical - don't fail if reporting fails
             logging.warning(f"Failed to report download state: {e}")
-            return False
+            return None if return_none_on_error else False
 
-    def get_prefetch_suggestions(self, provider_id: str, limit: int = 10) -> list[str]:
+    def get_prefetch_suggestions(
+        self,
+        provider_id: str,
+        limit: int = 10,
+        return_none_on_error: bool = False,
+    ) -> Optional[list[str]]:
         """
         Get pre-fetch suggestions from the server based on network demand.
 
@@ -1110,10 +1138,13 @@ class OrchestratorService:
                    (e.g. 20) when using the result to gate peeked-job downloads
                    so that all uncovered service types are visible.
 
+            return_none_on_error: Return None instead of [] when the server
+                cannot be reached, so download gates can fail open.
+
         Returns:
             List of service types with genuine uncovered demand, ordered by
-            cache_deficit DESC.  Empty list on any error (fail-open callers
-            should treat an empty result as "unknown" and allow the download).
+            cache_deficit DESC. Empty list means coverage is sufficient; None
+            means the coverage gate was unavailable when requested.
         """
         try:
             response = self._make_request(
@@ -1126,6 +1157,6 @@ class OrchestratorService:
             return data.get('suggestions', [])
         except requests.exceptions.RequestException as e:
             logging.debug(f"Failed to get prefetch suggestions: {e}")
-            return []
+            return None if return_none_on_error else []
 
 
