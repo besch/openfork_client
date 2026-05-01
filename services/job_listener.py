@@ -15,6 +15,8 @@ from exceptions import AuthError, InfrastructureError, ProviderError
 
 # Cap on backoff so a long outage still polls every 5 minutes.
 JOB_POLL_BACKOFF_CAP_SECONDS = 300
+TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled", "deleted")
+REMOTE_CANCELLATION_STATUSES = ("cancelled", "deleted")
 
 
 def _compute_poll_interval(base_seconds: int, consecutive_empty_polls: int) -> float:
@@ -46,6 +48,13 @@ class JobListener:
         """Check whether a job has already reached a terminal status."""
         return self._get_terminal_job_status(job_id) is not None
 
+    @staticmethod
+    def _remote_job_status(job_details: Any) -> Optional[str]:
+        if not isinstance(job_details, dict):
+            return None
+        status = job_details.get("status")
+        return status if isinstance(status, str) else None
+
     def _get_terminal_job_status(self, job_id: Optional[str]) -> Optional[str]:
         """Return the current terminal status for a job, if any."""
         if not job_id:
@@ -60,13 +69,8 @@ class JobListener:
         if not isinstance(job_details, dict):
             return None
 
-        status = job_details.get("status")
-        if status in (
-            "completed",
-            "failed",
-            "cancelled",
-            "deleted",
-        ):
+        status = self._remote_job_status(job_details)
+        if status in TERMINAL_JOB_STATUSES:
             return status
 
         return None
@@ -436,6 +440,45 @@ class JobListener:
                 self.client.interrupted_job_execution_token = job.get("execution_token")
             self.client.current_job = None
 
+    def _cleanup_remote_cancelled_job(
+        self,
+        job_id: str,
+        processor,
+        remote_status: str,
+    ) -> None:
+        logging.warning(
+            f"Job {job_id} was {remote_status}. Interrupting processing."
+        )
+
+        # Interrupt before stopping the container so ComfyUI can abort cleanly
+        # while its HTTP endpoint is still alive.
+        comfyui_client = getattr(processor, "comfyui_client", None)
+        if comfyui_client:
+            try:
+                comfyui_client.interrupt_workflow()
+            except Exception as e:
+                logging.debug(f"Could not interrupt workflow: {e}")
+
+        # Stop any running Docker container for this job.
+        if (
+            docker_manager
+            and hasattr(self.client, "active_service_type")
+            and self.client.active_service_type
+        ):
+            try:
+                logging.info(
+                    f"Stopping Docker container for service "
+                    f"'{self.client.active_service_type}' due to job cancellation..."
+                )
+                docker_manager.stop_container(
+                    service_type=self.client.active_service_type
+                )
+                self.client.active_service_type = None
+            except Exception as e:
+                logging.debug(f"Could not stop container: {e}")
+
+        logging.info(f"Job {job_id} cancellation cleanup completed.")
+
     def _monitor_job_cancellation(self, job_id: str, processor) -> None:
         """
         Monitor a job for cancellation during processing.
@@ -449,57 +492,25 @@ class JobListener:
             processor: The job processor instance
         """
         import threading
-        from services.docker_manager import docker_manager
 
         def _monitor_loop():
             check_interval = 5  # Check every 5 seconds
             while not self.shutdown_event.is_set():
                 try:
                     job_details = self.orchestrator_service.get_job(job_id)
-                    if not job_details or job_details.get("status") in (
-                        "cancelled",
-                        "deleted",
-                    ):
-                        logging.warning(
-                            f"Job {job_id} was cancelled/deleted. Interrupting processing."
-                        )
-
-                        # Stop any running Docker container for this job
-                        if (
-                            docker_manager
-                            and hasattr(self.client, "active_service_type")
-                            and self.client.active_service_type
-                        ):
-                            try:
-                                logging.info(
-                                    f"Stopping Docker container for service '{self.client.active_service_type}' due to job cancellation..."
-                                )
-                                docker_manager.stop_container(
-                                    service_type=self.client.active_service_type
-                                )
-                                self.client.active_service_type = None
-                            except Exception as e:
-                                logging.debug(f"Could not stop container: {e}")
-
-                        # Try to interrupt ComfyUI if available (for ComfyUI-based workflows)
-                        if hasattr(self.client, "comfyui_client"):
-                            try:
-                                self.client.comfyui_client.interrupt_workflow()
-                            except Exception as e:
-                                logging.debug(f"Could not interrupt workflow: {e}")
-
-                        # Update job status to cancelled
-                        try:
-                            self.orchestrator_service.update_job_status(
-                                job_id, "cancelled"
-                            )
-                        except Exception as e:
-                            logging.debug(f"Could not update job status: {e}")
-
-                        logging.info(
-                            f"Job {job_id} cancelled and resources cleaned up."
+                    remote_status = self._remote_job_status(job_details)
+                    if remote_status in REMOTE_CANCELLATION_STATUSES:
+                        self._cleanup_remote_cancelled_job(
+                            job_id,
+                            processor,
+                            remote_status,
                         )
                         return
+                    if job_details is None:
+                        logging.debug(
+                            f"Could not verify cancellation state for job "
+                            f"{job_id}; will retry."
+                        )
                 except Exception as e:
                     logging.debug(f"Error checking job status: {e}")
 
@@ -583,10 +594,8 @@ class JobListener:
                     if job and job.get("id"):
                         # Check if job was cancelled/deleted before processing
                         job_check = self.orchestrator_service.get_job(job.get("id"))
-                        if not job_check or job_check.get("status") in (
-                            "cancelled",
-                            "deleted",
-                        ):
+                        remote_status = self._remote_job_status(job_check)
+                        if remote_status in REMOTE_CANCELLATION_STATUSES:
                             logging.info(
                                 f"Job {job.get('id')} was cancelled/deleted before processing. Skipping."
                             )

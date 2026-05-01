@@ -4,7 +4,7 @@ import sys
 import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from cli import SHUTDOWN_EVENT, cleanup, listen_for_ipc_commands
 from exceptions import InfrastructureError
@@ -342,6 +342,67 @@ class StopResetBehaviorTests(unittest.TestCase):
         )
         self.assertIsNone(client.current_job)
         self.assertIn("JOB_FAILED", output.getvalue())
+
+    def test_cancellation_monitor_ignores_unverified_job_status(self):
+        shutdown_event = threading.Event()
+        orchestrator_service = Mock()
+
+        def get_job_once(_job_id):
+            shutdown_event.set()
+            return None
+
+        orchestrator_service.get_job.side_effect = get_job_once
+        client = SimpleNamespace(
+            orchestrator_service=orchestrator_service,
+            active_service_type="ltx23-comfyui-video-8gb",
+        )
+        processor = SimpleNamespace(comfyui_client=Mock())
+        listener = JobListener(
+            client,
+            provider_id="provider-1",
+            shutdown_event=shutdown_event,
+        )
+
+        with patch("services.job_listener.docker_manager") as docker_manager_mock:
+            listener._monitor_job_cancellation("job-transient-api-error", processor)
+
+            self.assertTrue(shutdown_event.wait(1))
+            processor.comfyui_client.interrupt_workflow.assert_not_called()
+            docker_manager_mock.stop_container.assert_not_called()
+            orchestrator_service.update_job_status.assert_not_called()
+
+    def test_remote_cancel_cleanup_interrupts_before_container_stop(self):
+        shutdown_event = threading.Event()
+        orchestrator_service = Mock()
+        client = SimpleNamespace(
+            orchestrator_service=orchestrator_service,
+            active_service_type="ltx23-comfyui-video-8gb",
+        )
+        processor = SimpleNamespace(comfyui_client=Mock())
+        events = []
+        processor.comfyui_client.interrupt_workflow.side_effect = lambda: events.append(
+            "interrupt"
+        )
+
+        listener = JobListener(
+            client,
+            provider_id="provider-1",
+            shutdown_event=shutdown_event,
+        )
+
+        with patch("services.job_listener.docker_manager") as docker_manager_mock:
+            docker_manager_mock.stop_container.side_effect = (
+                lambda service_type: events.append(f"stop:{service_type}")
+            )
+
+            listener._cleanup_remote_cancelled_job(
+                "job-cancelled",
+                processor,
+                "cancelled",
+            )
+
+        self.assertEqual(events, ["interrupt", "stop:ltx23-comfyui-video-8gb"])
+        orchestrator_service.update_job_status.assert_not_called()
 
     def test_comfyui_wait_for_ready_aborts_on_container_crash_event(self):
         shutdown_event = threading.Event()

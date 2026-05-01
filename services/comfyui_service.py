@@ -137,7 +137,7 @@ class ComfyUIClient:
             raise RuntimeError(f"ComfyUI /prompt returned HTTP {e.code}: {detail}")
         except (urllib.error.URLError, http.client.RemoteDisconnected) as e:
             reason = e.reason if hasattr(e, 'reason') else str(e)
-            error_message = f"Cannot reach ComfyUI at {self.server_address} (/prompt): {reason}. Check COMFYUI_WS_URL and that ComfyUI is running and the port is published."
+            error_message = f"Cannot reach ComfyUI at {self.http_base} (/prompt): {reason}. Check COMFYUI_WS_URL and that ComfyUI is running and the port is published."
             logging.error(error_message)
             raise RuntimeError(error_message)
 
@@ -249,8 +249,9 @@ class ComfyUIClient:
                     last_poll_ts = time.time()
                     try:
                         job_details = orchestrator_service.get_job(job_id)
-                        if job_details and job_details.get('status') == 'cancelled':
-                            logging.warning(f"Cancellation requested for job {job_id} (polled). Interrupting workflow.")
+                        status = job_details.get("status") if isinstance(job_details, dict) else None
+                        if status in ("cancelled", "deleted"):
+                            logging.warning(f"Cancellation requested for job {job_id} (polled status: {status}). Interrupting workflow.")
                             self.interrupt_workflow()
                             return "interrupted"
                     except TokenExpiredError:

@@ -830,6 +830,17 @@ class OrchestratorService:
             if status in ("completed", "failed", "cancelled"):
                 self.clear_active_job(job_id)
         except requests.exceptions.RequestException as e:
+            if (
+                status == "cancelled"
+                and e.response is not None
+                and e.response.status_code == 404
+            ):
+                logging.info(
+                    f"Job {job_id} was already missing while marking it "
+                    "cancelled; treating as already cancelled/deleted."
+                )
+                self.clear_active_job(job_id)
+                return
             logging.error(f"Could not update job status: {e}")
 
     def update_provider_status(self, provider_id: str, status: str):
