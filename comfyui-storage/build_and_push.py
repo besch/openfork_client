@@ -29,8 +29,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.heartmula-16gb", "beschiak/openfork-heartmula-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.heartmula-24gb", "beschiak/openfork-heartmula-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb-v1:latest", build=True, build_args={"MODEL_SIZE": "0.6B"}),
-    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb-v1:latest", build=True, push=True, build_args={"MODEL_SIZE": "1.7B"}),
+    # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb-v1:latest", build=True, build_args={"MODEL_SIZE": "0.6B"}),
+    # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb-v1:latest", build=True, push=True, build_args={"MODEL_SIZE": "1.7B"}),
     # ImageConfig("Dockerfile.hunyuan-video-16gb", "beschiak/openfork-hunyuan-video-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.acestep-8gb", "beschiak/openfork-acestep-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.acestep-16gb", "beschiak/openfork-acestep-16gb:latest", build=True, push=True),
@@ -64,6 +64,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx23-comfyui-8gb", "beschiak/openfork-ltx23-comfyui-8gb:latest", build=True),
     # ImageConfig("Dockerfile.ltx23-comfyui-16gb", "beschiak/openfork-ltx23-comfyui-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-comfyui-8gb", "beschiak/openfork-ltx23-comfyui-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.stream-diffvsr-8gb", "beschiak/openfork-stream-diffvsr-8gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4

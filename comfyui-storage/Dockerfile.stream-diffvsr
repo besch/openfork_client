@@ -26,7 +26,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv \
-        diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image
+        diffusers transformers accelerate einops omegaconf huggingface_hub[cli] scikit-image \
+        matplotlib
 
 # Setup Stream-DiffVSR
 WORKDIR /opt
