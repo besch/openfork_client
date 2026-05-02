@@ -819,6 +819,17 @@ class JobListener:
         # Get download manager from client (may be None in headless mode)
         download_manager = getattr(self.client, "download_manager", None)
 
+        # Sync actual local cache state with server once at startup.
+        # The registration-time scan may be empty if Docker was briefly unavailable
+        # after a WSL crash+restart, causing the server to skip tier-0 routing for
+        # this provider. This corrects that stale state before the first job poll.
+        if download_manager:
+            try:
+                download_manager._sync_cached_images_with_server()
+                logging.info("Startup: synced local Docker image cache state with server.")
+            except Exception as _sync_err:
+                logging.warning(f"Startup: cache sync failed (non-fatal): {_sync_err}")
+
         consecutive_empty_polls = 0
 
         try:
