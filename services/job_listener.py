@@ -652,8 +652,8 @@ class JobListener:
                 )
                 poll_interval = _compute_poll_interval(base_interval, consecutive_empty_polls - 1)
 
-                # Wait for poll interval, but interrupt if shutdown OR if a download completes
-                # We check in 0.5s increments to handle both events responsively
+                # Wait for poll interval, but interrupt if shutdown OR if a download
+                # completes or routing config changes. Check in 0.5s increments.
                 wait_until = time.time() + poll_interval
                 while time.time() < wait_until and not self.shutdown_event.is_set():
                     if (
@@ -661,8 +661,9 @@ class JobListener:
                         and self.client.job_wakeup_event.is_set()
                     ):
                         logging.info(
-                            "Waking up job listener due to download completion."
+                            "Waking up job listener due to download completion or config change."
                         )
+                        consecutive_empty_polls = 0
                         break
                     self.shutdown_event.wait(0.5)
             else:
@@ -1367,7 +1368,8 @@ class JobListener:
                     )
                     poll_interval = _compute_poll_interval(base_interval, consecutive_empty_polls - 1)
 
-                    # Wait for poll interval, but interrupt if shutdown OR if a download completes
+                    # Wait for poll interval, but interrupt if shutdown OR if a download
+                    # completes or routing config changes. Check in 0.5s increments.
                     wait_until = time.time() + poll_interval
                     while time.time() < wait_until and not self.shutdown_event.is_set():
                         if (
@@ -1375,8 +1377,9 @@ class JobListener:
                             and self.client.job_wakeup_event.is_set()
                         ):
                             logging.info(
-                                "Waking up auto job listener due to download completion."
+                                "Waking up auto job listener due to download completion or config change."
                             )
+                            consecutive_empty_polls = 0
                             break
                         self.shutdown_event.wait(0.5)
                 else:
