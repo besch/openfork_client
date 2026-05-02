@@ -1208,6 +1208,7 @@ class JobListener:
                                                 logging.warning(
                                                     f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
                                                 )
+                                                continue
                                             elif status and status.value == "failed":
                                                 logging.info(
                                                     f"Image for service '{service_type}' previously failed. Retrying download..."
