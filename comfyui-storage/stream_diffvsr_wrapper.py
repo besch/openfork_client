@@ -57,9 +57,6 @@ class StreamDiffVSR_Node:
             "--in_path", input_dir,
             "--out_path", output_dir,
             "--num_inference_steps", str(steps),
-            "--height", "0", # 0 might mean auto/keep aspect, or we assume script handles it. 
-            # If the script requires specific height, we might need to adjust. 
-            # Based on usage: just path args usually work.
         ]
         
         print(f"Running command: {' '.join(cmd)}")

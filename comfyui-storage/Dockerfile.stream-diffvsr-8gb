@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Base Python packages
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
-        torch==2.7.1+cu128 torchvision torchaudio \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg timm decord av uv \
@@ -32,7 +32,11 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 WORKDIR /opt
 RUN git clone https://github.com/jamichss/Stream-DiffVSR.git \
     && cd Stream-DiffVSR \
-    && python -m pip install -r requirements.txt || true
+    && python -m pip install -r requirements.txt || true \
+    # Reinstall correct PyTorch versions to override any conflicting dependencies
+    && python -m pip install --no-cache-dir --upgrade \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
+        --extra-index-url https://download.pytorch.org/whl/cu128
 
 # Download Model Checkpoint
 RUN mkdir -p /opt/models/Stream-DiffVSR \
