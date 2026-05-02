@@ -48,10 +48,7 @@ RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
         "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
     && wget -q -O models/vae/ae.safetensors \
         "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" \
-    # Download Full BF16 model
     && huggingface-cli download Comfy-Org/z_image_full \
         --include "*bf16.safetensors" --local-dir models/unet --local-dir-use-symlinks False
 
-WORKDIR /opt/ComfyUI
-# Check usage of SageAttention or other runtime needs
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]
