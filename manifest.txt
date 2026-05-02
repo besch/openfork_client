@@ -141,13 +141,10 @@ workflows/wan22-image-to-video.api.json
 workflows/wan22-text-to-video-16gb.api.json
 workflows/wan22-text-to-video-24gb.api.json
 workflows/wan22-text-to-video.api.json
-workflows/zimage-full-16gb-controlnet.api.json
 workflows/zimage-full-16gb-inpaint.api.json
 workflows/zimage-full-16gb-text-to-image.api.json
-workflows/zimage-full-24gb-controlnet.api.json
 workflows/zimage-full-24gb-inpaint.api.json
 workflows/zimage-full-24gb-text-to-image.api.json
-workflows/zimage-full-8gb-controlnet.api.json
 workflows/zimage-full-8gb-inpaint.api.json
 workflows/zimage-full-8gb-text-to-image.api.json
 workflows/zimage-turbo-8gb-controlnet.api.json
