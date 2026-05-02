@@ -64,7 +64,11 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx23-comfyui-8gb", "beschiak/openfork-ltx23-comfyui-8gb:latest", build=True),
     # ImageConfig("Dockerfile.ltx23-comfyui-16gb", "beschiak/openfork-ltx23-comfyui-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-comfyui-8gb", "beschiak/openfork-ltx23-comfyui-8gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.stream-diffvsr-8gb", "beschiak/openfork-stream-diffvsr-8gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.stream-diffvsr-8gb", "beschiak/openfork-stream-diffvsr-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.zimage-turbo-8gb", "beschiak/openfork-zimage-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.zimage-full-8gb", "beschiak/openfork-zimage-full-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.zimage-full-16gb", "beschiak/openfork-zimage-full-16gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.zimage-full-24gb", "beschiak/openfork-zimage-full-24gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4

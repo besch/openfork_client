@@ -222,7 +222,8 @@ class DGNClient:
             self.config = full_config.get("workflows", full_config)
             self.services_config = full_config.get("services", {})
 
-            # Create a map from service_name to prod_image for docker_manager
+            # Create a map from service_name to prod_image for docker_manager.
+            # Seed from workflow entries first (workflow → service_name → image).
             unique_services = {
                 (config["service_name"], config["prod_image"])
                 for config in self.config.values()
@@ -231,6 +232,13 @@ class DGNClient:
             self.docker_image_map = {
                 service_name: image for service_name, image in unique_services
             }
+            # Also include services that have no workflow entries (e.g. services
+            # only listed in the services section). The service type key IS the
+            # docker_image_map key, so we add it directly without overwriting
+            # any workflow-derived entry.
+            for svc_type, svc_cfg in self.services_config.items():
+                if "prod_image" in svc_cfg and svc_type not in self.docker_image_map:
+                    self.docker_image_map[svc_type] = svc_cfg["prod_image"]
 
             # Only configure docker_manager if not in headless mode
             if docker_manager:
