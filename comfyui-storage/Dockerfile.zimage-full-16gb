@@ -10,8 +10,6 @@ ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
 
-# System dependencies
-# Python 3.11 is in Ubuntu 22.04 universe — no external PPA needed
 RUN echo "deb http://archive.ubuntu.com/ubuntu jammy universe" >> /etc/apt/sources.list \
     && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-venv python3.11-distutils python3.11-dev \
@@ -21,17 +19,15 @@ RUN echo "deb http://archive.ubuntu.com/ubuntu jammy universe" >> /etc/apt/sourc
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Python packages
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
         torch==2.7.1+cu128 torchvision torchaudio \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir \
-        gitpython PyYAML opencv-python imageio-ffmpeg ninja uv "huggingface_hub[cli]"
+        gitpython PyYAML opencv-python imageio-ffmpeg ninja uv "huggingface_hub[cli]>=0.32"
 
 WORKDIR /opt/ComfyUI
 
-# Clone repos and install custom nodes
 RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && rm -rf .git \
     && python -m pip install --no-cache-dir -r requirements.txt \
@@ -40,14 +36,17 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-# Create model directories and download models
-# Z-Image FP8 for 16GB tier
 RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
-    && wget -q -O models/text_encoders/qwen_3_4b.safetensors \
-        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
-    && wget -q -O models/vae/ae.safetensors \
-        "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" \
-    && huggingface-cli download Comfy-Org/z_image_full \
+    && hf download Comfy-Org/z_image_turbo \
+        --include "split_files/text_encoders/qwen_3_4b.safetensors" \
+        --local-dir /tmp/z_image_turbo --local-dir-use-symlinks False \
+    && mv /tmp/z_image_turbo/split_files/text_encoders/qwen_3_4b.safetensors models/text_encoders/ \
+    && hf download Comfy-Org/z_image_turbo \
+        --include "split_files/vae/ae.safetensors" \
+        --local-dir /tmp/z_image_turbo --local-dir-use-symlinks False \
+    && mv /tmp/z_image_turbo/split_files/vae/ae.safetensors models/vae/ \
+    && rm -rf /tmp/z_image_turbo \
+    && hf download Comfy-Org/z_image_full \
         --include "*fp8.safetensors" --local-dir models/unet --local-dir-use-symlinks False
 
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]
