@@ -39,14 +39,14 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
 RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
     && hf download Comfy-Org/z_image_turbo \
         --include "split_files/text_encoders/qwen_3_4b.safetensors" \
-        --local-dir /tmp/z_image_turbo --local-dir-use-symlinks False \
+        --local-dir /tmp/z_image_turbo \
     && mv /tmp/z_image_turbo/split_files/text_encoders/qwen_3_4b.safetensors models/text_encoders/ \
     && hf download Comfy-Org/z_image_turbo \
         --include "split_files/vae/ae.safetensors" \
-        --local-dir /tmp/z_image_turbo --local-dir-use-symlinks False \
+        --local-dir /tmp/z_image_turbo \
     && mv /tmp/z_image_turbo/split_files/vae/ae.safetensors models/vae/ \
     && rm -rf /tmp/z_image_turbo \
     && hf download Comfy-Org/z_image_full \
-        --include "*fp8.safetensors" --local-dir models/unet --local-dir-use-symlinks False
+        --include "*fp8.safetensors" --local-dir models/unet
 
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]
