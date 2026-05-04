@@ -1203,56 +1203,53 @@ class JobListener:
                                         f"Skipping job {peeked_job.get('id')} for '{service_type}' because "
                                         "Docker image availability could not be verified."
                                     )
-                                else:
-                                    # Image not available - start background download if
-                                    # this provider should be the one to pull it.
-                                    if download_manager:
-                                        status = download_manager.get_download_status(
-                                            service_type
-                                        )
-                                        is_downloading = (
-                                            download_manager.is_downloading(
-                                                service_type
+                                # MISSING images: deferred to Pass 2 below.
+
+                            # Pass 2: start downloads for missing images, but only when
+                            # Pass 1 found no cached job to process. This prevents a
+                            # cached job sitting later in the FIFO peek list from being
+                            # blocked by downloads kicked off for earlier miss entries,
+                            # and avoids unnecessary evictions caused by those downloads.
+                            if not found_processable_job and download_manager and not HEADLESS_MODE:
+                                for peeked_job, _job_policy in _available_with_policy:
+                                    service_type = self._get_service_type_for_job(peeked_job)
+                                    if not service_type:
+                                        continue
+                                    image_availability = download_manager.get_image_availability(
+                                        service_type
+                                    )
+                                    if image_availability != ImageAvailability.MISSING:
+                                        continue
+                                    status = download_manager.get_download_status(service_type)
+                                    is_downloading = download_manager.is_downloading(service_type)
+                                    is_queued = download_manager.is_queued(service_type)
+                                    if not is_downloading and not is_queued:
+                                        if not self._should_download_missing_image(
+                                            service_type, _job_policy, download_gate
+                                        ):
+                                            continue
+                                        if status and status.value == "permanently_failed":
+                                            logging.warning(
+                                                f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
                                             )
-                                        )
-                                        is_queued = download_manager.is_queued(
-                                            service_type
-                                        )
-
-                                        if not is_downloading and not is_queued:
-                                            if not self._should_download_missing_image(
-                                                service_type,
-                                                _job_policy,
-                                                download_gate,
-                                            ):
-                                                continue
-
-                                            if (
-                                                status
-                                                and status.value == "permanently_failed"
-                                            ):
-                                                logging.warning(
-                                                    f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
-                                                )
-                                                continue
-                                            elif status and status.value == "failed":
-                                                logging.info(
-                                                    f"Image for service '{service_type}' previously failed. Retrying download..."
-                                                )
-
+                                            continue
+                                        elif status and status.value == "failed":
                                             logging.info(
-                                                f"Image for service '{service_type}' not available locally. "
-                                                f"Starting background download for peeked job..."
+                                                f"Image for service '{service_type}' previously failed. Retrying download..."
                                             )
-                                            download_manager.start_background_download(
-                                                service_type,
-                                                accept_policy=_job_policy,
-                                            )
-                                        else:
-                                            logging.debug(
-                                                f"Image for service '{service_type}' already downloading/queued (status: {status.value if status else 'unknown'})."
-                                            )
-                                    # Continue to check next job
+                                        logging.info(
+                                            f"Image for service '{service_type}' not available locally. "
+                                            "Starting background download for peeked job..."
+                                        )
+                                        download_manager.start_background_download(
+                                            service_type,
+                                            accept_policy=_job_policy,
+                                        )
+                                    else:
+                                        logging.debug(
+                                            f"Image for service '{service_type}' already downloading/queued "
+                                            f"(status: {status.value if status else 'unknown'})."
+                                        )
 
                         # Handle pre-fetch suggestions when idle
                         # This proactively downloads images for high-demand workflows
