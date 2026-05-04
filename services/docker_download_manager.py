@@ -43,6 +43,17 @@ DockerAPIError = getattr(
 # Only bypassed when disk pressure reaches CRITICAL (force=True).
 FRESH_IMAGE_PROTECTION_SECS = 120
 
+# How long (seconds) to wait after a docker pull completes before signalling
+# the job listener wakeup event.  After a large image pull (4-24 GB), Docker
+# spends up to ~60 s extracting overlay2 layers during which:
+#   - Disk stays at 100% I/O
+#   - The Docker TCP API (port 2375) intermittently refuses connections
+# Waking the job listener immediately causes image-availability checks to return
+# UNKNOWN (WinError 10061), the job is skipped, and the client stalls until the
+# next poll cycle.  A 30-second settle window is enough on most hardware while
+# still being short relative to normal poll intervals.
+POST_DOWNLOAD_SETTLE_SECS = 30
+
 
 class DownloadStatus(Enum):
     PENDING = "pending"
@@ -1093,16 +1104,45 @@ class DockerDownloadManager:
         """
         self._report_download_state(service_type, "finish")
     
+    def _signal_wakeup_after_settle(self) -> None:
+        """Signal the job wakeup event after a short settle delay.
+
+        Large docker pulls leave the Docker daemon busy with overlay2 layer
+        extraction for ~30-60 s.  During that window the TCP API returns
+        ECONNREFUSED (WinError 10061), so any immediate image-availability
+        check returns UNKNOWN.  We sleep briefly in a daemon thread so the
+        job listener wakes up once Docker has settled.
+        """
+        shutdown = self._shutdown  # snapshot before sleeping
+        if not shutdown:
+            logging.info(
+                f"Scheduling job_wakeup_event signal in {POST_DOWNLOAD_SETTLE_SECS}s "
+                "to allow Docker overlay2 extraction to settle."
+            )
+            time.sleep(POST_DOWNLOAD_SETTLE_SECS)
+        if self.wakeup_event and not self._shutdown:
+            logging.info("Signaling job_wakeup_event after post-download settle period.")
+            self.wakeup_event.set()
+
     def _finish_download(self, service_type: str):
         """Clean up after a download finishes and start the next queued download."""
         with self._lock:
             self._active_downloads.discard(service_type)
-            
-            # Signal wakeup event if provided - this tells the job listener 
-            # to check for new processable jobs immediately
+
+            # Signal wakeup event after a settle delay so Docker has time to
+            # finish overlay2 layer extraction before the job listener checks
+            # image availability.  Run in a daemon thread so we don't block
+            # the download worker.
             if self.wakeup_event:
-                logging.info("Signaling job_wakeup_event after download completion.")
-                self.wakeup_event.set()
+                logging.info(
+                    "Scheduling delayed job_wakeup_event after download completion."
+                )
+                t = threading.Thread(
+                    target=self._signal_wakeup_after_settle,
+                    daemon=True,
+                    name="download-settle-wakeup",
+                )
+                t.start()
 
             # Clean up cancellation event
             if service_type in self._cancellation_events:

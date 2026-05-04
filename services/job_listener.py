@@ -933,6 +933,41 @@ class JobListener:
                                             service_type
                                         )
                                     )
+                                    # When Docker returns UNKNOWN right after a
+                                    # large download, the daemon is likely still
+                                    # extracting overlay2 layers (disk at 100%).
+                                    # Retry a few times with short sleeps before
+                                    # giving up, so we don't skip a job whose
+                                    # image is actually already present.
+                                    if image_availability == ImageAvailability.UNKNOWN:
+                                        recently_downloaded = getattr(
+                                            download_manager, "_recently_downloaded", {}
+                                        )
+                                        if service_type in recently_downloaded:
+                                            logging.info(
+                                                f"Docker API returned UNKNOWN for '{service_type}' "
+                                                "which was recently downloaded. Retrying image check "
+                                                "to allow overlay2 extraction to settle..."
+                                            )
+                                            for _retry in range(3):
+                                                if self.shutdown_event.is_set():
+                                                    break
+                                                self.shutdown_event.wait(10)
+                                                image_availability = (
+                                                    download_manager.get_image_availability(
+                                                        service_type
+                                                    )
+                                                )
+                                                if image_availability != ImageAvailability.UNKNOWN:
+                                                    logging.info(
+                                                        f"Image check for '{service_type}' resolved "
+                                                        f"after {_retry + 1} retry(ies): {image_availability.value}"
+                                                    )
+                                                    break
+                                                logging.info(
+                                                    f"Image check for '{service_type}' still UNKNOWN "
+                                                    f"(retry {_retry + 1}/3), Docker may still be busy."
+                                                )
                                 image_available = (
                                     image_availability == ImageAvailability.AVAILABLE
                                 )
