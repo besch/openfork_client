@@ -57,6 +57,9 @@ def listen_for_ipc_commands(client: "DGNClient"):
                         payload["access_token"],
                         payload["refresh_token"]
                     )
+                    watcher = getattr(client, "realtime_watcher", None)
+                    if watcher:
+                        watcher.update_token(payload["access_token"])
                 else:
                     logging.warning("UPDATE_TOKENS command received with invalid payload.")
             elif cmd_type == "AUTH_FAILED_PERMANENTLY":
@@ -255,6 +258,21 @@ def run_client(client, provider_id, service_mode):
 
     heartbeat_manager = HeartbeatManager(client.orchestrator_service, provider_id, SHUTDOWN_EVENT, client=client)
     heartbeat_manager.start()
+
+    # Start Realtime job watcher in OAuth (Electron) mode so providers are
+    # woken up by Supabase Realtime instead of waiting for the poll interval.
+    # Headless/API-key mode has no user JWT and keeps its own poll cycle.
+    access_token = getattr(client.orchestrator_service, "access_token", None)
+    if access_token and not client.orchestrator_service.use_api_key:
+        from services.realtime_job_watcher import RealtimeJobWatcher
+        watcher = RealtimeJobWatcher(
+            access_token=access_token,
+            wakeup_event=client.job_wakeup_event,
+            shutdown_event=SHUTDOWN_EVENT,
+        )
+        client.realtime_watcher = watcher
+        watcher.start()
+        logging.info("Realtime job watcher started.")
 
     job_listener = JobListener(client, provider_id, SHUTDOWN_EVENT)
 

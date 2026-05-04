@@ -35,6 +35,16 @@ The client is designed to be run in the background, managed primarily by the [Op
     ```
 3.  Install Docker Desktop and ensure it is running.
 
+### Environment Variables
+
+The client requires the following Supabase configuration:
+
+-   `SUPABASE_URL`: Your Supabase project URL (default: OpenFork production).
+-   `SUPABASE_PUBLISHABLE_KEY`: Your Supabase publishable key (`sb_publishable_...` format). This is used for Realtime WebSocket connections. You can also use `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
+-   `SUPABASE_ANON_KEY`: Legacy anon key (JWT format). Fallback for older Supabase projects.
+
+If these are not set, Realtime job notifications will be disabled and the client will fall back to polling.
+
 ## Usage (Standalone)
 
 While the client is intended to be run by the desktop application, it can be run directly from the command line for development or debugging purposes.

@@ -93,7 +93,25 @@ HEADLESS_MODE = any([
 # --- Supabase Configuration ---
 # Production Supabase project
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://lhwcmiialdwsmtoikgqb.supabase.co")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxod2NtaWlhbGR3c210b2lrZ3FiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDIxNzMxMzAsImV4cCI6MjA1Nzc0OTEzMH0.nZuZL4sD-4fsP5ZO2UpJKFcxsWM9kGfJjbhzKiIvnJA")
+
+# Supabase publishable key for Realtime WebSocket connections.
+# This is the project's publishable/anon key (format: sb_publishable_... or legacy anon JWT).
+# Required for connecting to Supabase Realtime via WebSocket (the apikey param in the URL).
+# WARNING: Do NOT use a user's access token JWT here - use the project's publishable/anon key.
+SUPABASE_PUBLISHABLE_KEY = os.getenv(
+    "SUPABASE_PUBLISHABLE_KEY",
+    os.getenv(
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "sb_publishable_zJTLSH1mMUStNoKD19veEw_ZXslKovE",
+    ),
+)
+
+# Legacy anon key (JWT format) - fallback for older Supabase projects.
+# Use SUPABASE_PUBLISHABLE_KEY for new projects with sb_publishable_ keys.
+SUPABASE_ANON_KEY = os.getenv(
+    "SUPABASE_ANON_KEY",
+    "",
+)
 
 # --- Orchestrator Configuration ---
 ORCHESTRATOR_URL_PROD = os.getenv("ORCHESTRATOR_URL_PROD", "https://www.openfork.video")
