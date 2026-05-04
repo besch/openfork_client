@@ -838,6 +838,12 @@ class JobListener:
                 if hasattr(self.client, "job_wakeup_event"):
                     self.client.job_wakeup_event.clear()
 
+                # Ensure downloads are always allowed at the start of each iteration.
+                # This is idempotent, so it safely clears any True state left over
+                # by an exception that fired during the previous job's processing.
+                if download_manager:
+                    download_manager.set_job_active(False)
+
                 logging.info("Top of auto-mode loop iteration.")
                 job = None
                 found_processable_job = False
@@ -952,6 +958,15 @@ class JobListener:
                                         self.client.current_job = job
                                         job_id = job["id"]
                                         logging.info(f"Reserved job: {job_id}")
+
+                                        # Suspend background downloads for the
+                                        # duration of this job.  Competing disk
+                                        # I/O and Docker layer extraction can
+                                        # overwhelm the machine during generation.
+                                        # Downloads resume at the top of the next
+                                        # loop iteration via set_job_active(False).
+                                        if download_manager:
+                                            download_manager.set_job_active(True)
 
                                         workflow_type = job.get(
                                             "workflow_type", "image_to_video"

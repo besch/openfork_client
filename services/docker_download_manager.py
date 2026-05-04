@@ -124,6 +124,11 @@ class DockerDownloadManager:
         # Timestamps of successfully completed downloads (session-local, not persisted).
         # Used by _evict_lru_image to shield fresh images from immediate eviction.
         self._recently_downloaded: Dict[str, float] = {}
+        # Job-active gate: when True, no new downloads start and queue is frozen.
+        self._job_active: bool = False
+        # Service types whose downloads were cancelled because a job started;
+        # re-inserted at the front of the queue when the job finishes.
+        self._paused_downloads: Set[str] = set()
         self._shutdown = False
 
         # Persisted LRU metadata
@@ -226,6 +231,61 @@ class DockerDownloadManager:
         with self._lock:
             self._last_job_times[service_type] = time.time()
             self._save_cache_metadata_locked()
+
+    def set_job_active(self, active: bool) -> None:
+        """Suspend or resume background downloads around an active job.
+
+        When True: cancels all in-flight downloads so their disk I/O and the
+        post-download Docker layer-extraction step don't compete with the
+        running workflow.  Docker layer caching means the next pull will skip
+        already-transferred layers, so progress is not fully lost.
+
+        When False: re-queues any downloads that were cancelled for the job
+        pause and kick-starts the queue.  This is idempotent — safe to call
+        even if set_job_active(False) was already the current state.
+        """
+        next_to_start = None
+        with self._lock:
+            if self._job_active == active:
+                return
+
+            self._job_active = active
+
+            if active:
+                # Cancel every in-flight download.
+                for st, cancel_event in list(self._cancellation_events.items()):
+                    cancel_event.set()
+                    self._paused_downloads.add(st)
+                    logging.info(
+                        f"Suspended download for '{st}' — job started; will resume after."
+                    )
+            else:
+                # Re-insert paused downloads at the front of the queue so they
+                # restart first, in their original order.
+                paused = list(self._paused_downloads)
+                self._paused_downloads.clear()
+                for st in reversed(paused):
+                    if st not in self._active_downloads and st not in self._download_queue:
+                        self._download_queue.insert(0, st)
+                        self._download_status.pop(st, None)  # Clear FAILED → allow retry
+                        logging.info(f"Re-queued suspended download for '{st}' — job finished.")
+
+                # Kick-start the queue if nothing is currently downloading.
+                if (
+                    self._download_queue
+                    and not self._shutdown
+                    and len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS
+                ):
+                    next_to_start = self._download_queue.pop(0)
+                    self._download_status.pop(next_to_start, None)
+
+        # Start outside the lock so start_background_download's own lock acquisition
+        # is not a reentrant re-lock (still safe with RLock, but cleaner outside).
+        if next_to_start is not None:
+            logging.info(
+                f"Kick-starting queued download for '{next_to_start}' — job finished."
+            )
+            self.start_background_download(next_to_start)
 
     # ── LRU persistence ───────────────────────────────────────────────────
 
@@ -752,7 +812,20 @@ class DockerDownloadManager:
             except Exception as e:
                 logging.warning(f"Could not resolve image name for {service_type}: {e}")
                 return False
-            
+
+            # While a job is processing, defer all new downloads to avoid
+            # competing for disk I/O and CPU (Docker layer extraction).
+            # The deferred items are restarted by set_job_active(False).
+            if self._job_active:
+                if service_type not in self._download_queue:
+                    self._download_queue.append(service_type)
+                    self._download_status[service_type] = DownloadStatus.PENDING
+                    self._emit_download_state(service_type, image_name, "queued")
+                    logging.info(
+                        f"Deferred download for '{service_type}': job is actively processing."
+                    )
+                return True
+
             # Check if we can start a new download
             if len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS:
                 self._emit_download_state(service_type, image_name, "starting")
@@ -1040,6 +1113,13 @@ class DockerDownloadManager:
             # Re-check both image cap and disk space here because the prior download
             # may have changed local cache state significantly.
             while self._download_queue and not self._shutdown:
+                if self._job_active:
+                    # Don't chain the next download while a job is processing;
+                    # set_job_active(False) will kick the queue when the job ends.
+                    logging.debug(
+                        "Skipping next queued download: job is actively processing."
+                    )
+                    break
                 next_service = self._download_queue.pop(0)
 
                 availability = self.get_image_availability(next_service)
