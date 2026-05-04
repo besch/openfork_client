@@ -43,6 +43,24 @@ class JobListener:
         self.orchestrator_service = client.orchestrator_service
         self.provider_id = provider_id
         self.shutdown_event = shutdown_event
+        # Tracks the active ContainerMonitor so it can be stopped consistently
+        # from any cleanup path (normal, infrastructure error, cancellation, shutdown).
+        # Using an instance attribute rather than locals() avoids the race where
+        # the monitor thread fires a crash callback after the container has already
+        # been stopped on an error path.
+        self._active_container_monitor = None
+
+    def _stop_container_monitor(self) -> None:
+        """Stop and clear the active container monitor, if any.
+
+        Must be called before every stop_container() call to prevent the
+        monitor thread from firing a spurious crash callback on the next job
+        after the container has been intentionally removed.
+        """
+        monitor = self._active_container_monitor
+        if monitor is not None:
+            monitor.stop()
+            self._active_container_monitor = None
 
     def _job_has_terminal_status(self, job_id: Optional[str]) -> bool:
         """Check whether a job has already reached a terminal status."""
@@ -184,6 +202,9 @@ class JobListener:
             logging.error(f"Failed to requeue job {job_id}: {reset_error}")
 
         if self.client.active_service_type and not HEADLESS_MODE:
+            # Stop the monitor BEFORE the container so it cannot fire a spurious
+            # crash callback on the intentional removal.
+            self._stop_container_monitor()
             try:
                 docker_manager.stop_container(
                     service_type=self.client.active_service_type
@@ -465,6 +486,9 @@ class JobListener:
             and hasattr(self.client, "active_service_type")
             and self.client.active_service_type
         ):
+            # Stop the monitor first so it cannot misinterpret the intentional
+            # container removal as an unexpected crash for the cancelled job.
+            self._stop_container_monitor()
             try:
                 logging.info(
                     f"Stopping Docker container for service "
@@ -1153,6 +1177,10 @@ class JobListener:
                                                 shutdown_event=self.shutdown_event,
                                             )
                                             container_monitor.start()
+                                            # Register on self so every cleanup path
+                                            # (error, cancellation, shutdown) can stop it
+                                            # without relying on locals().
+                                            self._active_container_monitor = container_monitor
 
                                             # Start log streaming in a background thread
                                             # This allows seeing ComfyUI/container logs in the DGN client console
@@ -1217,9 +1245,10 @@ class JobListener:
                                         if not self.shutdown_event.is_set():
                                             logging.info(f"Job processing finished.")
                                             if not HEADLESS_MODE:
-                                                # Stop container monitor before stopping container
-                                                if "container_monitor" in locals():
-                                                    container_monitor.stop()
+                                                # Stop the monitor before the container so it
+                                                # cannot fire a spurious crash callback on
+                                                # the intentional removal.
+                                                self._stop_container_monitor()
 
                                                 logging.info(
                                                     f"Stopping container for service '{actual_service_type}'..."
@@ -1467,6 +1496,10 @@ class JobListener:
                 download_manager.shutdown()
 
             if self.client.active_service_type and not HEADLESS_MODE:
+                # Always stop the monitor before the container — even on shutdown —
+                # so a lingering monitor thread cannot misreport the clean removal
+                # as a container crash.
+                self._stop_container_monitor()
                 logging.info(
                     f"Ensuring container for service '{self.client.active_service_type}' is stopped."
                 )

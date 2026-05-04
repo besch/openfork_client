@@ -1245,7 +1245,14 @@ class DockerProdManager:
         try:
             container = self.client.containers.get(container_name)
             logging.info(f"Container '{container_name}' found. Forcefully removing it.")
+            removed_id = container.id
             container.remove(force=True)
+            # Wait for the name slot to be fully released so the next run_container()
+            # call doesn't hit a 409 conflict on the same container name.
+            # 15 s is generous but bounded; the slot is normally free within 1-2 s.
+            self._wait_for_container_removal(
+                container_name, container_id=removed_id, timeout=15.0
+            )
             logging.info(f"Container '{container_name}' removed.")
         except docker.errors.NotFound:
             logging.info(f"Container '{container_name}' not found. Nothing to stop.")
