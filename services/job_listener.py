@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional
 from config import HEADLESS_MODE, TimeoutConfig
 from services.docker_manager import docker_manager
 from services.container_monitor import ContainerMonitor
-from services.docker_download_manager import ImageAvailability
+from services.docker_download_manager import ImageAvailability, POST_DOWNLOAD_SETTLE_SECS
 from exceptions import AuthError, InfrastructureError, ProviderError
 
 
@@ -841,8 +841,22 @@ class JobListener:
                 # Ensure downloads are always allowed at the start of each iteration.
                 # This is idempotent, so it safely clears any True state left over
                 # by an exception that fired during the previous job's processing.
+                # Exception: skip the unfreeze during the post-download settle window
+                # so queued downloads for other service types don't restart while
+                # Docker is still extracting overlay2 layers (disk at 100%).
                 if download_manager:
-                    download_manager.set_job_active(False)
+                    recently_downloaded = getattr(download_manager, "_recently_downloaded", {})
+                    settle_active = any(
+                        time.time() - ts < POST_DOWNLOAD_SETTLE_SECS
+                        for ts in recently_downloaded.values()
+                    )
+                    if settle_active:
+                        logging.debug(
+                            "Post-download settle window active: keeping download queue frozen "
+                            f"for up to {POST_DOWNLOAD_SETTLE_SECS}s to allow overlay2 extraction."
+                        )
+                    else:
+                        download_manager.set_job_active(False)
 
                 logging.info("Top of auto-mode loop iteration.")
                 job = None
