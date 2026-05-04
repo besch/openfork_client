@@ -19,9 +19,11 @@ RUN echo "deb http://archive.ubuntu.com/ubuntu jammy universe" >> /etc/apt/sourc
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+# Pin all three torch packages to matching versions from the same cu128 index
+# to avoid ABI mismatch (undefined symbol: torch_library_impl in _torchaudio.abi3.so)
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
-        torch==2.7.1+cu128 torchvision torchaudio \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg ninja uv "huggingface_hub[cli]>=0.32"
