@@ -37,6 +37,13 @@ DockerAPIError = getattr(
 )
 
 
+# How long (seconds) a freshly-downloaded image is shielded from LRU eviction.
+# This prevents the race where _ensure_cache_capacity evicts an image that was
+# just pulled, before the job listener has had a chance to run a job on it.
+# Only bypassed when disk pressure reaches CRITICAL (force=True).
+FRESH_IMAGE_PROTECTION_SECS = 120
+
+
 class DownloadStatus(Enum):
     PENDING = "pending"
     DOWNLOADING = "downloading"
@@ -114,6 +121,9 @@ class DockerDownloadManager:
         self._download_status: Dict[str, DownloadStatus] = {}
         self._cancellation_events: Dict[str, threading.Event] = {}
         self._last_job_times: Dict[str, float] = {}
+        # Timestamps of successfully completed downloads (session-local, not persisted).
+        # Used by _evict_lru_image to shield fresh images from immediate eviction.
+        self._recently_downloaded: Dict[str, float] = {}
         self._shutdown = False
 
         # Persisted LRU metadata
@@ -342,12 +352,13 @@ class DockerDownloadManager:
             # Aggressive eviction: keep going until free space exceeds Pressure threshold,
             # or we run out of evictable images. Each eviction may take a few seconds
             # (docker rmi + container removal) so we cap the loop to avoid wedging.
+            # force=True bypasses freshness protection — disk safety takes priority.
             target_free_gb = max(DISK_PRESSURE_HEALTHY_GB, DISK_PRESSURE_CRITICAL_GB + 5)
             for _ in range(10):
                 current_free = disk_pressure.get_free_disk_gb()
                 if current_free >= target_free_gb:
                     break
-                victim = self._evict_lru_image(reason="disk_critical")
+                victim = self._evict_lru_image(reason="disk_critical", force=True)
                 if not victim:
                     break
                 evicted += 1
@@ -490,6 +501,7 @@ class DockerDownloadManager:
         self,
         exclude_service_types: Optional[Set[str]] = None,
         reason: str = "image_cap",
+        force: bool = False,
     ) -> Optional[str]:
         """
         Evict one cached image using session-local LRU ordering.
@@ -499,6 +511,8 @@ class DockerDownloadManager:
         2. Otherwise, the image with the oldest last completed job time
 
         Images are never evicted if they are currently running, downloading, or queued.
+        Images downloaded within FRESH_IMAGE_PROTECTION_SECS are also shielded unless
+        force=True (reserved for CRITICAL disk pressure).
 
         On success, emits an `IMAGE_EVICTED` JSON event with the freed bytes so the
         Electron auto-compact manager can decide when to schedule VHDX compaction.
@@ -507,10 +521,22 @@ class DockerDownloadManager:
             return None
 
         exclude = exclude_service_types or set()
+
+        # Shield images that finished downloading recently so the job listener has
+        # time to pick up a job before LRU eviction can remove the image.  This
+        # prevents the race: download completes → next queued download evicts the
+        # fresh image → job listener wakes up to find the image already gone.
+        now = time.time()
+        freshly_downloaded: Set[str] = set() if force else {
+            st for st, ts in self._recently_downloaded.items()
+            if now - ts < FRESH_IMAGE_PROTECTION_SECS
+        }
+
         busy_service_types = (
             set(self._active_downloads)
             | set(self._download_queue)
             | self._get_running_service_types()
+            | freshly_downloaded
             | exclude
         )
 
@@ -590,11 +616,18 @@ class DockerDownloadManager:
                 exclude_service_types={incoming_service_type}
             )
             if not evicted_service:
-                logging.warning(
-                    f"Image cap reached ({self.max_cached_images}) but no cached image "
-                    f"could be evicted for incoming service '{incoming_service_type}'."
+                # No evictable candidate — all remaining images are either active,
+                # running, or freshly downloaded (protected from immediate eviction).
+                # Allow the download to proceed with a temporary cap overage rather
+                # than silently dropping the queued download or evicting an image the
+                # job listener is about to use.
+                logging.info(
+                    f"Image cap reached ({self.max_cached_images}) but no evictable "
+                    f"candidate found for '{incoming_service_type}' — all cached images "
+                    "are busy or freshly downloaded. Proceeding; cap will be restored "
+                    f"within {FRESH_IMAGE_PROTECTION_SECS}s."
                 )
-                return False
+                return True
             cached_service_types = self._get_cached_service_types()
 
         return True
@@ -874,6 +907,7 @@ class DockerDownloadManager:
             
             with self._lock:
                 self._download_status[service_type] = DownloadStatus.COMPLETED
+                self._recently_downloaded[service_type] = time.time()
                 self._emit_download_state(service_type, image_name, "completed")
                 logging.info(f"Background download completed for {service_type}")
             
