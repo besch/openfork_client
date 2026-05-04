@@ -139,3 +139,59 @@ class TimeoutConfig:
     # Maximum wait time between retries
     API_RETRY_MAX_WAIT = int(os.getenv("API_RETRY_MAX_WAIT", "10"))
 
+
+def _apply_overrides() -> None:
+    """Apply user config overrides from a JSON file pointed to by env var.
+
+    This runs at import time so downstream modules (disk_pressure, etc.)
+    pick up the overridden values automatically.
+    """
+    import json
+
+    path = os.environ.get("OPENFORK_CONFIG_OVERRIDES_PATH")
+    if not path or not os.path.isfile(path):
+        return
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            overrides = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logging.warning(f"Could not read config overrides from {path}: {e}")
+        return
+
+    if not isinstance(overrides, dict):
+        return
+
+    # Scalar overrides
+    _scalar_keys = {
+        "DISK_PRESSURE_HEALTHY_GB": int,
+        "DISK_PRESSURE_CRITICAL_GB": int,
+        "MINE_POLICY_PRESSURE_CAP": int,
+    }
+    for key, cast in _scalar_keys.items():
+        val = overrides.get(key)
+        if val is not None:
+            try:
+                globals()[key] = cast(val)
+            except (ValueError, TypeError):
+                logging.warning(f"Invalid config override for {key}: {val}")
+
+    # Dict overrides — merge with defaults so partial overrides work
+    _dict_keys = ["POLICY_MAX_CACHED_IMAGES", "POLICY_IDLE_TIMEOUT_MINUTES"]
+    for key in _dict_keys:
+        val = overrides.get(key)
+        if isinstance(val, dict):
+            base = globals().get(key, {})
+            merged = {**base, **val}
+            # Normalize explicit null back to Python None
+            merged = {
+                k: (None if v is None else v)
+                for k, v in merged.items()
+            }
+            globals()[key] = merged
+
+    logging.info(f"Applied config overrides from {path}.")
+
+
+_apply_overrides()
+
