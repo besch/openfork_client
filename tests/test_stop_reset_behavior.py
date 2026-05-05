@@ -339,7 +339,9 @@ class StopResetBehaviorTests(unittest.TestCase):
         orchestrator_service = Mock()
         client = SimpleNamespace(
             interrupted_job_id="job-startup-oom",
+            interrupted_job_execution_token="token-startup-oom",
             current_job={"id": "job-startup-oom"},
+            active_service_type=None,
             orchestrator_service=orchestrator_service,
             get_service_type_for_workflow=lambda workflow_type: "wan22",
         )
@@ -348,19 +350,28 @@ class StopResetBehaviorTests(unittest.TestCase):
 
         with contextlib.redirect_stdout(output):
             listener._handle_service_startup_failure(
-                {"id": "job-startup-oom", "workflow_type": "wan_video"},
+                {
+                    "id": "job-startup-oom",
+                    "workflow_type": "wan_video",
+                    "execution_token": "token-startup-oom",
+                },
                 "wan22",
             )
 
         orchestrator_service.update_job_status.assert_not_called()
         self.assertNotIn("JOB_FAILED", output.getvalue())
 
-    def test_service_startup_failure_marks_failed_without_container_requeue(self):
+    def test_service_startup_failure_requeues_without_container_crash(self):
         shutdown_event = threading.Event()
         orchestrator_service = Mock()
         client = SimpleNamespace(
             interrupted_job_id=None,
-            current_job={"id": "job-startup-timeout"},
+            interrupted_job_execution_token=None,
+            current_job={
+                "id": "job-startup-timeout",
+                "execution_token": "token-startup-timeout",
+            },
+            active_service_type=None,
             orchestrator_service=orchestrator_service,
             get_service_type_for_workflow=lambda workflow_type: "wan22",
         )
@@ -369,16 +380,79 @@ class StopResetBehaviorTests(unittest.TestCase):
 
         with contextlib.redirect_stdout(output):
             listener._handle_service_startup_failure(
-                {"id": "job-startup-timeout", "workflow_type": "wan_video"},
+                {
+                    "id": "job-startup-timeout",
+                    "workflow_type": "wan_video",
+                    "execution_token": "token-startup-timeout",
+                },
                 "wan22",
             )
 
-        orchestrator_service.update_job_status.assert_called_once_with(
+        orchestrator_service.reset_interrupted_job.assert_called_once_with(
             "job-startup-timeout",
-            "failed",
+            execution_token="token-startup-timeout",
+            reason="provider_service_startup_failed",
         )
+        orchestrator_service.update_job_status.assert_not_called()
+        self.assertEqual(client.interrupted_job_id, "job-startup-timeout")
         self.assertIsNone(client.current_job)
         self.assertIn("JOB_FAILED", output.getvalue())
+        self.assertIn("job requeued", output.getvalue())
+
+    def test_job_listener_requeues_generic_provider_local_runtime_error(self):
+        shutdown_event = threading.Event()
+
+        class UnreachableComfyProcessor:
+            def process(self_inner):
+                raise RuntimeError(
+                    "Cannot reach ComfyUI at http://127.0.0.1:8188 (/prompt): "
+                    "Connection refused"
+                )
+
+            def close(self_inner):
+                return None
+
+        orchestrator_service = Mock()
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={
+                "id": "job-comfy-unreachable",
+                "execution_token": "token-comfy-unreachable",
+            },
+            active_service_type=None,
+            orchestrator_service=orchestrator_service,
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
+            _get_job_processor=lambda job, event: UnreachableComfyProcessor(),
+            download_manager=None,
+        )
+
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {
+                    "id": "job-comfy-unreachable",
+                    "workflow_type": "wan_video",
+                    "execution_token": "token-comfy-unreachable",
+                }
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(client.interrupted_job_id, "job-comfy-unreachable")
+        orchestrator_service.reset_interrupted_job.assert_called_once_with(
+            "job-comfy-unreachable",
+            execution_token="token-comfy-unreachable",
+            reason="provider_service_startup_failed",
+        )
+        orchestrator_service.update_job_status.assert_not_called()
+        self.assertIn("JOB_FAILED", output.getvalue())
+        self.assertIn("job requeued", output.getvalue())
 
     def test_cancellation_monitor_ignores_unverified_job_status(self):
         shutdown_event = threading.Event()

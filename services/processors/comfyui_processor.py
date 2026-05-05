@@ -5,6 +5,7 @@ Base class for all ComfyUI-based job processors.
 """
 
 import logging
+from exceptions import InfrastructureError
 from .base import BaseJobProcessor
 
 
@@ -20,8 +21,9 @@ class ComfyUIProcessor(BaseJobProcessor):
         prompt_id = self.comfyui_client.trigger_workflow(payload)
         if not prompt_id:
             logging.error(f"Failed to trigger workflow for job {self.job_id}.")
-            self.orchestrator_service.update_job_status(self.job_id, "failed")
-            return None
+            raise InfrastructureError(
+                f"ComfyUI failed to accept workflow for job {self.job_id}."
+            )
 
         outputs = self.comfyui_client.get_workflow_output(
             prompt_id,
@@ -36,7 +38,8 @@ class ComfyUIProcessor(BaseJobProcessor):
 
         if not outputs:
             logging.error(f"Workflow for job {self.job_id} failed to produce outputs.")
-            self.orchestrator_service.update_job_status(self.job_id, "failed")
-            return None
+            raise InfrastructureError(
+                f"Workflow for job {self.job_id} failed to produce outputs."
+            )
 
         return outputs

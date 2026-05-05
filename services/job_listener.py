@@ -120,12 +120,23 @@ class JobListener:
         text = str(exc).lower()
         transient_markers = (
             "connection aborted",
+            "connection refused",
             "timed out",
             "timeout",
             "npipe",
             "named pipe",
             "docker daemon",
             "protocolerror",
+            "remote end closed connection",
+            "cannot reach comfyui",
+            "cannot reach wan2gp",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "http 500",
+            "http 502",
+            "http 503",
+            "http 504",
             "out of memory",
             "oom",
             "cannot allocate memory",
@@ -133,6 +144,40 @@ class JobListener:
             "container killed",
         )
         return any(marker in text for marker in transient_markers)
+
+    @staticmethod
+    def _get_infrastructure_recovery_reason(exc: Exception) -> str:
+        text = str(exc).lower()
+        if any(
+            marker in text
+            for marker in (
+                "out of memory",
+                "oom",
+                "cannot allocate memory",
+                "cublas_status_alloc_failed",
+                "torch.cuda.outofmemoryerror",
+            )
+        ):
+            return "provider_gpu_oom"
+        if any(
+            marker in text
+            for marker in (
+                "failed to start",
+                "did not become ready",
+                "cannot reach comfyui",
+                "cannot reach wan2gp",
+                "service unavailable",
+                "bad gateway",
+                "gateway timeout",
+                "connection refused",
+                "http 500",
+                "http 502",
+                "http 503",
+                "http 504",
+            )
+        ):
+            return "provider_service_startup_failed"
+        return "provider_docker_unavailable"
 
     def _job_was_interrupted_by_infrastructure(self, job_id: Optional[str]) -> bool:
         return bool(
@@ -157,20 +202,16 @@ class JobListener:
             return
 
         logging.error(
-            f"ComfyUI for service '{service_type}' failed to start. Failing job."
+            f"ComfyUI for service '{service_type}' failed to start. "
+            f"Requeueing job {job_id} so another provider can retry it."
         )
-
-        self._emit_job_event(
-            "JOB_FAILED",
-            {
-                "id": job_id,
-                "service_type": service_type,
-                "error": "ComfyUI failed to start",
-            },
+        self._requeue_job_after_infrastructure_error(
+            job,
+            InfrastructureError(
+                f"ComfyUI failed to start for service '{service_type}'"
+            ),
+            reason="provider_service_startup_failed",
         )
-
-        self.orchestrator_service.update_job_status(job_id, "failed")
-        self.client.current_job = None
 
     def _requeue_job_after_infrastructure_error(
         self,
@@ -204,13 +245,14 @@ class JobListener:
         except Exception as reset_error:
             logging.error(f"Failed to requeue job {job_id}: {reset_error}")
 
-        if self.client.active_service_type and not HEADLESS_MODE:
+        active_service_type = getattr(self.client, "active_service_type", None)
+        if active_service_type and not HEADLESS_MODE:
             # Stop the monitor BEFORE the container so it cannot fire a spurious
             # crash callback on the intentional removal.
             self._stop_container_monitor()
             try:
                 docker_manager.stop_container(
-                    service_type=self.client.active_service_type
+                    service_type=active_service_type
                 )
             except Exception as stop_error:
                 logging.debug(
@@ -378,7 +420,7 @@ class JobListener:
             self._requeue_job_after_infrastructure_error(
                 job,
                 e,
-                reason="provider_gpu_oom",
+                reason=self._get_infrastructure_recovery_reason(e),
             )
             return True
         except Exception as e:
@@ -420,6 +462,14 @@ class JobListener:
                     "emitting a failure notification."
                 )
                 self._emit_job_cleared(job_id, service_type_for_cache, terminal_status)
+                return True
+
+            if job and job.get("id") and self._is_requeueable_infrastructure_error(e):
+                self._requeue_job_after_infrastructure_error(
+                    job,
+                    e,
+                    reason=self._get_infrastructure_recovery_reason(e),
+                )
                 return True
 
             logging.error(
@@ -1437,7 +1487,11 @@ class JobListener:
                         and job.get("id")
                         and self._is_requeueable_infrastructure_error(e)
                     ):
-                        self._requeue_job_after_infrastructure_error(job, e)
+                        self._requeue_job_after_infrastructure_error(
+                            job,
+                            e,
+                            reason=self._get_infrastructure_recovery_reason(e),
+                        )
                         continue
 
                     if job and job.get("id"):
