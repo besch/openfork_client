@@ -42,7 +42,7 @@ POLICY_MAX_CACHED_IMAGES = {
     "all": 4,
     "project": 6,
     "users": 6,
-    "mine": None,
+    "mine": 7,
 }
 
 # Policy-specific idle timeouts for the Electron-side cleanup notifier (minutes).
