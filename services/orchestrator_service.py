@@ -379,7 +379,14 @@ class OrchestratorService:
 
 
     def get_job(self, job_id: str) -> Union[Dict, None]:
-        """Get a job by its ID. Returns a fabricated 'cancelled' status if the job is not found (404)."""
+        """Get a job by its ID.
+
+        Returns fabricated local-stop statuses for cases where this worker
+        should stop acting on the job even though the remote row may still
+        exist:
+        - 404 => cancelled/deleted elsewhere
+        - 403 => lease lost / job reset or reassigned away from this provider
+        """
         try:
             # This endpoint needs to be created in the Next.js app: GET /api/dgn/job/{job_id}
             url = f"{self.orchestrator_url}/api/dgn/job/{job_id}"
@@ -388,6 +395,12 @@ class OrchestratorService:
             if response.status_code == 404:
                 logging.warning(f"Job {job_id} not found (404). Assuming it was cancelled and deleted.")
                 return {'status': 'cancelled'}
+            if response.status_code == 403:
+                logging.warning(
+                    f"Job {job_id} is no longer accessible to this provider (403). "
+                    "Assuming the job lease was lost, reset, or reassigned."
+                )
+                return {'status': 'lease_lost'}
 
             response.raise_for_status()
             if not response.content:
@@ -794,7 +807,7 @@ class OrchestratorService:
         return None
 
 
-    def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None, execution_token: Optional[str] = None):
+    def update_job_status(self, job_id: str, status: str, storage_path: Union[str, None] = None, thumbnail_storage_path: Union[str, None] = None, duration_seconds: float = None, completion_metadata: Dict = None, prompt: Union[str, None] = None, execution_token: Optional[str] = None) -> bool:
         """Update the status of a job."""
         try:
             payload = {"status": status}
@@ -829,6 +842,7 @@ class OrchestratorService:
             logging.info(f"Job {job_id} status updated to {status}")
             if status in ("completed", "failed", "cancelled"):
                 self.clear_active_job(job_id)
+            return True
         except requests.exceptions.RequestException as e:
             if (
                 status == "cancelled"
@@ -840,8 +854,24 @@ class OrchestratorService:
                     "cancelled; treating as already cancelled/deleted."
                 )
                 self.clear_active_job(job_id)
-                return
+                return False
+            if (
+                status in ("completed", "failed", "cancelled")
+                and e.response is not None
+                and e.response.status_code in (403, 409)
+            ):
+                logging.warning(
+                    f"Could not update job {job_id} to {status}: "
+                    "the job lease was lost or the job was already reset."
+                )
+                if e.response.text:
+                    logging.warning(f"Job status update response: {e.response.text}")
+                self.clear_active_job(job_id)
+                return False
             logging.error(f"Could not update job status: {e}")
+            if e.response is not None and e.response.text:
+                logging.error(f"Job status update response: {e.response.text}")
+            return False
 
     def update_provider_status(self, provider_id: str, status: str):
         """Update the status of a provider."""

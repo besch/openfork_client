@@ -15,8 +15,11 @@ from exceptions import AuthError, InfrastructureError, ProviderError
 
 # Cap on backoff so a long outage still polls every 5 minutes.
 JOB_POLL_BACKOFF_CAP_SECONDS = 300
-TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled", "deleted")
-REMOTE_CANCELLATION_STATUSES = ("cancelled", "deleted")
+# "lease_lost" is a local synthetic status returned when the server still has
+# the job row, but this provider no longer has access to it because the lease
+# was reset or reassigned.
+TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled", "deleted", "lease_lost")
+REMOTE_CANCELLATION_STATUSES = ("cancelled", "deleted", "lease_lost")
 
 
 def _compute_poll_interval(base_seconds: int, consecutive_empty_polls: int) -> float:
