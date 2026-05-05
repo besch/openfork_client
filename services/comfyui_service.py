@@ -16,6 +16,9 @@ from config import TimeoutConfig
 from exceptions import AuthError
 from services.orchestrator_service import TokenExpiredError
 
+REMOTE_WORKFLOW_STOP_STATUSES = ("cancelled", "deleted", "lease_lost")
+
+
 class ComfyUIClient:
     def __init__(self, comfyui_ws_url: str, access_token: str = None):
         self.comfyui_ws_url = comfyui_ws_url
@@ -250,8 +253,12 @@ class ComfyUIClient:
                     try:
                         job_details = orchestrator_service.get_job(job_id)
                         status = job_details.get("status") if isinstance(job_details, dict) else None
-                        if status in ("cancelled", "deleted"):
-                            logging.warning(f"Cancellation requested for job {job_id} (polled status: {status}). Interrupting workflow.")
+                        if status in REMOTE_WORKFLOW_STOP_STATUSES:
+                            logging.warning(
+                                f"Remote stop requested for job {job_id} "
+                                f"(polled status: {status}). Interrupting workflow "
+                                "so the worker can recover and accept other jobs."
+                            )
                             self.interrupt_workflow()
                             return "interrupted"
                     except TokenExpiredError:

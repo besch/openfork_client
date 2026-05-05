@@ -394,12 +394,14 @@ class OrchestratorService:
 
             if response.status_code == 404:
                 logging.warning(f"Job {job_id} not found (404). Assuming it was cancelled and deleted.")
+                self.clear_active_job(job_id)
                 return {'status': 'cancelled'}
             if response.status_code == 403:
                 logging.warning(
                     f"Job {job_id} is no longer accessible to this provider (403). "
                     "Assuming the job lease was lost, reset, or reassigned."
                 )
+                self.clear_active_job(job_id)
                 return {'status': 'lease_lost'}
 
             response.raise_for_status()

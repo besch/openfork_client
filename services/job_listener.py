@@ -371,6 +371,7 @@ class JobListener:
             # jobs that already reached a terminal state in the DB.
             terminal_status = self._get_terminal_job_status(job_id)
             if terminal_status:
+                self.orchestrator_service.clear_active_job(job_id)
                 logging.info(
                     f"Job {job_id} reached terminal status during processing "
                     f"('{terminal_status}'). Clearing local job state without "
@@ -456,6 +457,7 @@ class JobListener:
 
             terminal_status = self._get_terminal_job_status(job_id)
             if terminal_status:
+                self.orchestrator_service.clear_active_job(job_id)
                 logging.info(
                     f"Job {job_id} was externally terminated with status "
                     f"'{terminal_status}'. Clearing local job state without "
@@ -520,8 +522,10 @@ class JobListener:
         processor,
         remote_status: str,
     ) -> None:
+        self.orchestrator_service.clear_active_job(job_id)
         logging.warning(
-            f"Job {job_id} was {remote_status}. Interrupting processing."
+            f"Job {job_id} received remote stop status '{remote_status}'. "
+            "Interrupting local processing."
         )
 
         # Interrupt before stopping the container so ComfyUI can abort cleanly
@@ -545,7 +549,8 @@ class JobListener:
             try:
                 logging.info(
                     f"Stopping Docker container for service "
-                    f"'{self.client.active_service_type}' due to job cancellation..."
+                    f"'{self.client.active_service_type}' due to remote job "
+                    f"stop status '{remote_status}'..."
                 )
                 docker_manager.stop_container(
                     service_type=self.client.active_service_type
@@ -554,7 +559,10 @@ class JobListener:
             except Exception as e:
                 logging.debug(f"Could not stop container: {e}")
 
-        logging.info(f"Job {job_id} cancellation cleanup completed.")
+        logging.info(
+            f"Job {job_id} remote-stop cleanup completed "
+            f"(status='{remote_status}')."
+        )
 
     def _monitor_job_cancellation(self, job_id: str, processor) -> None:
         """

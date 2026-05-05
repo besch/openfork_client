@@ -10,6 +10,7 @@ from cli import SHUTDOWN_EVENT, cleanup, listen_for_ipc_commands
 from exceptions import InfrastructureError
 from services.comfyui_service import ComfyUIClient
 from services.job_listener import JobListener
+from services.orchestrator_service import OrchestratorService
 
 
 class StopResetBehaviorTests(unittest.TestCase):
@@ -513,6 +514,7 @@ class StopResetBehaviorTests(unittest.TestCase):
             )
 
         self.assertEqual(events, ["interrupt", "stop:ltx23-comfyui-video-8gb"])
+        orchestrator_service.clear_active_job.assert_called_once_with("job-cancelled")
         orchestrator_service.update_job_status.assert_not_called()
 
     def test_comfyui_wait_for_ready_aborts_on_container_crash_event(self):
@@ -528,6 +530,52 @@ class StopResetBehaviorTests(unittest.TestCase):
                 abort_event=abort_event,
             )
         )
+
+    def test_comfyui_output_wait_interrupts_when_job_lease_is_lost(self):
+        client = ComfyUIClient("ws://127.0.0.1:8188/ws?clientId={}")
+        orchestrator_service = Mock()
+        orchestrator_service.get_job.return_value = {"status": "lease_lost"}
+        fake_ws = Mock()
+        fake_thread = Mock()
+        time_values = iter([0, 1, 6, 6])
+
+        with patch("services.comfyui_service.websocket.WebSocket", return_value=fake_ws), patch(
+            "services.comfyui_service.threading.Thread",
+            return_value=fake_thread,
+        ), patch("services.comfyui_service.logging.info"), patch(
+            "services.comfyui_service.logging.warning"
+        ), patch("services.comfyui_service.logging.error"), patch(
+            "services.comfyui_service.logging.debug"
+        ), patch.object(client, "interrupt_workflow") as interrupt_mock, patch(
+            "services.comfyui_service.time.time",
+            side_effect=lambda: next(time_values, 6),
+        ):
+            result = client.get_workflow_output(
+                "prompt-123",
+                "job-lease-lost",
+                orchestrator_service,
+                timeout_sec=60,
+            )
+
+        self.assertEqual(result, "interrupted")
+        orchestrator_service.get_job.assert_called_once_with("job-lease-lost")
+        interrupt_mock.assert_called_once()
+        fake_ws.close.assert_called_once()
+        fake_thread.start.assert_called_once()
+        fake_thread.join.assert_called_once_with(timeout=5)
+
+    def test_orchestrator_service_clears_active_job_when_job_lease_is_lost(self):
+        service = OrchestratorService("http://example.test")
+        service._active_job_id = "job-lease-lost"
+        service._active_execution_token = "token-lease-lost"
+        response = Mock(status_code=403)
+        response.content = b'{"error":"Forbidden"}'
+        service._make_request = Mock(return_value=response)
+
+        result = service.get_job("job-lease-lost")
+
+        self.assertEqual(result, {"status": "lease_lost"})
+        self.assertIsNone(service.get_active_execution_token())
 
     def test_oom_text_is_requeueable_infrastructure_error(self):
         listener = JobListener(
