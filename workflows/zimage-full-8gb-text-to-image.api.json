@@ -62,7 +62,7 @@
     "46": {
       "class_type": "UnetLoaderGGUF",
       "inputs": {
-        "unet_name": "Z-Image-Q4_K_M.gguf"
+        "unet_name": "z-image-Q4_K_M.gguf"
       }
     },
     "9": {

@@ -62,7 +62,7 @@
     "46": {
       "class_type": "UNETLoader",
       "inputs": {
-        "unet_name": "Z-Image-BF16.safetensors",
+        "unet_name": "z_image_bf16.safetensors",
         "weight_dtype": "default"
       }
     },
