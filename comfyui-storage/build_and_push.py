@@ -78,13 +78,32 @@ PUSH_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 1200  # 20 minutes
 
 
+def _format_command_for_log(command: List[str]) -> str:
+    redacted = []
+    redact_next = False
+    for part in command:
+        if redact_next:
+            if part.startswith("HF_TOKEN="):
+                redacted.append("HF_TOKEN=<redacted>")
+            else:
+                redacted.append(part)
+            redact_next = False
+            continue
+
+        redacted.append(part)
+        if part == "--build-arg":
+            redact_next = True
+
+    return " ".join(redacted)
+
+
 def run_command(command: List[str], description: str, extra_env: dict = None) -> bool:
     """
     Run a command and return True if successf ul, False otherwise.
     """
     print(f"\n{'=' * 60}")
     print(f"🔹 {description}")
-    print(f"   Command: {' '.join(command)}")
+    print(f"   Command: {_format_command_for_log(command)}")
     print("=" * 60)
 
     env = {**os.environ, **(extra_env or {})}
@@ -135,10 +154,7 @@ def build_image(
 
         command.extend(["--build-arg", f"CACHEBUST={int(_time.time())}"])
 
-    if hf_token:
-        command.extend(["--build-arg", f"HF_TOKEN={hf_token}"])
-    else:
-        command.extend(["--build-arg", "HF_TOKEN"])
+    command.extend(["--build-arg", "HF_TOKEN"])
 
     if build_args:
         for key, value in build_args.items():
@@ -158,6 +174,8 @@ def build_image(
     command.append(".")
     # Legacy builder avoids BuildKit daemon OOM on large downloads; incompatible with direct_push.
     extra_env = {} if direct_push else {"DOCKER_BUILDKIT": "0"}
+    if hf_token:
+        extra_env["HF_TOKEN"] = hf_token
     return run_command(command, f"Building {tag}", extra_env=extra_env)
 
 

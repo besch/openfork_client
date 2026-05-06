@@ -60,42 +60,40 @@ RUN pip3 install \
 
 RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
 
-RUN test -n "${HF_TOKEN}" \
-    || { echo "ERROR: HF_TOKEN build-arg is required to download DeepBeepMeep/MagiHuman."; exit 1; }
+RUN python3 -c "import os; assert os.environ.get('HF_TOKEN'), 'ERROR: HF_TOKEN build-arg is required to download DeepBeepMeep/MagiHuman.'"
 
 RUN pip3 install -q "huggingface_hub[cli]" \
     && huggingface-cli download DeepBeepMeep/MagiHuman \
         magi_human_quanto_bf16_int8.safetensors \
         magi_human_sr1080_quanto_bf16_int8.safetensors \
         --local-dir /opt/wan2gp/ckpts \
-        --token "${HF_TOKEN}" \
     || { echo "ERROR: MagiHuman base/SR download failed."; exit 1; }
 
 RUN huggingface-cli download DeepBeepMeep/MagiHuman \
-        --include "t5gemma-9b-9b-ul2/config.json" \
-        --include "t5gemma-9b-9b-ul2/generation_config.json" \
-        --include "t5gemma-9b-9b-ul2/special_tokens_map.json" \
-        --include "t5gemma-9b-9b-ul2/tokenizer.json" \
-        --include "t5gemma-9b-9b-ul2/tokenizer.model" \
-        --include "t5gemma-9b-9b-ul2/tokenizer_config.json" \
-        --include "t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors" \
-        --include "stable-audio-open-1.0/*" \
-        --include "turbo_vae/*" \
+        t5gemma-9b-9b-ul2/config.json \
+        t5gemma-9b-9b-ul2/generation_config.json \
+        t5gemma-9b-9b-ul2/special_tokens_map.json \
+        t5gemma-9b-9b-ul2/tokenizer.json \
+        t5gemma-9b-9b-ul2/tokenizer.model \
+        t5gemma-9b-9b-ul2/tokenizer_config.json \
+        t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors \
+        stable-audio-open-1.0/model.safetensors \
+        stable-audio-open-1.0/model_config.json \
+        turbo_vae/TurboV3-Wan22-TinyShallow_7_7.json \
+        turbo_vae/TurboV3-Wan22-TinyShallow_7_7.safetensors \
         --local-dir /opt/wan2gp/ckpts \
-        --token "${HF_TOKEN}" \
     || { echo "ERROR: MagiHuman support file download failed."; exit 1; }
 
 RUN huggingface-cli download DeepBeepMeep/Wan2.2 \
         Wan2.2_VAE.safetensors \
         --local-dir /opt/wan2gp/ckpts \
-        --token "${HF_TOKEN}" \
     || { echo "ERROR: Wan2.2 VAE download failed."; exit 1; }
 
 RUN pip3 install fastapi "uvicorn[standard]"
 
 COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
 
-RUN python3 -c "import os, sys; sys.path.insert(0, '/opt/wan2gp'); from shared.api import init; required=['magi_human_quanto_bf16_int8.safetensors','magi_human_sr1080_quanto_bf16_int8.safetensors','Wan2.2_VAE.safetensors','t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors']; missing=[p for p in required if not os.path.isfile('/opt/wan2gp/ckpts/'+p)]; assert not missing, missing; print('MagiHuman Wan2GP 24GB files: OK')"
+RUN python3 -c "import os, sys; sys.path.insert(0, '/opt/wan2gp'); from shared.api import init; required=['magi_human_quanto_bf16_int8.safetensors','magi_human_sr1080_quanto_bf16_int8.safetensors','Wan2.2_VAE.safetensors','t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors','stable-audio-open-1.0/model.safetensors','stable-audio-open-1.0/model_config.json','turbo_vae/TurboV3-Wan22-TinyShallow_7_7.json','turbo_vae/TurboV3-Wan22-TinyShallow_7_7.safetensors']; missing=[p for p in required if not os.path.isfile('/opt/wan2gp/ckpts/'+p)]; assert not missing, missing; print('MagiHuman Wan2GP 24GB files: OK')"
 
 WORKDIR /opt/wan2gp
 
