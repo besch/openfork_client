@@ -34,6 +34,7 @@ from services.docker_download_manager import (
     ImageAvailability,
 )
 from services.job_listener import JobListener
+from services.realtime_job_watcher import RealtimeJobWatcher
 from dgn_client import DGNClient, _get_max_cached_images_for_policy
 
 
@@ -606,6 +607,70 @@ class PrefetchPolicyTests(unittest.TestCase):
             },
         )
         self.assertEqual(docker_manager.pull_calls[0]["service_type"], "wan22")
+
+
+class RealtimeNotificationFilterTests(unittest.TestCase):
+    def _watcher_for(self, **client_attrs):
+        client = SimpleNamespace(**client_attrs)
+        return RealtimeJobWatcher(
+            access_token="token",
+            wakeup_event=threading.Event(),
+            shutdown_event=threading.Event(),
+            client=client,
+        )
+
+    def test_realtime_notification_skips_incompatible_service(self):
+        watcher = self._watcher_for(
+            compatible_services={"wan22-8gb"},
+            community_mode="all",
+            process_own_jobs=False,
+            monetize_mode=False,
+        )
+
+        self.assertFalse(
+            watcher._should_wake_for_notification(
+                {
+                    "service_type": "hunyuan-video-24gb",
+                    "accept_policy": "all",
+                    "monetize_job": False,
+                }
+            )
+        )
+
+    def test_realtime_notification_wakes_for_matching_public_service(self):
+        watcher = self._watcher_for(
+            compatible_services={"wan22-8gb"},
+            community_mode="all",
+            process_own_jobs=False,
+            monetize_mode=False,
+        )
+
+        self.assertTrue(
+            watcher._should_wake_for_notification(
+                {
+                    "service_type": "wan22-8gb",
+                    "accept_policy": "all",
+                    "monetize_job": False,
+                }
+            )
+        )
+
+    def test_realtime_notification_wakes_for_legacy_rows_without_service_type(self):
+        watcher = self._watcher_for(
+            compatible_services={"wan22-8gb"},
+            community_mode="all",
+            process_own_jobs=False,
+            monetize_mode=False,
+        )
+
+        self.assertTrue(
+            watcher._should_wake_for_notification(
+                {
+                    "accept_policy": "all",
+                    "monetize_job": False,
+                }
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -269,6 +269,7 @@ def run_client(client, provider_id, service_mode):
             access_token=access_token,
             wakeup_event=client.job_wakeup_event,
             shutdown_event=SHUTDOWN_EVENT,
+            client=client,
         )
         client.realtime_watcher = watcher
         watcher.start()

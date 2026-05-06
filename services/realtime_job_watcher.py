@@ -51,11 +51,13 @@ class RealtimeJobWatcher:
         access_token: str,
         wakeup_event: threading.Event,
         shutdown_event: threading.Event,
+        client=None,
     ) -> None:
         self._token = access_token
         self._token_lock = threading.Lock()
         self._wakeup = wakeup_event
         self._shutdown = shutdown_event
+        self._client = client
         self._connected = False
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -102,6 +104,43 @@ class RealtimeJobWatcher:
             self._loop = None
             loop.close()
             logging.info("Realtime watcher thread stopped.")
+
+    def _should_wake_for_notification(self, record: dict) -> bool:
+        """Best-effort local filter for realtime job notifications.
+
+        The database claim RPC remains the source of truth.  This only avoids
+        waking/polling clients that obviously cannot process the new job.
+        Older notification rows may not include service_type, so we fail open.
+        """
+        client = self._client
+        if client is None:
+            return True
+
+        service_type = record.get("service_type")
+        if service_type:
+            compatible_services = getattr(client, "compatible_services", None)
+            if compatible_services and service_type not in compatible_services:
+                return False
+
+        monetize_job = bool(record.get("monetize_job"))
+        if monetize_job:
+            return bool(getattr(client, "monetize_mode", False))
+
+        accept_policy = record.get("accept_policy") or "all"
+        community_mode = getattr(client, "community_mode", "all")
+        process_own_jobs = bool(getattr(client, "process_own_jobs", False))
+
+        if accept_policy == "mine":
+            return process_own_jobs or community_mode == "none"
+        if accept_policy == "users":
+            return process_own_jobs or community_mode in ("trusted_users",)
+        if accept_policy == "project":
+            return process_own_jobs or community_mode in ("trusted_projects",)
+
+        # Public jobs can be visible to public providers and trusted providers
+        # whose DB trust rules match the submitter/project.  The notification
+        # intentionally omits user/project IDs, so keep this permissive.
+        return community_mode in ("all", "trusted_users", "trusted_projects")
 
     # ── Reconnect loop ───────────────────────────────────────────────────────
 
@@ -250,12 +289,17 @@ class RealtimeJobWatcher:
 
                 elif event == "postgres_changes":
                     data = msg.get("payload", {}).get("data", {})
+                    record = data.get("record", {}) if isinstance(data, dict) else {}
                     logging.debug(
                         f"Realtime: INSERT on dgn_job_notifications "
-                        f"(policy={data.get('record', {}).get('accept_policy')}) "
-                        "→ waking job listener"
+                        f"(policy={record.get('accept_policy')}, "
+                        f"service={record.get('service_type')})"
                     )
-                    self._wakeup.set()
+                    if self._should_wake_for_notification(record):
+                        logging.debug("Realtime: notification matches local provider; waking job listener")
+                        self._wakeup.set()
+                    else:
+                        logging.debug("Realtime: notification does not match local provider; staying idle")
 
                 elif event in ("phx_error", "phx_close"):
                     self._connected = False
