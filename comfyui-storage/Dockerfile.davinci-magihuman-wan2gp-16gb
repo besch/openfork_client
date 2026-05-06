@@ -1,0 +1,102 @@
+# OpenFork - daVinci-MagiHuman on Wan2GP (16GB distill SR1080)
+#
+# Provides:
+#   - Wan2GP at /opt/wan2gp
+#   - Magi Human Distill quanto int8 transformer
+#   - Magi Human 1080p SR quanto int8 transformer
+#   - T5Gemma text encoder, Stable Audio VAE, Turbo VAE, and Wan2.2 VAE
+#
+# Build:
+#   docker build \
+#     --build-arg HF_TOKEN=<token> \
+#     -t beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest \
+#     -f Dockerfile.davinci-magihuman-wan2gp-16gb .
+
+ARG HF_TOKEN
+
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ARG HF_TOKEN
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV WAN2GP_ROOT=/opt/wan2gp
+ENV WAN2GP_OUTPUT=/opt/wan2gp/outputs
+ENV CUDA_MODULE_LOADING=LAZY
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.8
+ENV MALLOC_ARENA_MAX=2
+ENV WAN2GP_CLI_ARGS="--profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.7"
+
+RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-dev \
+        git wget curl cmake ninja-build \
+        build-essential g++ \
+        libgl1 libglib2.0-0 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /usr/bin/python3 /usr/bin/python
+RUN pip3 install --upgrade pip setuptools wheel
+
+RUN pip3 install \
+        torch==2.7.0+cu128 \
+        torchvision==0.22.0+cu128 \
+        torchaudio==2.7.0+cu128 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+RUN git clone https://github.com/deepbeepmeep/Wan2GP /opt/wan2gp \
+    && git -C /opt/wan2gp checkout main
+
+RUN pip3 install \
+        --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ \
+        -r /opt/wan2gp/requirements.txt \
+    || pip3 install -r /opt/wan2gp/requirements.txt
+
+RUN pip3 install \
+        torch==2.7.0+cu128 \
+        torchvision==0.22.0+cu128 \
+        torchaudio==2.7.0+cu128 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
+
+RUN test -n "${HF_TOKEN}" \
+    || { echo "ERROR: HF_TOKEN build-arg is required to download DeepBeepMeep/MagiHuman."; exit 1; }
+
+RUN pip3 install -q "huggingface_hub[cli]" \
+    && huggingface-cli download DeepBeepMeep/MagiHuman \
+        magi_human_distill_quanto_bf16_int8.safetensors \
+        magi_human_sr1080_quanto_bf16_int8.safetensors \
+        --local-dir /opt/wan2gp/ckpts \
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: MagiHuman distill/SR download failed."; exit 1; }
+
+RUN huggingface-cli download DeepBeepMeep/MagiHuman \
+        --include "t5gemma-9b-9b-ul2/config.json" \
+        --include "t5gemma-9b-9b-ul2/generation_config.json" \
+        --include "t5gemma-9b-9b-ul2/special_tokens_map.json" \
+        --include "t5gemma-9b-9b-ul2/tokenizer.json" \
+        --include "t5gemma-9b-9b-ul2/tokenizer.model" \
+        --include "t5gemma-9b-9b-ul2/tokenizer_config.json" \
+        --include "t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors" \
+        --include "stable-audio-open-1.0/*" \
+        --include "turbo_vae/*" \
+        --local-dir /opt/wan2gp/ckpts \
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: MagiHuman support file download failed."; exit 1; }
+
+RUN huggingface-cli download DeepBeepMeep/Wan2.2 \
+        Wan2.2_VAE.safetensors \
+        --local-dir /opt/wan2gp/ckpts \
+        --token "${HF_TOKEN}" \
+    || { echo "ERROR: Wan2.2 VAE download failed."; exit 1; }
+
+RUN pip3 install fastapi "uvicorn[standard]"
+
+COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
+
+RUN python3 -c "import os, sys; sys.path.insert(0, '/opt/wan2gp'); from shared.api import init; required=['magi_human_distill_quanto_bf16_int8.safetensors','magi_human_sr1080_quanto_bf16_int8.safetensors','Wan2.2_VAE.safetensors','t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors']; missing=[p for p in required if not os.path.isfile('/opt/wan2gp/ckpts/'+p)]; assert not missing, missing; print('MagiHuman Wan2GP 16GB files: OK')"
+
+WORKDIR /opt/wan2gp
+
+CMD ["python3", "/opt/wan2gp/wan2gp_server.py"]

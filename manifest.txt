@@ -1,6 +1,5 @@
 cli.py
 comfyui-storage/build_and_push.py
-comfyui-storage/davinci_magihuman_api.py
 comfyui-storage/diffrhythm_api.py
 comfyui-storage/ernie_image_api.py
 comfyui-storage/heartmula_api.py

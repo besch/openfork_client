@@ -1,285 +1,143 @@
 """
-daVinci-MagiHuman Processors
+daVinci-MagiHuman processors (Wan2GP backend).
 
-Two processors that communicate with the daVinci-MagiHuman REST API server:
-
-  DaVinciMagiHumanT2VProcessor — text-to-video (prompt → avatar video + audio)
-  DaVinciMagiHumanI2VProcessor — image-to-video (reference image + prompt → avatar)
-
-Both inherit from TurboDiffusionBaseProcessor which provides:
-  - _wait_for_api()          : polls /health until ready
-  - _poll_for_completion()   : polls /status/{job_id}
-  - _download_output()       : streams video from /download/{job_id}
-  - _finalize_job()          : uploads to storage + updates job status
-  - _cleanup_remote_job()    : calls DELETE /job/{job_id}
-
-daVinci-MagiHuman specifics:
-  - Backend: REST API on port 8000 (started by start_cloud.sh)
-  - Distilled model: 8 fixed steps, no CFG
-  - Both T2V (JSON body) and I2V (multipart upload + form fields)
-  - Output: MP4 with embedded audio track
+WanGP's Magi Human implementation is a talking-head model: it needs a start
+image and can then generate synchronized speech/audio from the text prompt.
+The supported production tiers use DeepBeepMeep/MagiHuman quanto int8
+checkpoints through the Wan2GP HTTP server on port 8188.
 """
+
+from __future__ import annotations
 
 import logging
 import os
 from typing import Optional
 
-import requests
+from PIL import Image
 
-from services.processors.video.turbodiffusion import TurboDiffusionBaseProcessor
+from config import DEV_MODE, SUPABASE_URL
+from services.processors.wan2gp_processor import Wan2GPProcessor
 from utils.comfyui_workflow_utils import materialize_start_image
-from config import SUPABASE_URL, DEV_MODE
 
 logger = logging.getLogger(__name__)
 
-# Resolution lookup: aspect_ratio → (height, width) for 256p distilled baseline
-_ASPECT_RESOLUTIONS = {
-    "16:9": (256, 448),
-    "9:16": (448, 256),
-    "1:1":  (256, 256),
-    "4:3":  (256, 320),
-    "3:4":  (320, 256),
-    "21:9": (176, 448),
-    "2:1":  (224, 448),
+MODEL_TYPE_DISTILL_SR1080 = "magi_human_distill_sr1080"
+MODEL_TYPE_BASE_SR1080 = "magi_human_sr1080"
+
+_FPS = 25
+_DEFAULT_DURATION_SECONDS = 4.0
+_DEFAULT_SEED = -1
+
+_MAGIHUMAN_RESOLUTIONS_1080 = {
+    "16:9": "1920x1088",
+    "9:16": "1088x1920",
+    "1:1": "1088x1088",
+    "4:3": "1440x1088",
+    "3:4": "1088x1440",
+    "21:9": "1920x816",
+    "2:1": "1920x960",
 }
 
-_DEFAULT_STEPS = 8        # distilled — do not change
-_DEFAULT_DURATION = 5.0   # seconds
+_RUNTIME_LIMITS = {
+    "16gb": {
+        "model_type": MODEL_TYPE_DISTILL_SR1080,
+        "duration_default": 4.0,
+        "duration_max": 4.0,
+        "steps_default": 8,
+        "steps_max": 8,
+        "guidance_default": 1.0,
+        "audio_guidance_default": 1.0,
+    },
+    "24gb": {
+        "model_type": MODEL_TYPE_BASE_SR1080,
+        "duration_default": 4.0,
+        "duration_max": 4.0,
+        "steps_default": 32,
+        "steps_max": 32,
+        "guidance_default": 5.0,
+        "audio_guidance_default": 5.0,
+    },
+    "32gb": {
+        "model_type": MODEL_TYPE_BASE_SR1080,
+        "duration_default": 4.0,
+        "duration_max": 5.0,
+        "steps_default": 32,
+        "steps_max": 32,
+        "guidance_default": 5.0,
+        "audio_guidance_default": 5.0,
+    },
+    "default": {
+        "model_type": MODEL_TYPE_BASE_SR1080,
+        "duration_default": 4.0,
+        "duration_max": 4.0,
+        "steps_default": 32,
+        "steps_max": 32,
+        "guidance_default": 5.0,
+        "audio_guidance_default": 5.0,
+    },
+}
 
 
-def _aspect_to_hw(aspect_ratio: str) -> tuple[int, int]:
-    return _ASPECT_RESOLUTIONS.get(aspect_ratio, (256, 448))
+def get_davinci_magihuman_runtime_limits(service_type: str) -> dict:
+    service_type = (service_type or "").lower()
+    for tier in ("16gb", "24gb", "32gb"):
+        if tier in service_type:
+            return dict(_RUNTIME_LIMITS[tier])
+    return dict(_RUNTIME_LIMITS["default"])
 
 
-class DaVinciMagiHumanBaseProcessor(TurboDiffusionBaseProcessor):
-    """Shared base for daVinci-MagiHuman T2V & I2V processors."""
+def get_davinci_magihuman_model_type(service_type: str) -> str:
+    return str(get_davinci_magihuman_runtime_limits(service_type)["model_type"])
+
+
+def clamp_davinci_magihuman_duration(requested_duration, service_type: str) -> float:
+    limits = get_davinci_magihuman_runtime_limits(service_type)
+    try:
+        duration = float(requested_duration)
+    except (TypeError, ValueError):
+        duration = float(limits["duration_default"])
+    return max(1.0, min(duration, float(limits["duration_max"])))
+
+
+def clamp_davinci_magihuman_steps(requested_steps, service_type: str) -> int:
+    limits = get_davinci_magihuman_runtime_limits(service_type)
+    try:
+        steps = int(requested_steps)
+    except (TypeError, ValueError):
+        steps = int(limits["steps_default"])
+    return max(1, min(steps, int(limits["steps_max"])))
+
+
+def davinci_magihuman_resolution(aspect_ratio: str) -> str:
+    return _MAGIHUMAN_RESOLUTIONS_1080.get(aspect_ratio, "1920x1088")
+
+
+def duration_to_wangp_frames(duration_seconds: float) -> int:
+    frame_count = int(duration_seconds * _FPS) + 1
+    return max(26, ((frame_count - 1) // 4) * 4 + 1)
+
+
+class DaVinciMagiHumanBaseProcessor(Wan2GPProcessor):
+    """Shared Wan2GP settings and image resolution for MagiHuman."""
 
     SERVICE_NAME = "daVinci-MagiHuman"
-    # Allow up to 20 minutes per job (model load + compilation + generation)
-    MAX_WAIT_TIME = 1200
-    POLL_INTERVAL = 10
-
-    def __init__(self, client, job, shutdown_event):
-        super().__init__(client, job, shutdown_event)
-        self.api_base_url = "http://localhost:8000"
-
-    def _wait_for_api(self, timeout: int = 900) -> bool:
-        """Wait up to 15 minutes for the API to become available (model load is slow)."""
-        import time
-        start = time.time()
-        logger.info(
-            "Waiting for %s API at %s (timeout=%ds)…",
-            self.SERVICE_NAME, self.api_base_url, timeout,
-        )
-        while time.time() - start < timeout:
-            if self.shutdown_event.is_set():
-                return False
-            try:
-                resp = requests.get(f"{self.api_base_url}/health", timeout=10)
-                if resp.status_code == 200:
-                    logger.info("%s API is ready", self.SERVICE_NAME)
-                    return True
-            except requests.exceptions.RequestException:
-                pass
-            time.sleep(15)
-        logger.error(
-            "%s API not available after %ds at %s",
-            self.SERVICE_NAME, timeout, self.api_base_url,
-        )
-        return False
-
-
-class DaVinciMagiHumanT2VProcessor(DaVinciMagiHumanBaseProcessor):
-    """daVinci-MagiHuman text-to-video processor."""
-
-    def process(self):
-        if DEV_MODE:
-            return
-
-        if not self.job:
-            self._fail_job("Job object is None for DaVinciMagiHumanT2VProcessor.")
-            return
-
-        logger.info("Processing daVinci-MagiHuman T2V job %s", self.job_id)
-
-        if not self._wait_for_api():
-            self._fail_job(
-                f"daVinci-MagiHuman API not available for job {self.job_id}"
-            )
-            return
-
-        inputs = self.job.get("inputs") or {}
-        duration_seconds = float(inputs.get("duration", _DEFAULT_DURATION))
-        duration_seconds = max(3.0, min(duration_seconds, 10.0))
-        aspect_ratio = inputs.get("aspect_ratio", "16:9")
-        height, width = _aspect_to_hw(aspect_ratio)
-        seed = int(inputs.get("seed", 0))
-
-        remote_job_id = self._submit_t2v(duration_seconds, height, width, seed)
-        if not remote_job_id:
-            self._fail_job(f"Failed to submit T2V to daVinci API for job {self.job_id}")
-            return
-
-        result = self._poll_for_completion(remote_job_id)
-        if result.get("status") != "completed":
-            self._fail_job(
-                f"daVinci T2V failed: {result.get('error', 'Unknown error')}"
-            )
-            return
-
-        local_path = self._download_output(remote_job_id)
-        if not local_path:
-            self._fail_job(f"Failed to download daVinci output for job {self.job_id}")
-            return
-
-        self._finalize_job(local_path, remote_job_id)
-
-    def _submit_t2v(self, duration_seconds: float, height: int, width: int, seed: int) -> Optional[str]:
-        try:
-            payload = {
-                "prompt": self.positive_prompt,
-                "negative_prompt": self.negative_prompt or "",
-                "duration_seconds": duration_seconds,
-                "height": height,
-                "width": width,
-                "num_steps": _DEFAULT_STEPS,
-                "seed": seed,
-                "use_distilled": True,
-            }
-            resp = requests.post(
-                f"{self.api_base_url}/generate/t2v", json=payload, timeout=60
-            )
-            if resp.status_code == 200:
-                remote_job_id = resp.json().get("job_id")
-                logger.info("daVinci T2V job submitted: %s", remote_job_id)
-                return remote_job_id
-            logger.error("daVinci T2V submission failed: %s — %s", resp.status_code, resp.text)
-            return None
-        except requests.exceptions.RequestException as exc:
-            logger.error("daVinci T2V request error: %s", exc)
-            return None
-
-
-class DaVinciMagiHumanI2VProcessor(DaVinciMagiHumanBaseProcessor):
-    """daVinci-MagiHuman image-to-video (avatar) processor."""
-
-    def process(self):
-        if DEV_MODE:
-            return
-
-        if not self.job:
-            self._fail_job("Job object is None for DaVinciMagiHumanI2VProcessor.")
-            return
-
-        logger.info("Processing daVinci-MagiHuman I2V job %s", self.job_id)
-
-        inputs = self.job.get("inputs") or {}
-
-        # ── Resolve reference image ──────────────────────────────────────────
-        image_path = self._resolve_reference_image(inputs)
-        if not image_path:
-            self._fail_job(
-                f"Could not resolve reference image for job {self.job_id}"
-            )
-            return
-
-        # ── Wait for API ─────────────────────────────────────────────────────
-        if not self._wait_for_api():
-            self._fail_job(
-                f"daVinci-MagiHuman API not available for job {self.job_id}"
-            )
-            return
-
-        duration_seconds = float(inputs.get("duration", _DEFAULT_DURATION))
-        duration_seconds = max(3.0, min(duration_seconds, 10.0))
-        aspect_ratio = inputs.get("aspect_ratio", "16:9")
-        height, width = _aspect_to_hw(aspect_ratio)
-        seed = int(inputs.get("seed", 0))
-
-        remote_job_id = self._submit_i2v(
-            image_path, duration_seconds, height, width, seed
-        )
-        if not remote_job_id:
-            self._fail_job(
-                f"Failed to submit I2V to daVinci API for job {self.job_id}"
-            )
-            return
-
-        result = self._poll_for_completion(remote_job_id)
-        if result.get("status") != "completed":
-            self._fail_job(
-                f"daVinci I2V failed: {result.get('error', 'Unknown error')}"
-            )
-            return
-
-        local_path = self._download_output(remote_job_id)
-        if not local_path:
-            self._fail_job(
-                f"Failed to download daVinci output for job {self.job_id}"
-            )
-            return
-
-        self._finalize_job(local_path, remote_job_id)
-
-    def _submit_i2v(
-        self,
-        image_path: str,
-        duration_seconds: float,
-        height: int,
-        width: int,
-        seed: int,
-    ) -> Optional[str]:
-        try:
-            with open(image_path, "rb") as f:
-                files = {
-                    "image": (os.path.basename(image_path), f, "image/jpeg")
-                }
-                data = {
-                    "prompt": self.positive_prompt,
-                    "negative_prompt": self.negative_prompt or "",
-                    "duration_seconds": str(duration_seconds),
-                    "height": str(height),
-                    "width": str(width),
-                    "num_steps": str(_DEFAULT_STEPS),
-                    "seed": str(seed),
-                    "use_distilled": "true",
-                }
-                resp = requests.post(
-                    f"{self.api_base_url}/generate/i2v",
-                    data=data,
-                    files=files,
-                    timeout=90,
-                )
-            if resp.status_code == 200:
-                remote_job_id = resp.json().get("job_id")
-                logger.info("daVinci I2V job submitted: %s", remote_job_id)
-                return remote_job_id
-            logger.error(
-                "daVinci I2V submission failed: %s — %s", resp.status_code, resp.text
-            )
-            return None
-        except requests.exceptions.RequestException as exc:
-            logger.error("daVinci I2V request error: %s", exc)
-            return None
+    MAX_GENERATION_SECONDS = 7200
 
     def _resolve_reference_image(self, inputs: dict) -> Optional[str]:
-        """Return a local file path for the reference image, trying multiple sources."""
-        # 1. Signed URL from inputs
+        """Return a local path for the required start/reference image."""
         url = inputs.get("start_image_url")
         if url:
             path = self.orchestrator_service.download_asset_by_url(url, self.input_dir)
             if path:
                 return path
 
-        # 2. materialize_start_image handles base64 / embedded payloads
         filename = materialize_start_image(self.job, self.input_dir)
         if filename:
             return os.path.join(self.input_dir, filename)
 
-        # 3. Supabase storage path
         storage_path = self.job.get("input_storage_path")
         if not storage_path:
-            maybe = self.job.get("start_image_base64")
+            maybe = self.job.get("inputs", {}).get("start_image_base64")
             if (
                 maybe
                 and isinstance(maybe, str)
@@ -300,3 +158,113 @@ class DaVinciMagiHumanI2VProcessor(DaVinciMagiHumanBaseProcessor):
                     return path
 
         return None
+
+    def _build_settings(self, inputs: dict, start_image: Image.Image) -> dict:
+        service_type = self.job.get("service_type", "")
+        limits = get_davinci_magihuman_runtime_limits(service_type)
+        duration = clamp_davinci_magihuman_duration(
+            inputs.get("duration", _DEFAULT_DURATION_SECONDS), service_type
+        )
+
+        return {
+            "model_type": str(limits["model_type"]),
+            "prompt": self.positive_prompt,
+            "negative_prompt": self.negative_prompt,
+            "image_start": start_image,
+            "image_prompt_type": "S",
+            "audio_prompt_type": "",
+            "resolution": davinci_magihuman_resolution(
+                inputs.get("aspect_ratio", "16:9")
+            ),
+            "video_length": duration_to_wangp_frames(duration),
+            "force_fps": _FPS,
+            "num_inference_steps": clamp_davinci_magihuman_steps(
+                inputs.get("steps"), service_type
+            ),
+            "guidance_scale": float(
+                inputs.get("cfg_scale", limits["guidance_default"])
+            ),
+            "audio_guidance_scale": float(
+                inputs.get("audio_cfg_scale", limits["audio_guidance_default"])
+            ),
+            "flow_shift": float(inputs.get("flow_shift", 5.0)),
+            "sample_solver": "unipc",
+            "guidance_phases": 2,
+            "sliding_window_size": 101,
+            "sliding_window_overlap": 1,
+            "sliding_window_discard_last_frames": 0,
+            "seed": int(inputs.get("seed", _DEFAULT_SEED)),
+        }
+
+    def _run_magihuman_i2v(self) -> None:
+        if DEV_MODE:
+            return
+
+        if not self.job:
+            self._fail_job("Job object is None.")
+            return
+
+        inputs = self.job.get("inputs") or {}
+        image_path = self._resolve_reference_image(inputs)
+        if not image_path:
+            self._fail_job(
+                "daVinci-MagiHuman via Wan2GP requires a start image. "
+                "Use the image-to-video workflow with a portrait reference."
+            )
+            return
+
+        try:
+            start_image = Image.open(image_path).convert("RGB")
+        except Exception as exc:
+            self._fail_job(
+                f"Failed to open daVinci-MagiHuman start image for job {self.job_id}: {exc}"
+            )
+            return
+
+        settings = self._build_settings(inputs, start_image)
+        logger.info(
+            "Processing daVinci-MagiHuman job %s with Wan2GP model=%s resolution=%s frames=%s",
+            self.job_id,
+            settings["model_type"],
+            settings["resolution"],
+            settings["video_length"],
+        )
+
+        files = self._run_task(settings)
+        if not files:
+            if (
+                not self.shutdown_event.is_set()
+                and not self.infrastructure_interrupted
+            ):
+                self._fail_job(f"Wan2GP produced no output for job {self.job_id}")
+            return
+
+        result = self._handle_video_output(files[0])
+        if not result:
+            if not self.shutdown_event.is_set():
+                self._fail_job(f"Failed to process video output for job {self.job_id}")
+            return
+
+        video_storage_path, thumbnail_storage_path, actual_duration = result
+        self.orchestrator_service.update_job_status(
+            self.job_id,
+            "completed",
+            storage_path=video_storage_path,
+            thumbnail_storage_path=thumbnail_storage_path,
+            duration_seconds=actual_duration,
+            prompt=self.positive_prompt,
+        )
+
+
+class DaVinciMagiHumanT2VProcessor(DaVinciMagiHumanBaseProcessor):
+    """Compatibility processor; MagiHuman Wan2GP still requires a start image."""
+
+    def process(self):
+        self._run_magihuman_i2v()
+
+
+class DaVinciMagiHumanI2VProcessor(DaVinciMagiHumanBaseProcessor):
+    """daVinci-MagiHuman start-image-to-video processor via Wan2GP."""
+
+    def process(self):
+        self._run_magihuman_i2v()

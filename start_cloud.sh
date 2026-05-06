@@ -312,7 +312,6 @@ fi
           [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
-          [ -f "$DGN_SOURCE_DIR/davinci_magihuman_api.py" ] && cp -v "$DGN_SOURCE_DIR/davinci_magihuman_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
           [ -f "$DGN_SOURCE_DIR/sparkvsr_api.py" ] && cp -v "$DGN_SOURCE_DIR/sparkvsr_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/ernie_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/ernie_image_api.py" /app/
@@ -368,7 +367,6 @@ START_DIFFRHYTHM="false"
 START_QWEN3TTS="false"
 START_DIAGDISTILL="false"
 START_WAN2GP="false"
-START_DAVINCI="false"
 START_COMFYUI="true"
 START_SPARKVSR="false"
 START_INSPATIO="false"
@@ -401,10 +399,24 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
+      MAGIHUMAN_DISTILL_TRANSFORMER="/opt/wan2gp/ckpts/magi_human_distill_quanto_bf16_int8.safetensors"
+      MAGIHUMAN_BASE_TRANSFORMER="/opt/wan2gp/ckpts/magi_human_quanto_bf16_int8.safetensors"
+      MAGIHUMAN_SR_TRANSFORMER="/opt/wan2gp/ckpts/magi_human_sr1080_quanto_bf16_int8.safetensors"
       LTX23_Q4_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
       LTX23_Q6_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q6_K_light.gguf"
       LTX23_Q8_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
-      if [ -f "$LTX23_Q4_TRANSFORMER" ] && [ ! -f "$LTX23_Q6_TRANSFORMER" ] && [ ! -f "$LTX23_Q8_TRANSFORMER" ]; then
+      if [ -f "$MAGIHUMAN_SR_TRANSFORMER" ] && { [ -f "$MAGIHUMAN_DISTILL_TRANSFORMER" ] || [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; }; then
+          if [ "$TOTAL_VRAM_MB" -gt 28000 ] && [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; then
+              SERVICE_TYPE="davinci-magihuman-32gb"
+              log "Auto-selected daVinci-MagiHuman Wan2GP 32GB tier (base SR1080, VRAM: ${TOTAL_VRAM_MB}MB)"
+          elif [ "$TOTAL_VRAM_MB" -gt 22000 ] && [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; then
+              SERVICE_TYPE="davinci-magihuman-24gb"
+              log "Auto-selected daVinci-MagiHuman Wan2GP 24GB tier (base SR1080, VRAM: ${TOTAL_VRAM_MB}MB)"
+          else
+              SERVICE_TYPE="davinci-magihuman-16gb"
+              log "Auto-selected daVinci-MagiHuman Wan2GP 16GB tier (distill SR1080, VRAM: ${TOTAL_VRAM_MB}MB)"
+          fi
+      elif [ -f "$LTX23_Q4_TRANSFORMER" ] && [ ! -f "$LTX23_Q6_TRANSFORMER" ] && [ ! -f "$LTX23_Q8_TRANSFORMER" ]; then
           SERVICE_TYPE="ltx23-video-8gb"
           log "Auto-selected LTX-2.3 8GB tier (Q4_K_M image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
       elif [ -f "$LTX23_Q6_TRANSFORMER" ] && [ ! -f "$LTX23_Q8_TRANSFORMER" ]; then
@@ -441,10 +453,6 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ltx23-comfyui-video-8gb"
           log "Auto-selected LTX-2.3 ComfyUI 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
-  elif [ -f "/app/davinci_magihuman_api.py" ]; then
-      log "Auto-mode: Detected daVinci-MagiHuman image. Selecting daVinci-MagiHuman 32GB service."
-      START_DAVINCI="true"
-      SERVICE_TYPE="davinci-magihuman-32gb"
    elif [ -f "/app/sparkvsr_api.py" ] || [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
         log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
         START_SPARKVSR="true"
@@ -486,14 +494,10 @@ else
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video services (NOT the ComfyUI variants)
-  if [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; then
+  # and daVinci-MagiHuman Wan2GP services.
+  if { [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; } || [[ "$SERVICE_TYPE" == *"davinci"* ]]; then
       START_WAN2GP="true"
-      log "LTX-2.3 Wan2GP service requested. Using Wan2GP backend."
-  fi
-  # daVinci-MagiHuman REST backend
-  if [[ "$SERVICE_TYPE" == *"davinci"* ]]; then
-      START_DAVINCI="true"
-      log "daVinci-MagiHuman service requested. Using REST backend."
+      log "Wan2GP service requested for ${SERVICE_TYPE}."
   fi
 fi
 
@@ -518,15 +522,6 @@ if [ "$START_DIAGDISTILL" = "true" ]; then
   # DiagDistill (HunyuanVideo) needs full VRAM — always disable ComfyUI
   log "DiagDistill selected. Disabling ComfyUI to reserve VRAM for HunyuanVideo."
   START_COMFYUI="false"
-fi
-
-if [ "$START_DAVINCI" = "true" ]; then
-  # daVinci-MagiHuman needs full VRAM — always disable ComfyUI
-  log "daVinci-MagiHuman selected. Disabling ComfyUI to reserve VRAM."
-  START_COMFYUI="false"
-  export VRAM_MODE="32gb"
-  export DAVINCI_FP8_DIR="/models/davinci-magihuman/fp8"
-  log "daVinci-MagiHuman: VRAM_MODE=32gb (FP8 weights + CPU offloading)"
 fi
 
 if [ "$START_SPARKVSR" = "true" ]; then
@@ -561,13 +556,23 @@ if [ "$START_QWEN3TTS" = "true" ]; then
   fi
 fi
 
-# Wan2GP backend (LTX-2.3 Audio-Video)
+# Wan2GP backend (LTX-2.3 Audio-Video and daVinci-MagiHuman)
 if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    # LTX-2.3 uses GGUF transformer + Gemma-3 12B QAT Q4_0 encoder (not FP8).
+    if [[ "${SERVICE_TYPE:-}" == *"davinci"* ]]; then
+        if [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.7}"
+        elif [[ "${SERVICE_TYPE:-}" == *"32gb"* ]]; then
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4 --attention sdpa --perc-reserved-mem-max 0.55 --vram-safety-coefficient 0.80}"
+        else
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4 --attention sdpa --perc-reserved-mem-max 0.50 --vram-safety-coefficient 0.75}"
+        fi
+    fi
+
+    # Wan2GP images use PyTorch cu128 wheels and quantized model files.
     # Minimum requirement is CC >= 7.5 — the floor for the PyTorch 2.7 cu128 wheel
     # (sm_75 = T4/RTX 20xx, sm_80 = A100, sm_86 = RTX 30xx/A10G, sm_89 = RTX 40xx, sm_90 = H100).
     # Blackwell GPUs (SM 12.0) are forward-compatible via PTX JIT in the cu128 wheel.
@@ -598,11 +603,11 @@ except Exception as e:
             _info="${WAN2GP_GPU_CHECK#OK:}"
             _cc=$(echo "$_info" | cut -d: -f1-2)
             _gpu=$(echo "$_info" | cut -d: -f3-)
-            log "GPU '${_gpu}' CC ${_cc} — compatible with LTX-2.3 Wan2GP (PyTorch cu128 minimum: CC 7.5)."
+            log "GPU '${_gpu}' CC ${_cc} — compatible with Wan2GP (PyTorch cu128 minimum: CC 7.5)."
             ;;
         BELOW_MIN:*)
             _cc="${WAN2GP_GPU_CHECK#BELOW_MIN:}"
-            log "ERROR: LTX-2.3 requires compute capability 7.5+ (detected: ${_cc})."
+            log "ERROR: Wan2GP requires compute capability 7.5+ (detected: ${_cc})."
             log "Supported GPUs: T4 (CC 7.5), A100 (CC 8.0), RTX 30xx/A10G (CC 8.6), RTX 40xx/L40S (CC 8.9), H100 (CC 9.0)."
             exit 1
             ;;
@@ -681,6 +686,33 @@ except Exception as e:
             log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
             WAN2GP_CHECK_FAILED=1
         fi
+    fi
+
+    if [[ "${SERVICE_TYPE:-}" == *"davinci"* ]]; then
+        MAGIHUMAN_DISTILL_TRANSFORMER="$WAN2GP_ROOT/ckpts/magi_human_distill_quanto_bf16_int8.safetensors"
+        MAGIHUMAN_BASE_TRANSFORMER="$WAN2GP_ROOT/ckpts/magi_human_quanto_bf16_int8.safetensors"
+        MAGIHUMAN_SR_TRANSFORMER="$WAN2GP_ROOT/ckpts/magi_human_sr1080_quanto_bf16_int8.safetensors"
+        MAGIHUMAN_TEXT_ENCODER="$WAN2GP_ROOT/ckpts/t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors"
+        MAGIHUMAN_VAE="$WAN2GP_ROOT/ckpts/Wan2.2_VAE.safetensors"
+
+        if [[ "$SERVICE_TYPE" == *"16gb"* ]]; then
+            MAGIHUMAN_REQUIRED_TRANSFORMER="$MAGIHUMAN_DISTILL_TRANSFORMER"
+            MAGIHUMAN_EXPECTED_IMAGE="beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest"
+        elif [[ "$SERVICE_TYPE" == *"32gb"* ]]; then
+            MAGIHUMAN_REQUIRED_TRANSFORMER="$MAGIHUMAN_BASE_TRANSFORMER"
+            MAGIHUMAN_EXPECTED_IMAGE="beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest"
+        else
+            MAGIHUMAN_REQUIRED_TRANSFORMER="$MAGIHUMAN_BASE_TRANSFORMER"
+            MAGIHUMAN_EXPECTED_IMAGE="beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest"
+        fi
+
+        for required_file in "$MAGIHUMAN_REQUIRED_TRANSFORMER" "$MAGIHUMAN_SR_TRANSFORMER" "$MAGIHUMAN_TEXT_ENCODER" "$MAGIHUMAN_VAE"; do
+            if [ ! -f "$required_file" ]; then
+                log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
+                log "Expected image for this service: $MAGIHUMAN_EXPECTED_IMAGE"
+                WAN2GP_CHECK_FAILED=1
+            fi
+        done
     fi
     
     if [ "$WAN2GP_CHECK_FAILED" = "1" ]; then
@@ -894,54 +926,9 @@ if [ "$START_DIAGDISTILL" != "true" ] && [ -f "/opt/TurboDiffusion/api_server.py
   wait_for_url "TurboDiffusion API" "http://127.0.0.1:8000/health" 120 "/tmp/turbodiffusion_api.log"
 fi
 
-# Start daVinci-MagiHuman REST API
-if [ "$START_DAVINCI" = "true" ]; then
-  # Check if models are already present (from volume mount or previous run)
-  DAVINCI_MODEL_DIR="/models/davinci-magihuman"
-  WAN_MODEL_DIR="${DAVINCI_MODEL_DIR}/Wan2.2-TI2V-5B"
-  
-  if [[ "${VRAM_MODE:-64gb}" == "32gb" ]]; then
-    # 32GB tier: download FP8-quantized weights (~14.3 GB vs 28.5 GB BF16)
-    DAVINCI_FP8_MODEL_DIR="${DAVINCI_MODEL_DIR}/fp8"
-    if [ ! -d "${DAVINCI_FP8_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_FP8_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
-      log "daVinci-MagiHuman FP8 weights not found. Downloading from SanDiegoDude/daVinci-MagiHuman-FP8..."
-      huggingface-cli download SanDiegoDude/daVinci-MagiHuman-FP8 --local-dir "${DAVINCI_FP8_MODEL_DIR}" || true
-    else
-      log "daVinci-MagiHuman FP8 weights found at ${DAVINCI_FP8_MODEL_DIR}"
-    fi
-    # Still need the base repo for config files, VAE, text encoder, etc.
-    if [ ! -d "${DAVINCI_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_MODEL_DIR}" 2>/dev/null | grep -v "^fp8$" | wc -l) -eq 0 ]; then
-      log "daVinci-MagiHuman base repo (config/VAE) not found. Downloading..."
-      huggingface-cli download GAIR/daVinci-MagiHuman --local-dir "${DAVINCI_MODEL_DIR}" --ignore-patterns "*.safetensors" || true
-    else
-      log "daVinci-MagiHuman base repo found at ${DAVINCI_MODEL_DIR}"
-    fi
-  else
-    if [ ! -d "${DAVINCI_MODEL_DIR}" ] || [ $(ls -A "${DAVINCI_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
-      log "daVinci-MagiHuman models not found. Downloading..."
-      huggingface-cli download GAIR/daVinci-MagiHuman --local-dir "${DAVINCI_MODEL_DIR}" || true
-    else
-      log "daVinci-MagiHuman models found at ${DAVINCI_MODEL_DIR}"
-    fi
-  fi
-  
-  if [ ! -d "${WAN_MODEL_DIR}" ] || [ $(ls -A "${WAN_MODEL_DIR}" 2>/dev/null | wc -l) -eq 0 ]; then
-    log "Wan2.2-TI2V-5B not found. Downloading for I2V support..."
-    huggingface-cli download Wan-AI/Wan2.2-TI2V-5B --local-dir "${WAN_MODEL_DIR}" || true
-  else
-    log "Wan2.2-TI2V-5B found at ${WAN_MODEL_DIR}"
-  fi
-  
-  if [ -f "/app/davinci_magihuman_api.py" ]; then
-    log "Found daVinci-MagiHuman API script. Starting..."
-    log "Note: First run may take several minutes for model load + MagiCompiler graph compilation."
-    (cd /app && "$PYTHON_EXE" davinci_magihuman_api.py > /tmp/davinci_magihuman_api.log 2>&1) &
-    wait_for_url "daVinci-MagiHuman API" "http://127.0.0.1:8000/health" 600 "/tmp/davinci_magihuman_api.log"
-  else
-    log "WARNING: daVinci-MagiHuman API not found at /app/davinci_magihuman_api.py"
-    log "Ensure the Docker image was built with Dockerfile.davinci-magihuman"
-  fi
-fi
+# daVinci-MagiHuman is served by the Wan2GP block above. The legacy REST/FP8
+# startup path was intentionally removed because its FP8 image is not a
+# reliable 24GB-tier deployment target.
 
 # Start SparkVSR REST API
 if [ "$START_SPARKVSR" = "true" ]; then

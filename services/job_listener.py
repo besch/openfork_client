@@ -1159,7 +1159,35 @@ class JobListener:
                                                     "MALLOC_ARENA_MAX": "2",
                                                 }
 
-                                                if "8gb" in actual_service_type.lower():
+                                                lowered_service_type = (
+                                                    actual_service_type.lower()
+                                                )
+                                                if "davinci" in lowered_service_type:
+                                                    if "16gb" in lowered_service_type:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4.5 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.45 "
+                                                            "--vram-safety-coefficient 0.7"
+                                                        )
+                                                    elif "32gb" in lowered_service_type:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.55 "
+                                                            "--vram-safety-coefficient 0.80"
+                                                        )
+                                                    else:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.50 "
+                                                            "--vram-safety-coefficient 0.75"
+                                                        )
+                                                elif "8gb" in lowered_service_type:
                                                     # WanGP's documented low-memory path:
                                                     # profile 4/4.5 + sdpa + low reserved RAM.
                                                     wan2gp_env["WAN2GP_CLI_ARGS"] = (

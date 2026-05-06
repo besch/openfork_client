@@ -8,9 +8,11 @@ from utils.comfyui_workflow_utils import inject_prompt_into_ltx23_video_workflow
 WORKFLOW_DIR = Path(__file__).resolve().parents[1] / "workflows"
 LTX23_COMFYUI_WORKFLOWS = (
     "ltx23-comfyui-text-to-video-8gb.api.json",
+    "ltx23-comfyui-text-to-video-12gb.api.json",
     "ltx23-comfyui-text-to-video-16gb.api.json",
     "ltx23-comfyui-text-to-video-24gb.api.json",
     "ltx23-comfyui-image-to-video-8gb.api.json",
+    "ltx23-comfyui-image-to-video-12gb.api.json",
     "ltx23-comfyui-image-to-video-16gb.api.json",
     "ltx23-comfyui-image-to-video-24gb.api.json",
 )
