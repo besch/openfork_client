@@ -63,7 +63,10 @@ class DockerProdManager:
             print(f"DEBUG: {error_msg}", file=sys.stderr, flush=True)
             logging.warning(error_msg)
 
-            wsl_ip = self._get_wsl_ip()
+            allow_wsl_ip_fallback = (
+                os.environ.get("OPENFORK_ALLOW_WSL_DOCKER_IP_FALLBACK") == "1"
+            )
+            wsl_ip = self._get_wsl_ip() if allow_wsl_ip_fallback else None
             explicit_host = os.environ.get("DOCKER_HOST")
             if explicit_host:
                 # An explicit endpoint was configured for the OpenFork Ubuntu Docker daemon.
@@ -586,11 +589,32 @@ class DockerProdManager:
     def set_docker_image_map(self, image_map: dict):
         if image_map:
             logging.info("Setting dynamic Docker image map.")
-            self.docker_image_map = image_map
+            safe_image_map = {}
+            for service_type, image_name in image_map.items():
+                if self._is_allowed_openfork_image(image_name):
+                    safe_image_map[service_type] = image_name
+                else:
+                    logging.warning(
+                        "Rejecting Docker image for service '%s': image is not in the OpenFork allowlist",
+                        service_type,
+                    )
+            self.docker_image_map = safe_image_map
         else:
             logging.warning(
                 "Dynamic Docker image map is empty. Using fallback static map."
             )
+
+    @staticmethod
+    def _is_allowed_openfork_image(image_name: str) -> bool:
+        if not isinstance(image_name, str):
+            return False
+        return bool(
+            re.match(
+                r"^beschiak/openfork-[a-z0-9._-]+(?::[a-z0-9._-]+|@sha256:[a-f0-9]{64})$",
+                image_name,
+                re.IGNORECASE,
+            )
+        )
 
     def set_services_config(self, services_config: dict):
         if services_config:
@@ -600,13 +624,17 @@ class DockerProdManager:
     def get_default_ports(self, service_type: str) -> dict:
         config = self.services_config.get(service_type, {})
         port = config.get("port", 8188)  # Default to ComfyUI port
-        return {f"{port}/tcp": port}
+        return {f"{port}/tcp": ("127.0.0.1", port)}
 
     def get_image_name(self, service_type: str) -> str:
         image = self.docker_image_map.get(service_type)
         if not image:
             raise ValueError(
                 f"No Docker image configured for service type '{service_type}'"
+            )
+        if not self._is_allowed_openfork_image(image):
+            raise ValueError(
+                f"Refusing unsafe Docker image configured for service type '{service_type}'"
             )
         return image
 

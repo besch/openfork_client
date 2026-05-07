@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 from collections import deque
 from typing import List, Optional
@@ -8,6 +9,19 @@ _lock = threading.Lock()
 _recent_logs: deque[str] = deque(maxlen=1000)
 _installed = False
 _handler: Optional[logging.Handler] = None
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization:\s*bearer\s+)[^\s,;]+"),
+    re.compile(r"(?i)(x-dgn-api-key[=:]\s*)[^\s,;]+"),
+    re.compile(r"(?i)\b(dgn_)[a-f0-9]{32,}\b"),
+    re.compile(r"(?i)\b([a-z0-9_]*(?:api[_-]?key|secret|token|password)[a-z0-9_]*\s*[=:]\s*)[^\s,;]+"),
+)
+
+
+def _redact_secrets(message: str) -> str:
+    redacted = message
+    for pattern in _SECRET_PATTERNS:
+        redacted = pattern.sub(r"\1[REDACTED]", redacted)
+    return redacted
 
 
 class RecentLogsHandler(logging.Handler):
@@ -20,7 +34,7 @@ class RecentLogsHandler(logging.Handler):
             message = record.getMessage()
 
         with _lock:
-            _recent_logs.append(message)
+            _recent_logs.append(_redact_secrets(message))
 
 
 def install_recent_logs_handler(max_lines: int = 1000) -> None:

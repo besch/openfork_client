@@ -682,10 +682,15 @@ class OrchestratorService:
     def _get_signed_upload_url(self, job_id: str, file_name: str) -> Union[Dict, None]:
         """Get a presigned URL for uploading a file directly to storage."""
         try:
+            payload = {"jobId": job_id, "fileName": file_name}
+            execution_token = self.get_active_execution_token(job_id)
+            if execution_token:
+                payload["executionToken"] = execution_token
+
             response = self._make_request(
                 'post',
                 f"{self.orchestrator_url}/api/dgn/upload-url",
-                json={"jobId": job_id, "fileName": file_name}
+                json=payload
             )
             response.raise_for_status()
             return response.json()

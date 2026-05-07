@@ -268,9 +268,9 @@ else
     log "[Linux] NVIDIA Container Toolkit is already installed."
 fi
 
-log "[Linux] Configuring Docker to listen on TCP..."
+log "[Linux] Configuring Docker to listen on localhost-only TCP..."
 sudo mkdir -p /etc/docker
-echo '{"hosts": ["tcp://0.0.0.0:2375", "unix:///var/run/docker.sock"], "tls": false}' | sudo tee /etc/docker/daemon.json
+echo '{"hosts": ["tcp://127.0.0.1:2375", "unix:///var/run/docker.sock"], "tls": false}' | sudo tee /etc/docker/daemon.json
 echo "managed-by=openfork" | sudo tee /etc/openfork-managed > /dev/null
 
 sudo mkdir -p /etc/systemd/system/docker.service.d
