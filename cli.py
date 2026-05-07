@@ -216,9 +216,19 @@ def setup_client(args):
         registration_services = [args.service]
         logging.info(f"Headless mode: restricting supported_services to [{args.service}] (Docker image only has this service)")
         
-        # Headless clients exist to provide network capacity, not for personal use
-        # Force community mode to 'all' to ensure they serve the public network
-        if client.community_mode != 'all' or client.process_own_jobs:
+        # Headless clients exist to provide network capacity, not for personal use.
+        # Monetize headless clients are a separate paid-job pool and must not be
+        # rewritten into the public credit pool.
+        if client.monetize_mode:
+            if client.community_mode != 'none' or client.process_own_jobs:
+                logging.warning(
+                    "Headless monetize mode: restricting routing to paid jobs "
+                    "(community_mode='none', process_own_jobs=False)"
+                )
+            client.community_mode = 'none'
+            client.process_own_jobs = False
+            client.allowed_ids = []
+        elif client.community_mode != 'all' or client.process_own_jobs:
             logging.warning(
                 f"Headless mode: overriding routing config to community_mode='all', "
                 f"process_own_jobs=False (headless clients serve public network only)"

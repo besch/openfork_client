@@ -21,7 +21,7 @@ ENVIRONMENT VARIABLES:
     SERVICE_TYPE          Service type to advertise (default: auto)
     DGN_ORCHESTRATOR_URL  Orchestrator URL (default: https://openfork.video)
     HEADLESS_MODE         Set to "true" for headless operation
-    ACCEPT_POLICY         Job acceptance policy: all, mine, users, project (default: all)
+    ACCEPT_POLICY         Job acceptance policy: all, mine, users, project, monetize (default: all)
     SAVE_LOGS             Set to "true" to stream logs to webhook
     BUILD_JOB_ID          Build job ID for log association (uses provider ID if not set)
 
@@ -1114,8 +1114,51 @@ fi
 
 # Save restart configuration
 log "Saving restart configuration..."
+
+ACCEPT_POLICY="${ACCEPT_POLICY:-all}"
+DGN_CLIENT_ARGS=(
+  --dgn-api-key "$DGN_API_KEY"
+  --service "${SERVICE_TYPE:-auto}"
+  --root-dir /opt/dgn-client
+  --data-dir /data
+)
+
+case "$ACCEPT_POLICY" in
+  monetize)
+    log "Routing policy: monetize"
+    DGN_CLIENT_ARGS+=(--community-mode none --monetize-mode)
+    ;;
+  all)
+    log "Routing policy: all"
+    DGN_CLIENT_ARGS+=(--community-mode all)
+    ;;
+  mine)
+    log "Routing policy: mine"
+    DGN_CLIENT_ARGS+=(--community-mode none --process-own-jobs)
+    ;;
+  users)
+    log "Routing policy: users"
+    DGN_CLIENT_ARGS+=(--community-mode trusted_users)
+    if [ -n "$ALLOWED_TARGETS" ]; then
+      DGN_CLIENT_ARGS+=(--allowed-targets "$ALLOWED_TARGETS")
+    fi
+    ;;
+  project)
+    log "Routing policy: project"
+    DGN_CLIENT_ARGS+=(--community-mode trusted_projects)
+    if [ -n "$ALLOWED_TARGETS" ]; then
+      DGN_CLIENT_ARGS+=(--allowed-targets "$ALLOWED_TARGETS")
+    fi
+    ;;
+  *)
+    log "WARNING: Unknown ACCEPT_POLICY='$ACCEPT_POLICY', defaulting to all"
+    DGN_CLIENT_ARGS+=(--community-mode all)
+    ;;
+esac
+
+printf -v DGN_CLIENT_ARGS_STRING '%q ' "${DGN_CLIENT_ARGS[@]}"
 cat > /opt/dgn-client/.restart-config << RESTART_CONFIG_EOF
-export DGN_CLIENT_ARGS="--dgn-api-key \"$DGN_API_KEY\" --service \"${SERVICE_TYPE:-auto}\" --community-mode all --root-dir /opt/dgn-client --data-dir /data"
+export DGN_CLIENT_ARGS="$DGN_CLIENT_ARGS_STRING"
 export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 RESTART_CONFIG_EOF
 
@@ -1147,8 +1190,4 @@ except Exception as e:
 " || (log "ERROR: Python imports failed." && exit 1)
 
 "$PYTHON_EXE" cli.py \
-  --dgn-api-key "$DGN_API_KEY" \
-  --service "${SERVICE_TYPE:-auto}" \
-  --community-mode all \
-  --root-dir /opt/dgn-client \
-  --data-dir /data 2>&1 | tee -a /tmp/dgn_client.log
+  "${DGN_CLIENT_ARGS[@]}" 2>&1 | tee -a /tmp/dgn_client.log
