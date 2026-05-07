@@ -764,6 +764,26 @@ class JobListener:
             # Unknown workflow type, fall back to service_type from job
             return job.get("service_type")
 
+    @staticmethod
+    def _format_reservation_failure(response: Any) -> str:
+        if not isinstance(response, dict):
+            return "Unknown"
+
+        reason = response.get("reason") or response.get("error") or "Unknown"
+        message = response.get("message")
+        details = response.get("details")
+
+        parts = [str(reason)]
+        if message and message != reason:
+            parts.append(str(message))
+        if isinstance(details, dict) and details:
+            compact_details = ", ".join(
+                f"{key}={value}" for key, value in sorted(details.items())
+            )
+            parts.append(f"details: {compact_details}")
+
+        return " | ".join(parts)
+
     def _handle_prefetch_suggestions(self, download_manager) -> None:
         """Fetch and apply pre-fetch suggestions from the server.
 
@@ -1354,11 +1374,7 @@ class JobListener:
                                             )
                                     else:
                                         # Reservation failed - job may have been taken by another provider
-                                        error_msg = (
-                                            job.get("error")
-                                            if isinstance(job, dict)
-                                            else "Unknown"
-                                        )
+                                        error_msg = self._format_reservation_failure(job)
                                         logging.warning(
                                             f"Failed to reserve job {peeked_job.get('id')}. Server response: {error_msg}. Moving to next available job."
                                         )
