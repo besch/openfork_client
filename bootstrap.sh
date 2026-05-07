@@ -6,27 +6,33 @@
 set -e
 
 REPO="besch/openfork_client"
-BRANCH="main"
+BRANCH="${OPENFORK_CLIENT_SCRIPT_REF:-main}"
 BASE_URL="https://raw.githubusercontent.com/$REPO/$BRANCH"
 API_URL="https://api.github.com/repos/$REPO/git/trees/$BRANCH?recursive=1"
+
+download_openfork_file() {
+  local url="$1"
+  local dest="$2"
+  curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error "$url" -o "$dest"
+}
 
 echo "=== OpenFork DGN Client Bootstrap ==="
 echo "Fetching file list from GitHub API..."
 
 # Fetch the repository tree from GitHub API
 # This returns all files in the repo without needing a manifest
-TREE_JSON=$(curl -sL "$API_URL")
+TREE_JSON=$(curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error "$API_URL" || true)
 
 if [ -z "$TREE_JSON" ] || [[ "$TREE_JSON" == *"rate limit"* ]]; then
   echo "Warning: GitHub API unavailable or rate limited. Falling back to manifest..."
-  curl -sL "$BASE_URL/manifest.txt" -o manifest.txt
+  download_openfork_file "$BASE_URL/manifest.txt" manifest.txt
   count=0
   while IFS= read -r file || [[ -n "$file" ]]; do
     file=$(echo "$file" | tr -d '\r')
     [[ -z "$file" || "$file" =~ ^# ]] && continue
     dir=$(dirname "$file")
     [ "$dir" != "." ] && mkdir -p "$dir"
-    (curl -sL "$BASE_URL/$file" -o "$file" || echo "Failed: $file") &
+    (download_openfork_file "$BASE_URL/$file" "$file" || echo "Failed: $file") &
     
     count=$((count+1))
     if [ $count -ge 20 ]; then
@@ -56,7 +62,7 @@ else
         fi
         
         echo "  -> Downloading $file"
-        (curl -sL "$BASE_URL/$file" -o "$file" 2>/dev/null || echo "    (skipped)") &
+        (download_openfork_file "$BASE_URL/$file" "$file" 2>/dev/null || echo "    (skipped)") &
         
         count=$((count+1))
         if [ $count -ge 20 ]; then

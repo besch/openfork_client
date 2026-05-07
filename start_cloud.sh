@@ -2,6 +2,22 @@
 # OpenFork DGN Client Cloud Startup Script (start_cloud.sh)
 # This script is fetched and run by cloud containers (RunPod, Vast.ai)
 
+OPENFORK_CLIENT_SCRIPT_REF="${OPENFORK_CLIENT_SCRIPT_REF:-main}"
+OPENFORK_RAW_BASE="https://raw.githubusercontent.com/besch/openfork_client/${OPENFORK_CLIENT_SCRIPT_REF}"
+
+download_openfork_script() {
+  local script_name="$1"
+  local dest="$2"
+  local sha_var="$3"
+  curl --fail --location --proto '=https' --tlsv1.2 --max-time 60 --progress-bar \
+    "${OPENFORK_RAW_BASE}/${script_name}" -o "$dest"
+
+  local expected_sha="${!sha_var:-}"
+  if [ -n "$expected_sha" ]; then
+    echo "${expected_sha}  ${dest}" | sha256sum -c -
+  fi
+}
+
 # --- Help ---
 show_help() {
   cat << EOF
@@ -285,7 +301,7 @@ mkdir -p /opt/dgn-client /data/.cache /data/input
 cd /opt/dgn-client
 log "Downloading DGN client files..."
 export INSTALL_DEPS=true
-if curl --max-time 60 --progress-bar -L https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh; then
+if download_openfork_script bootstrap.sh bootstrap.sh OPENFORK_BOOTSTRAP_SHA256; then
   log "✓ bootstrap.sh downloaded successfully"
   bash bootstrap.sh
 else

@@ -29,7 +29,7 @@ CACHE_DIR = os.path.join(ROOT_DIR, '.cache')
 DEV_MODE = False
 THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "512"))
 MAX_INPUT_ASSET_BYTES = int(
-    os.getenv("MAX_INPUT_ASSET_BYTES", "1073741824")
+    os.getenv("MAX_INPUT_ASSET_BYTES", "536870912")
 )
 MAX_INPUT_ASSET_REDIRECTS = int(
     os.getenv("MAX_INPUT_ASSET_REDIRECTS", "3")

@@ -2,6 +2,22 @@
 # OpenFork Docker Image Builder Script (start_build.sh)
 # This script is fetched and run by cloud containers for building Docker images
 
+OPENFORK_CLIENT_SCRIPT_REF="${OPENFORK_CLIENT_SCRIPT_REF:-main}"
+OPENFORK_RAW_BASE="https://raw.githubusercontent.com/besch/openfork_client/${OPENFORK_CLIENT_SCRIPT_REF}"
+
+download_openfork_script() {
+  local script_name="$1"
+  local dest="$2"
+  local sha_var="$3"
+  curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+    "${OPENFORK_RAW_BASE}/${script_name}" -o "$dest"
+
+  local expected_sha="${!sha_var:-}"
+  if [ -n "$expected_sha" ]; then
+    echo "${expected_sha}  ${dest}" | sha256sum -c -
+  fi
+}
+
 # --- Help ---
 show_help() {
   cat << EOF
@@ -328,9 +344,12 @@ if [ "$RUN_DGN_CLIENT" = "true" ]; then
     -e HEADLESS_MODE="true" \
     -e ACCEPT_POLICY="all" \
     -e PYTHONUNBUFFERED="1" \
+    -e OPENFORK_CLIENT_SCRIPT_REF="$OPENFORK_CLIENT_SCRIPT_REF" \
+    ${OPENFORK_BOOTSTRAP_SHA256:+-e OPENFORK_BOOTSTRAP_SHA256="$OPENFORK_BOOTSTRAP_SHA256"} \
+    ${OPENFORK_START_CLOUD_SHA256:+-e OPENFORK_START_CLOUD_SHA256="$OPENFORK_START_CLOUD_SHA256"} \
     -v /data:/data \
     "$DOCKER_TAG" \
-    bash -c "curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/start_cloud.sh | bash"
+    bash -c 'set -euo pipefail; raw_base="https://raw.githubusercontent.com/besch/openfork_client/${OPENFORK_CLIENT_SCRIPT_REF:-main}"; curl --fail --location --proto "=https" --tlsv1.2 --silent --show-error "$raw_base/start_cloud.sh" -o /tmp/start_cloud.sh; if [ -n "${OPENFORK_START_CLOUD_SHA256:-}" ]; then echo "${OPENFORK_START_CLOUD_SHA256}  /tmp/start_cloud.sh" | sha256sum -c -; fi; bash /tmp/start_cloud.sh'
 else
   log "Build complete. No DGN client requested."
   report_status "completed" "Build completed successfully"
