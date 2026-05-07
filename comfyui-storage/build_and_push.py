@@ -68,9 +68,9 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.zimage-full-8gb", "beschiak/openfork-zimage-full-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.zimage-full-16gb", "beschiak/openfork-zimage-full-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.zimage-full-24gb", "beschiak/openfork-zimage-full-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-16gb", "beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.davinci-magihuman-wan2gp-16gb", "beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True),
     ImageConfig("Dockerfile.ltx23-wan2gp-12gb", "beschiak/openfork-ltx23-wan2gp-12gb:latest", build=True, push=True),
 ]
 

@@ -105,13 +105,9 @@ RUN pip3 install \
 RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs
 
 # ── Verify HF_TOKEN is set before attempting large downloads ──────────────────
-RUN test -n "${HF_TOKEN}" \
-    || { echo "ERROR: HF_TOKEN build-arg is required to download gated models. Pass --build-arg HF_TOKEN=<your_token>"; exit 1; }
+RUN python3 -c "import os; assert os.environ.get('HF_TOKEN'), 'ERROR: HF_TOKEN build-arg is required to download gated models.'"
 
 # ── Download LTX-2.3 22B model files (DeepBeepMeep/LTX-2) ────────────────────
-# Files go to the HF hub cache (no --local-dir) so that hf_hub_download() calls
-# inside Wan2GP at generation time can find them with HF_HUB_OFFLINE=1.
-# A symlink step below populates ckpts/ from the cache for direct-path access.
 RUN pip3 install -q "huggingface_hub[cli]" \
     && huggingface-cli download DeepBeepMeep/LTX-2 \
         ltx-2.3-22b-distilled-Q6_K_light.gguf \
@@ -126,19 +122,26 @@ RUN pip3 install -q "huggingface_hub[cli]" \
         ltx2_22b_config.json \
         ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors \
         ltx-2.3-22b-ic-lora-outpaint.safetensors \
-        --token "${HF_TOKEN}" \
+        --local-dir /opt/wan2gp/ckpts \
     || { echo "ERROR: LTX-2.3 model download failed. Verify HF_TOKEN is valid and has access to DeepBeepMeep/LTX-2."; exit 1; }
 
 # ── Download Gemma-3 12B QAT text encoder ─────────────────────────────────────
 RUN huggingface-cli download DeepBeepMeep/LTX-2 \
-        --include "gemma-3-12b-it-qat-q4_0-unquantized/*" \
-        --token "${HF_TOKEN}" \
+        gemma-3-12b-it-qat-q4_0-unquantized/added_tokens.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/chat_template.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/config.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/config_light.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/gemma-3-12b-it-qat-q4_0-unquantized.safetensors \
+        gemma-3-12b-it-qat-q4_0-unquantized/gemma-3-12b-it-qat-q4_0-unquantized_quanto_bf16_int8.safetensors \
+        gemma-3-12b-it-qat-q4_0-unquantized/generation_config.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/preprocessor_config.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/processor_config.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/special_tokens_map.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/tokenizer.json \
+        gemma-3-12b-it-qat-q4_0-unquantized/tokenizer.model \
+        gemma-3-12b-it-qat-q4_0-unquantized/tokenizer_config.json \
+        --local-dir /opt/wan2gp/ckpts \
     || { echo "ERROR: Gemma-3 text encoder download failed. Verify HF_TOKEN and repo access."; exit 1; }
-
-# ── Symlink HF cache snapshot → ckpts/ for direct-path access ────────────────
-# Resolves to actual blob files so ckpts/ entries are usable without network.
-COPY setup_ckpts_symlinks.py /tmp/setup_ckpts_symlinks.py
-RUN python3 /tmp/setup_ckpts_symlinks.py
 
 # The Gemma folder contains merged quantized weights, not the original shard set.
 # Remove any stale shard index so local Transformers lookups cannot chase absent
@@ -176,7 +179,6 @@ RUN huggingface-cli download DeepBeepMeep/Wan2.1 \
         mask/config.json \
         rife4.26.pkl \
         --local-dir /opt/wan2gp/ckpts \
-        --token "${HF_TOKEN}" \
     || { echo "ERROR: WanGP shared runtime asset download failed."; exit 1; }
 
 # ── FastAPI + uvicorn for the Wan2GP HTTP server ──────────────────────────────
