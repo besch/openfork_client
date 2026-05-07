@@ -17,7 +17,11 @@ from enum import Enum
 import docker
 from services.disk_space_utils import estimate_image_size_bytes, check_sufficient_space
 from services import disk_pressure
-from config import DISK_PRESSURE_HEALTHY_GB, DISK_PRESSURE_CRITICAL_GB
+from config import (
+    DISK_PRESSURE_HEALTHY_GB,
+    DISK_PRESSURE_CRITICAL_GB,
+    DOCKER_IMAGE_CACHE_LIMIT_GB,
+)
 
 _docker_errors = getattr(docker, "errors", None)
 DockerImageNotFound = getattr(
@@ -93,7 +97,7 @@ class DockerDownloadManager:
         orchestrator_service=None,
         provider_id=None,
         wakeup_event=None,
-        max_cached_images: Optional[int] = None,
+        cache_limit_gb: Optional[float] = None,
         community_mode: str = "all",
         monetize_mode: bool = False,
         data_dir: Optional[str] = None,
@@ -106,11 +110,11 @@ class DockerDownloadManager:
             orchestrator_service: Optional OrchestratorService for reporting cached images
             provider_id: Optional provider ID for server-side tracking
             wakeup_event: Optional threading.Event to set when a download completes
-            max_cached_images: Optional hard cap for locally cached Docker images.
-                When set, least-recently-used images are evicted before starting
-                a new download so disk usage stays bounded.
+            cache_limit_gb: Optional storage budget for locally cached OpenFork
+                Docker images. When set, least-recently-used images are evicted
+                before starting a new download so disk usage stays bounded.
             community_mode: Provider's current community routing mode. Used by
-                the disk-pressure layer to compute the effective per-policy cap.
+                logging and compatibility with routing config hot reloads.
             monetize_mode: True when the provider is currently in monetize mode.
             data_dir: Path of the OpenFork data directory. Cache metadata
                 (per-image last-used timestamps) is persisted here so LRU
@@ -121,8 +125,15 @@ class DockerDownloadManager:
         self.orchestrator_service = orchestrator_service
         self.provider_id = provider_id
         self.wakeup_event = wakeup_event
-        self.max_cached_images = (
-            max_cached_images if max_cached_images and max_cached_images > 0 else None
+        effective_cache_limit_gb = (
+            cache_limit_gb
+            if cache_limit_gb is not None
+            else DOCKER_IMAGE_CACHE_LIMIT_GB
+        )
+        self.cache_limit_bytes = (
+            int(float(effective_cache_limit_gb) * 1024 ** 3)
+            if effective_cache_limit_gb and float(effective_cache_limit_gb) > 0
+            else None
         )
         self.community_mode = community_mode or "all"
         self.monetize_mode = bool(monetize_mode)
@@ -354,49 +365,55 @@ class DockerDownloadManager:
         except OSError as e:
             logging.debug(f"Could not persist cache metadata: {e}")
 
-    # ── Routing config / pressure-aware caps ──────────────────────────────
+    # ── Routing config / storage budget ──────────────────────────────────
 
     def update_routing_config(
         self, community_mode: str, monetize_mode: bool
     ) -> None:
-        """Hot-reload policy state used by disk-pressure cap calculations."""
+        """Hot-reload policy state used by routing-aware download decisions."""
         with self._lock:
             self.community_mode = community_mode or "all"
             self.monetize_mode = bool(monetize_mode)
             tier = disk_pressure.get_disk_pressure_tier()
             policy = disk_pressure.policy_key_for(self.community_mode, self.monetize_mode)
-            effective = disk_pressure.get_effective_cap(policy, tier)
-            self.max_cached_images = effective if effective and effective > 0 else None
             logging.debug(
                 f"Routing config applied to download manager: "
-                f"policy={policy} tier={tier} effective_cap={self.max_cached_images}"
+                f"policy={policy} tier={tier} "
+                f"cache_limit_gb={self._cache_limit_gb_display()}"
             )
 
     def _current_policy_key(self) -> str:
         return disk_pressure.policy_key_for(self.community_mode, self.monetize_mode)
 
-    def _refresh_effective_cap(self, tier: str) -> None:
-        """Recompute and apply the effective image cap for the current policy + tier."""
-        effective = disk_pressure.get_effective_cap(self._current_policy_key(), tier)
-        new_cap = effective if effective and effective > 0 else None
-        if new_cap != self.max_cached_images:
-            logging.info(
-                f"Effective image cap updated: policy={self._current_policy_key()} "
-                f"tier={tier} cap={new_cap}"
-            )
-            self.max_cached_images = new_cap
+    def _cache_limit_gb_display(self) -> str:
+        if not self.cache_limit_bytes:
+            return "unlimited"
+        return f"{self.cache_limit_bytes / 1024 ** 3:.0f}"
+
+    def update_cache_limit_gb(self, cache_limit_gb: Optional[float]) -> None:
+        """Hot-reload the user-facing Docker image storage budget."""
+        with self._lock:
+            if cache_limit_gb and float(cache_limit_gb) > 0:
+                self.cache_limit_bytes = int(float(cache_limit_gb) * 1024 ** 3)
+            else:
+                self.cache_limit_bytes = None
+            limit_label = self._cache_limit_gb_display()
+            suffix = "" if limit_label == "unlimited" else " GB"
+            logging.info(f"Docker image cache limit updated: {limit_label}{suffix}")
+
+        self._evict_until_within_cache_limit(reason="storage_limit")
 
     # ── Disk-pressure-driven eviction ─────────────────────────────────────
 
     def check_and_evict_for_pressure(self) -> int:
         """
-        Idle-loop hook: compute current disk tier, update the effective cap,
-        and evict LRU images to bring disk back above the Pressure threshold
-        when at Critical. Returns the number of images evicted on this call.
+        Idle-loop hook: compute current disk tier, enforce the user's cache
+        budget, and evict LRU images to bring disk back above the Pressure
+        threshold when at Critical. Returns the number of images evicted on
+        this call.
 
-        Cheap when at Healthy: a single `shutil.disk_usage` call. Skips any
-        work if a download is currently in flight (eviction would race with
-        `_download_worker`).
+        Cheap when at Healthy unless the cache is over budget. Eviction skips
+        running, downloading, queued, and freshly downloaded images.
         """
         if self._shutdown:
             return 0
@@ -409,15 +426,12 @@ class DockerDownloadManager:
         self._last_disk_tier = tier
         self._last_pressure_check_ts = time.time()
 
-        # Always sync the cap to the current tier so subsequent pulls honor it.
-        self._refresh_effective_cap(tier)
-
         if tier == disk_pressure.HEALTHY:
-            # Honor caps but don't evict reactively at Healthy unless cap is exceeded.
-            return self._evict_until_under_cap()
+            # Honor the user's cache budget but don't do pressure cleanup.
+            return self._evict_until_within_cache_limit()
 
         # PRESSURE / CRITICAL — additionally try to claw back to Healthy / Pressure.
-        evicted = self._evict_until_under_cap()
+        evicted = self._evict_until_within_cache_limit()
 
         if tier == disk_pressure.CRITICAL:
             # Aggressive eviction: keep going until free space exceeds Pressure threshold,
@@ -436,20 +450,21 @@ class DockerDownloadManager:
 
         return evicted
 
-    def _evict_until_under_cap(self, reason: str = "image_cap") -> int:
-        """Evict LRU images while we exceed the current `max_cached_images` cap."""
-        if not self.max_cached_images:
+    def _evict_until_within_cache_limit(
+        self,
+        reason: str = "storage_limit",
+    ) -> int:
+        """Evict LRU images while cached OpenFork images exceed the GB budget."""
+        if not self.cache_limit_bytes:
             return 0
 
         evicted = 0
         with self._lock:
-            cached = self._get_cached_service_types()
-            while len(cached) > self.max_cached_images:
+            while self._get_cache_usage_bytes() > self.cache_limit_bytes:
                 victim = self._evict_lru_image(reason=reason)
                 if not victim:
                     break
                 evicted += 1
-                cached = self._get_cached_service_types()
         return evicted
 
     @staticmethod
@@ -555,6 +570,10 @@ class DockerDownloadManager:
         except Exception as e:
             logging.warning(f"Failed to sync cached images after eviction: {e}")
 
+    def sync_cached_images_with_server(self):
+        """Public wrapper used when Electron manually removes Docker images."""
+        self._sync_cached_images_with_server()
+
     def _lookup_image_size_bytes(self, image_name: str) -> int:
         """Best-effort image size lookup. Falls back to the heuristic estimate."""
         try:
@@ -568,10 +587,59 @@ class DockerDownloadManager:
             pass
         return estimate_image_size_bytes(image_name)
 
+    def _get_service_required_bytes(self, service_type: str) -> int:
+        """Return the expected disk footprint for a service image."""
+        service_config = (getattr(self.docker_manager, "services_config", None) or {}).get(
+            service_type,
+            {},
+        )
+        disk_required_gb = service_config.get("disk_required_gb")
+        if isinstance(disk_required_gb, (int, float)) and disk_required_gb > 0:
+            return int(float(disk_required_gb) * 1024 ** 3)
+
+        image_name = self.docker_manager.get_image_name(service_type)
+        return estimate_image_size_bytes(image_name)
+
+    def _get_cached_image_size_bytes(self, service_type: str) -> int:
+        """Return actual cached image size, falling back to configured requirement."""
+        image_name = self.docker_manager.get_image_name(service_type)
+        try:
+            client = getattr(self.docker_manager, "client", None)
+            if client:
+                image = client.images.get(image_name)
+                size = getattr(image, "attrs", {}).get("Size")
+                if isinstance(size, (int, float)) and size > 0:
+                    return int(size)
+        except Exception:
+            pass
+        return self._get_service_required_bytes(service_type)
+
+    def _get_cache_usage_bytes(
+        self,
+        exclude_service_types: Optional[Set[str]] = None,
+    ) -> int:
+        """Return total bytes used by cached OpenFork service images."""
+        exclude = exclude_service_types or set()
+        total = 0
+        for service_type in self._get_cached_service_types():
+            if service_type in exclude:
+                continue
+            total += self._get_cached_image_size_bytes(service_type)
+        return total
+
+    def service_fits_cache_budget(self, service_type: str) -> bool:
+        """Whether one service image can fit inside the configured cache budget."""
+        if not self.cache_limit_bytes:
+            return True
+        try:
+            return self._get_service_required_bytes(service_type) <= self.cache_limit_bytes
+        except Exception:
+            return True
+
     def _evict_lru_image(
         self,
         exclude_service_types: Optional[Set[str]] = None,
-        reason: str = "image_cap",
+        reason: str = "storage_limit",
         force: bool = False,
     ) -> Optional[str]:
         """
@@ -674,32 +742,72 @@ class DockerDownloadManager:
             return None
 
     def _ensure_cache_capacity(self, incoming_service_type: str) -> bool:
-        """Evict LRU images until a new download fits under the configured image cap."""
-        if not self.max_cached_images:
+        """Evict LRU images until a new download fits under the storage budget."""
+        if not self.cache_limit_bytes:
             return True
 
         cached_service_types = self._get_cached_service_types()
         if incoming_service_type in cached_service_types:
             return True
 
-        while len(cached_service_types) >= self.max_cached_images:
+        try:
+            incoming_required = self._get_service_required_bytes(incoming_service_type)
+            incoming_image = self.docker_manager.get_image_name(incoming_service_type)
+        except Exception as e:
+            logging.warning(
+                f"Could not calculate cache budget for {incoming_service_type}: {e}"
+            )
+            return True
+
+        if incoming_required > self.cache_limit_bytes:
+            required_gb = incoming_required / 1024 ** 3
+            limit_gb = self.cache_limit_bytes / 1024 ** 3
+            message = (
+                f"OpenFork storage limit is too small for '{incoming_image}'. "
+                f"This image needs about {required_gb:.1f} GB, but your Docker "
+                f"image limit is {limit_gb:.1f} GB. Increase the limit in "
+                "Docker Management settings to use this model."
+            )
+            logging.warning(message)
+            self._emit_disk_space_error(
+                incoming_image,
+                required_gb=required_gb,
+                available_gb=limit_gb,
+                message=message,
+            )
+            return False
+
+        while (
+            self._get_cache_usage_bytes(exclude_service_types={incoming_service_type})
+            + incoming_required
+            > self.cache_limit_bytes
+        ):
             evicted_service = self._evict_lru_image(
-                exclude_service_types={incoming_service_type}
+                exclude_service_types={incoming_service_type},
+                reason="storage_limit",
             )
             if not evicted_service:
-                # No evictable candidate — all remaining images are either active,
-                # running, or freshly downloaded (protected from immediate eviction).
-                # Allow the download to proceed with a temporary cap overage rather
-                # than silently dropping the queued download or evicting an image the
-                # job listener is about to use.
-                logging.info(
-                    f"Image cap reached ({self.max_cached_images}) but no evictable "
-                    f"candidate found for '{incoming_service_type}' — all cached images "
-                    "are busy or freshly downloaded. Proceeding; cap will be restored "
-                    f"within {FRESH_IMAGE_PROTECTION_SECS}s."
+                current_gb = self._get_cache_usage_bytes() / 1024 ** 3
+                incoming_gb = incoming_required / 1024 ** 3
+                limit_gb = self.cache_limit_bytes / 1024 ** 3
+                message = (
+                    f"OpenFork needs about {incoming_gb:.1f} GB for "
+                    f"'{incoming_image}', but the current image cache is "
+                    f"{current_gb:.1f} GB and the limit is {limit_gb:.1f} GB. "
+                    "No cached image can be safely removed right now; try again "
+                    "after the current job/download finishes or increase the limit."
                 )
-                return True
-            cached_service_types = self._get_cached_service_types()
+                logging.info(
+                    "Storage limit reached but no evictable candidate found for "
+                    f"'{incoming_service_type}'."
+                )
+                self._emit_disk_space_error(
+                    incoming_image,
+                    required_gb=incoming_gb,
+                    available_gb=max(0.0, limit_gb - current_gb),
+                    message=message,
+                )
+                return False
 
         return True
     
@@ -850,13 +958,7 @@ class DockerDownloadManager:
                 # Prefer disk_required_gb from services_config (authoritative, from services.json)
                 # over the hardcoded estimate map, which can be significantly off (e.g. wan22-24gb:
                 # estimate=120 GB, actual disk_required_gb=220 GB).
-                service_config = (self.docker_manager.services_config or {}).get(service_type, {})
-                disk_required_gb = service_config.get("disk_required_gb")
-                if disk_required_gb:
-                    required_bytes = int(disk_required_gb * 1024 ** 3)
-                else:
-                    # Fallback to name-based heuristic when config is unavailable
-                    required_bytes = estimate_image_size_bytes(image_name)
+                required_bytes = self._get_service_required_bytes(service_type)
                 has_space, available, required = check_sufficient_space(required_bytes)
 
                 if not has_space:
@@ -933,14 +1035,21 @@ class DockerDownloadManager:
                 self._active_downloads.discard(service_type)
                 self._download_status[service_type] = DownloadStatus.FAILED
     
-    def _emit_disk_space_error(self, image_name: str, required_gb: float, available_gb: float):
+    def _emit_disk_space_error(
+        self,
+        image_name: str,
+        required_gb: float,
+        available_gb: float,
+        message: Optional[str] = None,
+    ):
         """Emit a DISK_SPACE_ERROR JSON event so the Electron UI can show an actionable alert."""
-        import json, sys
-        message = (
-            f"Insufficient disk space for '{image_name}'. "
-            f"Required: {required_gb:.1f} GB (including 5 GB buffer), "
-            f"Available: {available_gb:.1f} GB"
-        )
+        import json
+        if message is None:
+            message = (
+                f"Insufficient disk space for '{image_name}'. "
+                f"Required: {required_gb:.1f} GB (including 5 GB buffer), "
+                f"Available: {available_gb:.1f} GB"
+            )
         print(json.dumps({
             "type": "DISK_SPACE_ERROR",
             "payload": {
@@ -998,6 +1107,11 @@ class DockerDownloadManager:
             # Report download completion to server (moves to tier 0 - cached)
             # This doesn't affect credits - credits are based on processing time, not caching
             self._report_download_state(service_type, "finish")
+
+            # The configured disk_required_gb is conservative; actual Docker
+            # image size can still push the cache over the user's budget after
+            # extraction. Evict older images immediately when possible.
+            self._evict_until_within_cache_limit(reason="storage_limit")
                 
         except Exception as e:
             # Distinguish permanent failures (image does not exist on registry) from
@@ -1150,7 +1264,7 @@ class DockerDownloadManager:
                 logging.debug(f"Cleaned up cancellation event for {service_type}")
             
             # Start the next queued download if any.
-            # Re-check both image cap and disk space here because the prior download
+            # Re-check both cache budget and disk space here because the prior download
             # may have changed local cache state significantly.
             while self._download_queue and not self._shutdown:
                 if self._job_active:
@@ -1192,12 +1306,7 @@ class DockerDownloadManager:
                     continue
 
                 next_image_name = self.docker_manager.get_image_name(next_service)
-                next_config = (self.docker_manager.services_config or {}).get(next_service, {})
-                next_disk_gb = next_config.get("disk_required_gb")
-                if next_disk_gb:
-                    next_required_bytes = int(next_disk_gb * 1024 ** 3)
-                else:
-                    next_required_bytes = estimate_image_size_bytes(next_image_name)
+                next_required_bytes = self._get_service_required_bytes(next_service)
 
                 has_space, available, required = check_sufficient_space(next_required_bytes)
                 if not has_space:

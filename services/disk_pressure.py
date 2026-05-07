@@ -2,10 +2,9 @@
 Disk Pressure Tier Detection
 
 Translates current free disk space into a categorical tier (healthy, pressure,
-critical) and computes effective per-policy caps and idle timeouts based on
-that tier. The DockerDownloadManager consults these helpers to evict images
-even when no new pull is in flight, and to override `mine` policy's normally
-uncapped behavior when free space drops below the configured thresholds.
+critical) and computes effective idle timeouts based on that tier. The
+DockerDownloadManager consults these helpers to evict images even when no new
+pull is in flight.
 """
 
 import logging
@@ -14,8 +13,6 @@ from typing import Optional
 from config import (
     DISK_PRESSURE_HEALTHY_GB,
     DISK_PRESSURE_CRITICAL_GB,
-    MINE_POLICY_PRESSURE_CAP,
-    POLICY_MAX_CACHED_IMAGES,
     POLICY_IDLE_TIMEOUT_MINUTES,
 )
 
@@ -54,7 +51,7 @@ def get_disk_pressure_tier(path: Optional[str] = None) -> str:
 
 def policy_key_for(community_mode: str, monetize_mode: bool) -> str:
     """Map (community_mode, monetize_mode) to the canonical policy key used by
-    POLICY_MAX_CACHED_IMAGES and POLICY_IDLE_TIMEOUT_MINUTES.
+    POLICY_IDLE_TIMEOUT_MINUTES.
     """
     if monetize_mode:
         return "monetize"
@@ -64,30 +61,6 @@ def policy_key_for(community_mode: str, monetize_mode: bool) -> str:
         "trusted_users": "users",
         "none": "mine",
     }.get(community_mode or "none", "mine")
-
-
-def get_effective_cap(policy: str, tier: str) -> Optional[int]:
-    """Return the maximum number of cached images allowed under the given tier.
-
-    Returns None for "mine" + healthy (preserves the existing hands-off contract
-    for the user's own private workloads on a roomy disk). Every other combination
-    yields a finite cap so eviction can make forward progress.
-    """
-    base_cap = POLICY_MAX_CACHED_IMAGES.get(policy)
-
-    if tier == HEALTHY:
-        return base_cap  # may be None for mine
-
-    # Pressure / Critical: even mine gets a cap
-    if base_cap is None:
-        base_cap = MINE_POLICY_PRESSURE_CAP
-
-    if tier == PRESSURE:
-        effective = max(2, int(base_cap * 0.6))
-    else:  # CRITICAL
-        effective = max(1, int(base_cap * 0.6 * 0.6))
-
-    return effective
 
 
 def get_effective_idle_minutes(policy: str, tier: str) -> Optional[int]:

@@ -95,6 +95,18 @@ def listen_for_ipc_commands(client: "DGNClient"):
                 logging.info(f"Received CANCEL_DOWNLOAD command for {service_type}.")
                 if client.download_manager:
                     client.download_manager.cancel_download(service_type)
+            elif cmd_type == "SYNC_CACHED_IMAGES":
+                logging.info("Received SYNC_CACHED_IMAGES command from main process.")
+                if client.download_manager:
+                    client.download_manager.sync_cached_images_with_server()
+            elif cmd_type == "UPDATE_STORAGE_CONFIG":
+                logging.info("Received UPDATE_STORAGE_CONFIG command from main process.")
+                if isinstance(payload, dict) and client.download_manager:
+                    client.download_manager.update_cache_limit_gb(
+                        payload.get("docker_image_cache_limit_gb")
+                    )
+                    if hasattr(client, "job_wakeup_event"):
+                        client.job_wakeup_event.set()
             elif cmd_type == "SET_COMPACTION_PENDING":
                 pending = bool(payload.get("pending")) if isinstance(payload, dict) else False
                 client.compaction_pending = pending
@@ -173,11 +185,20 @@ def setup_client(args):
             else:
                 logging.warning("No valid services found for SELECTED_WORKFLOWS. Using all compatible services.")
 
+    from config import HEADLESS_MODE
+
     # Validate service argument after loading config
     if args.service != 'auto':
         available_services = list(client.docker_image_map.keys())
         if args.service not in available_services:
             logging.error(f"Invalid service '{args.service}'. Available services from config: {', '.join(available_services)}")
+            sys.exit(1)
+        if not HEADLESS_MODE and args.service not in client.compatible_services:
+            logging.error(
+                f"Service '{args.service}' is not compatible with this client. "
+                "It may exceed your GPU/RAM requirements or the OpenFork Docker "
+                "image storage limit configured in Docker Management settings."
+            )
             sys.exit(1)
 
     # Scan for cached Docker images before registration (for smart job assignment)
@@ -190,7 +211,6 @@ def setup_client(args):
 
     # In headless mode, the Docker container only has ONE service's models installed
     # So we must restrict supported_services to only that service, not all VRAM-compatible ones
-    from config import HEADLESS_MODE
     if HEADLESS_MODE and args.service != 'auto':
         # Only claim to support the exact service this container has
         registration_services = [args.service]

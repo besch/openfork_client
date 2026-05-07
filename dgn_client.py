@@ -9,26 +9,13 @@ _UUID_RE = re.compile(
     re.IGNORECASE,
 )
 
-from config import POLICY_MAX_CACHED_IMAGES
+from config import DOCKER_IMAGE_CACHE_LIMIT_GB
 from services.orchestrator_service import OrchestratorService, TokenExpiredError
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 from services.docker_download_manager import DockerDownloadManager
 from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display, get_service_incompatibility_reason, get_available_system_ram
-from services import disk_pressure
 import services.processors as job_processors_module
-
-
-def _get_max_cached_images_for_policy(community_mode: str, monetize_mode: bool):
-    """Return the local Docker image cache cap for the current routing policy.
-
-    The returned value already reflects the active disk-pressure tier — at
-    Healthy it matches POLICY_MAX_CACHED_IMAGES, at Pressure / Critical it
-    follows the multipliers in services.disk_pressure.
-    """
-    policy_key = disk_pressure.policy_key_for(community_mode, monetize_mode)
-    tier = disk_pressure.get_disk_pressure_tier()
-    return disk_pressure.get_effective_cap(policy_key, tier)
 
 
 class DGNClient:
@@ -82,17 +69,12 @@ class DGNClient:
         # Shared event to wake up the job listener immediately when a download completes
         self.job_wakeup_event = threading.Event()
 
-        max_cached_images = _get_max_cached_images_for_policy(
-            self.community_mode,
-            self.monetize_mode,
-        )
-
         # Initialize download manager for Docker image pre-fetching (only when not headless)
         self.download_manager = (
             DockerDownloadManager(
                 docker_manager,
                 wakeup_event=self.job_wakeup_event,
-                max_cached_images=max_cached_images,
+                cache_limit_gb=DOCKER_IMAGE_CACHE_LIMIT_GB,
                 community_mode=self.community_mode,
                 monetize_mode=self.monetize_mode,
                 data_dir=self.data_dir,
@@ -172,7 +154,6 @@ class DGNClient:
 
             download_manager = getattr(self, "download_manager", None)
             if download_manager:
-                # update_routing_config also applies the disk-pressure-aware cap.
                 download_manager.update_routing_config(
                     community_mode=self.community_mode,
                     monetize_mode=self.monetize_mode,
@@ -252,6 +233,32 @@ class DGNClient:
             for service_name, service_config in self.services_config.items():
                 if can_run_service(service_config, self.available_vram):
                     self.compatible_services.add(service_name)
+
+            cache_limit_gb = DOCKER_IMAGE_CACHE_LIMIT_GB
+            if cache_limit_gb and cache_limit_gb > 0:
+                too_large_for_cache = []
+                for service_name in list(self.compatible_services):
+                    disk_required_gb = self.services_config.get(service_name, {}).get(
+                        "disk_required_gb"
+                    )
+                    if (
+                        isinstance(disk_required_gb, (int, float))
+                        and disk_required_gb > cache_limit_gb
+                    ):
+                        self.compatible_services.discard(service_name)
+                        too_large_for_cache.append(
+                            f"{service_name} ({disk_required_gb:g}GB)"
+                        )
+
+                if too_large_for_cache:
+                    logging.warning(
+                        "Storage limit filter: %s service(s) exceed the "
+                        "OpenFork Docker image cache limit (%sGB) and will not "
+                        "be advertised for jobs: %s",
+                        len(too_large_for_cache),
+                        cache_limit_gb,
+                        ", ".join(sorted(too_large_for_cache)),
+                    )
 
             
             if self.compatible_services:

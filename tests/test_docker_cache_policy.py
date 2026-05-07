@@ -5,7 +5,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import docker
 import requests
@@ -35,18 +35,22 @@ from services.docker_download_manager import (
 )
 from services.job_listener import JobListener
 from services.realtime_job_watcher import RealtimeJobWatcher
-from dgn_client import DGNClient, _get_max_cached_images_for_policy
+from dgn_client import DGNClient
 
 
 class FakeImageStore:
-    def __init__(self, image_names):
+    def __init__(self, image_names, image_sizes=None):
         self.present = set(image_names)
+        self.image_sizes = image_sizes or {}
         self.removed = []
 
     def get(self, image_name):
         if image_name not in self.present:
             raise docker.errors.ImageNotFound(f"{image_name} not found")
-        return SimpleNamespace(tags=[image_name])
+        return SimpleNamespace(
+            tags=[image_name],
+            attrs={"Size": self.image_sizes.get(image_name, 1024 ** 3)},
+        )
 
     def remove(self, image, force=False):
         if image not in self.present:
@@ -82,14 +86,17 @@ class FakeContainersAPI:
 
 
 class FakeDockerClient:
-    def __init__(self, image_names, running_service_types=None):
-        self.images = FakeImageStore(image_names)
+    def __init__(self, image_names, running_service_types=None, image_sizes=None):
+        self.images = FakeImageStore(image_names, image_sizes=image_sizes)
         self.containers = FakeContainersAPI(running_service_types)
 
 
 class FakeDockerManager:
     def __init__(self, service_types, cached_service_types=None, running_service_types=None):
-        self.services_config = {service_type: {} for service_type in service_types}
+        self.services_config = {
+            service_type: {"disk_required_gb": 1}
+            for service_type in service_types
+        }
         self.docker_image_map = {
             service_type: f"beschiak/openfork-{service_type}:latest"
             for service_type in service_types
@@ -98,8 +105,14 @@ class FakeDockerManager:
         cached_image_names = [
             self.docker_image_map[service_type] for service_type in cached_service_types
         ]
+        image_sizes = {
+            self.docker_image_map[service_type]: 1024 ** 3
+            for service_type in service_types
+        }
         self.client = FakeDockerClient(
-            cached_image_names, running_service_types=running_service_types
+            cached_image_names,
+            running_service_types=running_service_types,
+            image_sizes=image_sizes,
         )
 
     def get_image_name(self, service_type):
@@ -211,15 +224,15 @@ class FakeDownloadManager:
 
 
 class DockerCachePolicyTests(unittest.TestCase):
-    def test_cache_cap_policy_mapping_matches_routing_modes(self):
-        with patch("services.disk_pressure.get_disk_pressure_tier", return_value="healthy"):
-            self.assertEqual(_get_max_cached_images_for_policy("all", False), 4)
-            self.assertEqual(
-                _get_max_cached_images_for_policy("trusted_projects", False), 6
-            )
-            self.assertEqual(_get_max_cached_images_for_policy("trusted_users", False), 6)
-            self.assertIsNone(_get_max_cached_images_for_policy("none", False))
-            self.assertEqual(_get_max_cached_images_for_policy("none", True), 3)
+    def test_cache_limit_uses_gb_budget(self):
+        docker_manager = FakeDockerManager(["wan22"])
+        manager = DockerDownloadManager(docker_manager, cache_limit_gb=250)
+
+        self.assertEqual(manager.cache_limit_bytes, 250 * 1024 ** 3)
+        self.assertTrue(manager.service_fits_cache_budget("wan22"))
+
+        docker_manager.services_config["wan22"]["disk_required_gb"] = 300
+        self.assertFalse(manager.service_fits_cache_budget("wan22"))
 
     def test_apply_routing_config_updates_allowed_ids_and_cache_cap(self):
         client = DGNClient.__new__(DGNClient)
@@ -228,7 +241,6 @@ class DockerCachePolicyTests(unittest.TestCase):
         client.monetize_mode = False
         client.allowed_ids = ["owner-id"]
         client.download_manager = SimpleNamespace(
-            max_cached_images=None,
             update_routing_config=Mock(),
         )
         client.job_wakeup_event = threading.Event()
@@ -264,7 +276,6 @@ class DockerCachePolicyTests(unittest.TestCase):
         client.stop_requested = False
         client.active_service_type = "wan22"
         client.download_manager = SimpleNamespace(
-            max_cached_images=None,
             update_routing_config=Mock(),
         )
         client.job_wakeup_event = threading.Event()
@@ -298,7 +309,6 @@ class DockerCachePolicyTests(unittest.TestCase):
             docker_manager,
             orchestrator_service=orchestrator_service,
             provider_id="provider-1",
-            max_cached_images=3,
         )
 
         manager._last_job_times["foley"] = 100.0
@@ -321,7 +331,7 @@ class DockerCachePolicyTests(unittest.TestCase):
             service_types=["wan22", "foley", "hunyuan"],
             cached_service_types=["wan22", "foley", "hunyuan"],
         )
-        manager = DockerDownloadManager(docker_manager, max_cached_images=3)
+        manager = DockerDownloadManager(docker_manager)
 
         manager._last_job_times["wan22"] = 300.0
         manager._last_job_times["foley"] = 100.0
@@ -366,7 +376,7 @@ class DockerCachePolicyTests(unittest.TestCase):
         docker_manager.services_config["stream-diffvsr-upscaler"] = {
             "disk_required_gb": 0.001,
         }
-        manager = DockerDownloadManager(docker_manager, max_cached_images=3)
+        manager = DockerDownloadManager(docker_manager, cache_limit_gb=3)
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
