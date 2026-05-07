@@ -1,68 +1,163 @@
 # OpenFork DGN Client
 
-The OpenFork DGN Client is a command-line tool that works with the [openfork.video](https://openfork.video) website. It allows users to contribute their computer's processing power to the OpenFork network to collaboratively create videos.
+The OpenFork DGN Client is the Python worker that turns a GPU into an OpenFork
+provider. It connects to the website orchestrator, advertises compatible AI
+services, downloads Docker images when needed, runs generation jobs, uploads
+results, and reports heartbeats, cache state, credits, and monetize earnings.
 
-This directory contains the source code for the OpenFork Distributed GPU Network (DGN) Client. This is a Python application that allows users to contribute their computer's processing power to the OpenFork network to collaboratively create videos.
+Most users run this client through OpenFork Desktop. Developers and operators can
+also run it directly for debugging, headless providers, or cloud images.
 
-## How it Works
+## Responsibilities
 
-The DGN Client connects to the central OpenFork orchestrator, authenticates using a user's account, and waits for video processing jobs. When a job is received, the client:
+- Register a provider with the OpenFork orchestrator.
+- Detect compatible services from local GPU/VRAM, RAM, CUDA, and storage budget.
+- Pull and manage Docker images for model backends.
+- Execute workflow processors for video, image, audio, speech, music, and utility
+  jobs.
+- Track cached and downloading images so the server can route jobs intelligently.
+- Listen for jobs via Supabase Realtime when authenticated with OAuth tokens.
+- Poll quickly in headless/API-key mode for cloud or dedicated provider images.
+- Reset interrupted jobs on shutdown so work can return to the queue.
 
-1.  Downloads the necessary AI model and dependencies into a Docker container.
-2.  Executes the AI workflow (e.g., text-to-video, video-foley) with the parameters specified in the job.
-3.  Uploads the resulting video or audio back to the OpenFork platform.
-4.  Waits for the next job.
+## Key Files
 
-The client is designed to be run in the background, managed primarily by the [OpenFork Desktop application](../desktop/README.md), which provides a user-friendly interface for starting, stopping, and configuring the client.
-
-## Core Components
-
--   **`dgn_client.py`**: The main class that manages the connection to the orchestrator and job lifecycle.
--   **`cli.py`**: The command-line entry point for starting the client and passing configuration arguments.
--   **`services/`**: Contains modules for interacting with external services:
-    -   `orchestrator_service.py`: Handles all API communication with the main OpenFork server.
-    -   `comfyui_service.py`: Interacts with ComfyUI workflows.
-    -   `docker_manager.py`: Manages starting and stopping the Docker containers required for different AI models.
-    -   `job_processors.py`: Contains the logic for handling specific types of generation jobs.
--   **`workflows/`**: Contains the ComfyUI workflow definitions in JSON format.
-
-## Installation
-
-1.  Install Python 3.9 or higher.
-2.  Install the required dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-3.  Install Docker Desktop and ensure it is running.
-
-### Environment Variables
-
-The client requires the following Supabase configuration:
-
--   `SUPABASE_URL`: Your Supabase project URL (default: OpenFork production).
--   `SUPABASE_PUBLISHABLE_KEY`: Your Supabase publishable key (`sb_publishable_...` format). This is used for Realtime WebSocket connections. You can also use `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.
--   `SUPABASE_ANON_KEY`: Legacy anon key (JWT format). Fallback for older Supabase projects.
-
-If these are not set, Realtime job notifications will be disabled and the client will fall back to polling.
-
-## Usage (Standalone)
-
-While the client is intended to be run by the desktop application, it can be run directly from the command line for development or debugging purposes.
-
-You will need to provide valid Supabase access and refresh tokens.
-
-```bash
-python cli.py --access-token <YOUR_ACCESS_TOKEN> --refresh-token <YOUR_REFRESH_TOKEN>
+```text
+client/
+  cli.py                         Command-line entry point
+  dgn_client.py                  Provider lifecycle and routing config
+  config.py                      Supabase/orchestrator, timeout, cache settings
+  services/                      Docker, orchestrator, listener, heartbeat code
+  services/processors/           Workflow processor implementations
+  utils/                         Logs, media helpers, shutdown handling
+  workflows/                     ComfyUI/API workflow JSON files
+  comfyui-storage/               Dockerfiles, compose files, backend API wrappers
+  tests/                         Pytest coverage for routing/cache behavior
 ```
 
-### Command-Line Arguments
+## Requirements
 
--   `--access-token`: (Required) Your Supabase auth access token.
--   `--refresh-token`: (Required) Your Supabase auth refresh token.
--   `--service`: The specific service to run (e.g., `wan22`, `foley`). Defaults to `auto`, which allows the client to accept any job type.
--   `--accept-policy`: Defines which jobs to accept.
-    -   `mine` (default): Only accept jobs from your own projects.
-    -   `all`: Accept jobs from any public project.
-    -   `project`: Accept jobs only from specific projects (requires `--allowed-targets`).
-    -   `users`: Accept jobs only from specific users (requires `--allowed-targets`).
--   `--allowed-targets`: A comma-separated list of project slugs or user IDs for the `project` or `users` policies.
+- Python 3.10+ recommended.
+- Docker Engine with NVIDIA GPU support for local providers.
+- NVIDIA driver and CUDA-compatible GPU.
+- Enough disk space for selected OpenFork Docker images. Current images commonly
+  require 70-220 GB each.
+
+Windows users normally run the desktop app, which installs an OpenFork Ubuntu WSL2
+engine and Docker environment automatically.
+
+## Install For Development
+
+```bash
+cd client
+python -m venv venv
+```
+
+Windows PowerShell:
+
+```powershell
+.\venv\Scripts\python -m pip install -r requirements.txt
+```
+
+Linux/macOS shell:
+
+```bash
+./venv/bin/python -m pip install -r requirements.txt
+```
+
+## Configuration
+
+The production defaults point at `https://www.openfork.video`. Override these for
+local development or staging:
+
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_ANON_KEY=legacy_anon_jwt_if_needed
+ORCHESTRATOR_URL_PROD=https://www.openfork.video
+ORCHESTRATOR_URL_DEV=http://localhost:3000
+DOCKER_IMAGE_CACHE_LIMIT_GB=250
+DISK_PRESSURE_HEALTHY_GB=50
+DISK_PRESSURE_CRITICAL_GB=20
+```
+
+Useful headless/cloud variables:
+
+```env
+HEADLESS_MODE=true
+SELECTED_WORKFLOWS=wan22-text-to-video-8gb,qwen-image-edit-8gb
+RUNPOD_POD_ID=...
+VAST_CONTAINERLABEL=...
+```
+
+`config.py` also supports `OPENFORK_CONFIG_OVERRIDES_PATH`, a JSON file used by
+desktop to push storage/cache settings into a running client.
+
+## Authentication Modes
+
+OAuth token mode is used by desktop:
+
+```bash
+python cli.py --access-token <SUPABASE_ACCESS_TOKEN> --refresh-token <SUPABASE_REFRESH_TOKEN>
+```
+
+API-key mode is used for headless providers and cloud instances:
+
+```bash
+python cli.py --dgn-api-key <DGN_API_KEY> --service wan22 --community-mode all
+```
+
+If OAuth tokens are not passed as CLI arguments, `cli.py` waits for an initial
+`UPDATE_TOKENS` JSON message on stdin. Desktop uses that path so access tokens do
+not show up in process lists.
+
+## Routing Options
+
+```text
+--service auto|<service-name>       Run all compatible services or a single service.
+--process-own-jobs                  Poll the user's own mine-policy jobs first.
+--community-mode none               Private mode. Own jobs only when process-own is set.
+--community-mode trusted_users      Accept jobs from trusted users.
+--community-mode trusted_projects   Accept jobs from trusted projects.
+--community-mode all                Accept public community jobs.
+--allowed-targets id1,id2           Trusted user/project ids for trusted modes.
+--monetize-mode                     Poll paid monetize jobs only.
+--dgn-api-key <key>                 Headless authentication.
+--root-dir <path>                   Client source/runtime root.
+--data-dir <path>                   User data directory.
+```
+
+Desktop maps these flags to three primary modes:
+
+- Private: `community_mode=none`, usually with `process_own_jobs=true`.
+- Public: `community_mode=all`, optionally prioritizing own jobs.
+- Monetize: `monetize_mode=true`, paid queue only.
+
+Trusted Group is a Private sub-setting that selects `trusted_users` or
+`trusted_projects` and sends `--allowed-targets`.
+
+## Docker Image Cache
+
+The client maintains a user-facing Docker image budget with LRU eviction:
+
+- Healthy: more than 50 GB free, enforce the configured image budget.
+- Pressure: 20-50 GB free, enforce budget and shorten idle cleanup.
+- Critical: 20 GB or less free, evict aggressively and block new pulls until
+  space recovers.
+
+The server also tracks `cached_images` and `downloading_images` so providers do
+not all download the same image for the same queue demand.
+
+## Tests
+
+```bash
+pytest
+```
+
+Focused tests live under `tests/` for model selection, Docker cache policy,
+shutdown reset behavior, and workflow utilities.
+
+## Relationship To Other Projects
+
+- `../website` is the orchestrator, web app, Supabase schema, and admin surface.
+- `../desktop` is the Electron UI that embeds this client for normal users.
