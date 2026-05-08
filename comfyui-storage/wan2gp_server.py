@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import shlex
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -38,6 +39,37 @@ _HDR_SCENE_EMB_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hd
 os.makedirs(WAN2GP_OUTPUT, exist_ok=True)
 if WAN2GP_ROOT not in sys.path:
     sys.path.insert(0, WAN2GP_ROOT)
+
+
+def _prefer_host_libcuda() -> None:
+    """Avoid NVIDIA forward-compat libcuda on GeForce cloud hosts."""
+    host_libcuda = Path("/usr/lib/x86_64-linux-gnu/libcuda.so.1")
+    if not host_libcuda.exists():
+        return
+
+    disabled_compat = False
+    conf_dir = Path("/etc/ld.so.conf.d")
+    for conf in conf_dir.glob("*.conf"):
+        try:
+            text = conf.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "/usr/local/cuda" not in text or "/compat" not in text:
+            continue
+        try:
+            conf.rename(conf.with_name(f"{conf.name}.disabled.{os.getpid()}"))
+            disabled_compat = True
+        except OSError as exc:
+            logging.warning("Could not disable CUDA compat config %s: %s", conf, exc)
+
+    if disabled_compat:
+        subprocess.run(["ldconfig"], check=False)
+        logging.info(
+            "Disabled CUDA forward-compat libcuda path; using host driver libcuda."
+        )
+
+
+_prefer_host_libcuda()
 
 
 def _wan2gp_cli_args() -> tuple[str, ...]:

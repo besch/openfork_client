@@ -370,9 +370,38 @@ else
     log "INFO: VHS h264-mp4.json not found at $VHS_FMT (skipping color range patch)"
 fi
 
-# CRITICAL FIX for PyTorch 2.4+ / CUDA 12 mismatch errors
-# We must prioritize the pip-installed nvidia libraries over system libraries
-export LD_LIBRARY_PATH=$(python -c "import site; print(site.getsitepackages()[0] + '/nvidia/nvjitlink/lib:' + site.getsitepackages()[0] + '/nvidia/cusparse/lib:' + site.getsitepackages()[0] + '/nvidia/cublas/lib:' + site.getsitepackages()[0] + '/nvidia/cuda_runtime/lib')"):$LD_LIBRARY_PATH
+# CRITICAL FIX for PyTorch / CUDA startup on GeForce cloud nodes.
+#
+# Some NVIDIA container runtimes inject /usr/local/cuda-*/compat into ldconfig.
+# That forward-compat libcuda shim is intended for data-center GPUs; on GeForce
+# cards (RTX 3090/4090/etc.) it can fail with CUDA error 804 even though the host
+# driver is healthy. Prefer the host-mounted driver libcuda and the pip-installed
+# CUDA component libraries before probing torch.cuda.
+prefer_host_libcuda() {
+  local host_libcuda="/usr/lib/x86_64-linux-gnu/libcuda.so.1"
+  local disabled_compat="false"
+
+  if [ -f "$host_libcuda" ]; then
+    for conf in /etc/ld.so.conf.d/*.conf; do
+      [ -f "$conf" ] || continue
+      if grep -Eq '/usr/local/cuda(-[0-9.]+)?/compat' "$conf"; then
+        if mv "$conf" "${conf}.disabled.$(date +%s).$$" 2>/dev/null; then
+          disabled_compat="true"
+        fi
+      fi
+    done
+
+    if [ "$disabled_compat" = "true" ]; then
+      ldconfig 2>/dev/null || true
+      log "Disabled CUDA forward-compat libcuda path so PyTorch uses the host driver."
+    fi
+  fi
+}
+
+prefer_host_libcuda
+
+PYTORCH_NVIDIA_LIBRARY_PATHS=$(python -c "import site; p=site.getsitepackages()[0]; print(':'.join([p + '/nvidia/nvjitlink/lib', p + '/nvidia/cusparse/lib', p + '/nvidia/cublas/lib', p + '/nvidia/cuda_runtime/lib']))")
+export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${PYTORCH_NVIDIA_LIBRARY_PATHS}:${LD_LIBRARY_PATH:-}"
 log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 
 # --- Service Selection & Resource Management ---
@@ -629,7 +658,7 @@ except Exception as e:
             ;;
         NO_CUDA)
             log "ERROR: PyTorch cannot access CUDA, but Wan2GP requires a CUDA GPU."
-            log "This is often a host driver/runtime mismatch with the cu128 PyTorch wheel. Pick a node with a driver that supports CUDA 12.8."
+            log "This is often a host driver/runtime mismatch or a CUDA forward-compat libcuda issue on GeForce hosts."
             exit 1
             ;;
         ERROR:*)
