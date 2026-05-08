@@ -185,7 +185,7 @@ wait_for_url() {
   
   log "Waiting for $name to be ready at $url..."
   while [ $waited -lt $max_wait ]; do
-    if curl -s "$url" > /dev/null 2>&1; then
+    if curl -fsS "$url" > /dev/null 2>&1; then
       log "$name is ready!"
       return 0
     fi
@@ -628,10 +628,20 @@ except Exception as e:
             exit 1
             ;;
         NO_CUDA)
-            log "WARNING: No CUDA device detected — skipping GPU CC check."
+            log "ERROR: PyTorch cannot access CUDA, but Wan2GP requires a CUDA GPU."
+            log "This is often a host driver/runtime mismatch with the cu128 PyTorch wheel. Pick a node with a driver that supports CUDA 12.8."
+            exit 1
+            ;;
+        ERROR:*)
+            _err="${WAN2GP_GPU_CHECK#ERROR:}"
+            log "ERROR: Wan2GP GPU compatibility check failed: ${_err}"
+            log "Refusing to register this provider because Wan2GP would not be able to start reliably."
+            exit 1
             ;;
         *)
-            log "WARNING: GPU compatibility check failed (${WAN2GP_GPU_CHECK}) — proceeding anyway."
+            log "ERROR: GPU compatibility check failed (${WAN2GP_GPU_CHECK})."
+            log "Refusing to register this provider because Wan2GP would not be able to start reliably."
+            exit 1
             ;;
     esac
 
@@ -743,9 +753,22 @@ except Exception as e:
     # It loads the model at startup (can take 10-20 min for the 22B model).
     # The DGN client processor polls /health and waits up to 30 min for it.
     WAN2GP_SERVER="/opt/wan2gp/wan2gp_server.py"
+    WAN2GP_LOG_FILE="/tmp/wan2gp_server.log"
     if [ -f "$WAN2GP_SERVER" ]; then
-        log "Starting Wan2GP HTTP server in background (logging to /tmp/wan2gp_server.log)..."
-        (cd "$WAN2GP_ROOT" && "$PYTHON_EXE" "$WAN2GP_SERVER" > /tmp/wan2gp_server.log 2>&1) &
+        log "Starting Wan2GP HTTP server in background (logging to ${WAN2GP_LOG_FILE})..."
+        : > "$WAN2GP_LOG_FILE"
+        (cd "$WAN2GP_ROOT" && "$PYTHON_EXE" "$WAN2GP_SERVER" > "$WAN2GP_LOG_FILE" 2>&1) &
+        WAN2GP_SERVER_PID=$!
+        WAN2GP_STARTUP_TIMEOUT="${WAN2GP_STARTUP_TIMEOUT:-1800}"
+        if ! wait_for_url "Wan2GP" "http://127.0.0.1:8188/health" "$WAN2GP_STARTUP_TIMEOUT" "$WAN2GP_LOG_FILE"; then
+            if kill -0 "$WAN2GP_SERVER_PID" 2>/dev/null; then
+                log "ERROR: Wan2GP server process is still running but did not expose /health."
+            else
+                log "ERROR: Wan2GP server process exited before readiness."
+            fi
+            log "ERROR: Wan2GP failed to become ready; not starting the DGN client."
+            exit 1
+        fi
     else
         log "ERROR: wan2gp_server.py not found at $WAN2GP_SERVER. Cannot start Wan2GP HTTP server."
         exit 1

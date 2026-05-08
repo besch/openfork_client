@@ -3,6 +3,16 @@ import os
 import logging
 import threading
 
+
+def get_headless_log_paths(service_type: str):
+    normalized = (service_type or "").lower()
+    if "davinci" in normalized or (
+        "ltx23" in normalized and "comfyui" not in normalized
+    ):
+        return ["/tmp/wan2gp_server.log"]
+    return ["/tmp/comfyui.log"]
+
+
 class LogTailer:
     def __init__(self, file_path: str, service_type: str = "headless"):
         self.file_path = file_path

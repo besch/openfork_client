@@ -9,6 +9,7 @@ from services.processors.video.davinci_magihuman import (
     duration_to_wangp_frames,
     get_davinci_magihuman_model_type,
 )
+from utils.log_tailer import get_headless_log_paths
 
 
 class DaVinciMagiHumanWan2GPTests(unittest.TestCase):
@@ -40,6 +41,23 @@ class DaVinciMagiHumanWan2GPTests(unittest.TestCase):
         self.assertEqual(davinci_magihuman_resolution("16:9"), "1920x1088")
         self.assertEqual(davinci_magihuman_resolution("9:16"), "1088x1920")
         self.assertEqual(davinci_magihuman_resolution("unknown"), "1920x1088")
+
+    def test_headless_wan2gp_services_tail_wan2gp_log(self):
+        for service_type in (
+            "davinci-magihuman-24gb",
+            "ltx23-video-12gb",
+        ):
+            with self.subTest(service_type=service_type):
+                self.assertEqual(
+                    get_headless_log_paths(service_type),
+                    ["/tmp/wan2gp_server.log"],
+                )
+
+    def test_headless_comfyui_services_tail_comfyui_log(self):
+        self.assertEqual(
+            get_headless_log_paths("ltx23-comfyui-video-12gb"),
+            ["/tmp/comfyui.log"],
+        )
 
 
 if __name__ == "__main__":

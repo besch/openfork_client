@@ -452,17 +452,24 @@ def main():
             )
             log_thread.start()
         else:
-            logging.info(f"Headless mode detected - skipping Docker management. ComfyUI should be running at 127.0.0.1:8188")
-            # Start log tailer for headless mode
-            # Assuming ComfyUI logs to /tmp/comfyui.log in the container
-            from utils.log_tailer import LogTailer
-            tailer = LogTailer("/tmp/comfyui.log", service_type=args.service)
-            log_thread = threading.Thread(
-                target=tailer.tail,
-                args=(SHUTDOWN_EVENT,),
-                daemon=True
+            # Start log tailers for headless mode. Wan2GP backends do not write
+            # to the ComfyUI log, so choose the backend log for this service.
+            from utils.log_tailer import LogTailer, get_headless_log_paths
+
+            log_paths = get_headless_log_paths(args.service)
+            logging.info(
+                "Headless mode detected - skipping Docker management. "
+                "Backend should be running at 127.0.0.1:8188; tailing %s",
+                ", ".join(log_paths),
             )
-            log_thread.start()
+            for log_path in log_paths:
+                tailer = LogTailer(log_path, service_type=args.service)
+                log_thread = threading.Thread(
+                    target=tailer.tail,
+                    args=(SHUTDOWN_EVENT,),
+                    daemon=True
+                )
+                log_thread.start()
     
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()

@@ -15,6 +15,7 @@ import os
 import tempfile
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -27,6 +28,7 @@ from utils.media_utils import generate_thumbnail, get_video_duration
 
 WAN2GP_HTTP_URL = os.environ.get("WAN2GP_HTTP_URL", "http://127.0.0.1:8188")
 WAN2GP_READY_TIMEOUT = int(os.environ.get("WAN2GP_READY_TIMEOUT", "1800"))  # 30 min
+WAN2GP_LOG_PATH = os.environ.get("WAN2GP_LOG_PATH", "/tmp/wan2gp_server.log")
 
 # Aspect ratio → "WIDTHxHEIGHT" strings required by Wan2GP
 _ASPECT_RESOLUTIONS = {
@@ -136,7 +138,40 @@ class Wan2GPProcessor(BaseJobProcessor):
         logging.error(
             f"Wan2GP server did not become ready within {WAN2GP_READY_TIMEOUT}s."
         )
+        self._log_backend_tail()
         return False
+
+    @staticmethod
+    def _log_backend_tail(lines: int = 60) -> None:
+        if not os.path.isfile(WAN2GP_LOG_PATH):
+            logging.error("Wan2GP server log not found at %s.", WAN2GP_LOG_PATH)
+            return
+
+        try:
+            with open(
+                WAN2GP_LOG_PATH,
+                "r",
+                encoding="utf-8",
+                errors="replace",
+            ) as handle:
+                tail = deque(handle, maxlen=max(1, lines))
+        except OSError as exc:
+            logging.error(
+                "Could not read Wan2GP server log at %s: %s",
+                WAN2GP_LOG_PATH,
+                exc,
+            )
+            return
+
+        rendered = "".join(tail).strip()
+        if rendered:
+            logging.error(
+                "Recent Wan2GP server log (%s):\n%s",
+                WAN2GP_LOG_PATH,
+                rendered,
+            )
+        else:
+            logging.error("Wan2GP server log at %s is empty.", WAN2GP_LOG_PATH)
 
     def _job_was_interrupted_by_infrastructure(self) -> bool:
         if getattr(self.client, "interrupted_job_id", None) == self.job_id:

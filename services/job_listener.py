@@ -1338,19 +1338,26 @@ class JobListener:
                                             logging.info(
                                                 "Headless mode - container already running, skipping Docker management."
                                             )
-                                            # Start log tailer for headless mode
-                                            from utils.log_tailer import LogTailer
+                                            # Start log tailers for headless mode.
+                                            # Wan2GP backends write to their own log.
+                                            from utils.log_tailer import (
+                                                LogTailer,
+                                                get_headless_log_paths,
+                                            )
 
-                                            tailer = LogTailer(
-                                                "/tmp/comfyui.log",
-                                                service_type=actual_service_type,
-                                            )
-                                            log_thread = threading.Thread(
-                                                target=tailer.tail,
-                                                args=(self.shutdown_event,),
-                                                daemon=True,
-                                            )
-                                            log_thread.start()
+                                            for log_path in get_headless_log_paths(
+                                                actual_service_type
+                                            ):
+                                                tailer = LogTailer(
+                                                    log_path,
+                                                    service_type=actual_service_type,
+                                                )
+                                                log_thread = threading.Thread(
+                                                    target=tailer.tail,
+                                                    args=(self.shutdown_event,),
+                                                    daemon=True,
+                                                )
+                                                log_thread.start()
 
                                         # Check if service uses ComfyUI backend from configuration
                                         service_config = (
