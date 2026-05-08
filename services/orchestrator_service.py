@@ -846,7 +846,21 @@ class OrchestratorService:
                 json=payload
             )
             response.raise_for_status()
-            logging.info(f"Job {job_id} status updated to {status}")
+            response_status = status
+            try:
+                response_data = response.json()
+                if isinstance(response_data, dict):
+                    response_status = response_data.get("status") or status
+            except (ValueError, AttributeError):
+                pass
+
+            if response_status != status:
+                logging.info(
+                    f"Job {job_id} status update to {status} was accepted; "
+                    f"orchestrator finalized status as {response_status}"
+                )
+            else:
+                logging.info(f"Job {job_id} status updated to {status}")
             if status in ("completed", "failed", "cancelled"):
                 self.clear_active_job(job_id)
             return True
