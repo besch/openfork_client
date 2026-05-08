@@ -584,7 +584,7 @@ if [ "$START_WAN2GP" = "true" ]; then
         elif [[ "${SERVICE_TYPE:-}" == *"32gb"* ]]; then
             export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4 --attention sdpa --perc-reserved-mem-max 0.55 --vram-safety-coefficient 0.80}"
         else
-            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4 --attention sdpa --perc-reserved-mem-max 0.50 --vram-safety-coefficient 0.75}"
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
         fi
     fi
 

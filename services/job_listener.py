@@ -1235,9 +1235,9 @@ class JobListener:
                                                         wan2gp_env[
                                                             "WAN2GP_CLI_ARGS"
                                                         ] = (
-                                                            "--profile 4 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.50 "
-                                                            "--vram-safety-coefficient 0.75"
+                                                            "--profile 4.5 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.45 "
+                                                            "--vram-safety-coefficient 0.70"
                                                         )
                                                 elif "8gb" in lowered_service_type:
                                                     # WanGP's documented low-memory path:

@@ -24,7 +24,7 @@ ENV WAN2GP_OUTPUT=/opt/wan2gp/outputs
 ENV CUDA_MODULE_LOADING=LAZY
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.8
 ENV MALLOC_ARENA_MAX=2
-ENV WAN2GP_CLI_ARGS="--profile 4 --attention sdpa --perc-reserved-mem-max 0.50 --vram-safety-coefficient 0.75"
+ENV WAN2GP_CLI_ARGS="--profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70"
 
 RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list \
     && apt-get update \
