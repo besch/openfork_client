@@ -784,6 +784,17 @@ class JobListener:
 
         return " | ".join(parts)
 
+    def _known_service_types(self) -> set:
+        """Return the set of service types declared in this client's services.json.
+
+        Server-supplied service_type strings (prefetch suggestions, peeked jobs)
+        are validated against this set before any Docker operation is initiated.
+        An unknown service_type from a compromised or MITM'd server response
+        cannot trigger a Docker pull for an arbitrary image.
+        """
+        services_config = getattr(self.client, "services_config", None) or {}
+        return set(services_config.keys())
+
     def _handle_prefetch_suggestions(self, download_manager) -> None:
         """Fetch and apply pre-fetch suggestions from the server.
 
@@ -820,6 +831,8 @@ class JobListener:
         if download_manager._active_downloads or download_manager._download_queue:
             return
 
+        known = self._known_service_types()
+
         try:
             suggestions = self.orchestrator_service.get_prefetch_suggestions(
                 self.provider_id
@@ -834,6 +847,15 @@ class JobListener:
                 for service_type in suggestions[
                     :2
                 ]:  # Limit to 2 to avoid queue buildup
+                    # Reject service_type values not present in the local services.json.
+                    # A malicious or compromised server cannot trigger a Docker pull for
+                    # an image that is not part of this client's declared service set.
+                    if known and service_type not in known:
+                        logging.warning(
+                            f"Ignoring prefetch suggestion for unknown service_type "
+                            f"'{service_type}' (not in local services.json)."
+                        )
+                        continue
                     availability = download_manager.get_image_availability(
                         service_type
                     )
@@ -1037,11 +1059,21 @@ class JobListener:
                             )
 
                             # Step 2b: Find first job with available Docker image
+                            _known_pass1 = self._known_service_types()
                             for peeked_job, _job_policy in _available_with_policy:
                                 service_type = self._get_service_type_for_job(
                                     peeked_job
                                 )
                                 if not service_type:
+                                    continue
+
+                                # Validate service_type against locally-declared
+                                # services before any Docker or processing operation.
+                                if _known_pass1 and service_type not in _known_pass1:
+                                    logging.warning(
+                                        f"Skipping peeked job with unknown service_type "
+                                        f"'{service_type}' (not in local services.json)."
+                                    )
                                     continue
 
                                 # Check if Docker image is available
@@ -1394,9 +1426,18 @@ class JobListener:
                             # blocked by downloads kicked off for earlier miss entries,
                             # and avoids unnecessary evictions caused by those downloads.
                             if not found_processable_job and download_manager and not HEADLESS_MODE:
+                                _known = self._known_service_types()
                                 for peeked_job, _job_policy in _available_with_policy:
                                     service_type = self._get_service_type_for_job(peeked_job)
                                     if not service_type:
+                                        continue
+                                    # Validate against locally-declared services before
+                                    # any Docker operation; rejects server-injected types.
+                                    if _known and service_type not in _known:
+                                        logging.warning(
+                                            f"Ignoring peeked job with unknown service_type "
+                                            f"'{service_type}' (not in local services.json)."
+                                        )
                                         continue
                                     image_availability = download_manager.get_image_availability(
                                         service_type
