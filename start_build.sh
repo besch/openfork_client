@@ -111,6 +111,8 @@ report_status() {
 
   curl -s -X POST "$ORCHESTRATOR_URL/api/build-webhook" \
     -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${BUILD_WEBHOOK_SECRET}" \
+    -H "x-timestamp: $(date +%s)" \
     -d "$payload" || true
 }
 
