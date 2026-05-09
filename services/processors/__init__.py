@@ -38,6 +38,7 @@ from .video.davinci_magihuman import (
     DaVinciMagiHumanI2VProcessor,
 )
 from .video.scail import SCAILImageToVideoProcessor
+from .video.vista4d import Vista4DVideoToVideoProcessor
 from .video.inspatio_world import InSpatioWorldJobProcessor
 
 # Audio processors
@@ -111,6 +112,7 @@ __all__ = [
     "DaVinciMagiHumanT2VProcessor",
     "DaVinciMagiHumanI2VProcessor",
     "SCAILImageToVideoProcessor",
+    "Vista4DVideoToVideoProcessor",
     "InSpatioWorldJobProcessor",
     "StableAudioJobProcessor",
     "VibeVoiceJobProcessor",

@@ -12,6 +12,10 @@ import time
 from dataclasses import dataclass
 from typing import List
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 @dataclass
 class ImageConfig:
@@ -72,6 +76,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-12gb", "beschiak/openfork-ltx23-wan2gp-12gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest"),
+    ImageConfig("Dockerfile.vista4d-wan2gp-24gb", "beschiak/openfork-vista4d-wan2gp-24gb:latest"),
 ]
 
 PUSH_ATTEMPTS = 4
@@ -209,7 +215,7 @@ def build_and_push_image(
 ) -> str:
     """
     Build and push a single image based on its configuration and global flags.
-    Returns: "success", "build_failed", or "push_failed"
+    Returns: "success", "skipped", "build_failed", or "push_failed"
     """
     use_direct_push = config.direct_push or force_direct_push
 
@@ -245,15 +251,26 @@ def build_and_push_image(
     else:
         print(f"⏭️ Skipping build for {config.tag} as configured")
 
-    # In direct_push mode the image is already in the registry — skip the push step.
-    if use_direct_push:
+    # Push the image if configured (per-image or global)
+    should_push = config.push or global_push
+
+    # In direct_push mode the image is already in the registry after a build.
+    if use_direct_push and should_build:
         print(
             f"\n🎉 {config.tag} was pushed to the registry during build (direct_push mode)."
         )
         return "success"
 
-    # Push the image if configured (per-image or global)
-    should_push = config.push or global_push
+    if use_direct_push:
+        if should_push:
+            print(
+                f"\n💥 Cannot push {config.tag} separately in direct_push mode. "
+                "Run with --build so the registry push happens during build."
+            )
+            return "push_failed"
+        print(f"⏭️ Skipping push for {config.tag}")
+        return "skipped"
+
     if should_push:
         if not push_image(config.tag):
             print(f"\n💥 FAILED to push {config.tag} after {PUSH_ATTEMPTS} attempts")
@@ -262,7 +279,7 @@ def build_and_push_image(
     else:
         print(f"⏭️ Skipping push for {config.tag}")
 
-    return "success"
+    return "success" if should_build or should_push else "skipped"
 
 
 def parse_delay(delay_str: str) -> int:
@@ -387,6 +404,7 @@ def main():
     print(f"Retry delay: {RETRY_DELAY_SECONDS} seconds")
 
     successful = []
+    skipped = []
     build_failed = []
     push_failed = []
 
@@ -402,6 +420,8 @@ def main():
         )
         if result == "success":
             successful.append(config.tag)
+        elif result == "skipped":
+            skipped.append(config.tag)
         elif result == "build_failed":
             build_failed.append(config.tag)
         else:
@@ -415,6 +435,11 @@ def main():
     if successful:
         print(f"\n✅ Successfully built and pushed ({len(successful)}):")
         for tag in successful:
+            print(f"   - {tag}")
+
+    if skipped:
+        print(f"\n⏭️ Skipped ({len(skipped)}):")
+        for tag in skipped:
             print(f"   - {tag}")
 
     if build_failed:

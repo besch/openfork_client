@@ -450,10 +450,15 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       SCAIL_TRANSFORMER_BF16="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_bf16.safetensors"
       SCAIL_TRANSFORMER_INT8="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_quanto_bf16_int8.safetensors"
       SCAIL_TRANSFORMER_FP16_INT8="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_quanto_fp16_int8.safetensors"
+      VISTA4D_TRANSFORMER_BF16="/opt/wan2gp/ckpts/wan2.1_vista4d_384p49_14B_bf16.safetensors"
+      VISTA4D_TRANSFORMER_INT8="/opt/wan2gp/ckpts/wan2.1_vista4d_384p49_14B_quanto_bf16_int8.safetensors"
       LTX23_Q4_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
       LTX23_Q6_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q6_K_light.gguf"
       LTX23_Q8_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
-      if [ -f "$SCAIL_TRANSFORMER_BF16" ] || [ -f "$SCAIL_TRANSFORMER_INT8" ] || [ -f "$SCAIL_TRANSFORMER_FP16_INT8" ]; then
+      if [ -f "$VISTA4D_TRANSFORMER_BF16" ] || [ -f "$VISTA4D_TRANSFORMER_INT8" ]; then
+          SERVICE_TYPE="vista4d-wan2gp-24gb"
+          log "Auto-selected Vista4D Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ -f "$SCAIL_TRANSFORMER_BF16" ] || [ -f "$SCAIL_TRANSFORMER_INT8" ] || [ -f "$SCAIL_TRANSFORMER_FP16_INT8" ]; then
           SERVICE_TYPE="scail-wan2gp-24gb"
           log "Auto-selected SCAIL Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       elif [ -f "$MAGIHUMAN_SR_TRANSFORMER" ] && { [ -f "$MAGIHUMAN_DISTILL_TRANSFORMER" ] || [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; }; then
@@ -545,8 +550,8 @@ else
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video services (NOT the ComfyUI variants),
-  # daVinci-MagiHuman, and SCAIL services.
-  if { [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; } || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]]; then
+  # daVinci-MagiHuman, SCAIL, and Vista4D services.
+  if { [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; } || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
       START_WAN2GP="true"
       log "Wan2GP service requested for ${SERVICE_TYPE}."
   fi
@@ -607,13 +612,13 @@ if [ "$START_QWEN3TTS" = "true" ]; then
   fi
 fi
 
-# Wan2GP backend (LTX-2.3 Audio-Video, daVinci-MagiHuman, and SCAIL)
+# Wan2GP backend (LTX-2.3 Audio-Video, daVinci-MagiHuman, SCAIL, and Vista4D)
 if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
         export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
     elif [[ "${SERVICE_TYPE:-}" == *"davinci"* ]]; then
         if [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
@@ -809,7 +814,39 @@ except Exception as e:
             fi
         done
     fi
-    
+
+    if [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
+        VISTA4D_TRANSFORMER_BF16="$WAN2GP_ROOT/ckpts/wan2.1_vista4d_384p49_14B_bf16.safetensors"
+        VISTA4D_TRANSFORMER_INT8="$WAN2GP_ROOT/ckpts/wan2.1_vista4d_384p49_14B_quanto_bf16_int8.safetensors"
+        VISTA4D_VAE="$WAN2GP_ROOT/ckpts/Wan2.1_VAE.safetensors"
+        VISTA4D_TEXT_ENCODER="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
+        VISTA4D_TEXT_ENCODER_INT8="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
+        VISTA4D_DEPTH_MODEL="$WAN2GP_ROOT/ckpts/depth/depth_anything_v3_vitl_bf16.safetensors"
+        VISTA4D_SAM_MODEL="$WAN2GP_ROOT/ckpts/sam3/sam3.1_multiplex_bf16.safetensors"
+        VISTA4D_SAM_VOCAB="$WAN2GP_ROOT/ckpts/sam3/bpe_simple_vocab_16e6.txt.gz"
+        VISTA4D_EXPECTED_IMAGE="beschiak/openfork-vista4d-wan2gp-24gb:latest"
+
+        if [ ! -f "$VISTA4D_TRANSFORMER_BF16" ] && [ ! -f "$VISTA4D_TRANSFORMER_INT8" ]; then
+            log "ERROR: $SERVICE_TYPE requires a Vista4D 384p49 transformer, but this image does not contain one."
+            log "Expected image for this service: $VISTA4D_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
+
+        if [ ! -f "$VISTA4D_TEXT_ENCODER" ] && [ ! -f "$VISTA4D_TEXT_ENCODER_INT8" ]; then
+            log "ERROR: $SERVICE_TYPE requires a UMT5 text encoder, but this image does not contain one."
+            log "Expected image for this service: $VISTA4D_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
+
+        for required_file in "$VISTA4D_VAE" "$VISTA4D_DEPTH_MODEL" "$VISTA4D_SAM_MODEL" "$VISTA4D_SAM_VOCAB"; do
+            if [ ! -f "$required_file" ]; then
+                log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
+                log "Expected image for this service: $VISTA4D_EXPECTED_IMAGE"
+                WAN2GP_CHECK_FAILED=1
+            fi
+        done
+    fi
+
     if [ "$WAN2GP_CHECK_FAILED" = "1" ]; then
         log "ERROR: Wan2GP installation is incomplete."
         log "Please rebuild the image with proper HF_TOKEN for model downloads."
