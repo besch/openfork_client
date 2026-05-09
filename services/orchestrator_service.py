@@ -739,11 +739,31 @@ class OrchestratorService:
                     headers={'Content-Type': content_type}
                 )
                 response.raise_for_status()
-            
+
             logging.info(
                 f"Successfully uploaded {file_name} ({file_size} bytes) for job {job_id}. "
                 f"Storage path: {storage_path}"
             )
+
+            # SECURITY: Defense-in-depth magic-byte verification. The presigned
+            # PUT path stores whatever bytes arrive — there is no server-side
+            # check that an .mp4 is really an mp4. We tell the orchestrator
+            # the upload finished; it downloads the first 32 bytes back and
+            # rejects anything that doesn't match the extension's magic
+            # signature (deleting the object server-side).
+            #
+            # Failing this is a hard error: workflow outputs are produced by
+            # trusted Docker images, so a magic-byte mismatch indicates either
+            # a bug in our pipeline or a tampered upload — neither should
+            # advance to job completion.
+            finalize_ok = self._finalize_upload(job_id, storage_path)
+            if not finalize_ok:
+                logging.error(
+                    f"Upload finalize rejected {storage_path} for job {job_id}; "
+                    "the orchestrator deleted the object."
+                )
+                return None
+
             return storage_path
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not upload file to presigned URL: {e}")
@@ -755,6 +775,48 @@ class OrchestratorService:
                         "bucket file_size_limit for project buckets or reduce output bitrate."
                     )
             return None
+
+    def _finalize_upload(self, job_id: str, storage_path: str) -> bool:
+        """Ask the orchestrator to magic-byte-verify a freshly uploaded object.
+
+        Returns True on success or transport failure (we fail open on
+        unreachable orchestrator so a brief outage doesn't fail the job).
+        Returns False only when the orchestrator explicitly rejects the
+        object — that means the file was deleted server-side and the
+        worker must not advance the job to completion.
+        """
+        try:
+            payload: Dict[str, Any] = {
+                "jobId": job_id,
+                "storagePath": storage_path,
+            }
+            execution_token = self.get_active_execution_token(job_id)
+            if execution_token:
+                payload["executionToken"] = execution_token
+
+            response = self._make_request(
+                'post',
+                f"{self.orchestrator_url}/api/dgn/upload-finalize",
+                json=payload,
+            )
+            if response.status_code >= 400 and response.status_code < 500:
+                # Server explicitly rejected — magic byte mismatch, lease
+                # expired, etc. Do not let the job complete with this output.
+                logging.warning(
+                    f"upload-finalize rejected job {job_id} path {storage_path}: "
+                    f"HTTP {response.status_code} {response.text}"
+                )
+                return False
+            response.raise_for_status()
+            return True
+        except (requests.exceptions.RequestException, TransientError) as e:
+            # Transport-level failure — fail open. The cached output stays;
+            # job completion proceeds. A persistent outage will be noticed
+            # via heartbeat health, not by silently corrupting jobs.
+            logging.warning(
+                f"upload-finalize call failed for job {job_id} (failing open): {e}"
+            )
+            return True
 
     def upload_audio_output(self, file_path: str, job_id: str) -> Union[str, None]:
         """Upload the audio output file to the orchestrator."""
