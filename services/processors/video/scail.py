@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _FPS = 16
 _DEFAULT_DURATION_SECONDS = 5.0
+_DEFAULT_DURATION_SECONDS_16GB = 4.0
 _DEFAULT_SEED = -1
 
 _SCAIL_RESOLUTIONS = {
@@ -35,17 +36,39 @@ _SCAIL_RESOLUTIONS = {
     "2:1": "896x448",
 }
 
+_SCAIL_RESOLUTIONS_16GB = {
+    "16:9": "768x432",
+    "9:16": "432x768",
+    "1:1": "544x544",
+    "4:3": "640x480",
+    "3:4": "480x640",
+    "21:9": "768x336",
+    "2:1": "768x384",
+}
 
-def scail_resolution(aspect_ratio: str) -> str:
+
+def get_scail_vram_tier(service_type: str) -> str:
+    return "16gb" if "16gb" in (service_type or "").lower() else "24gb"
+
+
+def scail_resolution(aspect_ratio: str, vram_tier: str = "24gb") -> str:
+    if vram_tier == "16gb":
+        return _SCAIL_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
     return _SCAIL_RESOLUTIONS.get(aspect_ratio, "896x512")
 
 
-def clamp_scail_duration(requested_duration) -> float:
+def clamp_scail_duration(requested_duration, vram_tier: str = "24gb") -> float:
+    default_duration = (
+        _DEFAULT_DURATION_SECONDS_16GB
+        if vram_tier == "16gb"
+        else _DEFAULT_DURATION_SECONDS
+    )
+    max_duration = 4.0 if vram_tier == "16gb" else 5.0
     try:
         duration = float(requested_duration)
     except (TypeError, ValueError):
-        duration = _DEFAULT_DURATION_SECONDS
-    return max(1.0, min(duration, 5.0))
+        duration = default_duration
+    return max(1.0, min(duration, max_duration))
 
 
 def clamp_scail_steps(requested_steps) -> int:
@@ -182,7 +205,9 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
         start_image: Image.Image,
         pose_video_path: str,
     ) -> dict:
-        duration = clamp_scail_duration(inputs.get("duration"))
+        service_type = self.client.active_service_type or self.job.get("service_type")
+        vram_tier = get_scail_vram_tier(service_type or "")
+        duration = clamp_scail_duration(inputs.get("duration"), vram_tier)
         return {
             "model_type": "scail",
             "prompt": self.positive_prompt,
@@ -192,7 +217,9 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
             "video_prompt_type": inputs.get("video_prompt_type", "V#1#"),
             "image_prompt_type": "S",
             "audio_prompt_type": "R",
-            "resolution": scail_resolution(inputs.get("aspect_ratio", "16:9")),
+            "resolution": scail_resolution(
+                inputs.get("aspect_ratio", "16:9"), vram_tier
+            ),
             "video_length": duration_to_wangp_frames(duration),
             "force_fps": "control",
             "num_inference_steps": clamp_scail_steps(inputs.get("steps")),
@@ -243,9 +270,12 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
             return
 
         settings = self._build_settings(inputs, start_image, wan2gp_pose_video_path)
+        service_type = self.client.active_service_type or self.job.get("service_type")
+        vram_tier = get_scail_vram_tier(service_type or "")
         logger.info(
-            "Processing SCAIL job %s with resolution=%s frames=%s pose_video=%s",
+            "Processing SCAIL job %s with tier=%s resolution=%s frames=%s pose_video=%s",
             self.job_id,
+            vram_tier,
             settings["resolution"],
             settings["video_length"],
             os.path.basename(pose_video_path),

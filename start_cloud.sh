@@ -459,8 +459,13 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="vista4d-wan2gp-24gb"
           log "Auto-selected Vista4D Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       elif [ -f "$SCAIL_TRANSFORMER_BF16" ] || [ -f "$SCAIL_TRANSFORMER_INT8" ] || [ -f "$SCAIL_TRANSFORMER_FP16_INT8" ]; then
-          SERVICE_TYPE="scail-wan2gp-24gb"
-          log "Auto-selected SCAIL Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+          if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+              SERVICE_TYPE="scail-wan2gp-24gb"
+              log "Auto-selected SCAIL Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+          else
+              SERVICE_TYPE="scail-wan2gp-16gb"
+              log "Auto-selected SCAIL Wan2GP 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+          fi
       elif [ -f "$MAGIHUMAN_SR_TRANSFORMER" ] && { [ -f "$MAGIHUMAN_DISTILL_TRANSFORMER" ] || [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; }; then
           if [ "$TOTAL_VRAM_MB" -gt 28000 ] && [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; then
               SERVICE_TYPE="davinci-magihuman-32gb"
@@ -618,7 +623,9 @@ if [ "$START_WAN2GP" = "true" ]; then
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] && [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
+        export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.35 --vram-safety-coefficient 0.60}"
+    elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
         export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
     elif [[ "${SERVICE_TYPE:-}" == *"davinci"* ]]; then
         if [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
@@ -792,7 +799,11 @@ except Exception as e:
         SCAIL_TEXT_ENCODER_INT8="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
         SCAIL_POSE_MODEL="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.safetensors"
         SCAIL_POSE_META="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.meta.json"
-        SCAIL_EXPECTED_IMAGE="beschiak/openfork-scail-wan2gp-24gb:latest"
+        if [[ "$SERVICE_TYPE" == *"16gb"* ]]; then
+            SCAIL_EXPECTED_IMAGE="beschiak/openfork-scail-wan2gp-16gb:latest"
+        else
+            SCAIL_EXPECTED_IMAGE="beschiak/openfork-scail-wan2gp-24gb:latest"
+        fi
 
         if [ ! -f "$SCAIL_TRANSFORMER_BF16" ] && [ ! -f "$SCAIL_TRANSFORMER_INT8" ] && [ ! -f "$SCAIL_TRANSFORMER_FP16_INT8" ]; then
             log "ERROR: $SERVICE_TYPE requires a SCAIL preview transformer, but this image does not contain one."
