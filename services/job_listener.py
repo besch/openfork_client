@@ -578,9 +578,20 @@ class JobListener:
         """
         import threading
 
+        _CANCEL_POLL_BASE = 5        # seconds between checks (normal)
+        _CANCEL_POLL_MAX = 60        # cap so a fleet doesn't hammer during outage
+        _CANCEL_POLL_BACKOFF = 1.5   # multiplier per consecutive error
+
         def _monitor_loop():
-            check_interval = 5  # Check every 5 seconds
+            consecutive_errors = 0
             while not self.shutdown_event.is_set():
+                interval = min(
+                    _CANCEL_POLL_BASE * (_CANCEL_POLL_BACKOFF ** consecutive_errors),
+                    _CANCEL_POLL_MAX,
+                )
+                self.shutdown_event.wait(timeout=interval)
+                if self.shutdown_event.is_set():
+                    return
                 try:
                     job_details = self.orchestrator_service.get_job(job_id)
                     remote_status = self._remote_job_status(job_details)
@@ -596,11 +607,12 @@ class JobListener:
                             f"Could not verify cancellation state for job "
                             f"{job_id}; will retry."
                         )
+                        consecutive_errors += 1
+                    else:
+                        consecutive_errors = 0
                 except Exception as e:
                     logging.debug(f"Error checking job status: {e}")
-
-                # Wait for next check interval
-                self.shutdown_event.wait(timeout=check_interval)
+                    consecutive_errors += 1
 
         monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
         monitor_thread.start()

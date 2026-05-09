@@ -1,10 +1,32 @@
 import argparse
 import logging
 import multiprocessing
+import re
 import sys
 import threading
 import json
 import os
+
+_SERVICE_ID_RE = re.compile(r'^[a-z0-9][a-z0-9_-]{0,79}$', re.IGNORECASE)
+_VALID_COMMUNITY_MODES = frozenset(('none', 'trusted_users', 'trusted_projects', 'all'))
+_UUID_RE = re.compile(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+    re.IGNORECASE,
+)
+
+
+def _sanitize_routing_config(payload: dict) -> dict:
+    community_mode = payload.get("communityMode", "none")
+    if community_mode not in _VALID_COMMUNITY_MODES:
+        community_mode = "none"
+    raw_ids = payload.get("trustedIds", [])
+    trusted_ids = [i for i in raw_ids if isinstance(i, str) and _UUID_RE.match(i)][:500]
+    return {
+        "processOwnJobs": payload.get("processOwnJobs") is True,
+        "communityMode": community_mode,
+        "trustedIds": trusted_ids,
+        "monetizeMode": payload.get("monetizeMode") is True,
+    }
 
 def _configure_stdio_encoding() -> None:
     """Keep Electron pipe output UTF-8 on Windows codepages."""
@@ -69,7 +91,7 @@ def listen_for_ipc_commands(client: "DGNClient"):
             elif cmd_type == "UPDATE_ROUTING_CONFIG":
                 logging.info("Received UPDATE_ROUTING_CONFIG command from main process.")
                 if isinstance(payload, dict):
-                    client.apply_routing_config(payload)
+                    client.apply_routing_config(_sanitize_routing_config(payload))
                 else:
                     logging.warning("UPDATE_ROUTING_CONFIG command received with invalid payload.")
             elif cmd_type == "REQUEST_STOP":
@@ -91,10 +113,13 @@ def listen_for_ipc_commands(client: "DGNClient"):
 
                 SHUTDOWN_EVENT.set()
             elif cmd_type == "CANCEL_DOWNLOAD":
-                service_type = payload.get("service_type")
-                logging.info(f"Received CANCEL_DOWNLOAD command for {service_type}.")
-                if client.download_manager:
-                    client.download_manager.cancel_download(service_type)
+                service_type = payload.get("service_type") if isinstance(payload, dict) else None
+                if not isinstance(service_type, str) or not _SERVICE_ID_RE.match(service_type):
+                    logging.warning(f"CANCEL_DOWNLOAD received invalid service_type: {service_type!r}")
+                else:
+                    logging.info(f"Received CANCEL_DOWNLOAD command for {service_type}.")
+                    if client.download_manager:
+                        client.download_manager.cancel_download(service_type)
             elif cmd_type == "SYNC_CACHED_IMAGES":
                 logging.info("Received SYNC_CACHED_IMAGES command from main process.")
                 if client.download_manager:
