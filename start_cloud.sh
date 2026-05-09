@@ -447,10 +447,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       MAGIHUMAN_DISTILL_TRANSFORMER="/opt/wan2gp/ckpts/magi_human_distill_quanto_bf16_int8.safetensors"
       MAGIHUMAN_BASE_TRANSFORMER="/opt/wan2gp/ckpts/magi_human_quanto_bf16_int8.safetensors"
       MAGIHUMAN_SR_TRANSFORMER="/opt/wan2gp/ckpts/magi_human_sr1080_quanto_bf16_int8.safetensors"
+      SCAIL_TRANSFORMER_BF16="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_bf16.safetensors"
+      SCAIL_TRANSFORMER_INT8="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_quanto_bf16_int8.safetensors"
+      SCAIL_TRANSFORMER_FP16_INT8="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_quanto_fp16_int8.safetensors"
       LTX23_Q4_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
       LTX23_Q6_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q6_K_light.gguf"
       LTX23_Q8_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
-      if [ -f "$MAGIHUMAN_SR_TRANSFORMER" ] && { [ -f "$MAGIHUMAN_DISTILL_TRANSFORMER" ] || [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; }; then
+      if [ -f "$SCAIL_TRANSFORMER_BF16" ] || [ -f "$SCAIL_TRANSFORMER_INT8" ] || [ -f "$SCAIL_TRANSFORMER_FP16_INT8" ]; then
+          SERVICE_TYPE="scail-wan2gp-24gb"
+          log "Auto-selected SCAIL Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ -f "$MAGIHUMAN_SR_TRANSFORMER" ] && { [ -f "$MAGIHUMAN_DISTILL_TRANSFORMER" ] || [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; }; then
           if [ "$TOTAL_VRAM_MB" -gt 28000 ] && [ -f "$MAGIHUMAN_BASE_TRANSFORMER" ]; then
               SERVICE_TYPE="davinci-magihuman-32gb"
               log "Auto-selected daVinci-MagiHuman Wan2GP 32GB tier (base SR1080, VRAM: ${TOTAL_VRAM_MB}MB)"
@@ -538,9 +544,9 @@ else
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
-  # Wan2GP backend for LTX-2.3 Audio-Video services (NOT the ComfyUI variants)
-  # and daVinci-MagiHuman Wan2GP services.
-  if { [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; } || [[ "$SERVICE_TYPE" == *"davinci"* ]]; then
+  # Wan2GP backend for LTX-2.3 Audio-Video services (NOT the ComfyUI variants),
+  # daVinci-MagiHuman, and SCAIL services.
+  if { [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; } || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]]; then
       START_WAN2GP="true"
       log "Wan2GP service requested for ${SERVICE_TYPE}."
   fi
@@ -601,13 +607,15 @@ if [ "$START_QWEN3TTS" = "true" ]; then
   fi
 fi
 
-# Wan2GP backend (LTX-2.3 Audio-Video and daVinci-MagiHuman)
+# Wan2GP backend (LTX-2.3 Audio-Video, daVinci-MagiHuman, and SCAIL)
 if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    if [[ "${SERVICE_TYPE:-}" == *"davinci"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+        export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
+    elif [[ "${SERVICE_TYPE:-}" == *"davinci"* ]]; then
         if [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
             export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.7}"
         elif [[ "${SERVICE_TYPE:-}" == *"32gb"* ]]; then
@@ -765,6 +773,38 @@ except Exception as e:
             if [ ! -f "$required_file" ]; then
                 log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
                 log "Expected image for this service: $MAGIHUMAN_EXPECTED_IMAGE"
+                WAN2GP_CHECK_FAILED=1
+            fi
+        done
+    fi
+
+    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+        SCAIL_TRANSFORMER_BF16="$WAN2GP_ROOT/ckpts/wan2.1_scail_preview_14B_bf16.safetensors"
+        SCAIL_TRANSFORMER_INT8="$WAN2GP_ROOT/ckpts/wan2.1_scail_preview_14B_quanto_bf16_int8.safetensors"
+        SCAIL_TRANSFORMER_FP16_INT8="$WAN2GP_ROOT/ckpts/wan2.1_scail_preview_14B_quanto_fp16_int8.safetensors"
+        SCAIL_VAE="$WAN2GP_ROOT/ckpts/Wan2.1_VAE.safetensors"
+        SCAIL_TEXT_ENCODER="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
+        SCAIL_TEXT_ENCODER_INT8="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
+        SCAIL_POSE_MODEL="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.safetensors"
+        SCAIL_POSE_META="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.meta.json"
+        SCAIL_EXPECTED_IMAGE="beschiak/openfork-scail-wan2gp-24gb:latest"
+
+        if [ ! -f "$SCAIL_TRANSFORMER_BF16" ] && [ ! -f "$SCAIL_TRANSFORMER_INT8" ] && [ ! -f "$SCAIL_TRANSFORMER_FP16_INT8" ]; then
+            log "ERROR: $SERVICE_TYPE requires a SCAIL preview transformer, but this image does not contain one."
+            log "Expected image for this service: $SCAIL_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
+
+        if [ ! -f "$SCAIL_TEXT_ENCODER" ] && [ ! -f "$SCAIL_TEXT_ENCODER_INT8" ]; then
+            log "ERROR: $SERVICE_TYPE requires a UMT5 text encoder, but this image does not contain one."
+            log "Expected image for this service: $SCAIL_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
+
+        for required_file in "$SCAIL_VAE" "$SCAIL_POSE_MODEL" "$SCAIL_POSE_META"; do
+            if [ ! -f "$required_file" ]; then
+                log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
+                log "Expected image for this service: $SCAIL_EXPECTED_IMAGE"
                 WAN2GP_CHECK_FAILED=1
             fi
         done

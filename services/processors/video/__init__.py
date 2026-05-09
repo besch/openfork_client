@@ -5,6 +5,7 @@ from .wan22_image import WAN22ImageToVideoJobProcessor, ImageToVideoFromLastFram
 from .upscaler import VideoUpscalerJobProcessor
 from .sparkvsr import SparkVSRUpscalerJobProcessor
 from .turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
+from .scail import SCAILImageToVideoProcessor
 
 __all__ = [
     "WAN22TextToVideoJobProcessor",
@@ -12,5 +13,6 @@ __all__ = [
     "ImageToVideoFromLastFrameJobProcessor",
     "VideoUpscalerJobProcessor",
     "SparkVSRUpscalerJobProcessor",
+    "SCAILImageToVideoProcessor",
     "TurboDiffusionI2VJobProcessor",
 ]

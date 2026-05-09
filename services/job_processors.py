@@ -75,6 +75,7 @@ from services.processors import (
     PrismAudioJobProcessor,
     DaVinciMagiHumanT2VProcessor,
     DaVinciMagiHumanI2VProcessor,
+    SCAILImageToVideoProcessor,
     InSpatioWorldJobProcessor,
     ErnieImageProcessor,
 )
@@ -132,6 +133,7 @@ __all__ = [
     "PrismAudioJobProcessor",
     "DaVinciMagiHumanT2VProcessor",
     "DaVinciMagiHumanI2VProcessor",
+    "SCAILImageToVideoProcessor",
     "InSpatioWorldJobProcessor",
     "ErnieImageProcessor",
 ]
