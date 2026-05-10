@@ -63,6 +63,7 @@ class DGNClient:
 
         self.processor_map = {}
         self.services_config = {}
+        self.processable_services = set()
         self.available_vram = get_available_vram()
         self.compatible_services = set()
 
@@ -177,7 +178,12 @@ class DGNClient:
             if processor_name:
                 if processor_name not in allowed_processor_names:
                     logging.warning(
-                        f"Processor class '{processor_name}' is not in the allowed processor list — skipping workflow '{workflow_type}'"
+                        "Processor class '%s' is not in the allowed processor "
+                        "list — skipping workflow '%s' (module=%s, allowlist_count=%s)",
+                        processor_name,
+                        workflow_type,
+                        getattr(job_processors_module, "__file__", "unknown"),
+                        len(allowed_processor_names),
                     )
                     continue
                 processor_class = getattr(job_processors_module, processor_name, None)
@@ -188,6 +194,16 @@ class DGNClient:
                         f"Processor class '{processor_name}' not found for workflow '{workflow_type}'"
                     )
         return proc_map
+
+    def _build_processable_services(self):
+        services = set()
+        for workflow_type, config in self.config.items():
+            if workflow_type not in self.processor_map:
+                continue
+            service_name = config.get("service_name")
+            if service_name:
+                services.add(service_name)
+        return services
 
     def load_config(self):
         """Loads the configuration from the orchestrator."""
@@ -227,6 +243,7 @@ class DGNClient:
                 docker_manager.set_services_config(self.services_config)
 
             self.processor_map = self._build_processor_map()
+            self.processable_services = self._build_processable_services()
             
             # Check VRAM compatibility for each service
             self.compatible_services = set()

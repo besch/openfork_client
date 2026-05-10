@@ -67,6 +67,26 @@ class SCAILWan2GPTests(unittest.TestCase):
             SCAILImageToVideoProcessor,
         )
 
+    def test_processable_services_excludes_workflows_without_processors(self):
+        client = DGNClient.__new__(DGNClient)
+        client.config = {
+            "scail-image-to-video-24gb": {
+                "service_name": "scail-wan2gp-24gb",
+                "processor": "SCAILImageToVideoProcessor",
+            },
+            "future-workflow": {
+                "service_name": "future-service",
+                "processor": "FutureProcessor",
+            },
+        }
+
+        client.processor_map = DGNClient._build_processor_map(client)
+
+        self.assertEqual(
+            DGNClient._build_processable_services(client),
+            {"scail-wan2gp-24gb"},
+        )
+
     def test_missing_processor_map_entry_refreshes_config_once(self):
         class DummyProcessor:
             def __init__(self, client, job, shutdown_event):

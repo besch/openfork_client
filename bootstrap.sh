@@ -9,14 +9,35 @@ REPO="besch/openfork_client"
 BRANCH="${OPENFORK_CLIENT_SCRIPT_REF:-main}"
 BASE_URL="https://raw.githubusercontent.com/$REPO/$BRANCH"
 API_URL="https://api.github.com/repos/$REPO/git/trees/$BRANCH?recursive=1"
+DOWNLOAD_FAILURES=$(mktemp)
 
 download_openfork_file() {
   local url="$1"
   local dest="$2"
-  curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error "$url" -o "$dest"
+  local tmp="${dest}.tmp.$$"
+
+  if curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error "$url" -o "$tmp"; then
+    mv "$tmp" "$dest"
+    return 0
+  fi
+
+  rm -f "$tmp"
+  echo "$dest" >> "$DOWNLOAD_FAILURES"
+  return 1
+}
+
+wait_for_download_batch() {
+  wait || true
+  if [ -s "$DOWNLOAD_FAILURES" ]; then
+    echo "ERROR: Failed to download required DGN client file(s):"
+    sed 's/^/  - /' "$DOWNLOAD_FAILURES"
+    exit 1
+  fi
 }
 
 echo "=== OpenFork DGN Client Bootstrap ==="
+echo "Repository: $REPO"
+echo "Ref: $BRANCH"
 echo "Fetching file list from GitHub API..."
 
 # Fetch the repository tree from GitHub API
@@ -32,15 +53,15 @@ if [ -z "$TREE_JSON" ] || [[ "$TREE_JSON" == *"rate limit"* ]]; then
     [[ -z "$file" || "$file" =~ ^# ]] && continue
     dir=$(dirname "$file")
     [ "$dir" != "." ] && mkdir -p "$dir"
-    (download_openfork_file "$BASE_URL/$file" "$file" || echo "Failed: $file") &
+    download_openfork_file "$BASE_URL/$file" "$file" &
     
     count=$((count+1))
     if [ $count -ge 20 ]; then
-      wait
+      wait_for_download_batch
       count=0
     fi
   done < manifest.txt
-  wait
+  wait_for_download_batch
 else
   echo "Downloading client files..."
   
@@ -62,17 +83,23 @@ else
         fi
         
         echo "  -> Downloading $file"
-        (download_openfork_file "$BASE_URL/$file" "$file" 2>/dev/null || echo "    (skipped)") &
+        download_openfork_file "$BASE_URL/$file" "$file" &
         
         count=$((count+1))
         if [ $count -ge 20 ]; then
-          wait
+          wait_for_download_batch
           count=0
         fi
       done
-      wait
+      wait_for_download_batch
     }
 fi
+
+cat > .installed-ref << EOF
+repo=$REPO
+ref=$BRANCH
+installed_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+EOF
 
 # Install Python dependencies if requested
 if [ "$INSTALL_DEPS" = "true" ]; then

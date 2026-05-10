@@ -243,6 +243,24 @@ def setup_client(args):
         if args.service not in available_services:
             logging.error(f"Invalid service '{args.service}'. Available services from config: {', '.join(available_services)}")
             sys.exit(1)
+        configured_workflows = [
+            workflow_type
+            for workflow_type, workflow_config in client.config.items()
+            if workflow_config.get("service_name") == args.service
+        ]
+        if (
+            HEADLESS_MODE
+            and configured_workflows
+            and args.service not in client.processable_services
+        ):
+            logging.error(
+                "Service '%s' is configured but this DGN client build cannot "
+                "load any processor for its workflows: %s. Refusing to register "
+                "a headless provider that would fail assigned jobs.",
+                args.service,
+                ", ".join(configured_workflows) or "(none)",
+            )
+            sys.exit(1)
         if not HEADLESS_MODE and args.service not in client.compatible_services:
             logging.error(
                 f"Service '{args.service}' is not compatible with this client. "

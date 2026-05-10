@@ -245,6 +245,8 @@ log "=== OpenFork DGN Worker Initialization ==="
 log "========================================"
 log "User: $(whoami)"
 log "Path: $PATH"
+log "OpenFork client script ref: ${OPENFORK_CLIENT_SCRIPT_REF}"
+log "OpenFork raw base: ${OPENFORK_RAW_BASE}"
 log "Save Logs: $SAVE_LOGS"
 log "TIP: Large models like LTX-2 require a large swap file (128GB recommended) for stability when offloading."
 RESR=$(free -g | awk '/Swap/ {print $2}')
@@ -304,6 +306,10 @@ export INSTALL_DEPS=true
 if download_openfork_script bootstrap.sh bootstrap.sh OPENFORK_BOOTSTRAP_SHA256; then
   log "✓ bootstrap.sh downloaded successfully"
   bash bootstrap.sh
+  if [ -f ".installed-ref" ]; then
+    log "DGN client install metadata:"
+    sed 's/^/  /' .installed-ref || true
+  fi
 else
   log "ERROR: Failed to download bootstrap.sh. Cannot continue."
   exit 1
@@ -1333,11 +1339,19 @@ export ORCHESTRATOR_URL_PROD="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
 log "Testing Python imports..."
 "$PYTHON_EXE" -c "
 import sys
+import os
 sys.path.insert(0, '/opt/dgn-client')
 try:
     from config import HEADLESS_MODE
     from dgn_client import DGNClient
+    import services.processors as processors
     print('DGNClient import successful')
+    print(f'Client cwd: {os.getcwd()}')
+    print(f'Processor module: {getattr(processors, \"__file__\", \"unknown\")}')
+    processor_allowlist = getattr(processors, '__all__', [])
+    print(f'Processor allowlist count: {len(processor_allowlist)}')
+    print(f'Processor allowlist has SCAILImageToVideoProcessor: {\"SCAILImageToVideoProcessor\" in processor_allowlist}')
+    print(f'Processor allowlist has Vista4DVideoToVideoProcessor: {\"Vista4DVideoToVideoProcessor\" in processor_allowlist}')
 except Exception as e:
     print(f'Import error: {e}')
     import traceback

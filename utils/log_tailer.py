@@ -6,8 +6,13 @@ import threading
 
 def get_headless_log_paths(service_type: str):
     normalized = (service_type or "").lower()
-    if "davinci" in normalized or (
-        "ltx23" in normalized and "comfyui" not in normalized
+    if (
+        "davinci" in normalized
+        or "scail" in normalized
+        or "vista4d" in normalized
+        or (
+            "ltx23" in normalized and "comfyui" not in normalized
+        )
     ):
         return ["/tmp/wan2gp_server.log"]
     return ["/tmp/comfyui.log"]
