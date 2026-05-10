@@ -57,12 +57,14 @@ Windows PowerShell:
 
 ```powershell
 .\venv\Scripts\python -m pip install -r requirements.txt
+.\venv\Scripts\python -m pip install -r requirements-dev.txt
 ```
 
 Linux/macOS shell:
 
 ```bash
 ./venv/bin/python -m pip install -r requirements.txt
+./venv/bin/python -m pip install -r requirements-dev.txt
 ```
 
 ## Configuration
@@ -151,7 +153,7 @@ not all download the same image for the same queue demand.
 ## Tests
 
 ```bash
-pytest
+python -m pytest
 ```
 
 Focused tests live under `tests/` for model selection, Docker cache policy,

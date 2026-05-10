@@ -32,24 +32,61 @@ class DockerDevManager:
                 return ['docker', 'compose'] # Default to v2
 
     def _load_service_config(self):
-        """Loads the service config from the master services.json file."""
-        try:
-            # Path from dgn-client/services -> dgn-client -> root
-            config_path = os.path.join(ROOT_DIR, '..', 'services.json')
-            with open(config_path, 'r') as f:
-                data = json.load(f)
-            
-            self.service_config = {s['service_type']: s for s in data['services']}
-            logging.info("Successfully loaded services.json for dev manager.")
-        except (IOError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to load or parse services.json: {e}")
+        """Loads a local services.json fallback for dev-mode compose lookups."""
+        config_path = self._find_service_config_path()
+        if not config_path:
+            logging.warning(
+                "No local services.json found for dev manager. "
+                "Set OPENFORK_SERVICES_CONFIG_PATH or load config from the orchestrator."
+            )
             self.service_config = {}
+            return
+
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            self.service_config = self._normalize_service_config(data)
+            logging.info(f"Successfully loaded services.json for dev manager: {config_path}")
+        except (IOError, json.JSONDecodeError, ValueError) as e:
+            logging.error(f"Failed to load or parse services.json from {config_path}: {e}")
+            self.service_config = {}
+
+    def _find_service_config_path(self) -> str:
+        candidates = [
+            os.environ.get("OPENFORK_SERVICES_CONFIG_PATH"),
+            os.path.join(ROOT_DIR, 'services.json'),
+            os.path.join(ROOT_DIR, '..', 'website', 'services.json'),
+            os.path.join(ROOT_DIR, '..', 'services.json'),
+        ]
+
+        for candidate in candidates:
+            if candidate and os.path.isfile(candidate):
+                return os.path.abspath(candidate)
+        return ""
+
+    def _normalize_service_config(self, data: dict) -> dict:
+        services = data.get('services')
+        if isinstance(services, dict):
+            return services
+        if isinstance(services, list):
+            normalized = {}
+            for service in services:
+                service_type = service.get('service_type')
+                if service_type:
+                    normalized[service_type] = service
+            return normalized
+        raise ValueError("services.json must contain a services object or list")
 
     def set_docker_image_map(self, image_map: dict):
         # This method is a no-op for the dev manager as it uses docker-compose files,
         # but it's here to maintain a consistent interface with the prod manager.
         logging.debug("set_docker_image_map called on dev manager (no-op).")
         pass
+
+    def set_services_config(self, services_config: dict):
+        if services_config:
+            self.service_config = services_config
 
     def pull_image(self, image_name: str, shutdown_event: threading.Event = None, service_type: str = None):
         """No-op for dev manager as it builds images locally via docker-compose."""

@@ -16,17 +16,42 @@ _UUID_RE = re.compile(
 
 
 def _sanitize_routing_config(payload: dict) -> dict:
-    community_mode = payload.get("communityMode", "none")
-    if community_mode not in _VALID_COMMUNITY_MODES:
-        community_mode = "none"
-    raw_ids = payload.get("trustedIds", [])
-    trusted_ids = [i for i in raw_ids if isinstance(i, str) and _UUID_RE.match(i)][:500]
-    return {
-        "processOwnJobs": payload.get("processOwnJobs") is True,
-        "communityMode": community_mode,
-        "trustedIds": trusted_ids,
-        "monetizeMode": payload.get("monetizeMode") is True,
-    }
+    sanitized = {}
+
+    if "community_mode" in payload or "communityMode" in payload:
+        community_mode = payload.get("community_mode", payload.get("communityMode"))
+        if community_mode not in _VALID_COMMUNITY_MODES:
+            community_mode = "none"
+        sanitized["community_mode"] = community_mode
+
+    if (
+        "allowed_ids" in payload
+        or "allowedIds" in payload
+        or "trustedIds" in payload
+    ):
+        raw_ids = payload.get(
+            "allowed_ids",
+            payload.get("allowedIds", payload.get("trustedIds", [])),
+        )
+        if isinstance(raw_ids, str):
+            raw_ids = [i.strip() for i in raw_ids.split(",") if i.strip()]
+        elif not isinstance(raw_ids, (list, tuple, set)):
+            raw_ids = []
+        sanitized["allowed_ids"] = [
+            i for i in raw_ids if isinstance(i, str) and _UUID_RE.match(i)
+        ][:500]
+
+    if "process_own_jobs" in payload or "processOwnJobs" in payload:
+        sanitized["process_own_jobs"] = (
+            payload.get("process_own_jobs", payload.get("processOwnJobs")) is True
+        )
+
+    if "monetize_mode" in payload or "monetizeMode" in payload:
+        sanitized["monetize_mode"] = (
+            payload.get("monetize_mode", payload.get("monetizeMode")) is True
+        )
+
+    return sanitized
 
 def _configure_stdio_encoding() -> None:
     """Keep Electron pipe output UTF-8 on Windows codepages."""

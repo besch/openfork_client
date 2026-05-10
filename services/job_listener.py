@@ -585,13 +585,6 @@ class JobListener:
         def _monitor_loop():
             consecutive_errors = 0
             while not self.shutdown_event.is_set():
-                interval = min(
-                    _CANCEL_POLL_BASE * (_CANCEL_POLL_BACKOFF ** consecutive_errors),
-                    _CANCEL_POLL_MAX,
-                )
-                self.shutdown_event.wait(timeout=interval)
-                if self.shutdown_event.is_set():
-                    return
                 try:
                     job_details = self.orchestrator_service.get_job(job_id)
                     remote_status = self._remote_job_status(job_details)
@@ -613,6 +606,12 @@ class JobListener:
                 except Exception as e:
                     logging.debug(f"Error checking job status: {e}")
                     consecutive_errors += 1
+
+                interval = min(
+                    _CANCEL_POLL_BASE * (_CANCEL_POLL_BACKOFF ** consecutive_errors),
+                    _CANCEL_POLL_MAX,
+                )
+                self.shutdown_event.wait(timeout=interval)
 
         monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
         monitor_thread.start()
