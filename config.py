@@ -41,8 +41,9 @@ MAX_INPUT_ASSET_REDIRECTS = int(
 # OpenFork images exceed this budget, least-recently-used images are evicted.
 DOCKER_IMAGE_CACHE_LIMIT_GB = int(os.getenv("DOCKER_IMAGE_CACHE_LIMIT_GB", "250"))
 
-# Policy-specific idle timeouts for the Electron-side cleanup notifier (minutes).
-# Mirrored on the desktop side via /api/config so both layers stay in sync.
+# Policy-specific idle timeouts for Python-side Docker image eviction (minutes).
+# The download manager applies these during idle cleanup windows and batches
+# stale removals so Windows VHDX compaction can happen after enough space is freed.
 # None means idle eviction is disabled at Healthy tier.
 POLICY_IDLE_TIMEOUT_MINUTES = {
     "monetize": 90,
@@ -203,4 +204,3 @@ def _apply_overrides() -> None:
 
 
 _apply_overrides()
-

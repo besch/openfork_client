@@ -345,6 +345,92 @@ class DockerCachePolicyTests(unittest.TestCase):
             docker_manager.client.images.present,
         )
 
+    def test_idle_cleanup_evicts_multiple_stale_images_per_pass(self):
+        docker_manager = FakeDockerManager(
+            service_types=["wan22", "foley", "hunyuan"],
+            cached_service_types=["wan22", "foley", "hunyuan"],
+        )
+        manager = DockerDownloadManager(
+            docker_manager,
+            community_mode="all",
+            monetize_mode=False,
+        )
+
+        old = time.time() - (3 * 60 * 60)
+        recent = time.time()
+        manager._last_cache_activity_times["wan22"] = old
+        manager._last_cache_activity_times["foley"] = old
+        manager._last_cache_activity_times["hunyuan"] = recent
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            evicted = manager._evict_idle_images(tier="healthy")
+
+        self.assertEqual(evicted, 2)
+        self.assertNotIn(
+            docker_manager.get_image_name("wan22"),
+            docker_manager.client.images.present,
+        )
+        self.assertNotIn(
+            docker_manager.get_image_name("foley"),
+            docker_manager.client.images.present,
+        )
+        self.assertIn(
+            docker_manager.get_image_name("hunyuan"),
+            docker_manager.client.images.present,
+        )
+
+    def test_idle_cleanup_does_not_immediately_evict_unknown_legacy_cache(self):
+        docker_manager = FakeDockerManager(
+            service_types=["wan22", "foley"],
+            cached_service_types=["wan22", "foley"],
+        )
+        manager = DockerDownloadManager(
+            docker_manager,
+            community_mode="all",
+            monetize_mode=False,
+        )
+
+        evicted = manager._evict_idle_images(tier="healthy")
+
+        self.assertEqual(evicted, 0)
+        self.assertEqual(
+            docker_manager.client.images.present,
+            {
+                docker_manager.get_image_name("wan22"),
+                docker_manager.get_image_name("foley"),
+            },
+        )
+        self.assertEqual(
+            set(manager._last_cache_activity_times),
+            {"wan22", "foley"},
+        )
+
+    def test_private_mine_policy_disables_idle_cleanup_when_healthy(self):
+        docker_manager = FakeDockerManager(
+            service_types=["wan22", "foley"],
+            cached_service_types=["wan22", "foley"],
+        )
+        manager = DockerDownloadManager(
+            docker_manager,
+            community_mode="none",
+            monetize_mode=False,
+        )
+        old = time.time() - (24 * 60 * 60)
+        manager._last_cache_activity_times["wan22"] = old
+        manager._last_cache_activity_times["foley"] = old
+
+        evicted = manager._evict_idle_images(tier="healthy")
+
+        self.assertEqual(evicted, 0)
+        self.assertEqual(
+            docker_manager.client.images.present,
+            {
+                docker_manager.get_image_name("wan22"),
+                docker_manager.get_image_name("foley"),
+            },
+        )
+
     def test_transient_docker_error_is_not_treated_as_missing_image(self):
         docker_manager = ReconnectingDockerManager("ltx23-video-8gb")
         manager = DockerDownloadManager(docker_manager)

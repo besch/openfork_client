@@ -58,6 +58,10 @@ FRESH_IMAGE_PROTECTION_SECS = 120
 # still being short relative to normal poll intervals.
 POST_DOWNLOAD_SETTLE_SECS = 30
 
+# Max stale images to remove in one idle cleanup pass.  This batches useful
+# cleanup work without letting docker rmi monopolize the job listener forever.
+MAX_IDLE_EVICTIONS_PER_PASS = 5
+
 
 class DownloadStatus(Enum):
     PENDING = "pending"
@@ -89,7 +93,7 @@ class DockerDownloadManager:
     MAX_CONCURRENT_DOWNLOADS = 1
 
     # Cache metadata file format version — bump if schema changes.
-    _CACHE_METADATA_VERSION = 1
+    _CACHE_METADATA_VERSION = 2
 
     def __init__(
         self,
@@ -117,9 +121,9 @@ class DockerDownloadManager:
                 logging and compatibility with routing config hot reloads.
             monetize_mode: True when the provider is currently in monetize mode.
             data_dir: Path of the OpenFork data directory. Cache metadata
-                (per-image last-used timestamps) is persisted here so LRU
-                ordering survives client restarts. When None, persistence is
-                disabled and LRU stays session-local.
+                (per-image job and cache-activity timestamps) is persisted here
+                so LRU and idle-cleanup ordering survive client restarts. When
+                None, persistence is disabled and ordering stays session-local.
         """
         self.docker_manager = docker_manager
         self.orchestrator_service = orchestrator_service
@@ -143,6 +147,7 @@ class DockerDownloadManager:
         self._download_status: Dict[str, DownloadStatus] = {}
         self._cancellation_events: Dict[str, threading.Event] = {}
         self._last_job_times: Dict[str, float] = {}
+        self._last_cache_activity_times: Dict[str, float] = {}
         # Timestamps of successfully completed downloads (session-local, not persisted).
         # Used by _evict_lru_image to shield fresh images from immediate eviction.
         self._recently_downloaded: Dict[str, float] = {}
@@ -251,7 +256,9 @@ class DockerDownloadManager:
             return
 
         with self._lock:
-            self._last_job_times[service_type] = time.time()
+            now = time.time()
+            self._last_job_times[service_type] = now
+            self._last_cache_activity_times[service_type] = now
             self._save_cache_metadata_locked()
 
     def set_job_active(self, active: bool) -> None:
@@ -312,7 +319,7 @@ class DockerDownloadManager:
     # ── LRU persistence ───────────────────────────────────────────────────
 
     def _load_cache_metadata(self) -> None:
-        """Load `_last_job_times` from disk. Silently ignores corrupted or absent files."""
+        """Load cache metadata from disk. Silently ignores corrupted or absent files."""
         path = self._cache_metadata_path
         if not path or not os.path.exists(path):
             return
@@ -327,25 +334,67 @@ class DockerDownloadManager:
         if not isinstance(data, dict):
             return
 
-        # Ignore version sentinel + non-numeric values; everything else is a timestamp.
-        loaded = 0
-        for key, value in data.items():
-            if key == "_version":
-                continue
-            if isinstance(value, (int, float)) and value > 0:
-                self._last_job_times[key] = float(value)
-                loaded += 1
-        if loaded:
-            logging.info(f"Loaded {loaded} LRU entries from cache metadata.")
+        def load_numeric_map(source, target) -> int:
+            if not isinstance(source, dict):
+                return 0
+            loaded_count = 0
+            for key, value in source.items():
+                if (
+                    isinstance(key, str)
+                    and isinstance(value, (int, float))
+                    and value > 0
+                ):
+                    target[key] = float(value)
+                    loaded_count += 1
+            return loaded_count
+
+        # Version 2 stores named maps. Version 1 was a flat
+        # {service_type: last_job_timestamp} object with a _version sentinel.
+        if isinstance(data.get("last_job_times"), dict) or isinstance(
+            data.get("last_cache_activity_times"), dict
+        ):
+            loaded_jobs = load_numeric_map(
+                data.get("last_job_times"),
+                self._last_job_times,
+            )
+            loaded_activity = load_numeric_map(
+                data.get("last_cache_activity_times"),
+                self._last_cache_activity_times,
+            )
+        else:
+            loaded_jobs = 0
+            loaded_activity = 0
+            for key, value in data.items():
+                if key == "_version":
+                    continue
+                if (
+                    isinstance(key, str)
+                    and isinstance(value, (int, float))
+                    and value > 0
+                ):
+                    ts = float(value)
+                    self._last_job_times[key] = ts
+                    self._last_cache_activity_times[key] = ts
+                    loaded_jobs += 1
+                    loaded_activity += 1
+
+        if loaded_jobs or loaded_activity:
+            logging.info(
+                f"Loaded cache metadata: {loaded_jobs} job entries, "
+                f"{loaded_activity} activity entries."
+            )
 
     def _save_cache_metadata_locked(self) -> None:
-        """Atomically persist `_last_job_times`. Caller must hold `self._lock`."""
+        """Atomically persist cache metadata. Caller must hold `self._lock`."""
         path = self._cache_metadata_path
         if not path:
             return
 
-        payload = {"_version": self._CACHE_METADATA_VERSION}
-        payload.update(self._last_job_times)
+        payload = {
+            "_version": self._CACHE_METADATA_VERSION,
+            "last_job_times": self._last_job_times,
+            "last_cache_activity_times": self._last_cache_activity_times,
+        }
 
         # Atomic write: temp file in the same directory, then rename.
         directory = os.path.dirname(path) or "."
@@ -428,10 +477,13 @@ class DockerDownloadManager:
 
         if tier == disk_pressure.HEALTHY:
             # Honor the user's cache budget but don't do pressure cleanup.
-            return self._evict_until_within_cache_limit()
+            evicted = self._evict_until_within_cache_limit()
+            evicted += self._evict_idle_images(tier=tier)
+            return evicted
 
         # PRESSURE / CRITICAL — additionally try to claw back to Healthy / Pressure.
         evicted = self._evict_until_within_cache_limit()
+        evicted += self._evict_idle_images(tier=tier)
 
         if tier == disk_pressure.CRITICAL:
             # Aggressive eviction: keep going until free space exceeds Pressure threshold,
@@ -627,6 +679,111 @@ class DockerDownloadManager:
             total += self._get_cached_image_size_bytes(service_type)
         return total
 
+    def _ensure_cache_activity_for_cached_images_locked(self) -> None:
+        """
+        Give cached images with no metadata a first-seen timestamp.
+
+        This avoids deleting pre-existing caches immediately after users upgrade
+        from older clients that did not persist idle-cleanup metadata.
+        Caller must hold self._lock.
+        """
+        cached = self._get_cached_service_types()
+        now = time.time()
+        changed = False
+        for service_type in cached:
+            if service_type in self._last_cache_activity_times:
+                continue
+            last_job_time = self._last_job_times.get(service_type)
+            self._last_cache_activity_times[service_type] = (
+                last_job_time if last_job_time is not None else now
+            )
+            changed = True
+
+        if changed:
+            self._save_cache_metadata_locked()
+
+    def _get_cache_activity_time(self, service_type: str) -> float:
+        """Most recent local signal that this cached image was still useful."""
+        return max(
+            self._last_cache_activity_times.get(service_type, 0.0),
+            self._last_job_times.get(service_type, 0.0),
+            self._recently_downloaded.get(service_type, 0.0),
+        )
+
+    def _forget_cache_metadata_locked(self, service_type: str) -> None:
+        """Remove persisted metadata for an image that is no longer cached."""
+        changed = False
+        for mapping in (
+            self._last_job_times,
+            self._last_cache_activity_times,
+            self._recently_downloaded,
+        ):
+            if service_type in mapping:
+                mapping.pop(service_type, None)
+                changed = True
+        if changed:
+            self._save_cache_metadata_locked()
+
+    def _evict_idle_images(
+        self,
+        tier: Optional[str] = None,
+        max_evictions: int = MAX_IDLE_EVICTIONS_PER_PASS,
+    ) -> int:
+        """
+        Remove cached images that have exceeded the policy-specific idle timeout.
+
+        This runs only in idle-loop cleanup windows. It can remove several old
+        images in one pass so Windows VHDX compaction is triggered from the
+        cumulative freed bytes instead of one image at a time.
+        """
+        if max_evictions <= 0:
+            return 0
+        if not self.docker_manager or not getattr(self.docker_manager, "client", None):
+            return 0
+
+        with self._lock:
+            if self._job_active or self._active_downloads or self._download_queue:
+                return 0
+
+        tier = tier or disk_pressure.get_disk_pressure_tier()
+        policy = self._current_policy_key()
+        idle_minutes = disk_pressure.get_effective_idle_minutes(policy, tier)
+        if idle_minutes is None:
+            return 0
+
+        cutoff = time.time() - (idle_minutes * 60)
+        evicted = 0
+
+        with self._lock:
+            self._ensure_cache_activity_for_cached_images_locked()
+
+            while evicted < max_evictions:
+                cached_service_types = set(self._get_cached_service_types())
+                idle_service_types = {
+                    service_type
+                    for service_type in cached_service_types
+                    if self._get_cache_activity_time(service_type) <= cutoff
+                }
+
+                if not idle_service_types:
+                    break
+
+                victim = self._evict_lru_image(
+                    exclude_service_types=cached_service_types - idle_service_types,
+                    reason="idle_timeout",
+                )
+                if not victim:
+                    break
+                evicted += 1
+
+        if evicted:
+            logging.info(
+                f"Idle image cleanup removed {evicted} cached image(s) "
+                f"(policy={policy}, tier={tier}, idle_timeout={idle_minutes}m)."
+            )
+
+        return evicted
+
     def service_fits_cache_budget(self, service_type: str) -> bool:
         """Whether one service image can fit inside the configured cache budget."""
         if not self.cache_limit_bytes:
@@ -712,7 +869,9 @@ class DockerDownloadManager:
                 container.remove(force=True)
 
             self.docker_manager.client.images.remove(image=image_name, force=True)
-            self._download_status.pop(service_type_to_evict, None)
+            with self._lock:
+                self._download_status.pop(service_type_to_evict, None)
+                self._forget_cache_metadata_locked(service_type_to_evict)
             self._sync_cached_images_with_server()
             self._emit_image_evicted(
                 service_type=service_type_to_evict,
@@ -728,7 +887,9 @@ class DockerDownloadManager:
         except DockerImageNotFound:
             # Image already gone; still surface the cleanup so the compaction tracker
             # doesn't think nothing happened. Use 0 freed bytes since we can't measure.
-            self._download_status.pop(service_type_to_evict, None)
+            with self._lock:
+                self._download_status.pop(service_type_to_evict, None)
+                self._forget_cache_metadata_locked(service_type_to_evict)
             self._sync_cached_images_with_server()
             self._emit_image_evicted(
                 service_type=service_type_to_evict,
@@ -1099,8 +1260,11 @@ class DockerDownloadManager:
             self.docker_manager.pull_image(image_name, shutdown_event=cancel_event, service_type=service_type)
             
             with self._lock:
+                now = time.time()
                 self._download_status[service_type] = DownloadStatus.COMPLETED
-                self._recently_downloaded[service_type] = time.time()
+                self._recently_downloaded[service_type] = now
+                self._last_cache_activity_times[service_type] = now
+                self._save_cache_metadata_locked()
                 self._emit_download_state(service_type, image_name, "completed")
                 logging.info(f"Background download completed for {service_type}")
             
