@@ -305,7 +305,35 @@ class DGNClient:
         workflow_type = job.get("workflow_type")
 
         ProcessorClass = self.processor_map.get(workflow_type)
+        if not ProcessorClass and workflow_type:
+            logging.warning(
+                "No job processor found for workflow type '%s' in the current "
+                "processor map. Refreshing DGN configuration once before failing.",
+                workflow_type,
+            )
+            try:
+                self.load_config()
+            except Exception as exc:
+                logging.warning(
+                    "Failed to refresh DGN configuration after processor miss "
+                    "for workflow type '%s': %s",
+                    workflow_type,
+                    exc,
+                )
+            ProcessorClass = self.processor_map.get(workflow_type)
+
         if not ProcessorClass:
+            workflow_config = (
+                self.config.get(workflow_type, {})
+                if workflow_type and isinstance(self.config, dict)
+                else {}
+            )
+            configured_processor = workflow_config.get("processor")
+            if configured_processor:
+                raise ValueError(
+                    f"No job processor found for workflow type: {workflow_type} "
+                    f"(configured processor: {configured_processor})"
+                )
             raise ValueError(
                 f"No job processor found for workflow type: {workflow_type}"
             )

@@ -1,6 +1,8 @@
 import unittest
 
+from dgn_client import DGNClient
 from services.processors.video.scail import (
+    SCAILImageToVideoProcessor,
     clamp_scail_duration,
     clamp_scail_steps,
     duration_to_wangp_frames,
@@ -42,6 +44,57 @@ class SCAILWan2GPTests(unittest.TestCase):
     def test_service_type_selects_vram_tier(self):
         self.assertEqual(get_scail_vram_tier("scail-wan2gp-16gb"), "16gb")
         self.assertEqual(get_scail_vram_tier("scail-wan2gp-24gb"), "24gb")
+
+    def test_scail_workflows_are_registered_in_processor_map(self):
+        client = DGNClient.__new__(DGNClient)
+        client.config = {
+            "scail-image-to-video-16gb": {
+                "processor": "SCAILImageToVideoProcessor",
+            },
+            "scail-image-to-video-24gb": {
+                "processor": "SCAILImageToVideoProcessor",
+            },
+        }
+
+        processor_map = DGNClient._build_processor_map(client)
+
+        self.assertIs(
+            processor_map["scail-image-to-video-16gb"],
+            SCAILImageToVideoProcessor,
+        )
+        self.assertIs(
+            processor_map["scail-image-to-video-24gb"],
+            SCAILImageToVideoProcessor,
+        )
+
+    def test_missing_processor_map_entry_refreshes_config_once(self):
+        class DummyProcessor:
+            def __init__(self, client, job, shutdown_event):
+                self.client = client
+                self.job = job
+                self.shutdown_event = shutdown_event
+
+        client = DGNClient.__new__(DGNClient)
+        client.processor_map = {}
+        client.config = {}
+        refreshes = []
+
+        def load_config():
+            refreshes.append(True)
+            client.processor_map = {
+                "scail-image-to-video-16gb": DummyProcessor,
+            }
+
+        client.load_config = load_config
+
+        processor = DGNClient._get_job_processor(
+            client,
+            {"id": "job-1", "workflow_type": "scail-image-to-video-16gb"},
+            None,
+        )
+
+        self.assertIsInstance(processor, DummyProcessor)
+        self.assertEqual(refreshes, [True])
 
 
 if __name__ == "__main__":
