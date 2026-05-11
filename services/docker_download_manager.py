@@ -295,11 +295,11 @@ class DockerDownloadManager:
         already-transferred layers, so progress is not fully lost.
 
         When False: re-queues any downloads that were cancelled for the job
-        pause and kick-starts the queue.  This is idempotent — safe to call
-        even if set_job_active(False) was already the current state.
+        pause, but does not start the next queued pull. The job listener starts
+        queued pulls explicitly only after it has checked for processable jobs.
+        This is idempotent — safe to call even if set_job_active(False) was
+        already the current state.
         """
-        next_to_start = None
-        next_accept_policy = None
         with self._lock:
             already_in_state = self._job_active == active
             if already_in_state and active:
@@ -336,22 +336,13 @@ class DockerDownloadManager:
                             self._download_status.pop(st, None)  # Clear FAILED -> allow retry
                             logging.info(f"Re-queued suspended download for '{st}' — job finished.")
 
-                # Kick-start the queue if nothing is currently downloading.
+                # Do not kick-start queued downloads here. Auto mode calls this
+                # at the top of each loop before peeking jobs; starting the next
+                # pull there can race ahead of the freshly downloaded job that
+                # should run first. The listener calls start_next_queued_download()
+                # after it confirms no job is processable.
                 hold_remaining = self._post_download_hold_remaining_locked()
-                if (
-                    self._download_queue
-                    and not self._shutdown
-                    and not self._compaction_paused
-                    and hold_remaining <= 0
-                    and len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS
-                ):
-                    next_to_start = self._download_queue.pop(0)
-                    next_accept_policy = self._download_queue_policies.pop(
-                        next_to_start,
-                        None,
-                    )
-                    self._download_status.pop(next_to_start, None)
-                elif self._download_queue and hold_remaining > 0:
+                if self._download_queue and hold_remaining > 0:
                     logging.info(
                         "Queued Docker downloads remain paused for %.1fs after the "
                         "last completed pull so the job listener can process it first.",
@@ -362,14 +353,11 @@ class DockerDownloadManager:
                         "Queued Docker downloads remain paused while disk "
                         "compaction is pending."
                     )
-
-        # Start outside the lock so start_background_download's own lock acquisition
-        # is not a reentrant re-lock (still safe with RLock, but cleaner outside).
-        if next_to_start is not None:
-            logging.info(
-                f"Kick-starting queued download for '{next_to_start}' — job finished."
-            )
-            self.start_background_download(next_to_start, next_accept_policy)
+                elif self._download_queue:
+                    logging.debug(
+                        "Queued Docker downloads remain paused until the job "
+                        "listener confirms there is no processable job."
+                    )
 
     def set_compaction_paused(self, paused: bool) -> None:
         """Pause or resume new Docker downloads around disk compaction."""
@@ -1693,7 +1681,8 @@ class DockerDownloadManager:
             return False
         if self._job_active:
             # Don't chain the next download while a job is processing;
-            # set_job_active(False) will kick the queue when the job ends.
+            # the listener will kick the queue after the job ends and no
+            # processable job is available.
             logging.debug(
                 "Skipping next queued download: job is actively processing."
             )

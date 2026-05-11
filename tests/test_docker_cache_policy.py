@@ -282,6 +282,32 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertEqual(manager._download_queue, ["second"])
         self.assertEqual(docker_manager.pull_calls, [])
 
+    def test_set_job_inactive_does_not_start_queue_before_listener_checks_jobs(self):
+        docker_manager = PullRecordingDockerManager(["first", "second"])
+        docker_manager.services_config["second"] = {"disk_required_gb": 0.001}
+        manager = DockerDownloadManager(docker_manager)
+        with manager._lock:
+            manager._download_queue.append("second")
+            manager._download_status["second"] = DownloadStatus.PENDING
+
+        manager.set_job_active(False)
+
+        self.assertEqual(manager._download_queue, ["second"])
+        self.assertFalse(manager.is_downloading("second"))
+        self.assertEqual(docker_manager.pull_calls, [])
+
+        self.assertTrue(manager.start_next_queued_download(reason="listener-idle"))
+        for _ in range(100):
+            if manager.get_download_status("second") == DownloadStatus.COMPLETED:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(docker_manager.pull_calls[0]["service_type"], "second")
+        self.assertEqual(
+            manager.get_download_status("second"),
+            DownloadStatus.COMPLETED,
+        )
+
     def test_apply_routing_config_updates_allowed_ids_and_cache_cap(self):
         client = DGNClient.__new__(DGNClient)
         client.process_own_jobs = True
