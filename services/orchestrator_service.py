@@ -844,8 +844,7 @@ class OrchestratorService:
             active_token = self.get_active_execution_token()
             if active_token:
                 payload["executionToken"] = active_token
-            if compaction_pending:
-                payload["compactionPending"] = True
+            payload["compactionPending"] = bool(compaction_pending)
 
             response = self._make_request(
                 'post',

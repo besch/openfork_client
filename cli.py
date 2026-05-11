@@ -160,6 +160,10 @@ def listen_for_ipc_commands(client: "DGNClient"):
             elif cmd_type == "SET_COMPACTION_PENDING":
                 pending = bool(payload.get("pending")) if isinstance(payload, dict) else False
                 client.compaction_pending = pending
+                if client.download_manager and hasattr(client.download_manager, "set_compaction_paused"):
+                    client.download_manager.set_compaction_paused(pending)
+                if not pending and hasattr(client, "job_wakeup_event"):
+                    client.job_wakeup_event.set()
                 logging.info(f"Set compaction_pending={pending}.")
             else:
                 logging.warning(f"Received unknown IPC command type: {cmd_type}")

@@ -977,12 +977,37 @@ class JobListener:
                 logging.warning(f"Startup: cache sync failed (non-fatal): {_sync_err}")
 
         consecutive_empty_polls = 0
+        compaction_pause_logged = False
 
         try:
             while not self.shutdown_event.is_set():
                 # Clear wakeup event at start of loop
                 if hasattr(self.client, "job_wakeup_event"):
                     self.client.job_wakeup_event.clear()
+
+                if getattr(self.client, "compaction_pending", False):
+                    if download_manager and hasattr(
+                        download_manager, "set_compaction_paused"
+                    ):
+                        download_manager.set_compaction_paused(True)
+                    if not compaction_pause_logged:
+                        logging.info(
+                            "Disk compaction is pending; pausing job polling "
+                            "and new Docker image downloads until it completes."
+                        )
+                        compaction_pause_logged = True
+                    self.shutdown_event.wait(1.0)
+                    continue
+
+                if compaction_pause_logged:
+                    logging.info(
+                        "Disk compaction pause cleared; resuming job polling."
+                    )
+                    if download_manager and hasattr(
+                        download_manager, "set_compaction_paused"
+                    ):
+                        download_manager.set_compaction_paused(False)
+                    compaction_pause_logged = False
 
                 # Ensure downloads are always allowed at the start of each iteration.
                 # This is idempotent, so it safely clears any True state left over

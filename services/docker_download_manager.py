@@ -163,6 +163,10 @@ class DockerDownloadManager:
         self._post_download_hold_until: float = 0.0
         # Job-active gate: when True, no new downloads start and queue is frozen.
         self._job_active: bool = False
+        # Compaction gate: when True, do not start new Docker work. Existing
+        # active pulls are allowed to finish so manual compaction can wait for
+        # a clean idle point instead of cancelling half-written layers.
+        self._compaction_paused: bool = False
         # Service types whose downloads were cancelled because a job started;
         # re-inserted at the front of the queue when the job finishes.
         self._paused_downloads: Set[str] = set()
@@ -314,6 +318,7 @@ class DockerDownloadManager:
                 if (
                     self._download_queue
                     and not self._shutdown
+                    and not self._compaction_paused
                     and hold_remaining <= 0
                     and len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS
                 ):
@@ -325,12 +330,51 @@ class DockerDownloadManager:
                         "last completed pull so the job listener can process it first.",
                         hold_remaining,
                     )
+                elif self._download_queue and self._compaction_paused:
+                    logging.info(
+                        "Queued Docker downloads remain paused while disk "
+                        "compaction is pending."
+                    )
 
         # Start outside the lock so start_background_download's own lock acquisition
         # is not a reentrant re-lock (still safe with RLock, but cleaner outside).
         if next_to_start is not None:
             logging.info(
                 f"Kick-starting queued download for '{next_to_start}' — job finished."
+            )
+            self.start_background_download(next_to_start)
+
+    def set_compaction_paused(self, paused: bool) -> None:
+        """Pause or resume new Docker downloads around disk compaction."""
+        next_to_start = None
+        with self._lock:
+            paused = bool(paused)
+            if self._compaction_paused == paused:
+                return
+
+            self._compaction_paused = paused
+            if paused:
+                logging.info(
+                    "Docker image downloads paused: disk compaction is pending."
+                )
+                return
+
+            logging.info("Docker image downloads resumed after disk compaction.")
+            hold_remaining = self._post_download_hold_remaining_locked()
+            if (
+                self._download_queue
+                and not self._shutdown
+                and not self._job_active
+                and hold_remaining <= 0
+                and len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS
+            ):
+                next_to_start = self._download_queue.pop(0)
+                self._download_status.pop(next_to_start, None)
+
+        if next_to_start is not None:
+            logging.info(
+                f"Kick-starting queued download for '{next_to_start}' — "
+                "compaction pause cleared."
             )
             self.start_background_download(next_to_start)
 
@@ -1086,6 +1130,12 @@ class DockerDownloadManager:
         with self._lock:
             if self._shutdown:
                 return False
+            if self._compaction_paused:
+                logging.info(
+                    f"Skipping background download for {service_type}: disk "
+                    "compaction is pending."
+                )
+                return False
 
             # Check if already downloading or queued
             if service_type in self._active_downloads:
@@ -1510,6 +1560,11 @@ class DockerDownloadManager:
     def _start_next_queued_download_locked(self, reason: str = "idle") -> bool:
         """Start the next queued download. Caller must hold self._lock."""
         if self._shutdown:
+            return False
+        if self._compaction_paused:
+            logging.info(
+                "Skipping next queued download: disk compaction is pending."
+            )
             return False
         if self._job_active:
             # Don't chain the next download while a job is processing;

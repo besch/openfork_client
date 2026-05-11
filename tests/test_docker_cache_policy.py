@@ -246,6 +246,27 @@ class DockerCachePolicyTests(unittest.TestCase):
         docker_manager.services_config["wan22"]["disk_required_gb"] = 300
         self.assertFalse(manager.service_fits_cache_budget("wan22"))
 
+    def test_compaction_pause_blocks_new_background_downloads(self):
+        docker_manager = PullRecordingDockerManager(["wan22"])
+        manager = DockerDownloadManager(docker_manager)
+
+        manager.set_compaction_paused(True)
+
+        self.assertFalse(manager.start_background_download("wan22"))
+        self.assertEqual(manager._download_queue, [])
+        self.assertEqual(docker_manager.pull_calls, [])
+
+    def test_compaction_pause_freezes_existing_queue(self):
+        docker_manager = PullRecordingDockerManager(["first", "second"])
+        manager = DockerDownloadManager(docker_manager)
+        manager._download_queue.append("second")
+
+        manager.set_compaction_paused(True)
+
+        self.assertFalse(manager.start_next_queued_download())
+        self.assertEqual(manager._download_queue, ["second"])
+        self.assertEqual(docker_manager.pull_calls, [])
+
     def test_apply_routing_config_updates_allowed_ids_and_cache_cap(self):
         client = DGNClient.__new__(DGNClient)
         client.process_own_jobs = True
