@@ -28,6 +28,7 @@ if not hasattr(docker, "errors"):
         APIError=_DockerApiError,
     )
 
+import services.docker_download_manager as docker_download_manager_module
 from services.docker_download_manager import (
     DockerDownloadManager,
     DownloadStatus,
@@ -140,6 +141,17 @@ class PullRecordingDockerManager(FakeDockerManager):
             }
         )
         self.client.images.present.add(image_name)
+
+
+class NonRegisteringPullDockerManager(PullRecordingDockerManager):
+    def pull_image(self, image_name, shutdown_event=None, service_type=None):
+        self.pull_calls.append(
+            {
+                "image_name": image_name,
+                "shutdown_event": shutdown_event,
+                "service_type": service_type,
+            }
+        )
 
 
 class FlakyImageStore:
@@ -534,6 +546,7 @@ class DockerCachePolicyTests(unittest.TestCase):
 
         with manager._lock:
             manager._active_downloads.add("first")
+            manager._download_status["first"] = DownloadStatus.COMPLETED
             manager._download_queue.append("second")
             manager._download_status["second"] = DownloadStatus.PENDING
 
@@ -543,6 +556,73 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertEqual(manager._download_queue, ["second"])
         self.assertFalse(manager.is_downloading("second"))
         self.assertEqual(docker_manager.pull_calls, [])
+
+    def test_post_download_hold_blocks_listener_queue_start_until_expired(self):
+        wakeup_event = threading.Event()
+        docker_manager = PullRecordingDockerManager(
+            service_types=["first", "second"],
+            cached_service_types=["first"],
+        )
+        docker_manager.services_config["second"] = {"disk_required_gb": 0.001}
+        manager = DockerDownloadManager(
+            docker_manager,
+            wakeup_event=wakeup_event,
+        )
+        manager._signal_wakeup_after_settle = wakeup_event.set
+
+        with manager._lock:
+            manager._active_downloads.add("first")
+            manager._download_status["first"] = DownloadStatus.COMPLETED
+            manager._download_queue.append("second")
+            manager._download_status["second"] = DownloadStatus.PENDING
+
+        manager._finish_download("first")
+
+        self.assertTrue(manager.is_post_download_hold_active())
+        self.assertFalse(manager.start_next_queued_download(reason="test"))
+        self.assertEqual(docker_manager.pull_calls, [])
+
+        with manager._lock:
+            manager._post_download_hold_until = time.time() - 1
+
+        self.assertTrue(manager.start_next_queued_download(reason="test"))
+        for _ in range(100):
+            if manager.get_download_status("second") == DownloadStatus.COMPLETED:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(docker_manager.pull_calls[0]["service_type"], "second")
+        self.assertEqual(
+            manager.get_download_status("second"),
+            DownloadStatus.COMPLETED,
+        )
+
+    def test_start_background_download_queues_during_post_download_hold(self):
+        docker_manager = PullRecordingDockerManager(service_types=["first", "second"])
+        docker_manager.services_config["second"] = {"disk_required_gb": 0.001}
+        manager = DockerDownloadManager(docker_manager)
+
+        with manager._lock:
+            manager._post_download_hold_until = time.time() + 30
+
+        self.assertTrue(manager.start_background_download("second"))
+        self.assertEqual(manager._download_queue, ["second"])
+        self.assertEqual(docker_manager.pull_calls, [])
+
+        with manager._lock:
+            manager._post_download_hold_until = time.time() - 1
+
+        self.assertTrue(manager.start_next_queued_download(reason="test"))
+        for _ in range(100):
+            if manager.get_download_status("second") == DownloadStatus.COMPLETED:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(docker_manager.pull_calls[0]["service_type"], "second")
+        self.assertEqual(
+            manager.get_download_status("second"),
+            DownloadStatus.COMPLETED,
+        )
 
     def test_listener_can_resume_queue_when_no_job_became_processable(self):
         docker_manager = PullRecordingDockerManager(
@@ -566,6 +646,28 @@ class DockerCachePolicyTests(unittest.TestCase):
             manager.get_download_status("second"),
             DownloadStatus.COMPLETED,
         )
+
+    def test_download_worker_fails_if_pull_does_not_register_image(self):
+        docker_manager = NonRegisteringPullDockerManager(service_types=["wan22"])
+        manager = DockerDownloadManager(docker_manager)
+        cancel_event = threading.Event()
+
+        old_timeout = docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS
+        old_interval = docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS
+        docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS = 0.02
+        docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS = 0.01
+        try:
+            manager._download_worker("wan22", cancel_event)
+        finally:
+            docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS = old_timeout
+            docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS = old_interval
+
+        self.assertEqual(docker_manager.pull_calls[0]["service_type"], "wan22")
+        self.assertEqual(
+            manager.get_download_status("wan22"),
+            DownloadStatus.FAILED,
+        )
+        self.assertFalse(manager.is_post_download_hold_active())
 
 
 class PrefetchPolicyTests(unittest.TestCase):

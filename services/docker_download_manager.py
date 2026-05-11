@@ -58,6 +58,13 @@ FRESH_IMAGE_PROTECTION_SECS = 120
 # still being short relative to normal poll intervals.
 POST_DOWNLOAD_SETTLE_SECS = 30
 
+# After Docker's pull stream completes, verify that the daemon can actually
+# resolve the image before telling the orchestrator it is cached. A pull stream
+# ending without a registered image leaves large containerd blobs on disk but no
+# runnable Docker image.
+POST_PULL_VERIFY_TIMEOUT_SECS = 60
+POST_PULL_VERIFY_INTERVAL_SECS = 5
+
 # Max stale images to remove in one idle cleanup pass.  This batches useful
 # cleanup work without letting docker rmi monopolize the job listener forever.
 MAX_IDLE_EVICTIONS_PER_PASS = 5
@@ -151,6 +158,9 @@ class DockerDownloadManager:
         # Timestamps of successfully completed downloads (session-local, not persisted).
         # Used by _evict_lru_image to shield fresh images from immediate eviction.
         self._recently_downloaded: Dict[str, float] = {}
+        # Queue hold used after a successful pull so the job listener gets first
+        # chance to reserve/process the now-runnable job before another pull starts.
+        self._post_download_hold_until: float = 0.0
         # Job-active gate: when True, no new downloads start and queue is frozen.
         self._job_active: bool = False
         # Service types whose downloads were cancelled because a job started;
@@ -300,13 +310,21 @@ class DockerDownloadManager:
                         logging.info(f"Re-queued suspended download for '{st}' — job finished.")
 
                 # Kick-start the queue if nothing is currently downloading.
+                hold_remaining = self._post_download_hold_remaining_locked()
                 if (
                     self._download_queue
                     and not self._shutdown
+                    and hold_remaining <= 0
                     and len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS
                 ):
                     next_to_start = self._download_queue.pop(0)
                     self._download_status.pop(next_to_start, None)
+                elif self._download_queue and hold_remaining > 0:
+                    logging.info(
+                        "Queued Docker downloads remain paused for %.1fs after the "
+                        "last completed pull so the job listener can process it first.",
+                        hold_remaining,
+                    )
 
         # Start outside the lock so start_background_download's own lock acquisition
         # is not a reentrant re-lock (still safe with RLock, but cleaner outside).
@@ -991,6 +1009,15 @@ class DockerDownloadManager:
         """Check if a service's image is queued for download."""
         with self._lock:
             return service_type in self._download_queue
+
+    def _post_download_hold_remaining_locked(self) -> float:
+        """Return seconds remaining in the post-download queue hold."""
+        return max(0.0, self._post_download_hold_until - time.time())
+
+    def is_post_download_hold_active(self) -> bool:
+        """Return True while queued/prefetch downloads should stay paused."""
+        with self._lock:
+            return self._post_download_hold_remaining_locked() > 0
     
     def get_download_status(self, service_type: str) -> Optional[DownloadStatus]:
         """Get the download status for a service type."""
@@ -1116,6 +1143,22 @@ class DockerDownloadManager:
                     )
                 return True
 
+            hold_remaining = self._post_download_hold_remaining_locked()
+            if hold_remaining > 0:
+                if not self._claim_download_slot(service_type, accept_policy):
+                    return False
+
+                self._download_queue.append(service_type)
+                self._download_status[service_type] = DownloadStatus.PENDING
+                self._emit_download_state(service_type, image_name, "queued")
+                logging.info(
+                    "Deferred download for '%s': post-download settle hold active "
+                    "for %.1fs.",
+                    service_type,
+                    hold_remaining,
+                )
+                return True
+
             # Check if we can start a new download
             if len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS:
                 self._emit_download_state(service_type, image_name, "starting")
@@ -1231,6 +1274,52 @@ class DockerDownloadManager:
             }
         }), flush=True)
 
+    def _wait_for_pulled_image_ready(
+        self,
+        service_type: str,
+        image_name: str,
+        cancel_event: threading.Event,
+    ) -> None:
+        """Wait until a completed pull is visible through the Docker image API."""
+        deadline = time.time() + POST_PULL_VERIFY_TIMEOUT_SECS
+        attempt = 0
+
+        while True:
+            if self._shutdown or cancel_event.is_set():
+                raise RuntimeError(
+                    f"Docker pull for {image_name} was cancelled before image verification."
+                )
+
+            availability = self.get_image_availability(service_type)
+            if availability == ImageAvailability.AVAILABLE:
+                if attempt:
+                    logging.info(
+                        "Docker image '%s' became available after %d verification "
+                        "retry(ies).",
+                        image_name,
+                        attempt,
+                    )
+                return
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Docker pull stream completed for {image_name}, but the image "
+                    f"was not registered locally (last status: {availability.value})."
+                )
+
+            attempt += 1
+            wait_secs = min(POST_PULL_VERIFY_INTERVAL_SECS, remaining)
+            logging.info(
+                "Docker pull stream completed for '%s', but image availability is "
+                "%s. Waiting %.1fs before retry %d.",
+                image_name,
+                availability.value,
+                wait_secs,
+                attempt,
+            )
+            cancel_event.wait(wait_secs)
+
     def _download_worker(self, service_type: str, cancel_event: threading.Event):
         """Worker function that runs in a background thread to download an image.
         
@@ -1268,6 +1357,12 @@ class DockerDownloadManager:
             
             # Use the existing pull_image method which handles progress reporting
             self.docker_manager.pull_image(image_name, shutdown_event=cancel_event, service_type=service_type)
+
+            self._wait_for_pulled_image_ready(
+                service_type,
+                image_name,
+                cancel_event,
+            )
             
             with self._lock:
                 now = time.time()
@@ -1423,6 +1518,14 @@ class DockerDownloadManager:
                 "Skipping next queued download: job is actively processing."
             )
             return False
+        hold_remaining = self._post_download_hold_remaining_locked()
+        if hold_remaining > 0:
+            logging.info(
+                "Skipping next queued download: post-download settle hold active "
+                "for %.1fs.",
+                hold_remaining,
+            )
+            return False
         if len(self._active_downloads) >= self.MAX_CONCURRENT_DOWNLOADS:
             return False
 
@@ -1502,6 +1605,8 @@ class DockerDownloadManager:
     def _finish_download(self, service_type: str):
         """Clean up after a download finishes and wake the job listener first."""
         with self._lock:
+            status = self._download_status.get(service_type)
+            download_completed = status == DownloadStatus.COMPLETED
             self._active_downloads.discard(service_type)
             wakeup_scheduled = False
 
@@ -1509,7 +1614,11 @@ class DockerDownloadManager:
             # finish overlay2 layer extraction before the job listener checks
             # image availability.  Run in a daemon thread so we don't block
             # the download worker.
-            if self.wakeup_event:
+            if download_completed and self.wakeup_event:
+                self._post_download_hold_until = max(
+                    self._post_download_hold_until,
+                    time.time() + POST_DOWNLOAD_SETTLE_SECS,
+                )
                 logging.info(
                     "Scheduling delayed job_wakeup_event after download completion."
                 )

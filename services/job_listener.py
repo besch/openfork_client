@@ -827,6 +827,14 @@ class JobListener:
         """
         if not download_manager:
             return
+        if (
+            hasattr(download_manager, "is_post_download_hold_active")
+            and download_manager.is_post_download_hold_active()
+        ):
+            logging.debug(
+                "Skipping prefetch suggestions during post-download settle hold."
+            )
+            return
 
         community_mode = getattr(self.client, "community_mode", "all")
         monetize_mode = getattr(self.client, "monetize_mode", False)
@@ -982,13 +990,19 @@ class JobListener:
                 # Exception: skip the unfreeze during the post-download settle window
                 # so queued downloads for other service types don't restart while
                 # Docker is still extracting overlay2 layers (disk at 100%).
+                post_download_hold_active = False
                 if download_manager:
-                    recently_downloaded = getattr(download_manager, "_recently_downloaded", {})
-                    settle_active = any(
-                        time.time() - ts < POST_DOWNLOAD_SETTLE_SECS
-                        for ts in recently_downloaded.values()
-                    )
-                    if settle_active:
+                    if hasattr(download_manager, "is_post_download_hold_active"):
+                        post_download_hold_active = (
+                            download_manager.is_post_download_hold_active()
+                        )
+                    else:
+                        recently_downloaded = getattr(download_manager, "_recently_downloaded", {})
+                        post_download_hold_active = any(
+                            time.time() - ts < POST_DOWNLOAD_SETTLE_SECS
+                            for ts in recently_downloaded.values()
+                        )
+                    if post_download_hold_active:
                         logging.debug(
                             "Post-download settle window active: keeping download queue frozen "
                             f"for up to {POST_DOWNLOAD_SETTLE_SECS}s to allow overlay2 extraction."
@@ -1444,71 +1458,84 @@ class JobListener:
                             # blocked by downloads kicked off for earlier miss entries,
                             # and avoids unnecessary evictions caused by those downloads.
                             if not found_processable_job and download_manager and not HEADLESS_MODE:
-                                _known = self._known_service_types()
-                                for peeked_job, _job_policy in _available_with_policy:
-                                    service_type = self._get_service_type_for_job(peeked_job)
-                                    if not service_type:
-                                        continue
-                                    # Validate against locally-declared services before
-                                    # any Docker operation; rejects server-injected types.
-                                    if _known and service_type not in _known:
-                                        logging.warning(
-                                            f"Ignoring peeked job with unknown service_type "
-                                            f"'{service_type}' (not in local services.json)."
-                                        )
-                                        continue
-                                    image_availability = download_manager.get_image_availability(
-                                        service_type
+                                if post_download_hold_active:
+                                    logging.info(
+                                        "Skipping missing-image downloads during the "
+                                        "post-download settle window so the freshly "
+                                        "downloaded image can be checked first."
                                     )
-                                    if image_availability != ImageAvailability.MISSING:
-                                        continue
-                                    status = download_manager.get_download_status(service_type)
-                                    is_downloading = download_manager.is_downloading(service_type)
-                                    is_queued = download_manager.is_queued(service_type)
-                                    if not is_downloading and not is_queued:
-                                        if not self._should_download_missing_image(
-                                            service_type, _job_policy, download_gate
-                                        ):
+                                else:
+                                    _known = self._known_service_types()
+                                    for peeked_job, _job_policy in _available_with_policy:
+                                        service_type = self._get_service_type_for_job(peeked_job)
+                                        if not service_type:
                                             continue
-                                        if status and status.value == "permanently_failed":
+                                        # Validate against locally-declared services before
+                                        # any Docker operation; rejects server-injected types.
+                                        if _known and service_type not in _known:
                                             logging.warning(
-                                                f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
+                                                f"Ignoring peeked job with unknown service_type "
+                                                f"'{service_type}' (not in local services.json)."
                                             )
                                             continue
-                                        elif status and status.value == "failed":
+                                        image_availability = download_manager.get_image_availability(
+                                            service_type
+                                        )
+                                        if image_availability != ImageAvailability.MISSING:
+                                            continue
+                                        status = download_manager.get_download_status(service_type)
+                                        is_downloading = download_manager.is_downloading(service_type)
+                                        is_queued = download_manager.is_queued(service_type)
+                                        if not is_downloading and not is_queued:
+                                            if not self._should_download_missing_image(
+                                                service_type, _job_policy, download_gate
+                                            ):
+                                                continue
+                                            if status and status.value == "permanently_failed":
+                                                logging.warning(
+                                                    f"Image for service '{service_type}' does not exist on the registry (permanent failure). Skipping job."
+                                                )
+                                                continue
+                                            elif status and status.value == "failed":
+                                                logging.info(
+                                                    f"Image for service '{service_type}' previously failed. Retrying download..."
+                                                )
                                             logging.info(
-                                                f"Image for service '{service_type}' previously failed. Retrying download..."
+                                                f"Image for service '{service_type}' not available locally. "
+                                                "Starting background download for peeked job..."
                                             )
-                                        logging.info(
-                                            f"Image for service '{service_type}' not available locally. "
-                                            "Starting background download for peeked job..."
-                                        )
-                                        download_manager.start_background_download(
-                                            service_type,
-                                            accept_policy=_job_policy,
-                                        )
-                                    else:
-                                        logging.debug(
-                                            f"Image for service '{service_type}' already downloading/queued "
-                                            f"(status: {status.value if status else 'unknown'})."
-                                        )
+                                            download_manager.start_background_download(
+                                                service_type,
+                                                accept_policy=_job_policy,
+                                            )
+                                        else:
+                                            logging.debug(
+                                                f"Image for service '{service_type}' already downloading/queued "
+                                                f"(status: {status.value if status else 'unknown'})."
+                                            )
 
                         # Handle pre-fetch suggestions when idle
                         # This proactively downloads images for high-demand workflows
                         # NOTE: This does NOT affect credits - it's purely for network efficiency
                         if not found_processable_job:
-                            if download_manager and hasattr(
-                                download_manager, "start_next_queued_download"
-                            ):
-                                if download_manager.start_next_queued_download(
-                                    reason="no-processable-job"
+                            if post_download_hold_active:
+                                logging.info(
+                                    "Skipping queued and prefetch downloads during the "
+                                    "post-download settle window."
+                                )
+                            else:
+                                if download_manager and hasattr(
+                                    download_manager, "start_next_queued_download"
                                 ):
-                                    logging.info(
-                                        "Started queued Docker image download after "
-                                        "no processable job was found."
-                                    )
+                                    if download_manager.start_next_queued_download(
+                                        reason="no-processable-job"
+                                    ):
+                                        logging.info(
+                                            "Started queued Docker image download after "
+                                            "no processable job was found."
+                                        )
 
-                            self._handle_prefetch_suggestions(download_manager)
+                                self._handle_prefetch_suggestions(download_manager)
 
                             # Disk-pressure cleanup runs in the same idle window as
                             # prefetching. Cheap when at Healthy (one disk_usage call),
