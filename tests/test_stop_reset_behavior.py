@@ -400,6 +400,144 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertIn("JOB_FAILED", output.getvalue())
         self.assertIn("job requeued", output.getvalue())
 
+    def test_duplicate_infrastructure_requeue_is_ignored_for_same_execution_token(self):
+        shutdown_event = threading.Event()
+        orchestrator_service = Mock()
+        client = SimpleNamespace(
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={
+                "id": "job-startup-race",
+                "execution_token": "token-startup-race",
+            },
+            active_service_type=None,
+            orchestrator_service=orchestrator_service,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
+        )
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        job = {
+            "id": "job-startup-race",
+            "workflow_type": "wan_video",
+            "execution_token": "token-startup-race",
+        }
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            listener._requeue_job_after_infrastructure_error(
+                job,
+                InfrastructureError("Container exited unexpectedly with code 255"),
+                reason="provider_container_crash",
+            )
+            listener._handle_service_startup_failure(job, "wan22")
+
+        orchestrator_service.reset_interrupted_job.assert_called_once_with(
+            "job-startup-race",
+            execution_token="token-startup-race",
+            reason="provider_container_crash",
+        )
+        self.assertEqual(output.getvalue().count("JOB_FAILED"), 1)
+        self.assertEqual(client.interrupted_job_id, "job-startup-race")
+        self.assertEqual(client.interrupted_job_execution_token, "token-startup-race")
+
+    def test_retried_job_with_new_execution_token_clears_stale_infrastructure_marker(self):
+        shutdown_event = threading.Event()
+
+        class SuccessfulProcessor:
+            def process(self_inner):
+                return None
+
+            def close(self_inner):
+                return None
+
+        orchestrator_service = Mock()
+        orchestrator_service.get_job.return_value = {"status": "processing"}
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id="job-retry",
+            interrupted_job_execution_token="old-token",
+            current_job={
+                "id": "job-retry",
+                "execution_token": "new-token",
+            },
+            active_service_type=None,
+            orchestrator_service=orchestrator_service,
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "wan22",
+            _get_job_processor=lambda job, event: SuccessfulProcessor(),
+            download_manager=None,
+        )
+
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {
+                    "id": "job-retry",
+                    "workflow_type": "wan_video",
+                    "execution_token": "new-token",
+                }
+            )
+
+        self.assertTrue(result)
+        self.assertIsNone(client.interrupted_job_id)
+        self.assertIsNone(client.interrupted_job_execution_token)
+        self.assertIn("JOB_COMPLETE", output.getvalue())
+        orchestrator_service.reset_interrupted_job.assert_not_called()
+
+    def test_processor_completed_remote_status_still_emits_completion_events(self):
+        shutdown_event = threading.Event()
+
+        class SuccessfulProcessor:
+            def process(self_inner):
+                return None
+
+            def close(self_inner):
+                return None
+
+        orchestrator_service = Mock()
+        orchestrator_service.get_job.return_value = {"status": "completed"}
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={
+                "id": "job-completed-remotely",
+                "execution_token": "token-completed-remotely",
+            },
+            active_service_type=None,
+            orchestrator_service=orchestrator_service,
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "zimage-turbo-8gb",
+            _get_job_processor=lambda job, event: SuccessfulProcessor(),
+            download_manager=None,
+        )
+
+        listener = JobListener(client, provider_id="provider-1", shutdown_event=shutdown_event)
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {
+                    "id": "job-completed-remotely",
+                    "workflow_type": "zimage-turbo-8gb-text-to-image",
+                    "execution_token": "token-completed-remotely",
+                    "monetize_job": True,
+                }
+            )
+
+        self.assertTrue(result)
+        self.assertIn("JOB_COMPLETE", output.getvalue())
+        self.assertIn("MONETIZE_JOB_COMPLETE", output.getvalue())
+        self.assertNotIn("JOB_CLEARED", output.getvalue())
+        orchestrator_service.clear_active_job.assert_called_once_with(
+            "job-completed-remotely"
+        )
+
     def test_job_listener_requeues_generic_provider_local_runtime_error(self):
         shutdown_event = threading.Event()
 

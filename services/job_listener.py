@@ -116,6 +116,40 @@ class JobListener:
 
         self._emit_job_event("JOB_CLEARED", payload)
 
+    def _emit_job_completed(
+        self,
+        job: Dict[str, Any],
+        service_type: Optional[str],
+        duration_seconds: int,
+    ) -> None:
+        self._emit_job_event(
+            "JOB_COMPLETE",
+            {
+                "id": job.get("id"),
+                "service_type": service_type,
+            },
+        )
+
+        if job.get("monetize_job"):
+            workflow_type = job.get("workflow_type", "")
+            try:
+                monetize_service = self.client.get_service_type_for_workflow(workflow_type)
+            except Exception:
+                monetize_service = workflow_type
+            print(
+                json.dumps(
+                    {
+                        "type": "MONETIZE_JOB_COMPLETE",
+                        "payload": {
+                            "id": job.get("id"),
+                            "service_type": monetize_service,
+                            "duration_seconds": duration_seconds,
+                        },
+                    }
+                ),
+                flush=True,
+            )
+
     def _is_requeueable_infrastructure_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
         transient_markers = (
@@ -179,11 +213,38 @@ class JobListener:
             return "provider_service_startup_failed"
         return "provider_docker_unavailable"
 
-    def _job_was_interrupted_by_infrastructure(self, job_id: Optional[str]) -> bool:
-        return bool(
+    def _job_was_interrupted_by_infrastructure(
+        self,
+        job_id: Optional[str],
+        execution_token: Optional[str] = None,
+    ) -> bool:
+        if not job_id or getattr(self.client, "interrupted_job_id", None) != job_id:
+            return False
+
+        interrupted_token = getattr(self.client, "interrupted_job_execution_token", None)
+        if execution_token and interrupted_token and execution_token != interrupted_token:
+            return False
+
+        return True
+
+    def _clear_stale_infrastructure_marker(self, job: Dict[str, Any]) -> None:
+        job_id = job.get("id") if job else None
+        execution_token = job.get("execution_token") if job else None
+        interrupted_token = getattr(self.client, "interrupted_job_execution_token", None)
+
+        if (
             job_id
+            and execution_token
+            and interrupted_token
             and getattr(self.client, "interrupted_job_id", None) == job_id
-        )
+            and execution_token != interrupted_token
+        ):
+            logging.info(
+                f"Clearing stale infrastructure marker for retried job {job_id} "
+                "with a new execution token."
+            )
+            self.client.interrupted_job_id = None
+            self.client.interrupted_job_execution_token = None
 
     def _handle_service_startup_failure(
         self,
@@ -191,7 +252,10 @@ class JobListener:
         service_type: str,
     ) -> None:
         job_id = job.get("id")
-        if self._job_was_interrupted_by_infrastructure(job_id):
+        if self._job_was_interrupted_by_infrastructure(
+            job_id,
+            job.get("execution_token"),
+        ):
             logging.info(
                 f"Job {job_id} was already requeued after a local container "
                 "failure during startup. Skipping failed status update."
@@ -224,6 +288,19 @@ class JobListener:
 
         if not job_id:
             return
+
+        if self._job_was_interrupted_by_infrastructure(
+            job_id,
+            job.get("execution_token"),
+        ):
+            logging.info(
+                f"Job {job_id} was already requeued after an infrastructure "
+                "failure. Skipping duplicate reset."
+            )
+            return
+
+        self.client.interrupted_job_id = job_id
+        self.client.interrupted_job_execution_token = job.get("execution_token")
 
         logging.error(f"Requeueing job {job_id} after infrastructure error: {exc}")
 
@@ -259,8 +336,6 @@ class JobListener:
                     f"Failed to stop container after infrastructure error: {stop_error}"
                 )
 
-        self.client.interrupted_job_id = job_id
-        self.client.interrupted_job_execution_token = job.get("execution_token")
         self.client.current_job = None
         self.client.active_service_type = None
 
@@ -278,6 +353,7 @@ class JobListener:
         job_id = job.get("id") if job else None
         service_type_for_cache = self._get_service_type_for_job(job) if job else None
         job_used_service = False
+        self._clear_stale_infrastructure_marker(job)
 
         try:
             # Safety check: Validate hardware requirements before processing
@@ -341,7 +417,10 @@ class JobListener:
 
             if (
                 job_id
-                and self._job_was_interrupted_by_infrastructure(job_id)
+                and self._job_was_interrupted_by_infrastructure(
+                    job_id,
+                    job.get("execution_token"),
+                )
             ):
                 logging.info(
                     f"Job {job_id} was interrupted by an infrastructure "
@@ -366,12 +445,26 @@ class JobListener:
                 )
                 return True
 
+            _job_duration = int(_time.monotonic() - _job_start_time)
+
             # Job may have been cancelled externally (e.g., by the cancellation monitor)
-            # while the processor was still winding down.  Don't emit JOB_COMPLETE for
-            # jobs that already reached a terminal state in the DB.
+            # while the processor was still winding down.  If the processor itself already
+            # marked the job completed, still emit the local completion notifications.
             terminal_status = self._get_terminal_job_status(job_id)
             if terminal_status:
                 self.orchestrator_service.clear_active_job(job_id)
+                if terminal_status == "completed":
+                    logging.info(
+                        f"Job {job_id} reached completed status during processing. "
+                        "Emitting completion notification without another status update."
+                    )
+                    self._emit_job_completed(
+                        job,
+                        service_type_for_cache,
+                        _job_duration,
+                    )
+                    return True
+
                 logging.info(
                     f"Job {job_id} reached terminal status during processing "
                     f"('{terminal_status}'). Clearing local job state without "
@@ -380,37 +473,7 @@ class JobListener:
                 self._emit_job_cleared(job_id, service_type_for_cache, terminal_status)
                 return True
 
-            _job_duration = int(_time.monotonic() - _job_start_time)
-
-            # Emit JOB_COMPLETE event
-            self._emit_job_event(
-                "JOB_COMPLETE",
-                {
-                    "id": job.get("id"),
-                    "service_type": service_type_for_cache,
-                },
-            )
-
-            # Emit MONETIZE_JOB_COMPLETE for wallet refresh in Electron
-            if job.get("monetize_job"):
-                _wf = job.get("workflow_type", "")
-                try:
-                    _svc = self.client.get_service_type_for_workflow(_wf)
-                except Exception:
-                    _svc = _wf
-                print(
-                    json.dumps(
-                        {
-                            "type": "MONETIZE_JOB_COMPLETE",
-                            "payload": {
-                                "id": job.get("id"),
-                                "service_type": _svc,
-                                "duration_seconds": _job_duration,
-                            },
-                        }
-                    ),
-                    flush=True,
-                )
+            self._emit_job_completed(job, service_type_for_cache, _job_duration)
 
             return True
         except AuthError:
@@ -446,7 +509,10 @@ class JobListener:
             # don't report it as a failure — just clean up quietly.
             if (
                 job_id
-                and self._job_was_interrupted_by_infrastructure(job_id)
+                and self._job_was_interrupted_by_infrastructure(
+                    job_id,
+                    job.get("execution_token"),
+                )
             ):
                 logging.info(
                     f"Job {job_id} raised after an infrastructure failure: {e}. "
@@ -509,7 +575,10 @@ class JobListener:
                 self.shutdown_event.is_set()
                 and getattr(self.client, "stop_requested", False)
                 and job_id
-                and not self.client.interrupted_job_id
+                and not self._job_was_interrupted_by_infrastructure(
+                    job_id,
+                    job.get("execution_token"),
+                )
                 and not self._job_has_terminal_status(job_id)
             ):
                 self.client.interrupted_job_id = job_id

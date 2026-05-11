@@ -174,7 +174,16 @@ class Wan2GPProcessor(BaseJobProcessor):
             logging.error("Wan2GP server log at %s is empty.", WAN2GP_LOG_PATH)
 
     def _job_was_interrupted_by_infrastructure(self) -> bool:
-        if getattr(self.client, "interrupted_job_id", None) == self.job_id:
+        interrupted_token = getattr(self.client, "interrupted_job_execution_token", None)
+        execution_token = self.job.get("execution_token")
+        if (
+            getattr(self.client, "interrupted_job_id", None) == self.job_id
+            and (
+                not interrupted_token
+                or not execution_token
+                or interrupted_token == execution_token
+            )
+        ):
             self.infrastructure_interrupted = True
             return True
         return False
