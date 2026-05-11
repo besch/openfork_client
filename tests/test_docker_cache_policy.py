@@ -34,6 +34,7 @@ from services.docker_download_manager import (
     DownloadStatus,
     ImageAvailability,
 )
+from services.docker_progress_logger import DockerPullProgressLogger
 from services.job_listener import JobListener
 from services.realtime_job_watcher import RealtimeJobWatcher
 from dgn_client import DGNClient
@@ -132,24 +133,38 @@ class PullRecordingDockerManager(FakeDockerManager):
         )
         self.pull_calls = []
 
-    def pull_image(self, image_name, shutdown_event=None, service_type=None):
+    def pull_image(
+        self,
+        image_name,
+        shutdown_event=None,
+        service_type=None,
+        emit_pull_complete=True,
+    ):
         self.pull_calls.append(
             {
                 "image_name": image_name,
                 "shutdown_event": shutdown_event,
                 "service_type": service_type,
+                "emit_pull_complete": emit_pull_complete,
             }
         )
         self.client.images.present.add(image_name)
 
 
 class NonRegisteringPullDockerManager(PullRecordingDockerManager):
-    def pull_image(self, image_name, shutdown_event=None, service_type=None):
+    def pull_image(
+        self,
+        image_name,
+        shutdown_event=None,
+        service_type=None,
+        emit_pull_complete=True,
+    ):
         self.pull_calls.append(
             {
                 "image_name": image_name,
                 "shutdown_event": shutdown_event,
                 "service_type": service_type,
+                "emit_pull_complete": emit_pull_complete,
             }
         )
 
@@ -677,18 +692,107 @@ class DockerCachePolicyTests(unittest.TestCase):
         old_interval = docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS
         docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS = 0.02
         docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS = 0.01
+        stdout = io.StringIO()
         try:
-            manager._download_worker("wan22", cancel_event)
+            with contextlib.redirect_stdout(stdout):
+                manager._download_worker("wan22", cancel_event)
         finally:
             docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS = old_timeout
             docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS = old_interval
 
         self.assertEqual(docker_manager.pull_calls[0]["service_type"], "wan22")
+        self.assertFalse(docker_manager.pull_calls[0]["emit_pull_complete"])
         self.assertEqual(
             manager.get_download_status("wan22"),
             DownloadStatus.FAILED,
         )
         self.assertFalse(manager.is_post_download_hold_active())
+        events = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        self.assertFalse(
+            any(event.get("type") == "DOCKER_PULL_COMPLETE" for event in events)
+        )
+
+    def test_verified_download_emits_pull_complete_after_registration(self):
+        docker_manager = PullRecordingDockerManager(service_types=["wan22"])
+        manager = DockerDownloadManager(docker_manager)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            manager._download_worker("wan22", threading.Event())
+
+        events = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        event_types = [event.get("type") for event in events]
+
+        self.assertIn("DOCKER_PULL_COMPLETE", event_types)
+        self.assertIn("DOCKER_DOWNLOAD_STATE", event_types)
+        self.assertEqual(
+            manager.get_download_status("wan22"),
+            DownloadStatus.COMPLETED,
+        )
+        self.assertFalse(docker_manager.pull_calls[0]["emit_pull_complete"])
+
+    def test_failed_download_holds_queue_for_listener(self):
+        wakeup_event = threading.Event()
+        docker_manager = NonRegisteringPullDockerManager(
+            service_types=["first", "second"]
+        )
+        docker_manager.services_config["second"] = {"disk_required_gb": 0.001}
+        manager = DockerDownloadManager(
+            docker_manager,
+            wakeup_event=wakeup_event,
+        )
+        cancel_event = threading.Event()
+
+        with manager._lock:
+            manager._download_queue.append("second")
+            manager._download_status["second"] = DownloadStatus.PENDING
+
+        old_timeout = docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS
+        old_interval = docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS
+        docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS = 0.02
+        docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS = 0.01
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                manager._download_worker("first", cancel_event)
+        finally:
+            docker_download_manager_module.POST_PULL_VERIFY_TIMEOUT_SECS = old_timeout
+            docker_download_manager_module.POST_PULL_VERIFY_INTERVAL_SECS = old_interval
+
+        self.assertTrue(wakeup_event.is_set())
+        self.assertEqual(manager._download_queue, ["second"])
+        self.assertFalse(manager.is_downloading("second"))
+        self.assertEqual(
+            [call["service_type"] for call in docker_manager.pull_calls],
+            ["first"],
+        )
+
+    def test_pull_progress_does_not_report_processing_for_unknown_layers(self):
+        logger = DockerPullProgressLogger(
+            "beschiak/openfork-test:latest",
+            throttle_interval=0,
+            service_type="test",
+        )
+
+        logger.parse_progress_event(
+            {"id": "a", "status": "Pulling fs layer", "progressDetail": {}}
+        )
+        logger.parse_progress_event(
+            {"id": "b", "status": "Pulling fs layer", "progressDetail": {}}
+        )
+        logger.parse_progress_event(
+            {"id": "a", "status": "Already exists", "progressDetail": {}}
+        )
+
+        self.assertLess(logger.calculate_overall_progress(), 100)
+        self.assertNotEqual(logger.get_current_status(), "Processing")
 
 
 class PrefetchPolicyTests(unittest.TestCase):

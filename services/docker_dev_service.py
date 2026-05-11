@@ -88,7 +88,13 @@ class DockerDevManager:
         if services_config:
             self.service_config = services_config
 
-    def pull_image(self, image_name: str, shutdown_event: threading.Event = None, service_type: str = None):
+    def pull_image(
+        self,
+        image_name: str,
+        shutdown_event: threading.Event = None,
+        service_type: str = None,
+        emit_pull_complete: bool = True,
+    ):
         """No-op for dev manager as it builds images locally via docker-compose."""
         logging.info(f"Dev mode pull_image called for {image_name} (no-op).")
         pass

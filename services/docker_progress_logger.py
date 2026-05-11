@@ -76,11 +76,21 @@ class DockerPullProgressLogger:
             
         total_bytes = sum(layer["total"] for layer in self.layers.values())
         current_bytes = sum(layer["current"] for layer in self.layers.values())
+        unknown_incomplete_layers = [
+            layer
+            for layer in self.layers.values()
+            if not layer.get("complete") and layer.get("total", 0) <= 0
+        ]
         
         # If we have any bytes info (at least one layer has a known total size > 0),
         # use byte-based progress.
         if total_bytes > 0:
-            return int((current_bytes / total_bytes) * 100)
+            progress = int((current_bytes / total_bytes) * 100)
+            if unknown_incomplete_layers:
+                known_layer_count = len(self.layers) - len(unknown_incomplete_layers)
+                layer_cap = int((known_layer_count / len(self.layers)) * 100)
+                progress = min(progress, layer_cap)
+            return min(progress, 100)
             
         # Fallback to counting layers if NO layers have reported size yet
         # (happens with 'Already exists' layers or initial 'Pulling' state)
@@ -104,8 +114,8 @@ class DockerPullProgressLogger:
         downloading = sum(1 for l in self.layers.values() if l.get("status") == "Downloading")
         extracting = sum(1 for l in self.layers.values() if l.get("status") == "Extracting")
         
-        # If we are at 100%, we are likely waiting for docker to finish internal processing
-        if self.calculate_overall_progress() >= 100:
+        # If all known layers completed, Docker is likely finalizing the image locally.
+        if self.layers and all(l.get("complete") for l in self.layers.values()):
             return "Processing"
             
         if extracting > 0:
@@ -186,7 +196,14 @@ class DockerPullProgressLogger:
         print(json.dumps(message), flush=True)
 
 
-def stream_pull_with_progress(docker_client, image_name: str, throttle_interval: float = 0.5, shutdown_event: threading.Event = None, service_type: str = None):
+def stream_pull_with_progress(
+    docker_client,
+    image_name: str,
+    throttle_interval: float = 0.5,
+    shutdown_event: threading.Event = None,
+    service_type: str = None,
+    emit_complete: bool = True,
+):
     """
     Pull a Docker image using the Docker Python SDK with streaming progress.
     
@@ -255,7 +272,8 @@ def stream_pull_with_progress(docker_client, image_name: str, throttle_interval:
         # Emit final 100% progress
         logger.emit_progress(force=True)
         
-        logger.emit_complete()
+        if emit_complete:
+            logger.emit_complete()
             
     except DownloadInterruptedError:
         logging.info(f"Docker pull for {image_name} interrupted by user.")

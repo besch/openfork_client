@@ -740,6 +740,21 @@ class DockerDownloadManager:
                     return int(size)
         except Exception:
             pass
+
+    @staticmethod
+    def _emit_pull_complete(service_type: str, image_name: str) -> None:
+        """Emit final pull completion only after Docker can resolve the image."""
+        payload = {
+            "type": "DOCKER_PULL_COMPLETE",
+            "payload": {
+                "image": image_name,
+                "service_type": service_type,
+            },
+        }
+        try:
+            print(json.dumps(payload), flush=True)
+        except Exception:
+            pass
         return estimate_image_size_bytes(image_name)
 
     def _get_service_required_bytes(self, service_type: str) -> int:
@@ -1425,6 +1440,52 @@ class DockerDownloadManager:
             )
             cancel_event.wait(wait_secs)
 
+    def _cleanup_failed_pull_artifacts(
+        self,
+        service_type: str,
+        image_name: Optional[str],
+        error: Exception,
+    ) -> None:
+        """Best-effort cleanup for failed pulls without removing valid tagged caches."""
+        if not image_name or not self.docker_manager:
+            return
+        if not getattr(self.docker_manager, "client", None):
+            return
+
+        logging.info(
+            "Cleaning up safe dangling Docker artifacts after failed pull for %s: %s",
+            service_type,
+            error,
+        )
+        client = self.docker_manager.client
+        try:
+            client.images.remove(image=image_name, force=True)
+            logging.info("Removed partially registered image '%s'.", image_name)
+        except DockerImageNotFound:
+            pass
+        except Exception as cleanup_err:
+            logging.debug(
+                "Could not remove failed image reference '%s': %s",
+                image_name,
+                cleanup_err,
+            )
+
+        try:
+            client.containers.prune()
+        except Exception as cleanup_err:
+            logging.debug(
+                "Could not prune stopped containers after failed pull: %s",
+                cleanup_err,
+            )
+
+        try:
+            client.images.prune()
+        except Exception as cleanup_err:
+            logging.debug(
+                "Could not prune dangling images after failed pull: %s",
+                cleanup_err,
+            )
+
     def _download_worker(self, service_type: str, cancel_event: threading.Event):
         """Worker function that runs in a background thread to download an image.
         
@@ -1461,7 +1522,12 @@ class DockerDownloadManager:
             logging.info(f"Background download starting for image: {image_name}")
             
             # Use the existing pull_image method which handles progress reporting
-            self.docker_manager.pull_image(image_name, shutdown_event=cancel_event, service_type=service_type)
+            self.docker_manager.pull_image(
+                image_name,
+                shutdown_event=cancel_event,
+                service_type=service_type,
+                emit_pull_complete=False,
+            )
 
             self._wait_for_pulled_image_ready(
                 service_type,
@@ -1476,6 +1542,7 @@ class DockerDownloadManager:
                 self._last_cache_activity_times[service_type] = now
                 self._save_cache_metadata_locked()
                 self._emit_download_state(service_type, image_name, "completed")
+                self._emit_pull_complete(service_type, image_name)
                 logging.info(f"Background download completed for {service_type}")
             
             # Report download completion to server (moves to tier 0 - cached)
@@ -1518,6 +1585,9 @@ class DockerDownloadManager:
                             image_name,
                             terminal_status,
                         )
+
+                if terminal_status != "cancelled":
+                    self._cleanup_failed_pull_artifacts(service_type, image_name, e)
 
             # Report download failure to server (removes from downloading)
             self._report_download_state(service_type, "cancel")
@@ -1733,9 +1803,14 @@ class DockerDownloadManager:
         with self._lock:
             status = self._download_status.get(service_type)
             download_completed = status == DownloadStatus.COMPLETED
+            download_failed = status in (
+                DownloadStatus.FAILED,
+                DownloadStatus.PERMANENTLY_FAILED,
+            )
             self._active_downloads.discard(service_type)
             self._active_download_policies.pop(service_type, None)
             wakeup_scheduled = False
+            queue_held_for_listener = False
 
             # Signal wakeup event after a settle delay so Docker has time to
             # finish overlay2 layer extraction before the job listener checks
@@ -1756,6 +1831,15 @@ class DockerDownloadManager:
                 )
                 t.start()
                 wakeup_scheduled = True
+            elif download_failed:
+                queue_held_for_listener = True
+                if self.wakeup_event:
+                    logging.info(
+                        "Signaling job_wakeup_event after failed download for %s; "
+                        "queued downloads will wait for the listener to re-evaluate jobs.",
+                        service_type,
+                    )
+                    self.wakeup_event.set()
 
             # Clean up cancellation event
             if service_type in self._cancellation_events:
@@ -1767,6 +1851,12 @@ class DockerDownloadManager:
                     logging.info(
                         "Queued Docker downloads are paused until the job listener "
                         "checks whether the completed image can process a job."
+                    )
+                elif queue_held_for_listener:
+                    logging.info(
+                        "Queued Docker downloads are paused until the job listener "
+                        "handles the failed download for %s.",
+                        service_type,
                     )
                 else:
                     self._start_next_queued_download_locked(

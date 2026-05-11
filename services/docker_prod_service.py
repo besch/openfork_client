@@ -646,6 +646,7 @@ class DockerProdManager:
         image_name: str,
         shutdown_event: threading.Event = None,
         service_type: str = None,
+        emit_pull_complete: bool = True,
     ):
         if not self.client:
             logging.error(
@@ -710,6 +711,7 @@ class DockerProdManager:
                     throttle_interval=0.5,
                     shutdown_event=shutdown_event,
                     service_type=service_type,
+                    emit_complete=emit_pull_complete,
                 )
                 logging.info(f"Successfully pulled image: {image_name}")
             except docker.errors.APIError as e:
