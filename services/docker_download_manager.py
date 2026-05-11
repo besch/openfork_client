@@ -58,6 +58,15 @@ FRESH_IMAGE_PROTECTION_SECS = 120
 # still being short relative to normal poll intervals.
 POST_DOWNLOAD_SETTLE_SECS = 30
 
+# When enforcing the Docker image storage limit, evicting the previous image is
+# the signal Electron uses to schedule WSL VHDX compaction. Hold the next pull
+# briefly so the desktop process can pause the client before more Docker I/O
+# starts. The job listener can still start work immediately if compaction does
+# not claim the pause.
+POST_STORAGE_LIMIT_EVICTION_HOLD_SECS = int(
+    os.getenv("POST_STORAGE_LIMIT_EVICTION_HOLD_SECS", "30")
+)
+
 # After Docker's pull stream completes, verify that the daemon can actually
 # resolve the image before telling the orchestrator it is cached. A pull stream
 # ending without a registered image leaves large containerd blobs on disk but no
@@ -151,6 +160,8 @@ class DockerDownloadManager:
         self._lock = threading.RLock()
         self._active_downloads: Set[str] = set()  # service_types currently downloading
         self._download_queue: list[str] = []  # service_types waiting to download
+        self._download_queue_policies: Dict[str, Optional[str]] = {}
+        self._active_download_policies: Dict[str, Optional[str]] = {}
         self._download_status: Dict[str, DownloadStatus] = {}
         self._cancellation_events: Dict[str, threading.Event] = {}
         self._last_job_times: Dict[str, float] = {}
@@ -288,30 +299,42 @@ class DockerDownloadManager:
         even if set_job_active(False) was already the current state.
         """
         next_to_start = None
+        next_accept_policy = None
         with self._lock:
-            if self._job_active == active:
+            already_in_state = self._job_active == active
+            if already_in_state and active:
                 return
 
-            self._job_active = active
+            if not already_in_state:
+                self._job_active = active
 
             if active:
                 # Cancel every in-flight download.
                 for st, cancel_event in list(self._cancellation_events.items()):
                     cancel_event.set()
                     self._paused_downloads.add(st)
+                    if st in self._active_download_policies:
+                        self._download_queue_policies[st] = (
+                            self._active_download_policies.get(st)
+                        )
                     logging.info(
                         f"Suspended download for '{st}' — job started; will resume after."
                     )
             else:
                 # Re-insert paused downloads at the front of the queue so they
                 # restart first, in their original order.
-                paused = list(self._paused_downloads)
-                self._paused_downloads.clear()
-                for st in reversed(paused):
-                    if st not in self._active_downloads and st not in self._download_queue:
-                        self._download_queue.insert(0, st)
-                        self._download_status.pop(st, None)  # Clear FAILED → allow retry
-                        logging.info(f"Re-queued suspended download for '{st}' — job finished.")
+                if not already_in_state:
+                    paused = list(self._paused_downloads)
+                    self._paused_downloads.clear()
+                    for st in reversed(paused):
+                        if st not in self._active_downloads and st not in self._download_queue:
+                            self._download_queue.insert(0, st)
+                            self._download_queue_policies.setdefault(
+                                st,
+                                self._active_download_policies.get(st),
+                            )
+                            self._download_status.pop(st, None)  # Clear FAILED -> allow retry
+                            logging.info(f"Re-queued suspended download for '{st}' — job finished.")
 
                 # Kick-start the queue if nothing is currently downloading.
                 hold_remaining = self._post_download_hold_remaining_locked()
@@ -323,6 +346,10 @@ class DockerDownloadManager:
                     and len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS
                 ):
                     next_to_start = self._download_queue.pop(0)
+                    next_accept_policy = self._download_queue_policies.pop(
+                        next_to_start,
+                        None,
+                    )
                     self._download_status.pop(next_to_start, None)
                 elif self._download_queue and hold_remaining > 0:
                     logging.info(
@@ -342,7 +369,7 @@ class DockerDownloadManager:
             logging.info(
                 f"Kick-starting queued download for '{next_to_start}' — job finished."
             )
-            self.start_background_download(next_to_start)
+            self.start_background_download(next_to_start, next_accept_policy)
 
     def set_compaction_paused(self, paused: bool) -> None:
         """Pause or resume new Docker downloads around disk compaction."""
@@ -369,6 +396,10 @@ class DockerDownloadManager:
                 and len(self._active_downloads) < self.MAX_CONCURRENT_DOWNLOADS
             ):
                 next_to_start = self._download_queue.pop(0)
+                next_accept_policy = self._download_queue_policies.pop(
+                    next_to_start,
+                    None,
+                )
                 self._download_status.pop(next_to_start, None)
 
         if next_to_start is not None:
@@ -376,7 +407,7 @@ class DockerDownloadManager:
                 f"Kick-starting queued download for '{next_to_start}' — "
                 "compaction pause cleared."
             )
-            self.start_background_download(next_to_start)
+            self.start_background_download(next_to_start, next_accept_policy)
 
     def start_next_queued_download(self, reason: str = "idle") -> bool:
         """Start one queued download when the listener confirms it is idle.
@@ -951,6 +982,17 @@ class DockerDownloadManager:
                 freed_bytes=freed_bytes,
                 reason=reason,
             )
+            if reason == "storage_limit":
+                with self._lock:
+                    self._post_download_hold_until = max(
+                        self._post_download_hold_until,
+                        time.time() + POST_STORAGE_LIMIT_EVICTION_HOLD_SECS,
+                    )
+                logging.info(
+                    "Holding queued downloads for %ss after storage-limit "
+                    "eviction so disk compaction can claim the pause.",
+                    POST_STORAGE_LIMIT_EVICTION_HOLD_SECS,
+                )
             logging.info(
                 f"Evicted cached image for {service_type_to_evict} "
                 f"(reason={reason}, freed~{freed_bytes / 1024**3:.1f} GB)."
@@ -1186,6 +1228,7 @@ class DockerDownloadManager:
             if self._job_active:
                 if service_type not in self._download_queue:
                     self._download_queue.append(service_type)
+                    self._download_queue_policies[service_type] = accept_policy
                     self._download_status[service_type] = DownloadStatus.PENDING
                     self._emit_download_state(service_type, image_name, "queued")
                     logging.info(
@@ -1195,10 +1238,8 @@ class DockerDownloadManager:
 
             hold_remaining = self._post_download_hold_remaining_locked()
             if hold_remaining > 0:
-                if not self._claim_download_slot(service_type, accept_policy):
-                    return False
-
                 self._download_queue.append(service_type)
+                self._download_queue_policies[service_type] = accept_policy
                 self._download_status[service_type] = DownloadStatus.PENDING
                 self._emit_download_state(service_type, image_name, "queued")
                 logging.info(
@@ -1217,6 +1258,20 @@ class DockerDownloadManager:
                     self._download_status[service_type] = DownloadStatus.FAILED
                     self._emit_download_state(service_type, image_name, "failed")
                     return False
+
+                hold_remaining = self._post_download_hold_remaining_locked()
+                if hold_remaining > 0:
+                    self._download_queue.append(service_type)
+                    self._download_queue_policies[service_type] = accept_policy
+                    self._download_status[service_type] = DownloadStatus.PENDING
+                    self._emit_download_state(service_type, image_name, "queued")
+                    logging.info(
+                        "Deferred download for '%s': storage-limit cleanup "
+                        "is holding the queue for %.1fs.",
+                        service_type,
+                        hold_remaining,
+                    )
+                    return True
 
                 # Check for sufficient disk space before starting.
                 # Prefer disk_required_gb from services_config (authoritative, from services.json)
@@ -1241,6 +1296,7 @@ class DockerDownloadManager:
                     return False
 
                 self._active_downloads.add(service_type)
+                self._active_download_policies[service_type] = accept_policy
                 # Create and store a cancellation event for this download
                 cancel_event = threading.Event()
                 self._cancellation_events[service_type] = cancel_event
@@ -1256,11 +1312,9 @@ class DockerDownloadManager:
                 logging.info(f"Started background download for {service_type}")
                 return True
             else:
-                if not self._claim_download_slot(service_type, accept_policy):
-                    return False
-
                 # Queue the download
                 self._download_queue.append(service_type)
+                self._download_queue_policies[service_type] = accept_policy
                 self._download_status[service_type] = DownloadStatus.PENDING
                 self._emit_download_state(service_type, image_name, "queued")
                 logging.info(f"Queued download for {service_type} (max concurrent reached)")
@@ -1278,6 +1332,7 @@ class DockerDownloadManager:
             # 1. Remove from queue if it's there
             if service_type in self._download_queue:
                 self._download_queue.remove(service_type)
+                self._download_queue_policies.pop(service_type, None)
                 self._download_status[service_type] = DownloadStatus.FAILED
                 self._report_download_state(service_type, "cancel")
                 try:
@@ -1588,6 +1643,10 @@ class DockerDownloadManager:
         # download may have changed local cache state significantly.
         while self._download_queue and not self._shutdown:
             next_service = self._download_queue.pop(0)
+            next_accept_policy = self._download_queue_policies.pop(
+                next_service,
+                None,
+            )
 
             availability = self.get_image_availability(next_service)
             if availability == ImageAvailability.AVAILABLE:
@@ -1601,6 +1660,7 @@ class DockerDownloadManager:
                 continue
             if availability == ImageAvailability.UNKNOWN:
                 self._download_queue.insert(0, next_service)
+                self._download_queue_policies[next_service] = next_accept_policy
                 self._download_status[next_service] = DownloadStatus.PENDING
                 logging.info(
                     f"Deferring queued download for {next_service} because Docker image "
@@ -1635,7 +1695,18 @@ class DockerDownloadManager:
                 self._report_download_state(next_service, "cancel")
                 continue
 
+            if not self._claim_download_slot(next_service, next_accept_policy):
+                self._download_status.pop(next_service, None)
+                self._emit_download_state(next_service, next_image_name, "cancelled")
+                logging.info(
+                    "Skipping queued download for %s; server-side coverage is "
+                    "already sufficient.",
+                    next_service,
+                )
+                continue
+
             self._active_downloads.add(next_service)
+            self._active_download_policies[next_service] = next_accept_policy
             self._download_status[next_service] = DownloadStatus.DOWNLOADING
             self._emit_download_state(next_service, next_image_name, "starting")
 
@@ -1663,6 +1734,7 @@ class DockerDownloadManager:
             status = self._download_status.get(service_type)
             download_completed = status == DownloadStatus.COMPLETED
             self._active_downloads.discard(service_type)
+            self._active_download_policies.pop(service_type, None)
             wakeup_scheduled = False
 
             # Signal wakeup event after a settle delay so Docker has time to
@@ -1743,6 +1815,7 @@ class DockerDownloadManager:
             self._shutdown = True
             queued_services = list(self._download_queue)
             self._download_queue.clear()
+            self._download_queue_policies.clear()
             for service_type in queued_services:
                 self._report_download_state(service_type, "cancel")
                 try:
@@ -1753,3 +1826,4 @@ class DockerDownloadManager:
             # Signal all active downloads to stop
             for event in self._cancellation_events.values():
                 event.set()
+            self._active_download_policies.clear()
