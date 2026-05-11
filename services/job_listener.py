@@ -777,6 +777,7 @@ class JobListener:
                                 "id": job.get("id"),
                                 "workflow_type": job.get("workflow_type", "unknown"),
                                 "service_type": self._get_service_type_for_job(job),
+                                "execution_token": job.get("execution_token"),
                             },
                         )
 
@@ -1297,6 +1298,9 @@ class JobListener:
                                                     "workflow_type", "unknown"
                                                 ),
                                                 "service_type": actual_service_type,
+                                                "execution_token": job.get(
+                                                    "execution_token"
+                                                ),
                                             },
                                         )
 

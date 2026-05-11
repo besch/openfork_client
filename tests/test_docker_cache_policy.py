@@ -261,6 +261,44 @@ class DockerCachePolicyTests(unittest.TestCase):
         docker_manager.services_config["wan22"]["disk_required_gb"] = 300
         self.assertFalse(manager.service_fits_cache_budget("wan22"))
 
+    def test_cache_limit_uses_configured_footprint_when_docker_underreports_size(self):
+        docker_manager = PullRecordingDockerManager(
+            ["zimage-turbo-8gb", "llm"],
+            cached_service_types=["zimage-turbo-8gb"],
+        )
+        docker_manager.services_config["zimage-turbo-8gb"]["disk_required_gb"] = 120
+        docker_manager.services_config["llm"]["disk_required_gb"] = 20
+        zimage_name = docker_manager.get_image_name("zimage-turbo-8gb")
+        docker_manager.client.images.image_sizes[zimage_name] = 30 * 1024 ** 3
+        manager = DockerDownloadManager(docker_manager, cache_limit_gb=50)
+
+        self.assertEqual(
+            manager._get_cached_image_size_bytes("zimage-turbo-8gb"),
+            120 * 1024 ** 3,
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertTrue(manager.start_background_download("llm"))
+
+        self.assertEqual(
+            docker_manager.client.images.removed,
+            [(zimage_name, True)],
+        )
+        self.assertEqual(manager._download_queue, ["llm"])
+        self.assertEqual(docker_manager.pull_calls, [])
+
+        events = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        eviction = next(
+            event for event in events if event.get("type") == "IMAGE_EVICTED"
+        )
+        self.assertEqual(eviction["payload"]["service_type"], "zimage-turbo-8gb")
+        self.assertEqual(eviction["payload"]["freed_bytes"], 120 * 1024 ** 3)
+
     def test_compaction_pause_blocks_new_background_downloads(self):
         docker_manager = PullRecordingDockerManager(["wan22"])
         manager = DockerDownloadManager(docker_manager)

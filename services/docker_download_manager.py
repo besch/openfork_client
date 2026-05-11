@@ -759,18 +759,25 @@ class DockerDownloadManager:
         return estimate_image_size_bytes(image_name)
 
     def _get_cached_image_size_bytes(self, service_type: str) -> int:
-        """Return actual cached image size, falling back to configured requirement."""
+        """Return cached image footprint for budget decisions.
+
+        Docker's image attrs.Size can be much smaller than the practical WSL
+        disk cost once layers are unpacked. The services.json disk requirement
+        is the user-facing storage budget contract, so never count a cached
+        OpenFork image below that configured footprint.
+        """
         image_name = self.docker_manager.get_image_name(service_type)
+        required_bytes = self._get_service_required_bytes(service_type)
         try:
             client = getattr(self.docker_manager, "client", None)
             if client:
                 image = client.images.get(image_name)
                 size = getattr(image, "attrs", {}).get("Size")
                 if isinstance(size, (int, float)) and size > 0:
-                    return int(size)
+                    return max(int(size), required_bytes)
         except Exception:
             pass
-        return self._get_service_required_bytes(service_type)
+        return required_bytes
 
     def _get_cache_usage_bytes(
         self,
@@ -960,7 +967,10 @@ class DockerDownloadManager:
 
         _, service_type_to_evict = min(candidates, key=lambda item: item[0])
         image_name = self.docker_manager.get_image_name(service_type_to_evict)
-        freed_bytes = self._lookup_image_size_bytes(image_name)
+        freed_bytes = max(
+            self._lookup_image_size_bytes(image_name),
+            self._get_service_required_bytes(service_type_to_evict),
+        )
 
         try:
             referencing_containers = self.docker_manager.client.containers.list(
