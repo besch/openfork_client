@@ -159,6 +159,21 @@ python -m pytest
 Focused tests live under `tests/` for model selection, Docker cache policy,
 shutdown reset behavior, and workflow utilities.
 
+## Rebuild For Desktop Development
+
+When testing through `../desktop`, the Electron app prefers
+`../desktop/bin/client.exe` on Windows if that file exists. After changing Python
+code, rebuild the executable and restart the DGN client from the desktop UI:
+
+```powershell
+cd D:\openfork\client
+pyinstaller client.spec
+Move-Item -Force dist\client.exe ..\desktop\bin\client.exe
+```
+
+If you want desktop to run the Python source from `client/venv` instead, remove
+or rename `../desktop/bin/client.exe` before starting the DGN client.
+
 ## Relationship To Other Projects
 
 - `../website` is the orchestrator, web app, Supabase schema, and admin surface.
