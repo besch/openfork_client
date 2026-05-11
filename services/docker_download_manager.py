@@ -316,6 +316,16 @@ class DockerDownloadManager:
             )
             self.start_background_download(next_to_start)
 
+    def start_next_queued_download(self, reason: str = "idle") -> bool:
+        """Start one queued download when the listener confirms it is idle.
+
+        Completed pulls wake the job listener before continuing the queue so a
+        job that just became runnable can execute immediately. The listener
+        calls this method only after it fails to find a processable job.
+        """
+        with self._lock:
+            return self._start_next_queued_download_locked(reason=reason)
+
     # ── LRU persistence ───────────────────────────────────────────────────
 
     def _load_cache_metadata(self) -> None:
@@ -1402,10 +1412,98 @@ class DockerDownloadManager:
             logging.info("Signaling job_wakeup_event after post-download settle period.")
             self.wakeup_event.set()
 
+    def _start_next_queued_download_locked(self, reason: str = "idle") -> bool:
+        """Start the next queued download. Caller must hold self._lock."""
+        if self._shutdown:
+            return False
+        if self._job_active:
+            # Don't chain the next download while a job is processing;
+            # set_job_active(False) will kick the queue when the job ends.
+            logging.debug(
+                "Skipping next queued download: job is actively processing."
+            )
+            return False
+        if len(self._active_downloads) >= self.MAX_CONCURRENT_DOWNLOADS:
+            return False
+
+        # Re-check both cache budget and disk space here because the prior
+        # download may have changed local cache state significantly.
+        while self._download_queue and not self._shutdown:
+            next_service = self._download_queue.pop(0)
+
+            availability = self.get_image_availability(next_service)
+            if availability == ImageAvailability.AVAILABLE:
+                self._download_status.pop(next_service, None)
+                self._report_download_state(next_service, "finish")
+                try:
+                    next_image_name = self.docker_manager.get_image_name(next_service)
+                    self._emit_download_state(next_service, next_image_name, "completed")
+                except Exception:
+                    pass
+                continue
+            if availability == ImageAvailability.UNKNOWN:
+                self._download_queue.insert(0, next_service)
+                self._download_status[next_service] = DownloadStatus.PENDING
+                logging.info(
+                    f"Deferring queued download for {next_service} because Docker image "
+                    "availability could not be verified."
+                )
+                break
+
+            if not self._ensure_cache_capacity(next_service):
+                self._download_status[next_service] = DownloadStatus.FAILED
+                try:
+                    next_image_name = self.docker_manager.get_image_name(next_service)
+                    self._emit_download_state(next_service, next_image_name, "failed")
+                except Exception:
+                    pass
+                self._report_download_state(next_service, "cancel")
+                continue
+
+            next_image_name = self.docker_manager.get_image_name(next_service)
+            next_required_bytes = self._get_service_required_bytes(next_service)
+
+            has_space, available, required = check_sufficient_space(next_required_bytes)
+            if not has_space:
+                avail_gb = available / 1024 ** 3
+                req_gb = required / 1024 ** 3
+                logging.error(
+                    f"Insufficient disk space for queued download {next_service}: "
+                    f"need ~{req_gb:.1f} GB, have {avail_gb:.1f} GB"
+                )
+                self._emit_disk_space_error(next_image_name, req_gb, avail_gb)
+                self._download_status[next_service] = DownloadStatus.FAILED
+                self._emit_download_state(next_service, next_image_name, "failed")
+                self._report_download_state(next_service, "cancel")
+                continue
+
+            self._active_downloads.add(next_service)
+            self._download_status[next_service] = DownloadStatus.DOWNLOADING
+            self._emit_download_state(next_service, next_image_name, "starting")
+
+            # Create and store a cancellation event for this download
+            cancel_event = threading.Event()
+            self._cancellation_events[next_service] = cancel_event
+
+            thread = threading.Thread(
+                target=self._download_worker,
+                args=(next_service, cancel_event),
+                daemon=True,
+                name=f"docker-download-{next_service}"
+            )
+            thread.start()
+            logging.info(
+                f"Started queued download for {next_service} ({reason})"
+            )
+            return True
+
+        return False
+
     def _finish_download(self, service_type: str):
-        """Clean up after a download finishes and start the next queued download."""
+        """Clean up after a download finishes and wake the job listener first."""
         with self._lock:
             self._active_downloads.discard(service_type)
+            wakeup_scheduled = False
 
             # Signal wakeup event after a settle delay so Docker has time to
             # finish overlay2 layer extraction before the job listener checks
@@ -1421,88 +1519,23 @@ class DockerDownloadManager:
                     name="download-settle-wakeup",
                 )
                 t.start()
+                wakeup_scheduled = True
 
             # Clean up cancellation event
             if service_type in self._cancellation_events:
                 del self._cancellation_events[service_type]
                 logging.debug(f"Cleaned up cancellation event for {service_type}")
-            
-            # Start the next queued download if any.
-            # Re-check both cache budget and disk space here because the prior download
-            # may have changed local cache state significantly.
-            while self._download_queue and not self._shutdown:
-                if self._job_active:
-                    # Don't chain the next download while a job is processing;
-                    # set_job_active(False) will kick the queue when the job ends.
-                    logging.debug(
-                        "Skipping next queued download: job is actively processing."
-                    )
-                    break
-                next_service = self._download_queue.pop(0)
 
-                availability = self.get_image_availability(next_service)
-                if availability == ImageAvailability.AVAILABLE:
-                    self._download_status.pop(next_service, None)
-                    self._report_download_state(next_service, "finish")
-                    try:
-                        next_image_name = self.docker_manager.get_image_name(next_service)
-                        self._emit_download_state(next_service, next_image_name, "completed")
-                    except Exception:
-                        pass
-                    continue
-                if availability == ImageAvailability.UNKNOWN:
-                    self._download_queue.insert(0, next_service)
-                    self._download_status[next_service] = DownloadStatus.PENDING
+            if self._download_queue and not self._shutdown:
+                if wakeup_scheduled:
                     logging.info(
-                        f"Deferring queued download for {next_service} because Docker image "
-                        "availability could not be verified."
+                        "Queued Docker downloads are paused until the job listener "
+                        "checks whether the completed image can process a job."
                     )
-                    break
-
-                if not self._ensure_cache_capacity(next_service):
-                    self._download_status[next_service] = DownloadStatus.FAILED
-                    try:
-                        next_image_name = self.docker_manager.get_image_name(next_service)
-                        self._emit_download_state(next_service, next_image_name, "failed")
-                    except Exception:
-                        pass
-                    self._report_download_state(next_service, "cancel")
-                    continue
-
-                next_image_name = self.docker_manager.get_image_name(next_service)
-                next_required_bytes = self._get_service_required_bytes(next_service)
-
-                has_space, available, required = check_sufficient_space(next_required_bytes)
-                if not has_space:
-                    avail_gb = available / 1024 ** 3
-                    req_gb = required / 1024 ** 3
-                    logging.error(
-                        f"Insufficient disk space for queued download {next_service}: "
-                        f"need ~{req_gb:.1f} GB, have {avail_gb:.1f} GB"
+                else:
+                    self._start_next_queued_download_locked(
+                        reason="download-finished"
                     )
-                    self._emit_disk_space_error(next_image_name, req_gb, avail_gb)
-                    self._download_status[next_service] = DownloadStatus.FAILED
-                    self._emit_download_state(next_service, next_image_name, "failed")
-                    self._report_download_state(next_service, "cancel")
-                    continue
-
-                self._active_downloads.add(next_service)
-                self._download_status[next_service] = DownloadStatus.DOWNLOADING
-                self._emit_download_state(next_service, next_image_name, "starting")
-
-                # Create and store a cancellation event for this download
-                cancel_event = threading.Event()
-                self._cancellation_events[next_service] = cancel_event
-
-                thread = threading.Thread(
-                    target=self._download_worker,
-                    args=(next_service, cancel_event),
-                    daemon=True,
-                    name=f"docker-download-{next_service}"
-                )
-                thread.start()
-                logging.info(f"Started next queued download for {next_service}")
-                break
     
     def get_all_statuses(self) -> Dict[str, str]:
         """Get download status for all tracked service types."""

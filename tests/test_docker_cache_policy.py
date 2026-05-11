@@ -519,6 +519,54 @@ class DockerCachePolicyTests(unittest.TestCase):
             )
         )
 
+    def test_completed_download_wakes_listener_before_chaining_queue(self):
+        wakeup_event = threading.Event()
+        docker_manager = PullRecordingDockerManager(
+            service_types=["first", "second"],
+            cached_service_types=["first"],
+        )
+        docker_manager.services_config["second"] = {"disk_required_gb": 0.001}
+        manager = DockerDownloadManager(
+            docker_manager,
+            wakeup_event=wakeup_event,
+        )
+        manager._signal_wakeup_after_settle = wakeup_event.set
+
+        with manager._lock:
+            manager._active_downloads.add("first")
+            manager._download_queue.append("second")
+            manager._download_status["second"] = DownloadStatus.PENDING
+
+        manager._finish_download("first")
+
+        self.assertTrue(wakeup_event.wait(1))
+        self.assertEqual(manager._download_queue, ["second"])
+        self.assertFalse(manager.is_downloading("second"))
+        self.assertEqual(docker_manager.pull_calls, [])
+
+    def test_listener_can_resume_queue_when_no_job_became_processable(self):
+        docker_manager = PullRecordingDockerManager(
+            service_types=["first", "second"],
+            cached_service_types=["first"],
+        )
+        docker_manager.services_config["second"] = {"disk_required_gb": 0.001}
+        manager = DockerDownloadManager(docker_manager)
+        with manager._lock:
+            manager._download_queue.append("second")
+            manager._download_status["second"] = DownloadStatus.PENDING
+
+        self.assertTrue(manager.start_next_queued_download(reason="test"))
+        for _ in range(100):
+            if manager.get_download_status("second") == DownloadStatus.COMPLETED:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(docker_manager.pull_calls[0]["service_type"], "second")
+        self.assertEqual(
+            manager.get_download_status("second"),
+            DownloadStatus.COMPLETED,
+        )
+
 
 class PrefetchPolicyTests(unittest.TestCase):
     def test_private_policies_skip_global_prefetch_suggestions(self):

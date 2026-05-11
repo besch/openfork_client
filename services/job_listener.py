@@ -1497,6 +1497,17 @@ class JobListener:
                         # This proactively downloads images for high-demand workflows
                         # NOTE: This does NOT affect credits - it's purely for network efficiency
                         if not found_processable_job:
+                            if download_manager and hasattr(
+                                download_manager, "start_next_queued_download"
+                            ):
+                                if download_manager.start_next_queued_download(
+                                    reason="no-processable-job"
+                                ):
+                                    logging.info(
+                                        "Started queued Docker image download after "
+                                        "no processable job was found."
+                                    )
+
                             self._handle_prefetch_suggestions(download_manager)
 
                             # Disk-pressure cleanup runs in the same idle window as
