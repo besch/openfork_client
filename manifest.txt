@@ -63,6 +63,7 @@ services/processors/llm/llm.py
 services/processors/output_handlers.py
 services/processors/video/__init__.py
 services/processors/video/davinci_magihuman.py
+services/processors/video/dreamid_omni.py
 services/processors/video/hunyuan_image.py
 services/processors/video/hunyuan_text.py
 services/processors/video/inspatio_world.py
@@ -97,6 +98,7 @@ workflows/anima-text-to-image-8gb.api.json
 workflows/chatterbox-tts.api.json
 workflows/chatterbox-voice-clone.api.json
 workflows/diagdistill-t2v.api.json
+workflows/dreamid-omni-image-to-video-24gb.api.json
 workflows/flux-text-to-image.api.json
 workflows/hunyuan-image-to-video-fp8.api.json
 workflows/hunyuan-image-to-video.api.json
