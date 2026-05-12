@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # OpenFork — DreamID-Omni FP8 ComfyUI (24GB VRAM)
 #
 # Provides:
@@ -8,7 +9,7 @@
 #   - MMAudio audio VAE + BigVGAN vocoder
 #
 # Build:
-#   docker build --build-arg HF_TOKEN=<token> \
+#   docker build --secret id=HF_TOKEN,env=HF_TOKEN \
 #     -t beschiak/openfork-dreamid-omni-24gb:latest \
 #     -f Dockerfile.dreamid-omni-24gb .
 
@@ -22,7 +23,6 @@ ENV PIP_NO_CACHE_DIR=1
 ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 ENV HF_HUB_ENABLE_HF_TRANSFER=1
 
-ARG HF_TOKEN
 ARG CACHEBUST=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -68,11 +68,16 @@ RUN mkdir -p \
     models/DreamID-Omni/Wan2.2-TI2V-5B \
     models/DreamID-Omni/MMAudio
 
-RUN python - <<'EOF'
+RUN --mount=type=secret,id=HF_TOKEN,required=false python - <<'EOF'
 import os
 from huggingface_hub import hf_hub_download, snapshot_download
 
-token = os.environ.get("HF_TOKEN") or None
+token = None
+token_path = "/run/secrets/HF_TOKEN"
+if os.path.exists(token_path):
+    with open(token_path, "r", encoding="utf-8") as handle:
+        token = handle.read().strip() or None
+token = token or os.environ.get("HF_TOKEN") or None
 
 def download_file(repo_id, filename, local_dir):
     print(f"Downloading {repo_id}/{filename}...")

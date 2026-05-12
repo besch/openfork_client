@@ -40,7 +40,8 @@ RUN git clone --depth=1 https://github.com/ZeyueT/AudioX.git /opt/AudioX \
         uvicorn[standard] \
         python-multipart \
         requests \
-        soundfile
+        soundfile \
+        "transformers==4.44.2"
 
 RUN mkdir -p /app/input /app/output /app/models
 

@@ -106,6 +106,14 @@ def _format_command_for_log(command: List[str]) -> str:
     return " ".join(redacted)
 
 
+def _dockerfile_declares_hf_arg(dockerfile: str) -> bool:
+    try:
+        with open(dockerfile, "r", encoding="utf-8") as handle:
+            return any(line.strip().startswith("ARG HF_TOKEN") for line in handle)
+    except OSError:
+        return True
+
+
 def run_command(command: List[str], description: str, extra_env: dict = None) -> bool:
     """
     Run a command and return True if successf ul, False otherwise.
@@ -163,7 +171,11 @@ def build_image(
 
         command.extend(["--build-arg", f"CACHEBUST={int(_time.time())}"])
 
-    command.extend(["--build-arg", "HF_TOKEN"])
+    if _dockerfile_declares_hf_arg(dockerfile):
+        command.extend(["--build-arg", "HF_TOKEN"])
+
+    if hf_token and direct_push:
+        command.extend(["--secret", "id=HF_TOKEN,env=HF_TOKEN"])
 
     if build_args:
         for key, value in build_args.items():
