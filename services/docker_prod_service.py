@@ -14,10 +14,14 @@ import requests
 from typing import Optional
 from .docker_utils import (
     docker_cp,
+    get_subprocess_hidden_kwargs,
     should_use_api_file_copy,
     copy_file_from_container_api,
     copy_file_to_container_api,
 )
+
+DOCKER_API_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_API_TIMEOUT_SECS", "3600"))
+DOCKER_CLI_PULL_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_CLI_PULL_TIMEOUT_SECS", "7200"))
 
 
 class DockerProdManager:
@@ -47,7 +51,7 @@ class DockerProdManager:
     def __init__(self):
         try:
             logging.info("Initializing Docker client...")
-            self.client = docker.from_env(timeout=300)
+            self.client = docker.from_env(timeout=DOCKER_API_TIMEOUT_SECS)
             self.client.ping()
             logging.info("Successfully connected to Docker via from_env()")
         except (docker.errors.DockerException, Exception) as e:
@@ -119,7 +123,10 @@ class DockerProdManager:
                         continue
                     try:
                         print(f"DEBUG: Testing {host}...", file=sys.stderr, flush=True)
-                        self.client = docker.DockerClient(base_url=host, timeout=120)
+                        self.client = docker.DockerClient(
+                            base_url=host,
+                            timeout=DOCKER_API_TIMEOUT_SECS,
+                        )
                         self.client.ping()
 
                         success_msg = f"Successfully connected to Docker at {host}"
@@ -226,7 +233,10 @@ class DockerProdManager:
         for base_url in dict.fromkeys(filter(None, candidates)):
             try:
                 logging.info(f"Attempting Docker client reconnect via {base_url}...")
-                client = docker.DockerClient(base_url=base_url, timeout=300)
+                client = docker.DockerClient(
+                    base_url=base_url,
+                    timeout=DOCKER_API_TIMEOUT_SECS,
+                )
                 client.ping()
                 self.client = client
                 self._use_api_file_copy = should_use_api_file_copy(self.client)
@@ -239,7 +249,7 @@ class DockerProdManager:
 
         try:
             logging.info("Attempting Docker reconnect via docker.from_env()...")
-            client = docker.from_env(timeout=300)
+            client = docker.from_env(timeout=DOCKER_API_TIMEOUT_SECS)
             client.ping()
             self.client = client
             self._use_api_file_copy = should_use_api_file_copy(self.client)
@@ -267,6 +277,127 @@ class DockerProdManager:
         except Exception:
             pass
         return env
+
+    @staticmethod
+    def _normalize_docker_arch(arch: Optional[str]) -> Optional[str]:
+        if not arch:
+            return None
+        normalized = arch.lower()
+        aliases = {
+            "x86_64": "amd64",
+            "aarch64": "arm64",
+        }
+        return aliases.get(normalized, normalized)
+
+    def _get_pull_platform(self) -> Optional[str]:
+        """Return an explicit platform for Docker pulls when the daemon reports one.
+
+        OpenFork's WSL daemon runs linux/amd64 on supported Windows installs. Passing
+        the platform avoids OCI-index ambiguity for large images that also publish
+        non-runnable metadata manifests.
+        """
+        override = os.environ.get("OPENFORK_DOCKER_PULL_PLATFORM")
+        if override:
+            return override
+
+        try:
+            info = self.client.info()
+            os_type = (info.get("OSType") or "").lower()
+            arch = self._normalize_docker_arch(info.get("Architecture"))
+            if os_type and arch:
+                return f"{os_type}/{arch}"
+        except Exception as e:
+            logging.debug(f"Could not resolve Docker daemon platform: {e}")
+
+        return None
+
+    def _image_is_registered(self, image_name: str) -> bool:
+        try:
+            self.client.images.get(image_name)
+            return True
+        except docker.errors.ImageNotFound:
+            return False
+        except Exception as e:
+            if self._is_transient_transport_error(e) and self._refresh_client_connection():
+                try:
+                    self.client.images.get(image_name)
+                    return True
+                except docker.errors.ImageNotFound:
+                    return False
+                except Exception as retry_error:
+                    logging.debug(
+                        f"Image lookup still failed after reconnect for '{image_name}': {retry_error}"
+                    )
+            else:
+                logging.debug(f"Image lookup failed for '{image_name}': {e}")
+            return False
+
+    def _run_docker_cli_pull(
+        self,
+        image_name: str,
+        platform: Optional[str],
+        shutdown_event: threading.Event = None,
+    ) -> None:
+        """Fallback pull path for WSL Docker when the SDK stream ends early."""
+        if os.name == "nt" and os.environ.get("OPENFORK_WSL_DISTRO"):
+            distro = os.environ["OPENFORK_WSL_DISTRO"]
+            command = ["wsl.exe", "-d", distro, "--", "docker", "pull"]
+            env = os.environ.copy()
+            env.pop("DOCKER_HOST", None)
+        else:
+            command = ["docker", "pull"]
+            env = self._docker_cli_env()
+
+        if platform:
+            command.extend(["--platform", platform])
+        command.append(image_name)
+
+        logging.info("Running Docker CLI fallback pull for '%s'.", image_name)
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            env=env,
+            **get_subprocess_hidden_kwargs(),
+        )
+
+        deadline = time.monotonic() + DOCKER_CLI_PULL_TIMEOUT_SECS
+        output = ""
+        while True:
+            try:
+                stdout, _ = process.communicate(timeout=1.0)
+                output += stdout or ""
+                break
+            except subprocess.TimeoutExpired:
+                if shutdown_event and shutdown_event.is_set():
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    raise RuntimeError(
+                        f"Docker CLI pull for {image_name} cancelled."
+                    )
+                if time.monotonic() >= deadline:
+                    process.kill()
+                    raise TimeoutError(
+                        f"Docker CLI pull for {image_name} timed out after "
+                        f"{DOCKER_CLI_PULL_TIMEOUT_SECS}s."
+                    )
+
+        if process.returncode != 0:
+            tail = "\n".join(output.splitlines()[-20:])
+            raise RuntimeError(
+                f"Docker CLI pull failed for {image_name} with exit code "
+                f"{process.returncode}: {tail}"
+            )
+
+        tail = "\n".join(output.splitlines()[-5:])
+        if tail:
+            logging.info("Docker CLI fallback pull output tail:\n%s", tail)
+        self._refresh_client_connection()
 
     def _get_existing_container(self, container_name: str):
         try:
@@ -526,7 +657,12 @@ class DockerProdManager:
 
         logging.info(f"Force-pulling '{image_name}' to repair layer cache...")
         try:
-            stream_pull_with_progress(self.client, image_name, throttle_interval=0.5)
+            stream_pull_with_progress(
+                self.client,
+                image_name,
+                throttle_interval=0.5,
+                platform=self._get_pull_platform(),
+            )
             logging.info(f"Force-pull of '{image_name}' complete.")
         except Exception as e:
             logging.warning(f"Force-pull of '{image_name}' failed: {e}")
@@ -705,6 +841,7 @@ class DockerProdManager:
             try:
                 from .docker_progress_logger import stream_pull_with_progress
 
+                pull_platform = self._get_pull_platform()
                 stream_pull_with_progress(
                     self.client,
                     image_name,
@@ -712,7 +849,27 @@ class DockerProdManager:
                     shutdown_event=shutdown_event,
                     service_type=service_type,
                     emit_complete=emit_pull_complete,
+                    platform=pull_platform,
                 )
+
+                if not self._image_is_registered(image_name):
+                    logging.warning(
+                        "Docker SDK pull stream ended for '%s' but the image was "
+                        "not registered locally. Retrying once via Docker CLI.",
+                        image_name,
+                    )
+                    self._run_docker_cli_pull(
+                        image_name,
+                        pull_platform,
+                        shutdown_event=shutdown_event,
+                    )
+
+                if not self._image_is_registered(image_name):
+                    raise RuntimeError(
+                        f"Docker pull completed for {image_name}, but the image "
+                        "was not registered locally."
+                    )
+
                 logging.info(f"Successfully pulled image: {image_name}")
             except docker.errors.APIError as e:
                 # Case 2: Docker raises APIError mid-pull when the disk fills up.

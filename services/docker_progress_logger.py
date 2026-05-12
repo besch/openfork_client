@@ -29,7 +29,7 @@ class DockerPullProgressLogger:
         self.throttle_interval = throttle_interval
         self.service_type = service_type
         self.last_emit_time = 0
-        self.layers = {}  # layer_id -> {"current": bytes, "total": bytes}
+        self.layers = {}
         self.last_progress = -1
         
     def parse_progress_event(self, event: dict) -> bool:
@@ -45,24 +45,85 @@ class DockerPullProgressLogger:
         if not layer_id:
             return False
 
-        # Initialize layer tracking if not already present
+        # Initialize layer tracking if not already present. Docker reports
+        # downloading and extracting with independent byte counters for the
+        # same layer, so keep those phases separate to avoid UI regressions.
         if layer_id not in self.layers:
-            self.layers[layer_id] = {"current": 0, "total": 0, "status": status, "complete": False}
+            self.layers[layer_id] = {
+                "download_current": 0,
+                "download_total": 0,
+                "download_complete": False,
+                "extract_current": 0,
+                "extract_total": 0,
+                "extract_complete": False,
+                "status": status,
+                "complete": False,
+            }
             
         # Track layer download progress
-        if status in ("Downloading", "Extracting"):
+        if status == "Downloading":
             current = progress_detail.get("current", 0)
             total = progress_detail.get("total", 0)
             if total > 0:
-                self.layers[layer_id].update({"current": current, "total": total, "status": status})
+                self.layers[layer_id].update(
+                    {
+                        "download_current": max(
+                            current,
+                            self.layers[layer_id].get("download_current", 0),
+                        ),
+                        "download_total": max(
+                            total,
+                            self.layers[layer_id].get("download_total", 0),
+                        ),
+                        "status": status,
+                    }
+                )
                 return False  # Normal progress, use throttle
-        elif status in ("Download complete", "Pull complete", "Already exists") or "complete" in status.lower():
-            # Ensure we mark it as complete
-            if self.layers[layer_id]["total"] == 0:
-                 self.layers[layer_id]["total"] = 1
-                 self.layers[layer_id]["current"] = 1
-            else:
-                 self.layers[layer_id]["current"] = self.layers[layer_id]["total"]
+        elif status == "Extracting":
+            current = progress_detail.get("current", 0)
+            total = progress_detail.get("total", 0)
+            if total > 0:
+                self.layers[layer_id].update(
+                    {
+                        "extract_current": max(
+                            current,
+                            self.layers[layer_id].get("extract_current", 0),
+                        ),
+                        "extract_total": max(
+                            total,
+                            self.layers[layer_id].get("extract_total", 0),
+                        ),
+                        "status": status,
+                        "complete": False,
+                    }
+                )
+                return False
+        elif status == "Download complete":
+            if self.layers[layer_id]["download_total"] == 0:
+                self.layers[layer_id]["download_total"] = 1
+            self.layers[layer_id]["download_current"] = self.layers[layer_id][
+                "download_total"
+            ]
+            self.layers[layer_id]["download_complete"] = True
+            self.layers[layer_id]["status"] = status
+            return True
+        elif status in ("Pull complete", "Already exists") or "complete" in status.lower():
+            # Pull complete means the layer is ready locally. Ensure both phase
+            # counters are fully satisfied even if Docker omitted byte totals.
+            if self.layers[layer_id]["download_total"] == 0:
+                self.layers[layer_id]["download_total"] = 1
+            if self.layers[layer_id]["extract_total"] == 0:
+                self.layers[layer_id]["extract_total"] = self.layers[layer_id][
+                    "download_total"
+                ]
+            self.layers[layer_id]["download_current"] = self.layers[layer_id][
+                "download_total"
+            ]
+            self.layers[layer_id]["extract_current"] = self.layers[layer_id][
+                "extract_total"
+            ]
+            self.layers[layer_id]["download_complete"] = True
+            self.layers[layer_id]["extract_complete"] = True
             self.layers[layer_id]["complete"] = True
             self.layers[layer_id]["status"] = status
             return True  # Force emit when layer completes
@@ -74,27 +135,76 @@ class DockerPullProgressLogger:
         if not self.layers:
             return 0
             
-        total_bytes = sum(layer["total"] for layer in self.layers.values())
-        current_bytes = sum(layer["current"] for layer in self.layers.values())
+        total_bytes = sum(layer.get("download_total", 0) for layer in self.layers.values())
+        current_bytes = sum(
+            layer.get("download_current", 0) for layer in self.layers.values()
+        )
         unknown_incomplete_layers = [
             layer
             for layer in self.layers.values()
-            if not layer.get("complete") and layer.get("total", 0) <= 0
+            if not layer.get("download_complete")
+            and not layer.get("complete")
+            and layer.get("download_total", 0) <= 0
         ]
         
         # If we have any bytes info (at least one layer has a known total size > 0),
         # use byte-based progress.
         if total_bytes > 0:
-            progress = int((current_bytes / total_bytes) * 100)
+            download_fraction = min(current_bytes / total_bytes, 1)
             if unknown_incomplete_layers:
                 known_layer_count = len(self.layers) - len(unknown_incomplete_layers)
-                layer_cap = int((known_layer_count / len(self.layers)) * 100)
-                progress = min(progress, layer_cap)
-            return min(progress, 100)
+                layer_cap = known_layer_count / len(self.layers)
+                download_fraction = min(download_fraction, layer_cap)
+
+            extraction_seen = any(
+                layer.get("extract_total", 0) > 0
+                or layer.get("status") == "Extracting"
+                or layer.get("extract_complete")
+                for layer in self.layers.values()
+            )
+            all_complete = all(layer.get("complete") for layer in self.layers.values())
+
+            if all_complete:
+                return 100
+
+            if extraction_seen:
+                extract_total = 0
+                extract_current = 0
+                for layer in self.layers.values():
+                    layer_extract_total = layer.get("extract_total", 0) or layer.get(
+                        "download_total",
+                        0,
+                    )
+                    if layer_extract_total <= 0:
+                        continue
+                    extract_total += layer_extract_total
+                    if layer.get("extract_complete") or layer.get("complete"):
+                        extract_current += layer_extract_total
+                    else:
+                        extract_current += min(
+                            layer.get("extract_current", 0),
+                            layer_extract_total,
+                        )
+                extract_fraction = (
+                    min(extract_current / extract_total, 1)
+                    if extract_total > 0
+                    else 0
+                )
+                progress = int((download_fraction * 0.85 + extract_fraction * 0.14) * 100)
+                return min(progress, 99)
+
+            # Keep pre-extraction progress below complete so the UI does not
+            # show 100% while Docker is still applying layers locally.
+            progress = int(download_fraction * 85)
+            return min(progress, 85)
             
         # Fallback to counting layers if NO layers have reported size yet
         # (happens with 'Already exists' layers or initial 'Pulling' state)
-        completed_layers = sum(1 for layer in self.layers.values() if layer.get("complete"))
+        completed_layers = sum(
+            1
+            for layer in self.layers.values()
+            if layer.get("complete") or layer.get("download_complete")
+        )
         
         # SENSITIVE: If we have layers that are NOT complete and haven't reported size yet,
         # don't cap at 100% based on layers alone. This avoids the 100% spike at startup.
@@ -132,6 +242,8 @@ class DockerPullProgressLogger:
     def emit_progress(self, force: bool = False) -> None:
         """Emit a progress update if throttle allows or if forced."""
         progress = self.calculate_overall_progress()
+        if self.last_progress >= 0:
+            progress = max(progress, self.last_progress)
         
         # Force emit at 10% milestones (10%, 20%, 30%, etc.) to show progress on fast downloads
         progress_milestone = (progress // 10) * 10
@@ -203,6 +315,7 @@ def stream_pull_with_progress(
     shutdown_event: threading.Event = None,
     service_type: str = None,
     emit_complete: bool = True,
+    platform: str = None,
 ):
     """
     Pull a Docker image using the Docker Python SDK with streaming progress.
@@ -219,22 +332,13 @@ def stream_pull_with_progress(
     logging.info(f"Starting Docker pull via SDK for {image_name}")
     
     try:
-        # Parse image name into repository and tag
-        if ':' in image_name and '/' in image_name.split(':')[-1] is False:
-            # Has a tag like "repo/image:tag"
-            repository, tag = image_name.rsplit(':', 1)
-        elif '@' in image_name:
-            # Has a digest like "repo/image@sha256:..."
-            repository = image_name
-            tag = None
-        else:
-            # No tag, use 'latest'
-            repository = image_name
-            tag = 'latest' if ':' not in image_name else image_name.split(':')[-1]
-            if ':' in image_name:
-                repository = image_name.rsplit(':', 1)[0]
+        from docker.utils import parse_repository_tag
+
+        repository, tag = parse_repository_tag(image_name)
+        tag = tag or "latest"
         
-        logging.info(f"Pulling repository={repository}, tag={tag}")
+        platform_msg = f", platform={platform}" if platform else ""
+        logging.info(f"Pulling repository={repository}, tag={tag}{platform_msg}")
         
         # Use the low-level API to stream progress
         # This returns a generator of JSON objects
@@ -242,7 +346,15 @@ def stream_pull_with_progress(
         logging.info(f"Iteration through Docker pull stream for {image_name} started.")
         
         # We manually iterate to ensure we can catch the shutdown signal as fast as possible
-        pull_stream = docker_client.api.pull(repository, tag=tag, stream=True, decode=True)
+        pull_kwargs = {
+            "tag": tag,
+            "stream": True,
+            "decode": True,
+        }
+        if platform:
+            pull_kwargs["platform"] = platform
+
+        pull_stream = docker_client.api.pull(repository, **pull_kwargs)
         
         for chunk in pull_stream:
             if shutdown_event and shutdown_event.is_set():
