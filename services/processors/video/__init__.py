@@ -5,6 +5,7 @@ from .wan22_image import WAN22ImageToVideoJobProcessor, ImageToVideoFromLastFram
 from .upscaler import VideoUpscalerJobProcessor
 from .sparkvsr import SparkVSRUpscalerJobProcessor
 from .turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
+from .dreamid_omni import DreamIDOmniImageToVideoProcessor
 from .scail import SCAILImageToVideoProcessor
 from .vista4d import Vista4DVideoToVideoProcessor
 
@@ -14,6 +15,7 @@ __all__ = [
     "ImageToVideoFromLastFrameJobProcessor",
     "VideoUpscalerJobProcessor",
     "SparkVSRUpscalerJobProcessor",
+    "DreamIDOmniImageToVideoProcessor",
     "SCAILImageToVideoProcessor",
     "Vista4DVideoToVideoProcessor",
     "TurboDiffusionI2VJobProcessor",

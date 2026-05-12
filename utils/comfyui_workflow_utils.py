@@ -1564,6 +1564,99 @@ def inject_prompt_into_stable_audio_workflow(workflow_data, prompt, duration_sec
     return api_graph
 
 
+def get_dreamid_omni_dimensions(aspect_ratio: str) -> tuple[int, int]:
+    """DreamID-Omni default 992x512 is the published 24GB-friendly shape."""
+    if aspect_ratio == "9:16":
+        return 512, 992
+    if aspect_ratio == "1:1":
+        return 768, 768
+    if aspect_ratio == "4:3":
+        return 896, 672
+    if aspect_ratio == "3:4":
+        return 672, 896
+    if aspect_ratio == "21:9":
+        return 1120, 480
+    return 992, 512
+
+
+def inject_dreamid_omni_workflow(
+    workflow_data,
+    prompt: str,
+    reference_image_filename: str,
+    reference_audio_filename: str,
+    aspect_ratio: str = "16:9",
+    steps: Optional[int] = None,
+    seed: Optional[int] = None,
+    solver_name: str = "unipc",
+    model_file: str = "dreamid_omni.fp8_e4m3fn.safetensors",
+    precision: str = "FP8",
+    attention_backend: str = "SDPA",
+):
+    """
+    Inject single-person DreamID-Omni inputs into the ComfyUI API workflow.
+    The benjiyaya ComfyUI fork exposes a loader and sampler with direct
+    prompt/image/audio inputs, so no graph rewiring is needed at runtime.
+    """
+    api_graph = copy.deepcopy(workflow_data.get("prompt", workflow_data))
+    width, height = get_dreamid_omni_dimensions(aspect_ratio)
+    actual_steps = max(1, int(steps)) if steps is not None else 20
+    actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
+
+    image_set = False
+    audio_set = False
+    sampler_set = False
+
+    for node_id, node in api_graph.items():
+        class_type = node.get("class_type")
+        inputs = node.get("inputs", {})
+
+        if class_type == "ComfyUI DreamID-Omni Loader":
+            inputs["model_file"] = model_file
+            inputs["precision"] = precision
+            inputs["attention_backend"] = attention_backend
+        elif class_type == "ComfyUI DreamID-Omni Sampler":
+            inputs["prompt"] = prompt
+            inputs["sample_steps"] = actual_steps
+            inputs["seed"] = actual_seed
+            inputs["width"] = width
+            inputs["height"] = height
+            inputs["solver_name"] = solver_name
+            inputs["text_encoder_offload"] = True
+            inputs["release_diffusion_after_run"] = False
+            sampler_set = True
+        elif class_type == "LoadImage" and not image_set:
+            inputs["image"] = reference_image_filename
+            image_set = True
+        elif class_type == "LoadAudio" and not audio_set:
+            inputs["audio"] = reference_audio_filename
+            inputs["audioUI"] = ""
+            audio_set = True
+        elif class_type == "SaveVideo":
+            prefix = inputs.get("filename_prefix", "video/DreamID-Omni")
+            if "%date:yyyy-MM-dd%" in prefix:
+                datestr = datetime.now().strftime("%Y-%m-%d")
+                prefix = prefix.replace("%date:yyyy-MM-dd%", datestr)
+            inputs["filename_prefix"] = prefix
+
+    if not sampler_set:
+        raise ValueError("ComfyUI DreamID-Omni Sampler node not found in workflow")
+    if not image_set:
+        raise ValueError("LoadImage node not found in DreamID-Omni workflow")
+    if not audio_set:
+        raise ValueError("LoadAudio node not found in DreamID-Omni workflow")
+
+    logging.info(
+        "DreamID-Omni configured - image=%s audio=%s size=%sx%s steps=%s seed=%s",
+        reference_image_filename,
+        reference_audio_filename,
+        width,
+        height,
+        actual_steps,
+        actual_seed,
+    )
+    return api_graph
+
+
 def get_zimage_dimensions(aspect_ratio: str) -> tuple[int, int]:
     """
     Returns (width, height) for Z-Image based on aspect ratio.

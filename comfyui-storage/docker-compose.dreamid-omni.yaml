@@ -1,0 +1,21 @@
+services:
+  comfyui-dreamid-omni:
+    build:
+      context: .
+      dockerfile: Dockerfile.dreamid-omni-24gb
+    container_name: comfyui-dreamid-omni-24gb
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./storage/ComfyUI/output:/opt/ComfyUI/output
+      - ./storage/ComfyUI/input:/opt/ComfyUI/input
+      - ./storage/ComfyUI/models/DreamID-Omni:/opt/ComfyUI/models/DreamID-Omni
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true

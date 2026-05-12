@@ -1,0 +1,152 @@
+# OpenFork — DreamID-Omni FP8 ComfyUI (24GB VRAM)
+#
+# Provides:
+#   - ComfyUI
+#   - benjiyaya/ComfyUI_Dreamid-Omni custom nodes
+#   - DreamID-Omni FP8 fusion model (~11.7GB)
+#   - Wan2.2-TI2V-5B T5 encoder/tokenizer + VAE
+#   - MMAudio audio VAE + BigVGAN vocoder
+#
+# Build:
+#   docker build --build-arg HF_TOKEN=<token> \
+#     -t beschiak/openfork-dreamid-omni-24gb:latest \
+#     -f Dockerfile.dreamid-omni-24gb .
+
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+
+ARG HF_TOKEN
+ARG CACHEBUST=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget git-lfs ffmpeg build-essential \
+    libgl1-mesa-glx libglib2.0-0 libsndfile1 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+      torch torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir "numpy>=1.24,<2.0" \
+    && rm -rf /tmp/* /var/tmp/*
+
+WORKDIR /opt/ComfyUI
+
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && rm -rf /tmp/* /var/tmp/*
+
+RUN git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && (python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt || true) \
+    && rm -rf /tmp/* /var/tmp/*
+
+RUN git clone --depth=1 https://github.com/benjiyaya/ComfyUI_Dreamid-Omni.git custom_nodes/ComfyUI_Dreamid-Omni \
+    && rm -rf custom_nodes/ComfyUI_Dreamid-Omni/.git \
+    && grep -viE '^(torch|torchvision|torchaudio|numpy)([<>= ].*)?$' custom_nodes/ComfyUI_Dreamid-Omni/requirements.txt > /tmp/dreamid_requirements.txt \
+    && python -m pip install --no-cache-dir -r /tmp/dreamid_requirements.txt \
+    && python -m pip install --no-cache-dir "hf_transfer>=0.1.8" \
+    && rm -rf /tmp/* /var/tmp/*
+
+RUN mkdir -p \
+    models/DreamID-Omni/DreamID_Omni \
+    models/DreamID-Omni/Wan2.2-TI2V-5B \
+    models/DreamID-Omni/MMAudio
+
+RUN python - <<'EOF'
+import os
+from huggingface_hub import hf_hub_download, snapshot_download
+
+token = os.environ.get("HF_TOKEN") or None
+
+def download_file(repo_id, filename, local_dir):
+    print(f"Downloading {repo_id}/{filename}...")
+    hf_hub_download(
+        repo_id=repo_id,
+        filename=filename,
+        local_dir=local_dir,
+        token=token,
+    )
+
+download_file(
+    "benjiaiplayground/DreamID-Omni-bf16-FP8",
+    "dreamid_omni.fp8_e4m3fn.safetensors",
+    "/opt/ComfyUI/models/DreamID-Omni/DreamID_Omni",
+)
+
+for filename in ("models_t5_umt5-xxl-enc-bf16.pth", "Wan2.2_VAE.pth"):
+    download_file(
+        "Wan-AI/Wan2.2-TI2V-5B",
+        filename,
+        "/opt/ComfyUI/models/DreamID-Omni/Wan2.2-TI2V-5B",
+    )
+
+snapshot_download(
+    repo_id="Wan-AI/Wan2.2-TI2V-5B",
+    allow_patterns=["google/umt5-xxl/*"],
+    local_dir="/opt/ComfyUI/models/DreamID-Omni/Wan2.2-TI2V-5B",
+    token=token,
+)
+
+snapshot_download(
+    repo_id="hkchengrex/MMAudio",
+    allow_patterns=["ext_weights/v1-16.pth", "ext_weights/best_netG.pt"],
+    local_dir="/opt/ComfyUI/models/DreamID-Omni/MMAudio",
+    token=token,
+)
+EOF
+
+RUN python - <<'EOF'
+import os
+import sys
+
+files = {
+    "models/DreamID-Omni/DreamID_Omni/dreamid_omni.fp8_e4m3fn.safetensors": 10.0,
+    "models/DreamID-Omni/Wan2.2-TI2V-5B/models_t5_umt5-xxl-enc-bf16.pth": 8.0,
+    "models/DreamID-Omni/Wan2.2-TI2V-5B/Wan2.2_VAE.pth": 0.1,
+    "models/DreamID-Omni/MMAudio/ext_weights/v1-16.pth": 0.1,
+    "models/DreamID-Omni/MMAudio/ext_weights/best_netG.pt": 0.1,
+}
+ok = True
+print("=" * 60)
+print("VERIFYING DREAMID-OMNI MODEL FILES")
+print("=" * 60)
+for path, min_gb in files.items():
+    if not os.path.exists(path):
+        print(f"MISSING: {path}")
+        ok = False
+        continue
+    gb = os.path.getsize(path) / (1024 ** 3)
+    print(f"{path}: {gb:.2f}GB")
+    if gb < min_gb:
+        print(f"TOO SMALL: expected at least {min_gb}GB")
+        ok = False
+if not os.path.isdir("models/DreamID-Omni/Wan2.2-TI2V-5B/google/umt5-xxl"):
+    print("MISSING: Wan2.2 google/umt5-xxl tokenizer directory")
+    ok = False
+if not ok:
+    sys.exit(1)
+EOF
+
+RUN find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true \
+    && find /opt/ComfyUI -name "*.pyc" -delete 2>/dev/null || true \
+    && rm -rf /root/.cache/* /tmp/* /var/tmp/* ~/.cache/*
+
+WORKDIR /opt/ComfyUI
+
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--lowvram", "--reserve-vram", "1.0", "--use-pytorch-cross-attention", "--cache-none"]

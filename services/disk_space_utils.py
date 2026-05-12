@@ -124,6 +124,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "stream-diffvsr": 80,
         "audiox": 120,
         "stable-audio": 100,
+        "dreamid-omni": 140,
         "ltx-video": 100,  # LTX v1
         "ltxvideo": 100,
         "diffrhythm": 100,

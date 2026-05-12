@@ -532,6 +532,14 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ltx23-comfyui-video-8gb"
           log "Auto-selected LTX-2.3 ComfyUI 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/opt/ComfyUI/models/DreamID-Omni/DreamID_Omni/dreamid_omni.fp8_e4m3fn.safetensors" ]; then
+      log "Auto-mode: Detected DreamID-Omni FP8 ComfyUI image."
+      SERVICE_TYPE="dreamid-omni-24gb"
+      if [ "$TOTAL_VRAM_MB" -lt 22000 ]; then
+          log "WARNING: DreamID-Omni is configured as a 24GB tier; detected only ${TOTAL_VRAM_MB}MB VRAM."
+      else
+          log "Auto-selected DreamID-Omni 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
    elif [ -f "/app/sparkvsr_api.py" ] || [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
         log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
         START_SPARKVSR="true"
@@ -950,6 +958,10 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying 24GB optimizations for LTX-2.3 ComfyUI (768x432, 121 frames)"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention"
       ;;
+    *dreamid*omni*|*dreamid-omni*)
+      log "Applying 24GB optimizations for DreamID-Omni FP8"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention --cache-none"
+      ;;
     *ltx23*-8gb*|*ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
@@ -1296,6 +1308,18 @@ if [ -d "/opt/ComfyUI" ]; then
         log "  [OK] $node is registered"
       else
         log "  [MISSING] $node is NOT registered — check ComfyUI import errors above"
+      fi
+    done
+  fi
+
+  if [[ "${SERVICE_TYPE:-}" == *"dreamid"* ]]; then
+    log "Checking DreamID-Omni node availability..."
+    for node_path in "ComfyUI%20DreamID-Omni%20Loader" "ComfyUI%20DreamID-Omni%20Sampler"; do
+      result=$(curl -s "http://127.0.0.1:8188/object_info/$node_path" 2>/dev/null || echo "{}")
+      if echo "$result" | grep -q "DreamID-Omni"; then
+        log "  [OK] ${node_path//%20/ } is registered"
+      else
+        log "  [MISSING] ${node_path//%20/ } is NOT registered — check ComfyUI import errors above"
       fi
     done
   fi

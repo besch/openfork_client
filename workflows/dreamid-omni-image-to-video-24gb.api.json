@@ -1,0 +1,66 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "ComfyUI DreamID-Omni Loader",
+      "inputs": {
+        "model_file": "dreamid_omni.fp8_e4m3fn.safetensors",
+        "precision": "FP8",
+        "attention_backend": "SDPA"
+      },
+      "_meta": {
+        "title": "DreamID-Omni Loader"
+      }
+    },
+    "2": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "reference_image.png"
+      },
+      "_meta": {
+        "title": "Load Reference Image"
+      }
+    },
+    "3": {
+      "class_type": "LoadAudio",
+      "inputs": {
+        "audio": "reference_audio.wav",
+        "audioUI": ""
+      },
+      "_meta": {
+        "title": "Load Reference Audio"
+      }
+    },
+    "4": {
+      "class_type": "ComfyUI DreamID-Omni Sampler",
+      "inputs": {
+        "pipeline": ["1", 0],
+        "prompt": "<img1>: The person in the reference image is identified as <sub1>.\n**Overall Environment/Scene**: A clean upper-body talking-head shot with natural lighting.\n**Main Characters/Subjects Actions**: <sub1> faces the camera and speaks naturally.\n<sub1> says, <S>Hello, this is DreamID-Omni running on OpenFork.<E>",
+        "sample_steps": 20,
+        "seed": 100,
+        "width": 992,
+        "height": 512,
+        "solver_name": "unipc",
+        "text_encoder_offload": true,
+        "release_diffusion_after_run": false,
+        "ref_image": ["2", 0],
+        "ref_audio": ["3", 0]
+      },
+      "_meta": {
+        "title": "DreamID-Omni Sampler"
+      }
+    },
+    "5": {
+      "class_type": "SaveVideo",
+      "inputs": {
+        "filename_prefix": "video/DreamID-Omni",
+        "format": "auto",
+        "codec": "auto",
+        "fw_video_preview": "",
+        "video": ["4", 0]
+      },
+      "_meta": {
+        "title": "Save Video"
+      }
+    }
+  }
+}

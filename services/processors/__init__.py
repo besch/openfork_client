@@ -33,6 +33,7 @@ from .video.turbodiffusion import (
     TurboDiffusionT2VJobProcessor,
     TurboDiffusionI2VJobProcessor,
 )
+from .video.dreamid_omni import DreamIDOmniImageToVideoProcessor
 from .video.davinci_magihuman import (
     DaVinciMagiHumanT2VProcessor,
     DaVinciMagiHumanI2VProcessor,
@@ -110,6 +111,7 @@ __all__ = [
     "SparkVSRUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",
     "TurboDiffusionI2VJobProcessor",
+    "DreamIDOmniImageToVideoProcessor",
     "DaVinciMagiHumanT2VProcessor",
     "DaVinciMagiHumanI2VProcessor",
     "SCAILImageToVideoProcessor",
