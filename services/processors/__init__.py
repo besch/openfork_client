@@ -43,6 +43,7 @@ from .video.inspatio_world import InSpatioWorldJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
+from .audio.audiox import AudioXJobProcessor
 
 from .audio.vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
 from .audio.diffrhythm_cli import DiffRhythmCLIJobProcessor
@@ -115,6 +116,7 @@ __all__ = [
     "Vista4DVideoToVideoProcessor",
     "InSpatioWorldJobProcessor",
     "StableAudioJobProcessor",
+    "AudioXJobProcessor",
     "VibeVoiceJobProcessor",
     "VibeVoiceMultiCloneJobProcessor",
     "DiffRhythmCLIJobProcessor",

@@ -122,6 +122,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "vibevoice": 80,
         "chatterbox": 80,
         "stream-diffvsr": 80,
+        "audiox": 120,
         "stable-audio": 100,
         "ltx-video": 100,  # LTX v1
         "ltxvideo": 100,

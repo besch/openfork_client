@@ -332,6 +332,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/heartmula_api.py" ] && cp -v "$DGN_SOURCE_DIR/heartmula_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagnose_heartmula.sh" ] && cp -v "$DGN_SOURCE_DIR/diagnose_heartmula.sh" /app/ && chmod +x /app/diagnose_heartmula.sh
           [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/audiox_api.py" ] && cp -v "$DGN_SOURCE_DIR/audiox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
@@ -415,6 +416,7 @@ log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 # Defaults
 START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
+START_AUDIOX="false"
 START_QWEN3TTS="false"
 START_DIAGDISTILL="false"
 START_WAN2GP="false"
@@ -443,6 +445,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -f "/app/diffrhythm_api.py" ]; then
       log "Auto-mode: Detected DiffRhythm image. Selecting DiffRhythm service."
       START_DIFFRHYTHM="true"
+  elif [ -f "/app/audiox_api.py" ]; then
+      log "Auto-mode: Detected AudioX image. Selecting AudioX service."
+      START_AUDIOX="true"
+      if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+          SERVICE_TYPE="audiox-24gb"
+          log "Auto-selected AudioX 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="audiox-16gb"
+          log "Auto-selected AudioX 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/app/qwen3_tts_api.py" ]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
       START_QWEN3TTS="true"
@@ -554,6 +566,7 @@ else
   # MANUAL MODE: Check for keywords
   if [[ "$SERVICE_TYPE" == *"heartmula"* ]]; then START_HEARTMULA="true"; fi
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
+  if [[ "$SERVICE_TYPE" == *"audiox"* ]]; then START_AUDIOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
   if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
@@ -588,6 +601,11 @@ fi
 if [ "$START_DIAGDISTILL" = "true" ]; then
   # DiagDistill (HunyuanVideo) needs full VRAM — always disable ComfyUI
   log "DiagDistill selected. Disabling ComfyUI to reserve VRAM for HunyuanVideo."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_AUDIOX" = "true" ]; then
+  log "AudioX selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
 fi
 
@@ -995,6 +1013,15 @@ if [ "$START_DIFFRHYTHM" = "true" ] && [ -f "/app/diffrhythm_api.py" ]; then
   log "Found DiffRhythm API script. Starting..."
   (cd /app && "$PYTHON_EXE" diffrhythm_api.py > /tmp/diffrhythm_api.log 2>&1) &
   wait_for_url "DiffRhythm API" "http://127.0.0.1:8000/health" 120 "/tmp/diffrhythm_api.log"
+fi
+
+# Start AudioX REST API
+if [ "$START_AUDIOX" = "true" ] && [ -f "/app/audiox_api.py" ]; then
+  log "Found AudioX API script. Starting..."
+  export AUDIOX_MODEL_HALF="${AUDIOX_MODEL_HALF:-true}"
+  export AUDIOX_MAX_DURATION_SECONDS="${AUDIOX_MAX_DURATION_SECONDS:-10}"
+  (cd /app && "$PYTHON_EXE" audiox_api.py > /tmp/audiox_api.log 2>&1) &
+  wait_for_url "AudioX API" "http://127.0.0.1:8000/health" 600 "/tmp/audiox_api.log"
 fi
 
 # Start Qwen3-TTS REST API

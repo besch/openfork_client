@@ -1,6 +1,7 @@
 """Audio processor modules."""
 
 from .stable_audio import StableAudioJobProcessor
+from .audiox import AudioXJobProcessor
 
 from .vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
 from .diffrhythm_cli import DiffRhythmCLIJobProcessor
@@ -12,7 +13,7 @@ from .prismaudio import PrismAudioJobProcessor
 
 __all__ = [
     "StableAudioJobProcessor",
-
+    "AudioXJobProcessor",
     "VibeVoiceJobProcessor",
     "VibeVoiceMultiCloneJobProcessor",
     "DiffRhythmCLIJobProcessor",

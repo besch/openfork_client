@@ -1,0 +1,57 @@
+# syntax=docker/dockerfile:1.4
+# AudioX REST image for text/audio/video-conditioned sound generation.
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV AUDIOX_MODEL_HALF=true
+ENV AUDIOX_MAX_DURATION_SECONDS=10
+ENV AUDIOX_DEFAULT_STEPS=100
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-distutils \
+    curl git wget ffmpeg libsndfile1 libgl1 ca-certificates \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.4.0 torchaudio==2.4.0 torchvision==0.19.0 \
+        --index-url https://download.pytorch.org/whl/cu124
+
+RUN git clone --depth=1 https://github.com/ZeyueT/AudioX.git /app/audiox \
+    && python -m pip install --no-cache-dir -e /app/audiox \
+    && python -m pip install --no-cache-dir \
+        fastapi \
+        uvicorn[standard] \
+        python-multipart \
+        requests \
+        soundfile
+
+RUN mkdir -p /app/input /app/output /app/models
+
+ARG HF_TOKEN
+RUN HF_TOKEN=$HF_TOKEN python -c "from stable_audio_tools import get_pretrained_model; model, cfg = get_pretrained_model('HKUSTAudio/AudioX'); print('AudioX downloaded:', cfg['sample_rate'], cfg['sample_size'])"
+
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+COPY audiox_api.py /app/audiox_api.py
+
+EXPOSE 8000
+
+CMD ["/bin/bash", "-c", "curl -fsSL -o /app/audiox_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/audiox_api.py || echo 'WARNING: Could not update audiox_api.py, using baked-in copy'; python /app/audiox_api.py"]
