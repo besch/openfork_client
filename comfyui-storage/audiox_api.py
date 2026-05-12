@@ -21,9 +21,9 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from stable_audio_tools import get_pretrained_model
-from stable_audio_tools.data.utils import read_video, load_and_process_audio
-from stable_audio_tools.inference.generation import generate_diffusion_cond
+from audiox import get_pretrained_model
+from audiox.data.utils import read_video, load_and_process_audio
+from audiox.inference.generation import generate_diffusion_cond
 
 
 logging.basicConfig(
@@ -141,13 +141,18 @@ def _generate_audiox(
                 torch.cuda.empty_cache()
             gc.collect()
 
-            actual_video_path = str(video_path) if video_path else None
-            video_tensor = read_video(
-                actual_video_path,
-                seek_time=0,
-                duration=duration,
-                target_fps=target_fps,
-            )
+            if video_path:
+                video_tensor = read_video(
+                    str(video_path),
+                    seek_time=0,
+                    duration=duration,
+                    target_fps=target_fps,
+                )
+            else:
+                video_tensor = torch.zeros(
+                    (int(duration * target_fps), 3, 224, 224),
+                    dtype=torch.float32,
+                )
             audio_tensor = load_and_process_audio(
                 None,
                 sample_rate,
@@ -157,7 +162,10 @@ def _generate_audiox(
 
             conditioning = [
                 {
-                    "video_prompt": [video_tensor.unsqueeze(0)],
+                    "video_prompt": {
+                        "video_tensors": video_tensor.unsqueeze(0),
+                        "video_sync_frames": torch.zeros(1, 240, 768, device=device),
+                    },
                     "text_prompt": prompt or "",
                     "audio_prompt": audio_tensor.unsqueeze(0),
                     "seconds_start": 0,
@@ -169,7 +177,10 @@ def _generate_audiox(
             if negative_prompt:
                 negative_conditioning = [
                     {
-                        "video_prompt": [video_tensor.unsqueeze(0)],
+                        "video_prompt": {
+                            "video_tensors": video_tensor.unsqueeze(0),
+                            "video_sync_frames": torch.zeros(1, 240, 768, device=device),
+                        },
                         "text_prompt": negative_prompt,
                         "audio_prompt": audio_tensor.unsqueeze(0),
                         "seconds_start": 0,
