@@ -114,6 +114,12 @@ def _conditioning_window_seconds() -> float:
     return max(1.0, min(float(MAX_DURATION_SECONDS), AUDIOX_CONDITIONING_SECONDS))
 
 
+def _conditioning_tensor_dtype() -> torch.dtype:
+    if USE_MODEL_HALF and device.type == "cuda":
+        return torch.float16
+    return torch.float32
+
+
 def _normalize_audio(audio: torch.Tensor, duration: float) -> torch.Tensor:
     audio = rearrange(audio, "b d n -> d (b n)")
     target_samples = int(duration * sample_rate)
@@ -144,6 +150,7 @@ def _generate_audiox(
         requested_duration = _clamp_duration(duration)
         model_duration = _model_window_seconds()
         conditioning_duration = _conditioning_window_seconds()
+        conditioning_dtype = _conditioning_tensor_dtype()
         steps = max(1, min(500, int(steps)))
         seed = int(seed)
 
@@ -162,17 +169,24 @@ def _generate_audiox(
             else:
                 video_tensor = torch.zeros(
                     (int(conditioning_duration * target_fps), 3, 224, 224),
-                    dtype=torch.float32,
+                    dtype=conditioning_dtype,
                 )
+            video_tensor = video_tensor.to(dtype=conditioning_dtype)
             audio_tensor = load_and_process_audio(
                 None,
                 sample_rate,
                 seconds_start=0,
                 seconds_total=conditioning_duration,
-            ).to(device)
+            ).to(device=device, dtype=conditioning_dtype)
             video_prompt = {
                 "video_tensors": video_tensor.unsqueeze(0),
-                "video_sync_frames": torch.zeros(1, 240, 768, device=device),
+                "video_sync_frames": torch.zeros(
+                    1,
+                    240,
+                    768,
+                    device=device,
+                    dtype=conditioning_dtype,
+                ),
             }
 
             logger.info(
