@@ -105,6 +105,10 @@ def _clamp_duration(duration: float) -> float:
     return max(1.0, min(float(MAX_DURATION_SECONDS), value))
 
 
+def _model_window_seconds() -> float:
+    return sample_size / sample_rate
+
+
 def _normalize_audio(audio: torch.Tensor, duration: float) -> torch.Tensor:
     audio = rearrange(audio, "b d n -> d (b n)")
     target_samples = int(duration * sample_rate)
@@ -132,7 +136,8 @@ def _generate_audiox(
     output_path = OUTPUT_DIR / f"{job_id}.wav"
 
     try:
-        duration = _clamp_duration(duration)
+        requested_duration = _clamp_duration(duration)
+        conditioning_duration = _model_window_seconds()
         steps = max(1, min(500, int(steps)))
         seed = int(seed)
 
@@ -145,31 +150,39 @@ def _generate_audiox(
                 video_tensor = read_video(
                     str(video_path),
                     seek_time=0,
-                    duration=duration,
+                    duration=conditioning_duration,
                     target_fps=target_fps,
                 )
             else:
                 video_tensor = torch.zeros(
-                    (int(duration * target_fps), 3, 224, 224),
+                    (int(conditioning_duration * target_fps), 3, 224, 224),
                     dtype=torch.float32,
                 )
             audio_tensor = load_and_process_audio(
                 None,
                 sample_rate,
                 seconds_start=0,
-                seconds_total=duration,
+                seconds_total=conditioning_duration,
             ).to(device)
+            video_prompt = {
+                "video_tensors": video_tensor.unsqueeze(0),
+                "video_sync_frames": torch.zeros(1, 240, 768, device=device),
+            }
+
+            logger.info(
+                "AudioX job %s requested %.2fs; using %.2fs model conditioning window",
+                job_id,
+                requested_duration,
+                conditioning_duration,
+            )
 
             conditioning = [
                 {
-                    "video_prompt": {
-                        "video_tensors": video_tensor.unsqueeze(0),
-                        "video_sync_frames": torch.zeros(1, 240, 768, device=device),
-                    },
+                    "video_prompt": video_prompt,
                     "text_prompt": prompt or "",
                     "audio_prompt": audio_tensor.unsqueeze(0),
                     "seconds_start": 0,
-                    "seconds_total": sample_size / sample_rate,
+                    "seconds_total": conditioning_duration,
                 }
             ]
 
@@ -177,14 +190,11 @@ def _generate_audiox(
             if negative_prompt:
                 negative_conditioning = [
                     {
-                        "video_prompt": {
-                            "video_tensors": video_tensor.unsqueeze(0),
-                            "video_sync_frames": torch.zeros(1, 240, 768, device=device),
-                        },
+                        "video_prompt": video_prompt,
                         "text_prompt": negative_prompt,
                         "audio_prompt": audio_tensor.unsqueeze(0),
                         "seconds_start": 0,
-                        "seconds_total": duration,
+                        "seconds_total": conditioning_duration,
                     }
                 ]
 
@@ -209,7 +219,7 @@ def _generate_audiox(
                     scale_phi=0.0,
                 )
 
-            audio = _normalize_audio(audio, duration)
+            audio = _normalize_audio(audio, requested_duration)
             torchaudio.save(str(output_path), audio, sample_rate)
 
             if torch.cuda.is_available():
