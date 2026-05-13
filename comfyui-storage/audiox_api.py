@@ -43,6 +43,7 @@ DEFAULT_CFG_SCALE = float(os.environ.get("AUDIOX_DEFAULT_CFG_SCALE", "7.0"))
 DEFAULT_SIGMA_MIN = float(os.environ.get("AUDIOX_DEFAULT_SIGMA_MIN", "0.03"))
 DEFAULT_SIGMA_MAX = float(os.environ.get("AUDIOX_DEFAULT_SIGMA_MAX", "500"))
 DEFAULT_SAMPLER = os.environ.get("AUDIOX_DEFAULT_SAMPLER", "dpmpp-3m-sde")
+AUDIOX_CONDITIONING_SECONDS = float(os.environ.get("AUDIOX_CONDITIONING_SECONDS", "10"))
 USE_MODEL_HALF = os.environ.get("AUDIOX_MODEL_HALF", "true").lower() in {
     "1",
     "true",
@@ -109,6 +110,10 @@ def _model_window_seconds() -> float:
     return sample_size / sample_rate
 
 
+def _conditioning_window_seconds() -> float:
+    return max(1.0, min(float(MAX_DURATION_SECONDS), AUDIOX_CONDITIONING_SECONDS))
+
+
 def _normalize_audio(audio: torch.Tensor, duration: float) -> torch.Tensor:
     audio = rearrange(audio, "b d n -> d (b n)")
     target_samples = int(duration * sample_rate)
@@ -137,7 +142,8 @@ def _generate_audiox(
 
     try:
         requested_duration = _clamp_duration(duration)
-        conditioning_duration = _model_window_seconds()
+        model_duration = _model_window_seconds()
+        conditioning_duration = _conditioning_window_seconds()
         steps = max(1, min(500, int(steps)))
         seed = int(seed)
 
@@ -170,10 +176,11 @@ def _generate_audiox(
             }
 
             logger.info(
-                "AudioX job %s requested %.2fs; using %.2fs model conditioning window",
+                "AudioX job %s requested %.2fs; using %.2fs prompt window and %.2fs diffusion window",
                 job_id,
                 requested_duration,
                 conditioning_duration,
+                model_duration,
             )
 
             conditioning = [
@@ -182,7 +189,7 @@ def _generate_audiox(
                     "text_prompt": prompt or "",
                     "audio_prompt": audio_tensor.unsqueeze(0),
                     "seconds_start": 0,
-                    "seconds_total": conditioning_duration,
+                    "seconds_total": model_duration,
                 }
             ]
 
@@ -194,7 +201,7 @@ def _generate_audiox(
                         "text_prompt": negative_prompt,
                         "audio_prompt": audio_tensor.unsqueeze(0),
                         "seconds_start": 0,
-                        "seconds_total": conditioning_duration,
+                        "seconds_total": model_duration,
                     }
                 ]
 
