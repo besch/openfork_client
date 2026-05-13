@@ -1,7 +1,11 @@
 import threading
 import logging
 import json
-from services.orchestrator_service import TokenExpiredError, ProviderNotFoundError
+from services.orchestrator_service import (
+    ProviderNotFoundError,
+    TokenExpiredError,
+    UpgradeRequiredError,
+)
 
 # Number of consecutive failed heartbeats before we escalate. At 30s/heartbeat,
 # 4 misses means the orchestrator has been unreachable for ~2 minutes.
@@ -53,6 +57,20 @@ class HeartbeatManager:
                 logging.warning("Provider registration expired (detected in heartbeat). Signaling main process for restart.")
                 print(json.dumps({"status": "PROVIDER_EXPIRED"}), flush=True)
                 self.shutdown_event.set()  # Trigger shutdown
+                break
+            except UpgradeRequiredError as e:
+                logging.error("Required OpenFork update detected. Stopping heartbeat loop.")
+                if not getattr(self.orchestrator_service, "_upgrade_required_emitted", False):
+                    print(
+                        json.dumps(
+                            {
+                                "status": "UPGRADE_REQUIRED",
+                                "payload": getattr(e, "payload", {}),
+                            }
+                        ),
+                        flush=True,
+                    )
+                self.shutdown_event.set()
                 break
             except Exception as e:
                 consecutive_failures += 1

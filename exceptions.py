@@ -10,6 +10,7 @@ Exception Hierarchy:
     ├── PermanentError (not retryable)
     │   ├── AuthError (token expired, invalid API key)
     │   └── ProviderError (provider not found/expired)
+    │   └── UpgradeRequiredError (client must be updated)
     └── WorkflowError (workflow file issues)
 """
 
@@ -78,6 +79,20 @@ class ProviderError(PermanentError):
         - Provider cleanup by stale provider cron
     """
     pass
+
+
+class UpgradeRequiredError(PermanentError):
+    """
+    Client version/protocol is below the orchestrator's required policy.
+
+    Raised when the control plane returns HTTP 426. The client should stop
+    processing and let the desktop app or operator install an update.
+    """
+
+    def __init__(self, payload=None):
+        self.payload = payload if isinstance(payload, dict) else {}
+        message = self.payload.get("message") or "OpenFork update required"
+        super().__init__(message)
 
 
 class WorkflowError(DGNError):

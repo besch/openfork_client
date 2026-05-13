@@ -20,7 +20,14 @@ from config import (
     MAX_INPUT_ASSET_BYTES,
     MAX_INPUT_ASSET_REDIRECTS,
 )
-from exceptions import AuthError, ProviderError, TransientError
+from exceptions import AuthError, ProviderError, TransientError, UpgradeRequiredError
+from openfork_version import (
+    CLIENT_BUILD_SHA,
+    CLIENT_KIND,
+    CLIENT_VERSION,
+    DESKTOP_VERSION,
+    DGN_PROTOCOL_VERSION,
+)
 from services.hardware_profiler import get_hardware_profile
 from utils.recent_logs import get_recent_logs_tail
 
@@ -54,6 +61,7 @@ class OrchestratorService:
         self._active_execution_token: Optional[str] = None
         self._latency_samples_ms = deque(maxlen=20)
         self._latency_lock = threading.Lock()
+        self._upgrade_required_emitted = False
         self.cloud_instance_id, self.cloud_provider = self._detect_cloud_instance()
         
         # PERFORMANCE: Use a Session for HTTP connection pooling
@@ -87,6 +95,18 @@ class OrchestratorService:
             return runpod_pod_id, "runpod"
 
         return None, None
+
+    def _client_update_payload(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "client_version": CLIENT_VERSION,
+            "client_kind": CLIENT_KIND,
+            "dgn_protocol_version": DGN_PROTOCOL_VERSION,
+        }
+        if DESKTOP_VERSION:
+            payload["desktop_version"] = DESKTOP_VERSION
+        if CLIENT_BUILD_SHA:
+            payload["client_build_sha"] = CLIENT_BUILD_SHA
+        return payload
 
     def _set_active_job(self, job: Optional[Dict[str, Any]]) -> None:
         """Track the active leased job so heartbeats and status updates carry its token."""
@@ -146,6 +166,21 @@ class OrchestratorService:
         
         print(json.dumps({"status": "AUTH_EXPIRED"}), flush=True)
         logging.warning("AUTH_EXPIRED signal sent to main process.")
+
+    def signal_upgrade_required(self, payload: Optional[Dict[str, Any]]) -> None:
+        if self._upgrade_required_emitted:
+            return
+        self._upgrade_required_emitted = True
+        print(
+            json.dumps(
+                {
+                    "status": "UPGRADE_REQUIRED",
+                    "payload": payload or {},
+                }
+            ),
+            flush=True,
+        )
+        logging.error("UPGRADE_REQUIRED signal sent to main process.")
 
     @retry(
         stop=stop_after_attempt(TimeoutConfig.API_MAX_RETRIES),
@@ -213,6 +248,18 @@ class OrchestratorService:
         except requests.exceptions.Timeout as e:
             logging.warning(f"Request timeout to {url}, will retry: {e}")
             raise  # Let tenacity handle the retry
+
+        if response.status_code == 426:
+            try:
+                payload = response.json()
+            except (ValueError, json.JSONDecodeError):
+                payload = {"message": response.text or "OpenFork update required"}
+            logging.error(
+                "Orchestrator requires a client update: %s",
+                payload.get("message") if isinstance(payload, dict) else payload,
+            )
+            self.signal_upgrade_required(payload if isinstance(payload, dict) else None)
+            raise UpgradeRequiredError(payload)
 
         # Handle server errors that are retryable
         if response.status_code == 503:
@@ -871,7 +918,10 @@ class OrchestratorService:
         Returns the routing_config from the response, or None if no config was returned.
         """
         try:
-            payload: Dict[str, Any] = {"providerId": provider_id}
+            payload: Dict[str, Any] = {
+                "providerId": provider_id,
+                **self._client_update_payload(),
+            }
             active_token = self.get_active_execution_token()
             if active_token:
                 payload["executionToken"] = active_token
@@ -902,6 +952,8 @@ class OrchestratorService:
                 return None
         except ProviderNotFoundError:
             raise  # Re-raise to be handled by caller
+        except UpgradeRequiredError:
+            raise
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not send heartbeat: {e}")
         return None
@@ -1041,6 +1093,7 @@ class OrchestratorService:
         
         payload = {
             **hardware_profile,
+            **self._client_update_payload(),
             "service_type": service_type,
             "supported_services": supported_services or [],
             "cached_images": cached_images or [],
@@ -1076,6 +1129,9 @@ class OrchestratorService:
                 "provider_id": data.get('provider_id'),
                 "user_id": data.get('user_id') or user_id  # Fall back to local user_id for OAuth mode
             }
+        except UpgradeRequiredError as e:
+            logging.error(f"Client update required before registration: {e}")
+            return None
         except requests.exceptions.RequestException as e:
             logging.error(f"Error registering with the Orchestrator: {e.response.text if e.response else e}")
             return None
