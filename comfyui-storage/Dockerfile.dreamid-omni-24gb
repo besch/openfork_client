@@ -37,12 +37,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+# Keep the torch stack pinned; newer torchaudio releases route save() through
+# torchcodec, and the DreamID custom node writes temporary WAV files with save().
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
-      torch torchvision torchaudio \
+      torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
       --index-url https://download.pytorch.org/whl/cu128 \
-    && python -m pip install --no-cache-dir "numpy>=1.24,<2.0" \
+    && python -m pip install --no-cache-dir "numpy>=1.24,<2.0" "soundfile>=0.12.1" \
     && rm -rf /tmp/* /var/tmp/*
+
+RUN python - <<'EOF'
+import os
+import tempfile
+
+import torch
+import torchaudio
+
+path = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+try:
+    torchaudio.save(path, torch.zeros(1, 16000), 16000, format="wav")
+finally:
+    if os.path.exists(path):
+        os.remove(path)
+
+print(
+    "Verified torch stack: "
+    f"torch={torch.__version__} "
+    f"torchaudio={torchaudio.__version__} "
+    f"backends={torchaudio.list_audio_backends()}"
+)
+EOF
 
 WORKDIR /opt/ComfyUI
 
