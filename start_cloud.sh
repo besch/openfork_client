@@ -8,14 +8,8 @@ OPENFORK_RAW_BASE="https://raw.githubusercontent.com/besch/openfork_client/${OPE
 download_openfork_script() {
   local script_name="$1"
   local dest="$2"
-  local sha_var="$3"
   curl --fail --location --proto '=https' --tlsv1.2 --max-time 60 --progress-bar \
     "${OPENFORK_RAW_BASE}/${script_name}" -o "$dest"
-
-  local expected_sha="${!sha_var:-}"
-  if [ -n "$expected_sha" ]; then
-    echo "${expected_sha}  ${dest}" | sha256sum -c -
-  fi
 }
 
 # --- Help ---
@@ -303,7 +297,7 @@ mkdir -p /opt/dgn-client /data/.cache /data/input
 cd /opt/dgn-client
 log "Downloading DGN client files..."
 export INSTALL_DEPS=true
-if download_openfork_script bootstrap.sh bootstrap.sh OPENFORK_BOOTSTRAP_SHA256; then
+if download_openfork_script bootstrap.sh bootstrap.sh; then
   log "✓ bootstrap.sh downloaded successfully"
   bash bootstrap.sh
   if [ -f ".installed-ref" ]; then
