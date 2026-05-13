@@ -1,6 +1,6 @@
 #!/bin/bash
 # OpenFork DGN Client Cloud Startup Script (start_cloud.sh)
-# This script is fetched and run by cloud containers (RunPod, Vast.ai)
+# This script is fetched and run by Vast.ai cloud containers.
 
 OPENFORK_CLIENT_SCRIPT_REF="${OPENFORK_CLIENT_SCRIPT_REF:-main}"
 OPENFORK_RAW_BASE="https://raw.githubusercontent.com/besch/openfork_client/${OPENFORK_CLIENT_SCRIPT_REF}"

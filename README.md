@@ -88,7 +88,6 @@ Useful headless/cloud variables:
 ```env
 HEADLESS_MODE=true
 SELECTED_WORKFLOWS=wan22-text-to-video-8gb,qwen-image-edit-8gb
-RUNPOD_POD_ID=...
 VAST_CONTAINERLABEL=...
 ```
 

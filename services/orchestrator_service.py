@@ -89,11 +89,6 @@ class OrchestratorService:
             normalized_id = vast_container_id.replace("C.", "") if vast_container_id.startswith("C.") else vast_container_id
             return normalized_id, "vast.ai"
 
-        # RunPod detection
-        runpod_pod_id = os.environ.get("RUNPOD_POD_ID")
-        if runpod_pod_id:
-            return runpod_pod_id, "runpod"
-
         return None, None
 
     def _client_update_payload(self) -> Dict[str, Any]:

@@ -12,7 +12,7 @@ def get_docker_manager():
     if _manager is not None:
         return _manager
         
-    # In headless/cloud mode (RunPod/Vast.ai), we're already inside the container
+    # In headless/cloud mode (Vast.ai), we're already inside the container
     # and there's no Docker daemon to connect to. Set docker_manager to None.
     if HEADLESS_MODE:
         _manager = None

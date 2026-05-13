@@ -62,7 +62,7 @@ POLICY_IDLE_TIMEOUT_MINUTES = {
 DISK_PRESSURE_HEALTHY_GB = int(os.getenv("DISK_PRESSURE_HEALTHY_GB", "50"))
 DISK_PRESSURE_CRITICAL_GB = int(os.getenv("DISK_PRESSURE_CRITICAL_GB", "20"))
 
-# Headless mode detection - when running inside a cloud container (RunPod/Vast.ai),
+# Headless mode detection - when running inside a cloud container (Vast.ai),
 # Docker operations should be skipped as ComfyUI is already running in the same container.
 # Detection based on:
 # 1. Environment vars set by cloud providers or deploy scripts
@@ -75,7 +75,6 @@ def _is_vast_container():
     )
 
 HEADLESS_MODE = any([
-    os.environ.get("RUNPOD_POD_ID"),      # RunPod sets this automatically
     os.environ.get("VAST_CONTAINERLABEL"), # Vast.ai container environment (via env var)
     _is_vast_container(),                  # Vast.ai container (via file detection)
     os.path.exists("/.dockerenv"),         # Generic Docker container detection

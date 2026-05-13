@@ -11,7 +11,7 @@ except ValueError:
 
 if os.environ.get("OPENFORK_CLIENT_KIND"):
     CLIENT_KIND = os.environ["OPENFORK_CLIENT_KIND"]
-elif os.environ.get("RUNPOD_POD_ID") or os.environ.get("CONTAINER_ID"):
+elif os.environ.get("CONTAINER_ID") or os.environ.get("VAST_CONTAINERLABEL"):
     CLIENT_KIND = "cloud"
 elif DESKTOP_VERSION:
     CLIENT_KIND = "desktop"
