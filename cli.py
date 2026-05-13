@@ -325,6 +325,7 @@ def setup_client(args):
         community_mode=client.community_mode,
         allowed_ids=client.allowed_ids,
         monetize_mode=client.monetize_mode,
+        hardware_profile=client.hardware_profile,
     )
     if not registration_result:
         raise RuntimeError("Failed to register with orchestrator. Aborting startup.")

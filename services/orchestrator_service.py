@@ -9,6 +9,7 @@ import os
 import re
 import socket
 import uuid
+from collections import deque
 from typing import Union, Dict, Optional, Any, List, Tuple
 from urllib.parse import urljoin, urlparse, unquote
 
@@ -51,6 +52,8 @@ class OrchestratorService:
         self._auth_failed_permanently = False
         self._active_job_id: Optional[str] = None
         self._active_execution_token: Optional[str] = None
+        self._latency_samples_ms = deque(maxlen=20)
+        self._latency_lock = threading.Lock()
         self.cloud_instance_id, self.cloud_provider = self._detect_cloud_instance()
         
         # PERFORMANCE: Use a Session for HTTP connection pooling
@@ -203,6 +206,7 @@ class OrchestratorService:
         try:
             # Use session for connection pooling
             response = self._session.request(method, url, headers=request_headers, **kwargs)
+            self._record_latency_sample(response)
         except requests.exceptions.ConnectionError as e:
             logging.warning(f"Connection error to {url}, will retry: {e}")
             raise  # Let tenacity handle the retry
@@ -226,6 +230,33 @@ class OrchestratorService:
                 raise AuthError("Access token has expired.")
         
         return response
+
+    def _record_latency_sample(self, response: requests.Response) -> None:
+        try:
+            elapsed_ms = int(response.elapsed.total_seconds() * 1000)
+        except Exception:
+            return
+        if elapsed_ms < 0:
+            return
+        with self._latency_lock:
+            self._latency_samples_ms.append(elapsed_ms)
+
+    def get_network_profile(self) -> Dict[str, Any]:
+        """Return lightweight network telemetry for provider routing/health."""
+        parsed_url = urlparse(self.orchestrator_url)
+        with self._latency_lock:
+            samples = list(self._latency_samples_ms)
+
+        last_rtt_ms = samples[-1] if samples else None
+        average_rtt_ms = int(sum(samples) / len(samples)) if samples else None
+        profile: Dict[str, Any] = {"sample_count": len(samples)}
+        if parsed_url.hostname:
+            profile["orchestrator_host"] = parsed_url.hostname
+        if last_rtt_ms is not None:
+            profile["last_rtt_ms"] = last_rtt_ms
+        if average_rtt_ms is not None:
+            profile["average_rtt_ms"] = average_rtt_ms
+        return profile
 
     def resolve_targets(self, targets: list[str], target_type: str = 'project') -> list[str]:
         """Resolves a list of target strings to UUIDs."""
@@ -845,6 +876,7 @@ class OrchestratorService:
             if active_token:
                 payload["executionToken"] = active_token
             payload["compactionPending"] = bool(compaction_pending)
+            payload["network"] = self.get_network_profile()
 
             response = self._make_request(
                 'post',
@@ -989,13 +1021,14 @@ class OrchestratorService:
         community_mode: str = "all",
         allowed_ids: list = None,
         monetize_mode: bool = False,
+        hardware_profile: Optional[Dict[str, Any]] = None,
     ) -> Union[Dict[str, str], None]:
         """Register the client with the orchestrator.
         
         Returns:
             A dict with 'provider_id' and 'user_id' keys on success, or None on failure.
         """
-        hardware_profile = get_hardware_profile()
+        hardware_profile = hardware_profile or get_hardware_profile()
         
         # In API key mode, the server will get user_id from the API key
         # In OAuth mode, we extract it from the JWT token
@@ -1015,6 +1048,7 @@ class OrchestratorService:
             "community_mode": community_mode,
             "allowed_ids": allowed_ids or [],
             "monetize_mode": monetize_mode,
+            "network": self.get_network_profile(),
         }
         
         # Only include user_id if we have it (OAuth mode)

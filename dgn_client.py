@@ -14,7 +14,15 @@ from services.orchestrator_service import OrchestratorService, TokenExpiredError
 from services.comfyui_service import ComfyUIClient
 from services.docker_manager import docker_manager
 from services.docker_download_manager import DockerDownloadManager
-from services.hardware_profiler import get_available_vram, can_run_service, get_vram_requirement_display, get_service_incompatibility_reason, get_available_system_ram
+from services.hardware_profiler import (
+    can_run_service,
+    get_available_system_ram,
+    get_available_vram,
+    get_compute_capability,
+    get_hardware_profile,
+    get_service_incompatibility_reason,
+    get_vram_requirement_display,
+)
 import services.processors as job_processors_module
 
 
@@ -64,7 +72,8 @@ class DGNClient:
         self.processor_map = {}
         self.services_config = {}
         self.processable_services = set()
-        self.available_vram = get_available_vram()
+        self.hardware_profile = get_hardware_profile()
+        self.available_vram = get_available_vram(self.hardware_profile)
         self.compatible_services = set()
 
         # Shared event to wake up the job listener immediately when a download completes
@@ -248,7 +257,11 @@ class DGNClient:
             # Check VRAM compatibility for each service
             self.compatible_services = set()
             for service_name, service_config in self.services_config.items():
-                if can_run_service(service_config, self.available_vram):
+                if can_run_service(
+                    service_config,
+                    self.available_vram,
+                    self.hardware_profile,
+                ):
                     self.compatible_services.add(service_name)
 
             cache_limit_gb = DOCKER_IMAGE_CACHE_LIMIT_GB
@@ -282,7 +295,16 @@ class DGNClient:
                 from services.disk_space_utils import get_available_disk_space
                 system_ram_mb = get_available_system_ram()
                 available_disk_bytes = get_available_disk_space()
-                logging.info(f"GPU VRAM: {get_vram_requirement_display(self.available_vram)}, System RAM: {get_vram_requirement_display(system_ram_mb)}, Disk Free: {available_disk_bytes / (1024**3):.1f}GB")
+                compute_capability = get_compute_capability(self.hardware_profile)
+                cuda_version = (self.hardware_profile.get("cuda") or {}).get("version")
+                logging.info(
+                    "GPU VRAM: %s, CUDA compute capability: %s, CUDA driver capability: %s, System RAM: %s, Disk Free: %.1fGB",
+                    get_vram_requirement_display(self.available_vram),
+                    compute_capability or "unknown",
+                    cuda_version or "unknown",
+                    get_vram_requirement_display(system_ram_mb),
+                    available_disk_bytes / (1024**3),
+                )
                 logging.info(f"Compatible services: {', '.join(sorted(self.compatible_services))}")
 
             else:
@@ -293,7 +315,11 @@ class DGNClient:
             if incompatible_services:
                 logging.debug("Incompatible services:")
                 for service_name in sorted(incompatible_services):
-                    reason = get_service_incompatibility_reason(self.services_config[service_name], self.available_vram)
+                    reason = get_service_incompatibility_reason(
+                        self.services_config[service_name],
+                        self.available_vram,
+                        self.hardware_profile,
+                    )
                     if reason:
                         logging.debug(f"  - {service_name}: {reason}")
                     else:
