@@ -1584,6 +1584,8 @@ def inject_dreamid_omni_workflow(
     prompt: str,
     reference_image_filename: str,
     reference_audio_filename: str,
+    reference_image2_filename: Optional[str] = None,
+    reference_audio2_filename: Optional[str] = None,
     aspect_ratio: str = "16:9",
     steps: Optional[int] = None,
     seed: Optional[int] = None,
@@ -1593,10 +1595,16 @@ def inject_dreamid_omni_workflow(
     attention_backend: str = "SDPA",
 ):
     """
-    Inject single-person DreamID-Omni inputs into the ComfyUI API workflow.
+    Inject DreamID-Omni inputs into the ComfyUI API workflow.
     The benjiyaya ComfyUI fork exposes a loader and sampler with direct
-    prompt/image/audio inputs, so no graph rewiring is needed at runtime.
+    prompt/image/audio inputs. A second character is supported only when both
+    ref_image2 and ref_audio2 are available.
     """
+    if bool(reference_image2_filename) != bool(reference_audio2_filename):
+        raise ValueError(
+            "DreamID-Omni second character requires both a second image and a second audio clip"
+        )
+
     api_graph = copy.deepcopy(workflow_data.get("prompt", workflow_data))
     width, height = get_dreamid_omni_dimensions(aspect_ratio)
     actual_steps = max(1, int(steps)) if steps is not None else 20
@@ -1604,7 +1612,10 @@ def inject_dreamid_omni_workflow(
 
     image_set = False
     audio_set = False
+    image2_set = False
+    audio2_set = False
     sampler_set = False
+    sampler_node = None
 
     for node_id, node in api_graph.items():
         class_type = node.get("class_type")
@@ -1615,6 +1626,9 @@ def inject_dreamid_omni_workflow(
             inputs["precision"] = precision
             inputs["attention_backend"] = attention_backend
         elif class_type == "ComfyUI DreamID-Omni Sampler":
+            if not reference_image2_filename:
+                inputs.pop("ref_image2", None)
+                inputs.pop("ref_audio2", None)
             inputs["prompt"] = prompt
             inputs["sample_steps"] = actual_steps
             inputs["seed"] = actual_seed
@@ -1624,13 +1638,21 @@ def inject_dreamid_omni_workflow(
             inputs["text_encoder_offload"] = True
             inputs["release_diffusion_after_run"] = False
             sampler_set = True
+            sampler_node = node
         elif class_type == "LoadImage" and not image_set:
             inputs["image"] = reference_image_filename
             image_set = True
+        elif class_type == "LoadImage" and reference_image2_filename and not image2_set:
+            inputs["image"] = reference_image2_filename
+            image2_set = True
         elif class_type == "LoadAudio" and not audio_set:
             inputs["audio"] = reference_audio_filename
             inputs["audioUI"] = ""
             audio_set = True
+        elif class_type == "LoadAudio" and reference_audio2_filename and not audio2_set:
+            inputs["audio"] = reference_audio2_filename
+            inputs["audioUI"] = ""
+            audio2_set = True
         elif class_type == "SaveVideo":
             prefix = inputs.get("filename_prefix", "video/DreamID-Omni")
             if "%date:yyyy-MM-dd%" in prefix:
@@ -1638,17 +1660,59 @@ def inject_dreamid_omni_workflow(
                 prefix = prefix.replace("%date:yyyy-MM-dd%", datestr)
             inputs["filename_prefix"] = prefix
 
+    if reference_image2_filename:
+        if not image2_set:
+            next_id = str(max([int(node_id) for node_id in api_graph.keys()] + [0]) + 1)
+            api_graph[next_id] = {
+                "class_type": "LoadImage",
+                "inputs": {"image": reference_image2_filename},
+                "_meta": {"title": "Load Reference Image 2"},
+            }
+            image2_set = True
+            image2_node_id = next_id
+        else:
+            image_nodes = [
+                node_id
+                for node_id, node in api_graph.items()
+                if node.get("class_type") == "LoadImage"
+            ]
+            image2_node_id = image_nodes[1] if len(image_nodes) > 1 else None
+
+        if not audio2_set:
+            next_id = str(max([int(node_id) for node_id in api_graph.keys()] + [0]) + 1)
+            api_graph[next_id] = {
+                "class_type": "LoadAudio",
+                "inputs": {"audio": reference_audio2_filename, "audioUI": ""},
+                "_meta": {"title": "Load Reference Audio 2"},
+            }
+            audio2_set = True
+            audio2_node_id = next_id
+        else:
+            audio_nodes = [
+                node_id
+                for node_id, node in api_graph.items()
+                if node.get("class_type") == "LoadAudio"
+            ]
+            audio2_node_id = audio_nodes[1] if len(audio_nodes) > 1 else None
+
+        if sampler_node is not None and image2_node_id and audio2_node_id:
+            sampler_node.setdefault("inputs", {})["ref_image2"] = [image2_node_id, 0]
+            sampler_node.setdefault("inputs", {})["ref_audio2"] = [audio2_node_id, 0]
+
     if not sampler_set:
         raise ValueError("ComfyUI DreamID-Omni Sampler node not found in workflow")
     if not image_set:
         raise ValueError("LoadImage node not found in DreamID-Omni workflow")
     if not audio_set:
         raise ValueError("LoadAudio node not found in DreamID-Omni workflow")
+    if reference_image2_filename and (not image2_set or not audio2_set):
+        raise ValueError("Could not attach DreamID-Omni second character inputs")
 
     logging.info(
-        "DreamID-Omni configured - image=%s audio=%s size=%sx%s steps=%s seed=%s",
+        "DreamID-Omni configured - image=%s audio=%s second_character=%s size=%sx%s steps=%s seed=%s",
         reference_image_filename,
         reference_audio_filename,
+        bool(reference_image2_filename),
         width,
         height,
         actual_steps,
