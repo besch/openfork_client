@@ -807,6 +807,18 @@ class JobListener:
         monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
         monitor_thread.start()
 
+    def _is_compaction_pending(self) -> bool:
+        return bool(getattr(self.client, "compaction_pending", False))
+
+    def _skip_new_work_for_compaction(self, context: str) -> bool:
+        if not self._is_compaction_pending():
+            return False
+        logging.info(
+            "Disk compaction is pending; skipping new job/download work "
+            f"before {context}."
+        )
+        return True
+
     def _fetch_next_job_with_priority(self):
         """
         Poll for the next job using priority ordering:
@@ -818,6 +830,9 @@ class JobListener:
         """
         client = self.client
 
+        if self._skip_new_work_for_compaction("job reservation"):
+            return None
+
         # Monetize is a completely separate track — check it independently
         if getattr(client, "monetize_mode", False):
             job = self.orchestrator_service.get_next_job(
@@ -828,6 +843,9 @@ class JobListener:
             )
             if job:
                 return job
+
+        if self._skip_new_work_for_compaction("own-job reservation"):
+            return None
 
         # Priority 1: own jobs (mine policy). Private mode still requires the
         # explicit process_own_jobs toggle; otherwise "none" means accept no jobs.
@@ -841,6 +859,9 @@ class JobListener:
             )
             if job:
                 return job
+
+        if self._skip_new_work_for_compaction("community-job reservation"):
+            return None
 
         # Priority 2: community jobs
         if community_mode == "none":
@@ -875,6 +896,9 @@ class JobListener:
                     logging.info(
                         f"Checking for new jobs for provider {self.provider_id}..."
                     )
+                    if self._skip_new_work_for_compaction("job fetch"):
+                        job = None
+                        continue
                     job = self._fetch_next_job_with_priority()
 
                     if job and job.get("id"):
@@ -1035,6 +1059,8 @@ class JobListener:
                 f"Skipping global prefetch suggestions for private community_mode='{community_mode}'."
             )
             return
+        if self._skip_new_work_for_compaction("prefetch suggestions"):
+            return
 
         # Don't fetch suggestions if we already have downloads in progress
         # This prevents queue explosion and respects MAX_CONCURRENT_DOWNLOADS
@@ -1057,6 +1083,8 @@ class JobListener:
                 for service_type in suggestions[
                     :2
                 ]:  # Limit to 2 to avoid queue buildup
+                    if self._skip_new_work_for_compaction("prefetch download"):
+                        return
                     # Reject service_type values not present in the local services.json.
                     # A malicious or compromised server cannot trigger a Docker pull for
                     # an image that is not part of this client's declared service set.
@@ -1229,11 +1257,15 @@ class JobListener:
                 logging.info("Top of auto-mode loop iteration.")
                 job = None
                 found_processable_job = False
+                compaction_requested = False
 
                 try:
                     # Acquire the processing lock BEFORE fetching a job
                     with self.client.processing_lock:
                         logging.info("Auto mode: Peeking at available jobs...")
+                        if self._skip_new_work_for_compaction("auto-mode job peek"):
+                            compaction_requested = True
+                            continue
 
                         # Step 1: Peek at available jobs without reserving.
                         # Build an ordered list of (job, policy) pairs — own jobs first
@@ -1373,6 +1405,12 @@ class JobListener:
 
                                 if image_available:
                                     # Image is ready - reserve and process this job
+                                    if self._skip_new_work_for_compaction(
+                                        "auto-mode job reservation"
+                                    ):
+                                        compaction_requested = True
+                                        break
+
                                     logging.info(
                                         f"Found job {peeked_job.get('id')} with available image ({service_type}). Reserving..."
                                     )
@@ -1726,7 +1764,12 @@ class JobListener:
                             # cached job sitting later in the FIFO peek list from being
                             # blocked by downloads kicked off for earlier miss entries,
                             # and avoids unnecessary evictions caused by those downloads.
-                            if not found_processable_job and download_manager and not HEADLESS_MODE:
+                            if (
+                                not found_processable_job
+                                and not compaction_requested
+                                and download_manager
+                                and not HEADLESS_MODE
+                            ):
                                 if post_download_hold_active:
                                     logging.info(
                                         "Skipping missing-image downloads during the "
@@ -1736,6 +1779,12 @@ class JobListener:
                                 else:
                                     _known = self._known_service_types()
                                     for peeked_job, _job_policy in _available_with_policy:
+                                        if self._skip_new_work_for_compaction(
+                                            "background image download"
+                                        ):
+                                            compaction_requested = True
+                                            break
+
                                         service_type = self._get_service_type_for_job(peeked_job)
                                         if not service_type:
                                             continue
@@ -1786,8 +1835,12 @@ class JobListener:
                         # Handle pre-fetch suggestions when idle
                         # This proactively downloads images for high-demand workflows
                         # NOTE: This does NOT affect credits - it's purely for network efficiency
-                        if not found_processable_job:
-                            if post_download_hold_active:
+                        if not found_processable_job and not compaction_requested:
+                            if self._skip_new_work_for_compaction(
+                                "idle downloads and cleanup"
+                            ):
+                                compaction_requested = True
+                            elif post_download_hold_active:
                                 logging.info(
                                     "Skipping queued and prefetch downloads during the "
                                     "post-download settle window."
@@ -1811,13 +1864,14 @@ class JobListener:
                             # only evicts at Pressure / Critical tiers.
                             if download_manager:
                                 try:
-                                    download_manager.check_and_evict_for_pressure()
+                                    if not compaction_requested:
+                                        download_manager.check_and_evict_for_pressure()
                                 except Exception as pressure_err:
                                     logging.debug(
                                         f"check_and_evict_for_pressure failed: {pressure_err}"
                                     )
 
-                        if not found_processable_job:
+                        if not found_processable_job and not compaction_requested:
                             if available_jobs:
                                 # Count how many were actually ready vs downloading
                                 ready_count = 0
@@ -1934,6 +1988,10 @@ class JobListener:
                             logging.error("Failed to update job status to failed.")
 
                         self.client.current_job = None
+
+                if compaction_requested and self._is_compaction_pending():
+                    consecutive_empty_polls = 0
+                    continue
 
                 if not found_processable_job:
                     consecutive_empty_polls += 1
