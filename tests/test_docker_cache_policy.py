@@ -957,6 +957,132 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertLess(logger.calculate_overall_progress(), 100)
         self.assertNotEqual(logger.get_current_status(), "Processing")
 
+    def test_pull_progress_does_not_jump_from_cached_layers_before_bytes(self):
+        logger = DockerPullProgressLogger(
+            "beschiak/openfork-test:latest",
+            throttle_interval=0,
+            service_type="test",
+        )
+
+        for layer_id in ("a", "b", "c", "d"):
+            logger.parse_progress_event(
+                {"id": layer_id, "status": "Pulling fs layer", "progressDetail": {}}
+            )
+        logger.parse_progress_event(
+            {"id": "a", "status": "Already exists", "progressDetail": {}}
+        )
+
+        self.assertLessEqual(logger.calculate_overall_progress(), 5)
+
+        logger.parse_progress_event(
+            {
+                "id": "b",
+                "status": "Downloading",
+                "progressDetail": {"current": 10, "total": 1000},
+            }
+        )
+        self.assertLessEqual(logger.calculate_overall_progress(), 5)
+
+        logger.parse_progress_event(
+            {
+                "id": "b",
+                "status": "Downloading",
+                "progressDetail": {"current": 300, "total": 1000},
+            }
+        )
+        self.assertGreater(logger.calculate_overall_progress(), 5)
+
+    def test_pull_progress_advances_on_layer_phase_when_byte_totals_are_partial(self):
+        logger = DockerPullProgressLogger(
+            "beschiak/openfork-test:latest",
+            throttle_interval=0,
+            service_type="test",
+        )
+
+        for layer_id in ("a", "b", "c", "d"):
+            logger.parse_progress_event(
+                {"id": layer_id, "status": "Pulling fs layer", "progressDetail": {}}
+            )
+        logger.parse_progress_event(
+            {"id": "a", "status": "Already exists", "progressDetail": {}}
+        )
+        logger.parse_progress_event(
+            {
+                "id": "b",
+                "status": "Downloading",
+                "progressDetail": {"current": 300, "total": 1000},
+            }
+        )
+        before = logger.calculate_overall_progress()
+
+        logger.parse_progress_event(
+            {"id": "c", "status": "Download complete", "progressDetail": {}}
+        )
+
+        self.assertGreater(logger.calculate_overall_progress(), before)
+
+    def test_pull_progress_slowly_advances_while_active_progress_is_flat(self):
+        logger = DockerPullProgressLogger(
+            "beschiak/openfork-test:latest",
+            throttle_interval=0.5,
+            service_type="test",
+        )
+        logger.parse_progress_event(
+            {
+                "id": "a",
+                "status": "Downloading",
+                "progressDetail": {"current": 10, "total": 1000},
+            }
+        )
+        logger.last_progress = 22
+        logger.last_emit_time = time.time() - 10
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            logger.emit_progress()
+
+        events = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        self.assertEqual(events[-1]["payload"]["progress"], 23)
+
+    def test_pull_progress_creeps_during_finalizing_phase(self):
+        logger = DockerPullProgressLogger(
+            "beschiak/openfork-test:latest",
+            throttle_interval=0.5,
+            service_type="test",
+        )
+        for layer_id in ("a", "b"):
+            logger.parse_progress_event(
+                {"id": layer_id, "status": "Pulling fs layer", "progressDetail": {}}
+            )
+        logger.parse_progress_event(
+            {
+                "id": "a",
+                "status": "Downloading",
+                "progressDetail": {"current": 1000, "total": 1000},
+            }
+        )
+        logger.parse_progress_event(
+            {"id": "a", "status": "Download complete", "progressDetail": {}}
+        )
+        logger.last_progress = 90
+        logger.last_emit_time = time.time() - 10
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            logger.emit_progress()
+
+        events = [
+            json.loads(line)
+            for line in stdout.getvalue().splitlines()
+            if line.startswith("{")
+        ]
+        self.assertEqual(events[-1]["payload"]["progress"], 91)
+        self.assertEqual(events[-1]["payload"]["status"], "Finalizing")
+
 
 class PrefetchPolicyTests(unittest.TestCase):
     def test_private_policies_skip_global_prefetch_suggestions(self):

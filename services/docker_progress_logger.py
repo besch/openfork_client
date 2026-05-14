@@ -31,6 +31,7 @@ class DockerPullProgressLogger:
         self.last_emit_time = 0
         self.layers = {}
         self.last_progress = -1
+        self.synthetic_interval = max(throttle_interval * 4, 3.0)
         
     def parse_progress_event(self, event: dict) -> bool:
         """Parse a single progress event from Docker pull stream.
@@ -52,6 +53,7 @@ class DockerPullProgressLogger:
             self.layers[layer_id] = {
                 "download_current": 0,
                 "download_total": 0,
+                "download_total_known": False,
                 "download_complete": False,
                 "extract_current": 0,
                 "extract_total": 0,
@@ -75,6 +77,7 @@ class DockerPullProgressLogger:
                             total,
                             self.layers[layer_id].get("download_total", 0),
                         ),
+                        "download_total_known": True,
                         "status": status,
                     }
                 )
@@ -83,20 +86,28 @@ class DockerPullProgressLogger:
             current = progress_detail.get("current", 0)
             total = progress_detail.get("total", 0)
             if total > 0:
-                self.layers[layer_id].update(
-                    {
-                        "extract_current": max(
-                            current,
-                            self.layers[layer_id].get("extract_current", 0),
-                        ),
-                        "extract_total": max(
-                            total,
-                            self.layers[layer_id].get("extract_total", 0),
-                        ),
-                        "status": status,
-                        "complete": False,
-                    }
-                )
+                updates = {
+                    "extract_current": max(
+                        current,
+                        self.layers[layer_id].get("extract_current", 0),
+                    ),
+                    "extract_total": max(
+                        total,
+                        self.layers[layer_id].get("extract_total", 0),
+                    ),
+                    "status": status,
+                    "complete": False,
+                }
+                if self.layers[layer_id].get("download_total", 0) == 0:
+                    updates.update(
+                        {
+                            "download_current": total,
+                            "download_total": total,
+                            "download_total_known": True,
+                            "download_complete": True,
+                        }
+                    )
+                self.layers[layer_id].update(updates)
                 return False
         elif status == "Download complete":
             if self.layers[layer_id]["download_total"] == 0:
@@ -129,22 +140,93 @@ class DockerPullProgressLogger:
             return True  # Force emit when layer completes
         
         return False
+
+    def _is_pull_active(self) -> bool:
+        has_active_layer = any(
+            layer.get("status") in ("Downloading", "Extracting")
+            for layer in self.layers.values()
+        )
+        if has_active_layer:
+            return True
+
+        # Docker may spend a while verifying/applying layers after all byte
+        # download events have stopped. Treat that as active only after real
+        # progress has started, so the UI does not look frozen near the end.
+        return self.last_progress >= 85 and any(
+            not layer.get("complete") for layer in self.layers.values()
+        )
+
+    def _synthetic_progress_cap(self) -> int:
+        if any(layer.get("status") == "Extracting" for layer in self.layers.values()):
+            return 97
+        if self.last_progress >= 85 and any(
+            not layer.get("complete") for layer in self.layers.values()
+        ):
+            return 97
+        return 90
+
+    def _calculate_layer_phase_progress(self) -> int:
+        if not self.layers:
+            return 0
+
+        total_score = 0.0
+        for layer in self.layers.values():
+            if layer.get("complete"):
+                total_score += 1.0
+                continue
+
+            if layer.get("extract_total", 0) > 0:
+                extract_total = layer.get("extract_total", 0)
+                extract_fraction = min(
+                    layer.get("extract_current", 0) / extract_total,
+                    1,
+                )
+                total_score += 0.70 + extract_fraction * 0.25
+                continue
+
+            if layer.get("download_complete"):
+                total_score += 0.65
+                continue
+
+            if layer.get("download_total_known") and layer.get("download_total", 0) > 0:
+                download_total = layer.get("download_total", 0)
+                download_fraction = min(
+                    layer.get("download_current", 0) / download_total,
+                    1,
+                )
+                total_score += 0.05 + download_fraction * 0.60
+                continue
+
+            if layer.get("status") == "Downloading":
+                total_score += 0.05
+            elif layer.get("status") == "Extracting":
+                total_score += 0.70
+
+        return min(int((total_score / len(self.layers)) * 95), 99)
                 
     def calculate_overall_progress(self) -> int:
         """Calculate overall progress as a percentage (0-100)."""
         if not self.layers:
             return 0
-            
-        total_bytes = sum(layer.get("download_total", 0) for layer in self.layers.values())
+
+        known_download_layers = [
+            layer
+            for layer in self.layers.values()
+            if layer.get("download_total_known") and layer.get("download_total", 0) > 0
+        ]
+        total_bytes = sum(
+            layer.get("download_total", 0) for layer in known_download_layers
+        )
         current_bytes = sum(
-            layer.get("download_current", 0) for layer in self.layers.values()
+            min(layer.get("download_current", 0), layer.get("download_total", 0))
+            for layer in known_download_layers
         )
         unknown_incomplete_layers = [
             layer
             for layer in self.layers.values()
             if not layer.get("download_complete")
             and not layer.get("complete")
-            and layer.get("download_total", 0) <= 0
+            and not layer.get("download_total_known")
         ]
         
         # If we have any bytes info (at least one layer has a known total size > 0),
@@ -157,15 +239,16 @@ class DockerPullProgressLogger:
                 download_fraction = min(download_fraction, layer_cap)
 
             extraction_seen = any(
-                layer.get("extract_total", 0) > 0
-                or layer.get("status") == "Extracting"
-                or layer.get("extract_complete")
+                layer.get("status") == "Extracting"
+                or (layer.get("extract_total", 0) > 0 and not layer.get("complete"))
                 for layer in self.layers.values()
             )
             all_complete = all(layer.get("complete") for layer in self.layers.values())
 
             if all_complete:
                 return 100
+
+            layer_progress = self._calculate_layer_phase_progress()
 
             if extraction_seen:
                 extract_total = 0
@@ -191,31 +274,22 @@ class DockerPullProgressLogger:
                     else 0
                 )
                 progress = int((download_fraction * 0.85 + extract_fraction * 0.14) * 100)
-                return min(progress, 99)
+                layer_progress = min(layer_progress, progress + 8)
+                return min(max(progress, layer_progress), 99)
 
             # Keep pre-extraction progress below complete so the UI does not
             # show 100% while Docker is still applying layers locally.
             progress = int(download_fraction * 85)
-            return min(progress, 85)
+            layer_progress = min(layer_progress, progress + 5)
+            return min(max(progress, layer_progress), 85)
             
-        # Fallback to counting layers if NO layers have reported size yet
-        # (happens with 'Already exists' layers or initial 'Pulling' state)
-        completed_layers = sum(
-            1
-            for layer in self.layers.values()
-            if layer.get("complete") or layer.get("download_complete")
-        )
-        
-        # SENSITIVE: If we have layers that are NOT complete and haven't reported size yet,
-        # don't cap at 100% based on layers alone. This avoids the 100% spike at startup.
-        if completed_layers < len(self.layers):
-            return int((completed_layers / len(self.layers)) * 100)
-        elif len(self.layers) > 0:
-            # If all known layers are complete but total_bytes is 0,
-            # it might be that Docker hasn't reported ALL layers yet.
-            # We return 99% instead of 100% to avoid premature completion UI spikes
-            # unless we're actually done (handled by emit_complete).
-            return 99 if any(l.get("status") in ("Downloading", "Extracting") for l in self.layers.values()) else 100
+        # Before Docker reports real byte totals, layer counts are only a weak
+        # readiness signal. Cached "Already exists" layers can arrive first and
+        # otherwise make the UI jump to 20%+ even though the real pull has not
+        # started. Keep this phase near the beginning until byte progress exists.
+        layer_progress = self._calculate_layer_phase_progress()
+        if layer_progress > 0:
+            return min(layer_progress, 5)
             
         return 0
     
@@ -232,6 +306,8 @@ class DockerPullProgressLogger:
             return "Extracting"
         elif downloading > 0:
             return "Downloading"
+        elif self.last_progress >= 85:
+            return "Finalizing"
         return "Preparing"
         
     def should_emit(self) -> bool:
@@ -244,6 +320,12 @@ class DockerPullProgressLogger:
         progress = self.calculate_overall_progress()
         if self.last_progress >= 0:
             progress = max(progress, self.last_progress)
+            if (
+                progress == self.last_progress
+                and self._is_pull_active()
+                and (time.time() - self.last_emit_time) >= self.synthetic_interval
+            ):
+                progress = min(progress + 1, self._synthetic_progress_cap())
         
         # Force emit at 10% milestones (10%, 20%, 30%, etc.) to show progress on fast downloads
         progress_milestone = (progress // 10) * 10
