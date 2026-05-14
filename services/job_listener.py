@@ -829,11 +829,10 @@ class JobListener:
             if job:
                 return job
 
-        # Priority 1: own jobs (mine policy)
-        # Always poll own jobs when process_own_jobs is enabled OR when community
-        # mode is "none" (Private) — without this, Private mode would never poll.
+        # Priority 1: own jobs (mine policy). Private mode still requires the
+        # explicit process_own_jobs toggle; otherwise "none" means accept no jobs.
         community_mode = getattr(client, "community_mode", "none")
-        if getattr(client, "process_own_jobs", False) or community_mode == "none":
+        if getattr(client, "process_own_jobs", False):
             job = self.orchestrator_service.get_next_job(
                 provider_id=self.provider_id,
                 accept_policy="mine",
@@ -1244,8 +1243,10 @@ class JobListener:
                         _monetize_mode = getattr(self.client, "monetize_mode", False)
                         if _monetize_mode:
                             _peek_policy = "monetize"
-                        elif _community_mode == "none":
+                        elif _community_mode == "none" and _process_own_jobs:
                             _peek_policy = "mine"
+                        elif _community_mode == "none":
+                            _peek_policy = None
                         else:
                             _peek_policy = {
                                 "trusted_users": "users",
@@ -1254,7 +1255,12 @@ class JobListener:
                             }.get(_community_mode, "all")
 
                         _available_with_policy: list = []
-                        if _process_own_jobs and _peek_policy not in ("mine", "monetize"):
+                        if _peek_policy is None:
+                            logging.info(
+                                "Routing is disabled (community_mode='none', "
+                                "process_own_jobs=False); skipping job peek."
+                            )
+                        elif _process_own_jobs and _peek_policy not in ("mine", "monetize"):
                             _mine_jobs = self.orchestrator_service.peek_available_jobs(
                                 provider_id=self.provider_id,
                                 accept_policy="mine",
