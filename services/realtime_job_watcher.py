@@ -137,10 +137,21 @@ class RealtimeJobWatcher:
         if accept_policy == "project":
             return process_own_jobs or community_mode in ("trusted_projects",)
 
-        # Public jobs can be visible to public providers and trusted providers
-        # whose DB trust rules match the submitter/project.  The notification
-        # intentionally omits user/project IDs, so keep this permissive.
-        return community_mode in ("all", "trusted_users", "trusted_projects")
+        # Public/all-policy jobs may still be claimed by a provider polling its
+        # own queue: the assignment RPC accepts p_accept_policy='mine' whenever
+        # j.user_id = p_user_id, regardless of the persisted job policy.  Without
+        # this wake-up, private desktop clients only see those jobs on the next
+        # backoff poll, which can take minutes after the client has been idle.
+        #
+        # Notifications intentionally omit submitter/project IDs, so a
+        # process-own private client may wake for another user's public job and
+        # then find nothing to claim.  That extra cheap poll is preferable to
+        # letting own jobs sit until a restart or the next long backoff interval.
+        return process_own_jobs or community_mode in (
+            "all",
+            "trusted_users",
+            "trusted_projects",
+        )
 
     # ── Reconnect loop ───────────────────────────────────────────────────────
 
