@@ -182,10 +182,19 @@ class DockerProdManager:
         text = str(exc).lower()
         return "apply layer error" in text or (
             "extract layer" in text and "canceled" in text
+        ) or (
+            "grpc" in text
+            and (
+                "client connection is closing" in text
+                or "context canceled" in text
+                or "context cancelled" in text
+            )
         )
 
     def _is_transient_transport_error(self, exc: Exception) -> bool:
         if isinstance(exc, docker.errors.APIError):
+            if self._is_layer_extraction_error(exc):
+                return True
             if getattr(exc, "status_code", None) in (409, 400, 404, 500):
                 return False
 

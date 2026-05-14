@@ -728,6 +728,27 @@ class StopResetBehaviorTests(unittest.TestCase):
             )
         )
 
+    def test_docker_api_context_cancel_is_requeueable_infrastructure_error(self):
+        listener = JobListener(
+            SimpleNamespace(orchestrator_service=Mock()),
+            provider_id="provider-1",
+            shutdown_event=threading.Event(),
+        )
+
+        exc = RuntimeError(
+            "500 Server Error for "
+            "http://127.0.0.1:2375/v1.54/containers/create"
+            "?name=dgn-client-qwen3-tts: Internal Server Error "
+            '("Canceled: grpc: the client connection is closing: '
+            'context canceled")'
+        )
+
+        self.assertTrue(listener._is_requeueable_infrastructure_error(exc))
+        self.assertEqual(
+            listener._get_infrastructure_recovery_reason(exc),
+            "provider_service_startup_failed",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

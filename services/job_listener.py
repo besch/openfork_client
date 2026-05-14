@@ -152,6 +152,19 @@ class JobListener:
 
     def _is_requeueable_infrastructure_error(self, exc: Exception) -> bool:
         text = str(exc).lower()
+        is_docker_api_500 = (
+            ("127.0.0.1:2375" in text or "docker.errors.apierror" in text)
+            and (
+                "500 server error" in text
+                or "internal server error" in text
+                or "client connection is closing" in text
+                or "context canceled" in text
+                or "context cancelled" in text
+            )
+        )
+        if is_docker_api_500:
+            return True
+
         transient_markers = (
             "connection aborted",
             "connection refused",
@@ -198,6 +211,11 @@ class JobListener:
             for marker in (
                 "failed to start",
                 "did not become ready",
+                "500 server error",
+                "internal server error",
+                "client connection is closing",
+                "context canceled",
+                "context cancelled",
                 "cannot reach comfyui",
                 "cannot reach wan2gp",
                 "service unavailable",
