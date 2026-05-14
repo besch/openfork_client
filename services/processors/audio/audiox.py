@@ -136,7 +136,7 @@ class AudioXJobProcessor(BaseJobProcessor):
     def _wait_for_api(self, timeout: int = 180) -> bool:
         start_time = time.time()
         while time.time() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
             try:
                 response = requests.get(f"{self.api_base_url}/health", timeout=5)
@@ -212,7 +212,7 @@ class AudioXJobProcessor(BaseJobProcessor):
     def _poll_for_completion(self, remote_job_id: str) -> Dict:
         start_time = time.time()
         while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
             try:
                 response = requests.get(

@@ -113,7 +113,7 @@ class Wan2GPProcessor(BaseJobProcessor):
         deadline = time.monotonic() + WAN2GP_READY_TIMEOUT
         last_log = time.monotonic()
         while time.monotonic() < deadline:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
             if self._job_was_interrupted_by_infrastructure():
                 logging.warning(
@@ -235,7 +235,7 @@ class Wan2GPProcessor(BaseJobProcessor):
         gen_thread.start()
         while gen_thread.is_alive():
             gen_thread.join(timeout=1.0)
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 logging.info(
                     "Shutdown event received during Wan2GP generation. Aborting job %s.",
                     self.job_id,

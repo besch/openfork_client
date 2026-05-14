@@ -82,7 +82,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
         model_wait_elapsed = 0
         model_poll_interval = 15
         while model_wait_elapsed < model_wait_max:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 logging.info("[SparkVSR] Shutdown requested while waiting for model. Aborting.")
                 return
             try:
@@ -138,7 +138,7 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
         elapsed = 0
 
         while elapsed < max_wait:
-            if self.shutdown_event and self.shutdown_event.is_set():
+            if self.is_cancelled():
                 logging.warning(f"[SparkVSR] Shutdown requested, aborting job {self.job_id}")
                 return
 

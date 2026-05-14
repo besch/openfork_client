@@ -160,7 +160,7 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
         )
 
         while time.monotonic() - start < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
             elapsed = int(time.monotonic() - start)
             try:
@@ -199,7 +199,7 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
     def _poll_for_completion(self, task_id: str) -> dict:
         start = time.time()
         while time.time() - start < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
             try:
                 resp = self.session.get(

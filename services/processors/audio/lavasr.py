@@ -83,7 +83,7 @@ class LavaSRJobProcessor(BaseJobProcessor):
             start_time = time.time()
             
             while time.time() - start_time < self.MAX_WAIT_TIME:
-                if self.shutdown_event.is_set():
+                if self.is_cancelled():
                     return
 
                 try:
@@ -174,7 +174,7 @@ class LavaSRJobProcessor(BaseJobProcessor):
         logger.info(f"Waiting for LavaSR API at {api_url}...")
         start_time = time.time()
         while time.time() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
             try:
                 response = requests.get(f"{api_url}/health", timeout=5)

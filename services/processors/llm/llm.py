@@ -66,7 +66,7 @@ class LLMJobProcessor(BaseJobProcessor):
     def _wait_for_ollama(self, api_base: str, timeout: int = 60) -> bool:
         """Wait for Ollama service to be ready."""
         for attempt in range(timeout):
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 logging.info("Shutdown event received during Ollama readiness check.")
                 return False
             try:
@@ -181,7 +181,7 @@ class LLMJobProcessor(BaseJobProcessor):
                 req_thread.start()
                 while req_thread.is_alive():
                     req_thread.join(timeout=1.0)
-                    if self.shutdown_event.is_set():
+                    if self.is_cancelled():
                         logging.info("Shutdown event received during LLM generation. Aborting.")
                         return
 
@@ -200,7 +200,7 @@ class LLMJobProcessor(BaseJobProcessor):
                             delay,
                         )
                         self.shutdown_event.wait(delay)
-                        if self.shutdown_event.is_set():
+                        if self.is_cancelled():
                             logging.info("Shutdown event received during LLM retry delay. Aborting.")
                             return
                         continue
@@ -222,7 +222,7 @@ class LLMJobProcessor(BaseJobProcessor):
                             delay,
                         )
                         self.shutdown_event.wait(delay)
-                        if self.shutdown_event.is_set():
+                        if self.is_cancelled():
                             logging.info("Shutdown event received during LLM retry delay. Aborting.")
                             return
                         continue
@@ -261,7 +261,7 @@ class LLMJobProcessor(BaseJobProcessor):
 
             storage_path = self.orchestrator_service.upload_output(output_path, self.job_id, "text/plain")
 
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 logging.info("Shutdown event set after LLM generation completed. Skipping job completion.")
                 return
 

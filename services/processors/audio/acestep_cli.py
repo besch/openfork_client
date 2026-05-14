@@ -60,6 +60,9 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
         local_path = None
 
         if not self._wait_for_api():
+            if self.is_cancelled():
+                logging.info(f"ACE-Step job {self.job_id} cancelled while waiting for API")
+                return
             self._fail_job("ACE-Step API did not become available")
             return
 
@@ -70,6 +73,10 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
 
         try:
             result = self._poll_for_completion(task_id)
+
+            if result.get("status") == "cancelled":
+                logging.info(f"ACE-Step job {self.job_id} cancelled during processing")
+                return
 
             if result.get("status") != "completed":
                 error_msg = result.get("error", "Unknown error")
@@ -151,7 +158,7 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
         logging.info(f"Waiting for ACE-Step 1.5 API at {self.api_base_url} (timeout: {timeout}s)...")
 
         while time.monotonic() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
 
             elapsed = int(time.monotonic() - start_time)
@@ -274,7 +281,7 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
         """
         start_time = time.time()
         while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
             try:
                 response = self.session.post(

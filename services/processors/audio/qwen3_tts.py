@@ -55,6 +55,9 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
         speaker = speaker.lower()
 
         if not self._wait_for_api():
+            if self.is_cancelled():
+                logging.info(f"Qwen3-TTS job {self.job_id} cancelled while waiting for API")
+                return
             self._fail_job(f"Qwen3-TTS API did not become available for job {self.job_id}")
             return
 
@@ -65,6 +68,10 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
 
         try:
             result = self._poll_for_completion(remote_job_id)
+
+            if result.get("status") == "cancelled":
+                logging.info(f"Qwen3-TTS job {self.job_id} cancelled during processing")
+                return
 
             if result.get("status") != "completed":
                 error_msg = result.get("error", "Unknown error")
@@ -112,7 +119,7 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
         """Wait for the Qwen3-TTS API to become available."""
         start_time = time.time()
         while time.time() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
             try:
                 response = requests.get(f"{self.api_base_url}/health", timeout=5)
@@ -159,7 +166,7 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
         start_time = time.time()
 
         while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
 
             try:
@@ -264,6 +271,9 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
             return
 
         if not self._wait_for_api():
+            if self.is_cancelled():
+                logging.info(f"Qwen3-TTS VoiceDesign job {self.job_id} cancelled while waiting for API")
+                return
             self._fail_job(f"Qwen3-TTS API did not become available for job {self.job_id}")
             return
 
@@ -274,6 +284,10 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
 
         try:
             result = self._poll_for_completion(remote_job_id)
+
+            if result.get("status") == "cancelled":
+                logging.info(f"Qwen3-TTS VoiceDesign job {self.job_id} cancelled during processing")
+                return
 
             if result.get("status") != "completed":
                 error_msg = result.get("error", "Unknown error")
@@ -320,7 +334,7 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
         """Wait for the Qwen3-TTS API to become available."""
         start_time = time.time()
         while time.time() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
             try:
                 response = requests.get(f"{self.api_base_url}/health", timeout=5)
@@ -355,7 +369,7 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
         """Poll the API for job completion."""
         start_time = time.time()
         while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled"}
             try:
                 response = requests.get(f"{self.api_base_url}/status/{remote_job_id}", timeout=10)
@@ -445,6 +459,9 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
                 return
 
             if not self._wait_for_api():
+                if self.is_cancelled():
+                    logging.info(f"Qwen3-TTS VoiceClone job {self.job_id} cancelled while waiting for API")
+                    return
                 self._fail_job(f"Qwen3-TTS API did not become available for job {self.job_id}")
                 return
 
@@ -454,6 +471,10 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
                 return
 
             result = self._poll_for_completion(remote_job_id)
+
+            if result.get("status") == "cancelled":
+                logging.info(f"Qwen3-TTS VoiceClone job {self.job_id} cancelled during processing")
+                return
 
             if result.get("status") != "completed":
                 error_msg = result.get("error", "Unknown error")
@@ -507,7 +528,7 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
         """Wait for the Qwen3-TTS API to become available."""
         start_time = time.time()
         while time.time() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return False
             try:
                 response = requests.get(f"{self.api_base_url}/health", timeout=5)
@@ -562,7 +583,7 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
         """Poll the API for job completion."""
         start_time = time.time()
         while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled"}
             try:
                 response = requests.get(f"{self.api_base_url}/status/{remote_job_id}", timeout=10)

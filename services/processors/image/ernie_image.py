@@ -151,7 +151,7 @@ class ErnieImageProcessor(BaseJobProcessor):
         self._api_startup_error = None
 
         while time.monotonic() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 logging.warning("Shutdown requested while waiting for API.")
                 return False
 
@@ -278,7 +278,7 @@ class ErnieImageProcessor(BaseJobProcessor):
         start_time = time.time()
         last_log = -30
         while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
             elapsed = int(time.time() - start_time)
             try:

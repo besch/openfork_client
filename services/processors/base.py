@@ -48,6 +48,15 @@ class BaseJobProcessor(ABC):
         self.positive_prompt: str = job.get("prompt") or ""
         self.negative_prompt: str = job.get("negative_prompt") or ""
         self.workflow_type: Optional[str] = job.get("workflow_type")
+        self.cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        """Signal that this single job was cancelled remotely."""
+        self.cancel_event.set()
+
+    def is_cancelled(self) -> bool:
+        """True when this job should stop without shutting down the client."""
+        return self.shutdown_event.is_set() or self.cancel_event.is_set()
 
     @property
     def workflow_file(self) -> str:
@@ -111,6 +120,12 @@ class BaseJobProcessor(ABC):
         Args:
             message: Error message to log
         """
+        if self.is_cancelled():
+            logging.info(
+                f"Skipping failure update for cancelled job {self.job_id}: {message}"
+            )
+            return
+
         logging.error(message)
         self.orchestrator_service.update_job_status(
             self.job_id,

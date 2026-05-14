@@ -284,7 +284,7 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
         files = self._run_task(settings)
         if not files:
             if (
-                not self.shutdown_event.is_set()
+                not self.is_cancelled()
                 and not self.infrastructure_interrupted
             ):
                 self._fail_job(f"Wan2GP produced no output for job {self.job_id}")
@@ -292,7 +292,7 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
 
         result = self._handle_video_output(files[0])
         if not result:
-            if not self.shutdown_event.is_set():
+            if not self.is_cancelled():
                 self._fail_job(f"Failed to process video output for job {self.job_id}")
             return
 

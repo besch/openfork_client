@@ -715,6 +715,10 @@ class JobListener:
             "Interrupting local processing."
         )
 
+        request_cancel = getattr(processor, "request_cancel", None)
+        if callable(request_cancel):
+            request_cancel()
+
         # Interrupt before stopping the container so ComfyUI can abort cleanly
         # while its HTTP endpoint is still alive.
         comfyui_client = getattr(processor, "comfyui_client", None)

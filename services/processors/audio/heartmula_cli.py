@@ -167,7 +167,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         logging.info(f"Waiting for HeartMuLa API (timeout: {timeout}s)...")
         
         while time.monotonic() - start_time < timeout:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 logging.info("Shutdown requested while waiting for HeartMuLa API")
                 return False
             
@@ -277,7 +277,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         start_time = time.time()
 
         while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.shutdown_event.is_set():
+            if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
 
             try:
