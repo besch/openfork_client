@@ -174,9 +174,9 @@ class DockerDownloadManager:
         self._post_download_hold_until: float = 0.0
         # Job-active gate: when True, no new downloads start and queue is frozen.
         self._job_active: bool = False
-        # Compaction gate: when True, do not start new Docker work. Existing
-        # active pulls are allowed to finish so manual compaction can wait for
-        # a clean idle point instead of cancelling half-written layers.
+        # Compaction gate: when True, do not start new Docker work. Desktop
+        # compaction can request this after storage-limit eviction; active pulls
+        # are cancelled and requeued so the WSL VHDX can become idle promptly.
         self._compaction_paused: bool = False
         # Service types whose downloads were cancelled because a job started;
         # re-inserted at the front of the queue when the job finishes.
@@ -284,6 +284,10 @@ class DockerDownloadManager:
             now = time.time()
             self._last_job_times[service_type] = now
             self._last_cache_activity_times[service_type] = now
+            # Fresh-image protection exists only to give the listener a chance
+            # to run the just-downloaded job. Once that service has actually
+            # been used, it can participate in normal LRU eviction immediately.
+            self._recently_downloaded.pop(service_type, None)
             self._save_cache_metadata_locked()
 
     def set_job_active(self, active: bool) -> None:
@@ -322,19 +326,9 @@ class DockerDownloadManager:
                     )
             else:
                 # Re-insert paused downloads at the front of the queue so they
-                # restart first, in their original order.
-                if not already_in_state:
-                    paused = list(self._paused_downloads)
-                    self._paused_downloads.clear()
-                    for st in reversed(paused):
-                        if st not in self._active_downloads and st not in self._download_queue:
-                            self._download_queue.insert(0, st)
-                            self._download_queue_policies.setdefault(
-                                st,
-                                self._active_download_policies.get(st),
-                            )
-                            self._download_status.pop(st, None)  # Clear FAILED -> allow retry
-                            logging.info(f"Re-queued suspended download for '{st}' — job finished.")
+                # restart before new background pulls.
+                if self._paused_downloads:
+                    self._requeue_paused_downloads_locked("job finished")
 
                 # Do not kick-start queued downloads here. Auto mode calls this
                 # at the top of each loop before peeking jobs; starting the next
@@ -359,22 +353,59 @@ class DockerDownloadManager:
                         "listener confirms there is no processable job."
                     )
 
+    def _requeue_paused_downloads_locked(self, reason: str) -> None:
+        """Move finished paused downloads back to the front of the queue."""
+        paused = list(self._paused_downloads)
+        for st in paused:
+            if st in self._active_downloads:
+                continue
+            if st not in self._download_queue:
+                self._download_queue.insert(0, st)
+                self._download_queue_policies.setdefault(
+                    st,
+                    self._active_download_policies.get(st),
+                )
+                self._download_status.pop(st, None)  # Clear FAILED -> allow retry
+                logging.info(f"Re-queued suspended download for '{st}' — {reason}.")
+            self._paused_downloads.discard(st)
+
+    def _is_desktop_client(self) -> bool:
+        return os.environ.get("OPENFORK_CLIENT_KIND") == "desktop"
+
     def set_compaction_paused(self, paused: bool) -> None:
         """Pause or resume new Docker downloads around disk compaction."""
         next_to_start = None
         with self._lock:
             paused = bool(paused)
-            if self._compaction_paused == paused:
-                return
+            already_in_state = self._compaction_paused == paused
+            if already_in_state and (paused or not self._paused_downloads):
+                # When already paused, still fall through below if there are
+                # active downloads so repeated desktop pause signals can cancel
+                # work that started before the first signal arrived.
+                if not (paused and self._active_downloads):
+                    return
 
-            self._compaction_paused = paused
+            if not already_in_state:
+                self._compaction_paused = paused
             if paused:
-                logging.info(
-                    "Docker image downloads paused: disk compaction is pending."
-                )
+                if not already_in_state:
+                    logging.info(
+                        "Docker image downloads paused: disk compaction is pending."
+                    )
+                for st, cancel_event in list(self._cancellation_events.items()):
+                    cancel_event.set()
+                    self._paused_downloads.add(st)
+                    if st in self._active_download_policies:
+                        self._download_queue_policies[st] = (
+                            self._active_download_policies.get(st)
+                        )
+                    logging.info(
+                        f"Suspended download for '{st}' — disk compaction is pending."
+                    )
                 return
 
             logging.info("Docker image downloads resumed after disk compaction.")
+            self._requeue_paused_downloads_locked("disk compaction finished")
             hold_remaining = self._post_download_hold_remaining_locked()
             if (
                 self._download_queue
@@ -1001,11 +1032,18 @@ class DockerDownloadManager:
                         self._post_download_hold_until,
                         time.time() + POST_STORAGE_LIMIT_EVICTION_HOLD_SECS,
                     )
+                    if self._is_desktop_client():
+                        self._compaction_paused = True
                 logging.info(
                     "Holding queued downloads for %ss after storage-limit "
                     "eviction so disk compaction can claim the pause.",
                     POST_STORAGE_LIMIT_EVICTION_HOLD_SECS,
                 )
+                if self._is_desktop_client():
+                    logging.info(
+                        "Docker image downloads paused until desktop disk "
+                        "compaction clears the storage-limit eviction."
+                    )
             logging.info(
                 f"Evicted cached image for {service_type_to_evict} "
                 f"(reason={reason}, freed~{freed_bytes / 1024**3:.1f} GB)."
@@ -1271,6 +1309,18 @@ class DockerDownloadManager:
                     self._download_status[service_type] = DownloadStatus.FAILED
                     self._emit_download_state(service_type, image_name, "failed")
                     return False
+
+                if self._compaction_paused:
+                    self._download_queue.append(service_type)
+                    self._download_queue_policies[service_type] = accept_policy
+                    self._download_status[service_type] = DownloadStatus.PENDING
+                    self._emit_download_state(service_type, image_name, "queued")
+                    logging.info(
+                        "Deferred download for '%s': storage-limit eviction "
+                        "requested disk compaction.",
+                        service_type,
+                    )
+                    return True
 
                 hold_remaining = self._post_download_hold_remaining_locked()
                 if hold_remaining > 0:
@@ -1747,6 +1797,22 @@ class DockerDownloadManager:
                 self._report_download_state(next_service, "cancel")
                 continue
 
+            if self._compaction_paused:
+                self._download_queue.insert(0, next_service)
+                self._download_queue_policies[next_service] = next_accept_policy
+                self._download_status[next_service] = DownloadStatus.PENDING
+                try:
+                    next_image_name = self.docker_manager.get_image_name(next_service)
+                    self._emit_download_state(next_service, next_image_name, "queued")
+                except Exception:
+                    pass
+                logging.info(
+                    "Deferred queued download for '%s': storage-limit eviction "
+                    "requested disk compaction.",
+                    next_service,
+                )
+                return False
+
             next_image_name = self.docker_manager.get_image_name(next_service)
             next_required_bytes = self._get_service_required_bytes(next_service)
 
@@ -1844,6 +1910,9 @@ class DockerDownloadManager:
             if service_type in self._cancellation_events:
                 del self._cancellation_events[service_type]
                 logging.debug(f"Cleaned up cancellation event for {service_type}")
+
+            if service_type in self._paused_downloads and not self._compaction_paused:
+                self._requeue_paused_downloads_locked("download cancellation finished")
 
             if self._download_queue and not self._shutdown:
                 if wakeup_scheduled:

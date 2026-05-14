@@ -999,6 +999,7 @@ class DockerProdManager:
         ports: dict = None,
         force_restart: bool = True,
         command: list = None,
+        entrypoint: list = None,
         environment: dict = None,
         pre_start_copies: list[tuple[str, str]] = None,
         shutdown_event: threading.Event = None,
@@ -1103,6 +1104,8 @@ class DockerProdManager:
             )
             if command:
                 run_kwargs["command"] = command
+            if entrypoint:
+                run_kwargs["entrypoint"] = entrypoint
             if environment:
                 run_kwargs["environment"] = environment
             max_attempts = 5

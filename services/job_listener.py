@@ -277,6 +277,99 @@ class JobListener:
             reason="provider_service_startup_failed",
         )
 
+    @staticmethod
+    def _format_exec_output(output: Any, max_chars: int = 2000) -> str:
+        if output is None:
+            return ""
+        if isinstance(output, bytes):
+            text = output.decode("utf-8", errors="replace")
+        else:
+            text = str(output)
+        text = text.strip()
+        if len(text) <= max_chars:
+            return text
+        return text[-max_chars:]
+
+    @staticmethod
+    def _is_safe_ollama_model_name(model_name: str) -> bool:
+        if not isinstance(model_name, str) or not model_name:
+            return False
+        allowed = set(
+            "abcdefghijklmnopqrstuvwxyz"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "0123456789"
+            "._:/-"
+        )
+        return all(ch in allowed for ch in model_name)
+
+    def _warm_ollama_model_in_container(
+        self,
+        job: Dict[str, Any],
+        service_type: str,
+    ) -> bool:
+        """Load the Ollama model from inside the container before host requests.
+
+        Cold model loads can leave the Windows -> WSL localhost connection idle
+        long enough for the client side to disconnect. Running a tiny in-container
+        `ollama run` avoids that boundary and keeps the real processor request fast.
+        """
+        if HEADLESS_MODE:
+            return True
+
+        inputs = job.get("inputs") or {}
+        model_name = inputs.get("model", "qwen2.5:3b")
+        if not self._is_safe_ollama_model_name(model_name):
+            logging.warning(
+                "Skipping Ollama warmup for unsafe model name %r; processor will "
+                "handle validation/failure.",
+                model_name,
+            )
+            return True
+
+        warmup_prompt = "Return the single word ready."
+        for attempt in range(1, 4):
+            if self.shutdown_event.is_set():
+                return False
+
+            logging.info(
+                "Warming Ollama model '%s' inside container for service '%s' "
+                "(attempt %s/3).",
+                model_name,
+                service_type,
+                attempt,
+            )
+            result = docker_manager.exec_in_container(
+                service_type,
+                ["ollama", "run", model_name, warmup_prompt],
+            )
+
+            exit_code = getattr(result, "exit_code", None)
+            output = self._format_exec_output(getattr(result, "output", None))
+            if result is not None and exit_code == 0:
+                if output:
+                    logging.debug("Ollama warmup output tail: %s", output)
+                logging.info("Ollama model '%s' warmed successfully.", model_name)
+                return True
+
+            logging.warning(
+                "Ollama warmup failed for model '%s' (attempt %s/3, exit=%s): %s",
+                model_name,
+                attempt,
+                exit_code,
+                output or "no output",
+            )
+            self.shutdown_event.wait(min(10, 2 * attempt))
+
+        self._requeue_job_after_infrastructure_error(
+            job,
+            InfrastructureError(
+                f"Ollama model '{model_name}' did not warm up for service "
+                f"'{service_type}'"
+            ),
+            reason="provider_service_startup_failed",
+        )
+        return False
+
     def _requeue_job_after_infrastructure_error(
         self,
         job: Dict[str, Any],
@@ -371,12 +464,19 @@ class JobListener:
                         or self.client.get_service_type_for_workflow(workflow_type)
                     )
                     service_config = self.client.services_config.get(service_type, {})
+                    hardware_profile = getattr(
+                        self.client, "hardware_profile", None
+                    )
 
                     if service_config and not can_run_service(
-                        service_config, self.client.available_vram
+                        service_config,
+                        self.client.available_vram,
+                        hardware_profile,
                     ):
                         reason = get_service_incompatibility_reason(
-                            service_config, self.client.available_vram
+                            service_config,
+                            self.client.available_vram,
+                            hardware_profile,
                         )
                         error_msg = f"Job requires service '{service_type}' but hardware is incompatible: {reason}"
                         logging.error(error_msg)
@@ -1315,6 +1415,9 @@ class JobListener:
                                             is_wan2gp = (
                                                 service_cfg.get("backend") == "wan2gp"
                                             )
+                                            is_ollama = (
+                                                service_cfg.get("backend") == "ollama"
+                                            )
 
                                             if is_wan2gp:
                                                 # LTX/Wan2GP images are expected to contain
@@ -1407,6 +1510,21 @@ class JobListener:
                                                 logging.info(
                                                     "Started wan2gp_server.py as the Wan2GP container main process."
                                                 )
+                                            elif is_ollama:
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    entrypoint=["ollama"],
+                                                    command=["serve"],
+                                                    environment={
+                                                        "OLLAMA_HOST": "0.0.0.0:11434",
+                                                        "OLLAMA_MAX_LOADED_MODELS": "1",
+                                                        "OLLAMA_NUM_PARALLEL": "2",
+                                                        "OLLAMA_ORIGINS": "*",
+                                                    },
+                                                )
+                                                logging.info(
+                                                    "Started Ollama as the container main process."
+                                                )
                                             else:
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,
@@ -1488,9 +1606,14 @@ class JobListener:
                                                 actual_service_type, {}
                                             )
                                         )
-                                        uses_comfyui = (
-                                            service_config.get("backend", "comfyui")
-                                            == "comfyui"
+                                        backend = service_config.get(
+                                            "backend", "comfyui"
+                                        )
+                                        uses_comfyui = backend == "comfyui"
+                                        logging.info(
+                                            "Service '%s' uses backend '%s'.",
+                                            actual_service_type,
+                                            backend,
                                         )
 
                                         if uses_comfyui:
@@ -1510,8 +1633,28 @@ class JobListener:
                                                     actual_service_type,
                                                 )
                                         else:
-                                            # For text_generation, directly process the job (no ComfyUI needed)
-                                            self._process_job_safely(job)
+                                            logging.info(
+                                                "Skipping ComfyUI readiness wait for "
+                                                "backend '%s'; processor will manage "
+                                                "its own readiness checks.",
+                                                backend,
+                                            )
+                                            ollama_warmed = True
+                                            if backend == "ollama":
+                                                ollama_warmed = (
+                                                    self._warm_ollama_model_in_container(
+                                                        job,
+                                                        actual_service_type,
+                                                    )
+                                                )
+
+                                            if not ollama_warmed:
+                                                logging.info(
+                                                    "Skipping job processor because "
+                                                    "Ollama warmup did not complete."
+                                                )
+                                            else:
+                                                self._process_job_safely(job)
 
                                         if not self.shutdown_event.is_set():
                                             logging.info(f"Job processing finished.")

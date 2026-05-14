@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import threading
 import time
 import unittest
@@ -299,6 +300,28 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertEqual(eviction["payload"]["service_type"], "zimage-turbo-8gb")
         self.assertEqual(eviction["payload"]["freed_bytes"], 120 * 1024 ** 3)
 
+    def test_job_completion_releases_fresh_image_eviction_shield(self):
+        docker_manager = PullRecordingDockerManager(
+            ["qwen3-tts", "zimage-turbo-8gb"],
+            cached_service_types=["qwen3-tts"],
+        )
+        docker_manager.services_config["qwen3-tts"]["disk_required_gb"] = 100
+        docker_manager.services_config["zimage-turbo-8gb"]["disk_required_gb"] = 120
+        qwen3_name = docker_manager.get_image_name("qwen3-tts")
+        manager = DockerDownloadManager(docker_manager, cache_limit_gb=120)
+        manager._recently_downloaded["qwen3-tts"] = time.time()
+
+        manager.notify_job_complete("qwen3-tts")
+
+        self.assertNotIn("qwen3-tts", manager._recently_downloaded)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertTrue(manager.start_background_download("zimage-turbo-8gb"))
+
+        self.assertEqual(docker_manager.client.images.removed, [(qwen3_name, True)])
+        self.assertEqual(manager._download_queue, ["zimage-turbo-8gb"])
+
     def test_compaction_pause_blocks_new_background_downloads(self):
         docker_manager = PullRecordingDockerManager(["wan22"])
         manager = DockerDownloadManager(docker_manager)
@@ -319,6 +342,82 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertFalse(manager.start_next_queued_download())
         self.assertEqual(manager._download_queue, ["second"])
         self.assertEqual(docker_manager.pull_calls, [])
+
+    def test_compaction_pause_cancels_active_download_and_requeues_on_resume(self):
+        docker_manager = PullRecordingDockerManager(["wan22"])
+        manager = DockerDownloadManager(docker_manager)
+        cancel_event = threading.Event()
+        with manager._lock:
+            manager._active_downloads.add("wan22")
+            manager._active_download_policies["wan22"] = "mine"
+            manager._cancellation_events["wan22"] = cancel_event
+            manager._download_status["wan22"] = DownloadStatus.DOWNLOADING
+
+        manager.set_compaction_paused(True)
+
+        self.assertTrue(cancel_event.is_set())
+        self.assertIn("wan22", manager._paused_downloads)
+        self.assertEqual(manager._download_queue_policies["wan22"], "mine")
+
+        with manager._lock:
+            manager._active_downloads.clear()
+            manager._cancellation_events.clear()
+            manager._job_active = True
+
+        manager.set_compaction_paused(False)
+
+        self.assertEqual(manager._download_queue, ["wan22"])
+        self.assertEqual(manager._download_queue_policies["wan22"], "mine")
+        self.assertEqual(docker_manager.pull_calls, [])
+
+    def test_storage_limit_eviction_pauses_desktop_download_before_pull(self):
+        old_kind = os.environ.get("OPENFORK_CLIENT_KIND")
+        os.environ["OPENFORK_CLIENT_KIND"] = "desktop"
+        try:
+            docker_manager = PullRecordingDockerManager(
+                ["old", "incoming"],
+                cached_service_types=["old"],
+            )
+            docker_manager.services_config["old"]["disk_required_gb"] = 80
+            docker_manager.services_config["incoming"]["disk_required_gb"] = 80
+            manager = DockerDownloadManager(docker_manager, cache_limit_gb=120)
+
+            self.assertTrue(manager.start_background_download("incoming"))
+
+            self.assertTrue(manager._compaction_paused)
+            self.assertEqual(manager._download_queue, ["incoming"])
+            self.assertEqual(docker_manager.pull_calls, [])
+        finally:
+            if old_kind is None:
+                os.environ.pop("OPENFORK_CLIENT_KIND", None)
+            else:
+                os.environ["OPENFORK_CLIENT_KIND"] = old_kind
+
+    def test_storage_limit_eviction_freezes_queued_desktop_download(self):
+        old_kind = os.environ.get("OPENFORK_CLIENT_KIND")
+        os.environ["OPENFORK_CLIENT_KIND"] = "desktop"
+        try:
+            docker_manager = PullRecordingDockerManager(
+                ["old", "incoming"],
+                cached_service_types=["old"],
+            )
+            docker_manager.services_config["old"]["disk_required_gb"] = 80
+            docker_manager.services_config["incoming"]["disk_required_gb"] = 80
+            manager = DockerDownloadManager(docker_manager, cache_limit_gb=120)
+            with manager._lock:
+                manager._download_queue.append("incoming")
+                manager._download_status["incoming"] = DownloadStatus.PENDING
+
+            self.assertFalse(manager.start_next_queued_download(reason="test"))
+
+            self.assertTrue(manager._compaction_paused)
+            self.assertEqual(manager._download_queue, ["incoming"])
+            self.assertEqual(docker_manager.pull_calls, [])
+        finally:
+            if old_kind is None:
+                os.environ.pop("OPENFORK_CLIENT_KIND", None)
+            else:
+                os.environ["OPENFORK_CLIENT_KIND"] = old_kind
 
     def test_set_job_inactive_does_not_start_queue_before_listener_checks_jobs(self):
         docker_manager = PullRecordingDockerManager(["first", "second"])

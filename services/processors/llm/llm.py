@@ -19,6 +19,20 @@ from services.processors.base import BaseJobProcessor
 class LLMJobProcessor(BaseJobProcessor):
     """Processor for LLM-based text generation using Ollama."""
 
+    @staticmethod
+    def _is_transient_ollama_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        transient_markers = (
+            "remote end closed connection",
+            "connection aborted",
+            "connection reset",
+            "connection refused",
+            "temporarily unavailable",
+            "timeout",
+            "timed out",
+        )
+        return any(marker in text for marker in transient_markers)
+
     def process(self):
         if not self.job:
             self._fail_job(f"Job object is None for LLMJobProcessor. Cannot proceed.")
@@ -149,30 +163,70 @@ class LLMJobProcessor(BaseJobProcessor):
             }
 
             logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
-            response_holder: list = [None]
-            error_holder: list = [None]
+            response = None
+            max_attempts = 4
+            for attempt in range(1, max_attempts + 1):
+                response_holder: list = [None]
+                error_holder: list = [None]
 
-            def _do_request():
+                def _do_request():
+                    try:
+                        response_holder[0] = requests.post(
+                            f"{api_base}/api/chat", json=payload, timeout=1200
+                        )
+                    except Exception as exc:
+                        error_holder[0] = exc
+
+                req_thread = threading.Thread(target=_do_request, daemon=True)
+                req_thread.start()
+                while req_thread.is_alive():
+                    req_thread.join(timeout=1.0)
+                    if self.shutdown_event.is_set():
+                        logging.info("Shutdown event received during LLM generation. Aborting.")
+                        return
+
+                if error_holder[0]:
+                    if (
+                        attempt < max_attempts
+                        and self._is_transient_ollama_error(error_holder[0])
+                    ):
+                        delay = min(30, 5 * attempt)
+                        logging.warning(
+                            "Ollama chat request failed during startup/model load "
+                            "(attempt %s/%s): %s. Retrying in %ss.",
+                            attempt,
+                            max_attempts,
+                            error_holder[0],
+                            delay,
+                        )
+                        self.shutdown_event.wait(delay)
+                        if self.shutdown_event.is_set():
+                            logging.info("Shutdown event received during LLM retry delay. Aborting.")
+                            return
+                        continue
+                    raise error_holder[0]
+
+                response = response_holder[0]
                 try:
-                    response_holder[0] = requests.post(
-                        f"{api_base}/api/chat", json=payload, timeout=1200
-                    )
-                except Exception as exc:
-                    error_holder[0] = exc
-
-            req_thread = threading.Thread(target=_do_request, daemon=True)
-            req_thread.start()
-            while req_thread.is_alive():
-                req_thread.join(timeout=1.0)
-                if self.shutdown_event.is_set():
-                    logging.info("Shutdown event received during LLM generation. Aborting.")
-                    return
-
-            if error_holder[0]:
-                raise error_holder[0]
-
-            response = response_holder[0]
-            response.raise_for_status()
+                    response.raise_for_status()
+                    break
+                except requests.exceptions.RequestException as exc:
+                    if attempt < max_attempts and self._is_transient_ollama_error(exc):
+                        delay = min(30, 5 * attempt)
+                        logging.warning(
+                            "Ollama chat returned a transient error "
+                            "(attempt %s/%s): %s. Retrying in %ss.",
+                            attempt,
+                            max_attempts,
+                            exc,
+                            delay,
+                        )
+                        self.shutdown_event.wait(delay)
+                        if self.shutdown_event.is_set():
+                            logging.info("Shutdown event received during LLM retry delay. Aborting.")
+                            return
+                        continue
+                    raise
 
             result = response.json()
             generated_text = result.get("message", {}).get("content", "")
