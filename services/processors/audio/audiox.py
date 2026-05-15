@@ -23,6 +23,7 @@ class AudioXJobProcessor(BaseJobProcessor):
     API_PORT = 8000
     POLL_INTERVAL = 5
     MAX_WAIT_TIME = 900
+    FIXED_TEXT_AUDIO_DURATION = 10.0
 
     def __init__(self, client, job, shutdown_event):
         super().__init__(client, job, shutdown_event)
@@ -60,6 +61,8 @@ class AudioXJobProcessor(BaseJobProcessor):
             if not video_path:
                 self._fail_job(f"Failed to download input video for AudioX job {self.job_id}.")
                 return
+        else:
+            duration = self._normalize_text_duration(duration)
 
         remote_job_id = self._submit_generation(
             prompt=prompt,
@@ -209,6 +212,24 @@ class AudioXJobProcessor(BaseJobProcessor):
             logging.error("Failed to submit AudioX request: %s", exc)
             return None
 
+    def _normalize_text_duration(self, duration) -> float:
+        try:
+            requested = float(duration)
+        except (TypeError, ValueError):
+            requested = self.FIXED_TEXT_AUDIO_DURATION
+
+        if requested != self.FIXED_TEXT_AUDIO_DURATION:
+            logging.warning(
+                "AudioX text-to-audio currently supports a fixed %.0fs "
+                "conditioning window. Requested %.2fs will be run as %.0fs "
+                "to avoid known tensor-shape failures.",
+                self.FIXED_TEXT_AUDIO_DURATION,
+                requested,
+                self.FIXED_TEXT_AUDIO_DURATION,
+            )
+
+        return self.FIXED_TEXT_AUDIO_DURATION
+
     def _poll_for_completion(self, remote_job_id: str) -> Dict:
         start_time = time.time()
         while time.time() - start_time < self.MAX_WAIT_TIME:
@@ -253,6 +274,8 @@ class AudioXJobProcessor(BaseJobProcessor):
             return None
 
     def _cleanup_remote_job(self, remote_job_id: str) -> None:
+        if not remote_job_id:
+            return
         try:
             requests.delete(f"{self.api_base_url}/job/{remote_job_id}", timeout=10)
         except requests.exceptions.RequestException:

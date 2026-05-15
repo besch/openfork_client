@@ -26,7 +26,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
 
     API_PORT = 8000
     POLL_INTERVAL = 5
-    MAX_WAIT_TIME = 900  # 15 minutes
+    MIN_GENERATION_WAIT_TIME = int(os.environ.get("HEARTMULA_MIN_WAIT_TIME", "1800"))
     
     # Default audio duration limits per VRAM tier (in seconds)
     # These can be overridden by max_audio_duration_seconds in workflow config
@@ -45,6 +45,20 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
             self.DEFAULT_MAX_DURATION
         )
         logging.info(f"HeartMuLa max audio duration: {self.max_audio_duration_seconds}s")
+
+        estimated_minutes = workflow_config.get("estimated_duration_minutes") or 15
+        default_generation_wait = max(
+            self.MIN_GENERATION_WAIT_TIME,
+            int(estimated_minutes * 120 + 300),
+        )
+        self.max_wait_time = int(
+            os.environ.get("HEARTMULA_MAX_WAIT_TIME", str(default_generation_wait))
+        )
+        logging.info(
+            "HeartMuLa generation wait timeout: %ss (workflow estimate: %s min)",
+            self.max_wait_time,
+            estimated_minutes,
+        )
 
     def process(self):
         """Main processing method."""
@@ -276,7 +290,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
         """Poll the API for job completion."""
         start_time = time.time()
 
-        while time.time() - start_time < self.MAX_WAIT_TIME:
+        while time.time() - start_time < self.max_wait_time:
             if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
 
@@ -303,7 +317,10 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
 
             time.sleep(self.POLL_INTERVAL)
 
-        return {"status": "failed", "error": "Timeout waiting for generation"}
+        return {
+            "status": "failed",
+            "error": f"Timeout waiting for generation after {self.max_wait_time}s",
+        }
 
     def _download_output(self, remote_job_id: str) -> Optional[str]:
         """Download the generated audio file from the API."""
@@ -330,6 +347,8 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
 
     def _cleanup_remote_job(self, remote_job_id: str):
         """Clean up the remote job and its files."""
+        if not remote_job_id:
+            return
         try:
             requests.delete(f"{self.api_base_url}/job/{remote_job_id}", timeout=10)
         except requests.exceptions.RequestException:

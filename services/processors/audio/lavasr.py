@@ -4,6 +4,7 @@ import os
 import requests
 import time
 
+from config import SUPABASE_URL
 from services.processors.base import BaseJobProcessor
 from utils.media_utils import get_audio_duration
 
@@ -17,7 +18,8 @@ class LavaSRJobProcessor(BaseJobProcessor):
 
     API_PORT = 8000
     POLL_INTERVAL = 3
-    MAX_WAIT_TIME = 300  # 5 minutes
+    MAX_WAIT_TIME = int(os.environ.get("LAVASR_MAX_WAIT_TIME", "1200"))
+    API_WAIT_TIMEOUT = int(os.environ.get("LAVASR_API_WAIT_TIMEOUT", "600"))
 
     def process(self):
         """
@@ -36,10 +38,40 @@ class LavaSRJobProcessor(BaseJobProcessor):
                 self._fail_job("Job object is None for LavaSRJobProcessor. Cannot proceed.")
                 return
 
-            # Get the input audio URL (reusing input_video_url field)
-            input_audio_url = self.job.get("input_video_url")
+            inputs = self.job.get("inputs") or {}
+
+            # Get the input audio URL. Historically this reused input_video_url,
+            # but website callers may provide audio-specific aliases.
+            input_audio_url = (
+                self.job.get("input_video_url")
+                or inputs.get("input_video_url")
+                or inputs.get("input_audio_url")
+                or inputs.get("audio_url")
+                or inputs.get("source_url")
+            )
+            input_storage_path = (
+                self.job.get("input_storage_path")
+                or inputs.get("input_storage_path")
+                or inputs.get("input_audio_storage_path")
+                or inputs.get("audio_storage_path")
+                or inputs.get("source_storage_path")
+            )
+            if not input_audio_url and input_storage_path:
+                bucket = self.job.get("bucket") or inputs.get("bucket") or "projects_public"
+                input_audio_url = (
+                    f"{SUPABASE_URL}/storage/v1/object/public/"
+                    f"{bucket}/{input_storage_path}"
+                )
+                logger.info(
+                    "Using LavaSR input storage path fallback for job %s: %s",
+                    self.job_id,
+                    input_storage_path,
+                )
+
             if not input_audio_url:
-                self._fail_job(f"LavaSR job {self.job_id} missing 'input_video_url' (audio input).")
+                self._fail_job(
+                    f"LavaSR job {self.job_id} missing audio input URL or storage path."
+                )
                 return
 
             # 1. Download input audio
@@ -106,14 +138,20 @@ class LavaSRJobProcessor(BaseJobProcessor):
                 time.sleep(self.POLL_INTERVAL)
 
             if not completed:
-                self._fail_job("LavaSR restoration timed out")
+                self._fail_job(
+                    f"LavaSR restoration timed out after {self.MAX_WAIT_TIME}s"
+                )
                 return
 
             # 6. Download restored audio
             output_filename = f"{self.job_id}_restored.wav"
             output_path = os.path.join(self.cache_dir, output_filename)
             
-            download_resp = requests.get(f"{api_url}/download/{restoration_job_id}", stream=True, timeout=30)
+            download_resp = requests.get(
+                f"{api_url}/download/{restoration_job_id}",
+                stream=True,
+                timeout=120,
+            )
             if download_resp.status_code == 200:
                 with open(output_path, 'wb') as f:
                     for chunk in download_resp.iter_content(chunk_size=8192):
@@ -169,8 +207,9 @@ class LavaSRJobProcessor(BaseJobProcessor):
                 except:
                     pass
 
-    def _wait_for_api(self, api_url: str, timeout: int = 300) -> bool:
+    def _wait_for_api(self, api_url: str, timeout: Optional[int] = None) -> bool:
         """Wait for the LavaSR API to become available."""
+        timeout = timeout or self.API_WAIT_TIMEOUT
         logger.info(f"Waiting for LavaSR API at {api_url}...")
         start_time = time.time()
         while time.time() - start_time < timeout:
