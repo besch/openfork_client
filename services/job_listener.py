@@ -1341,6 +1341,45 @@ class JobListener:
                             # Step 2b: Find first job with available Docker image
                             _known_pass1 = self._known_service_types()
                             for peeked_job, _job_policy in _available_with_policy:
+                                workflow_type = peeked_job.get("workflow_type")
+                                if not workflow_type:
+                                    logging.warning(
+                                        "Skipping peeked job %s with missing workflow_type.",
+                                        peeked_job.get("id"),
+                                    )
+                                    continue
+
+                                if workflow_type not in getattr(
+                                    self.client, "processor_map", {}
+                                ):
+                                    logging.warning(
+                                        "Peeked job %s has no local processor for "
+                                        "workflow_type '%s'. Refreshing DGN config once "
+                                        "before skipping.",
+                                        peeked_job.get("id"),
+                                        workflow_type,
+                                    )
+                                    try:
+                                        self.client.load_config()
+                                    except Exception as exc:
+                                        logging.warning(
+                                            "Failed to refresh DGN config before "
+                                            "processor check for workflow_type '%s': %s",
+                                            workflow_type,
+                                            exc,
+                                        )
+
+                                    if workflow_type not in getattr(
+                                        self.client, "processor_map", {}
+                                    ):
+                                        logging.warning(
+                                            "Skipping peeked job %s with unsupported "
+                                            "workflow_type '%s'.",
+                                            peeked_job.get("id"),
+                                            workflow_type,
+                                        )
+                                        continue
+
                                 service_type = self._get_service_type_for_job(
                                     peeked_job
                                 )
@@ -1444,10 +1483,13 @@ class JobListener:
                                             "workflow_type", "image_to_video"
                                         )
                                         actual_service_type = (
-                                            self.client.get_service_type_for_workflow(
-                                                workflow_type
-                                            )
+                                            self._get_service_type_for_job(job)
                                         )
+                                        if not actual_service_type:
+                                            raise ValueError(
+                                                "Unknown service type for workflow: "
+                                                f"{workflow_type}"
+                                            )
                                         self.client.active_service_type = (
                                             actual_service_type
                                         )

@@ -14,9 +14,29 @@ import logging
 import requests
 from typing import Optional, Dict
 
+from config import SUPABASE_URL
 from services.processors.base import BaseJobProcessor
 from services.orchestrator_service import TokenExpiredError
 from utils.media_utils import get_audio_duration
+
+
+QWEN3_MAX_WAIT_TIME = int(os.environ.get("QWEN3_TTS_MAX_WAIT_TIME", "1800"))
+
+
+def _input_alias(inputs: Dict, *keys: str, default=None):
+    for key in keys:
+        value = inputs.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def _as_url_list(value) -> list[str]:
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str) and item.strip()]
+    return []
 
 
 class Qwen3TTSJobProcessor(BaseJobProcessor):
@@ -27,7 +47,7 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
 
     API_PORT = 8000
     POLL_INTERVAL = 2
-    MAX_WAIT_TIME = 300
+    MAX_WAIT_TIME = QWEN3_MAX_WAIT_TIME
 
     def __init__(self, client, job, shutdown_event):
         super().__init__(client, job, shutdown_event)
@@ -43,8 +63,8 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
 
         inputs = self.job.get("inputs") or {}
         text = self.positive_prompt or inputs.get("text", "")
-        language = inputs.get("language", "Auto")
-        speaker = inputs.get("speaker", "vivian")
+        language = _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        speaker = _input_alias(inputs, "speaker", "qwen3_speaker", default="vivian")
         instruct = inputs.get("instruct")
 
         if not text:
@@ -219,6 +239,8 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
 
     def _cleanup_remote_job(self, remote_job_id: str):
         """Clean up the remote job and its files."""
+        if not remote_job_id:
+            return
         try:
             requests.delete(f"{self.api_base_url}/job/{remote_job_id}", timeout=10)
         except requests.exceptions.RequestException:
@@ -243,7 +265,7 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
 
     API_PORT = 8000
     POLL_INTERVAL = 2
-    MAX_WAIT_TIME = 300
+    MAX_WAIT_TIME = QWEN3_MAX_WAIT_TIME
 
     def __init__(self, client, job, shutdown_event):
         super().__init__(client, job, shutdown_event)
@@ -259,7 +281,7 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
 
         inputs = self.job.get("inputs") or {}
         text = self.positive_prompt or inputs.get("text", "")
-        language = inputs.get("language", "Auto")
+        language = _input_alias(inputs, "language", "qwen3_language", default="Auto")
         voice_design_instruct = inputs.get("voice_design_instruct", "")
 
         if not text:
@@ -398,6 +420,8 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
             return None
 
     def _cleanup_remote_job(self, remote_job_id: str):
+        if not remote_job_id:
+            return
         try:
             requests.delete(f"{self.api_base_url}/job/{remote_job_id}", timeout=10)
         except requests.exceptions.RequestException:
@@ -420,7 +444,7 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
 
     API_PORT = 8000
     POLL_INTERVAL = 2
-    MAX_WAIT_TIME = 300
+    MAX_WAIT_TIME = QWEN3_MAX_WAIT_TIME
 
     def __init__(self, client, job, shutdown_event):
         super().__init__(client, job, shutdown_event)
@@ -436,8 +460,14 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
 
         inputs = self.job.get("inputs") or {}
         text = self.positive_prompt or inputs.get("text", "")
-        language = inputs.get("language", "Auto")
-        voice_clone_urls = inputs.get("voice_clone_urls", [])
+        language = _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        voice_clone_urls = _as_url_list(inputs.get("voice_clone_urls", []))
+        voice_clone_storage_path = _input_alias(
+            inputs,
+            "voice_clone_storage_path",
+            "reference_audio",
+            "reference_audio_storage_path",
+        )
         ref_text = inputs.get("ref_text")
 
         if not text:
@@ -449,13 +479,32 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
             return
 
         clone_path = None
+        remote_job_id = None
         try:
             # Download the voice reference audio
-            clone_path = self.orchestrator_service.download_asset_by_url(
-                voice_clone_urls[0], self.input_dir
-            )
+            for voice_clone_url in voice_clone_urls:
+                clone_path = self.orchestrator_service.download_asset_by_url(
+                    voice_clone_url, self.input_dir
+                )
+                if clone_path:
+                    break
+
+            if not clone_path and voice_clone_storage_path:
+                bucket = self.job.get("bucket") or "projects_public"
+                source_url = (
+                    f"{SUPABASE_URL}/storage/v1/object/public/"
+                    f"{bucket}/{voice_clone_storage_path}"
+                )
+                logging.info(
+                    "Downloading voice clone reference from storage path fallback: %s",
+                    voice_clone_storage_path,
+                )
+                clone_path = self.orchestrator_service.download_asset_by_url(
+                    source_url, self.input_dir
+                )
+
             if not clone_path:
-                self._fail_job(f"Failed to download voice clone from {voice_clone_urls[0]}")
+                self._fail_job("Failed to download voice clone reference audio")
                 return
 
             if not self._wait_for_api():
@@ -612,6 +661,8 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
             return None
 
     def _cleanup_remote_job(self, remote_job_id: str):
+        if not remote_job_id:
+            return
         try:
             requests.delete(f"{self.api_base_url}/job/{remote_job_id}", timeout=10)
         except requests.exceptions.RequestException:
