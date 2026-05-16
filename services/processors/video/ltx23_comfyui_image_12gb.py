@@ -99,6 +99,8 @@ class LTX23ComfyUIImageToVideoProcessor12GB(ComfyUIProcessor, VideoOutputHandler
         steps = inputs.get("steps")
         cfg_scale = inputs.get("cfg_scale")
         strength = inputs.get("strength")
+        if strength is None:
+            strength = 0.65
 
         wf_ready = inject_prompt_and_image_into_ltx23_video_workflow(
             workflow_data,

@@ -178,6 +178,11 @@ class DockerDownloadManager:
         # compaction can request this after storage-limit eviction; active pulls
         # are cancelled and requeued so the WSL VHDX can become idle promptly.
         self._compaction_paused: bool = False
+        # Internal storage-limit pauses are only a handoff window for Electron
+        # to claim with SET_COMPACTION_PENDING=true. If no desktop compaction
+        # claims the pause, this deadline lets the queue resume instead of
+        # stalling forever.
+        self._compaction_pause_deadline: Optional[float] = None
         # Service types whose downloads were cancelled because a job started;
         # re-inserted at the front of the queue when the job finishes.
         self._paused_downloads: Set[str] = set()
@@ -230,6 +235,13 @@ class DockerDownloadManager:
             return ImageAvailability.AVAILABLE  # Headless mode - no Docker needed
 
         docker_client = getattr(self.docker_manager, "client", None)
+        if not docker_client:
+            refresh_client_connection = getattr(
+                self.docker_manager, "_refresh_client_connection", None
+            )
+            if callable(refresh_client_connection) and refresh_client_connection():
+                docker_client = getattr(self.docker_manager, "client", None)
+
         if not docker_client:
             logging.warning(
                 f"Docker client unavailable while checking image for {service_type}."
@@ -358,10 +370,17 @@ class DockerDownloadManager:
                         hold_remaining,
                     )
                 elif self._download_queue and self._compaction_paused:
-                    logging.info(
-                        "Queued Docker downloads remain paused while disk "
-                        "compaction is pending."
-                    )
+                    self._clear_expired_compaction_pause_locked()
+                    if self._compaction_paused:
+                        logging.info(
+                            "Queued Docker downloads remain paused while disk "
+                            "compaction is pending."
+                        )
+                    else:
+                        logging.debug(
+                            "Queued Docker downloads remain paused until the job "
+                            "listener confirms there is no processable job."
+                        )
                 elif self._download_queue:
                     logging.debug(
                         "Queued Docker downloads remain paused until the job "
@@ -384,6 +403,23 @@ class DockerDownloadManager:
                 logging.info(f"Re-queued suspended download for '{st}' — {reason}.")
             self._paused_downloads.discard(st)
 
+    def _clear_expired_compaction_pause_locked(self) -> None:
+        """Release an unclaimed storage-limit pause after its handoff window."""
+        if not self._compaction_paused or self._compaction_pause_deadline is None:
+            return
+        if time.time() < self._compaction_pause_deadline:
+            return
+
+        self._compaction_paused = False
+        self._compaction_pause_deadline = None
+        logging.info(
+            "Storage-limit compaction pause expired without a desktop compaction "
+            "claim; resuming queued Docker downloads."
+        )
+        self._requeue_paused_downloads_locked(
+            "storage-limit compaction pause expired"
+        )
+
     def _is_desktop_client(self) -> bool:
         return os.environ.get("OPENFORK_CLIENT_KIND") == "desktop"
 
@@ -402,6 +438,7 @@ class DockerDownloadManager:
 
             if not already_in_state:
                 self._compaction_paused = paused
+            self._compaction_pause_deadline = None
             if paused:
                 if not already_in_state:
                     logging.info(
@@ -1061,6 +1098,9 @@ class DockerDownloadManager:
                     )
                     if self._is_desktop_client():
                         self._compaction_paused = True
+                        self._compaction_pause_deadline = (
+                            time.time() + POST_STORAGE_LIMIT_EVICTION_HOLD_SECS
+                        )
                 logging.info(
                     "Holding queued downloads for %ss after storage-limit "
                     "eviction so disk compaction can claim the pause.",
@@ -1253,6 +1293,7 @@ class DockerDownloadManager:
         with self._lock:
             if self._shutdown:
                 return False
+            self._clear_expired_compaction_pause_locked()
             if self._compaction_paused:
                 logging.info(
                     f"Skipping background download for {service_type}: disk "
@@ -1764,6 +1805,7 @@ class DockerDownloadManager:
         """Start the next queued download. Caller must hold self._lock."""
         if self._shutdown:
             return False
+        self._clear_expired_compaction_pause_locked()
         if self._compaction_paused:
             logging.info(
                 "Skipping next queued download: disk compaction is pending."

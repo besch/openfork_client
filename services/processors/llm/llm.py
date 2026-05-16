@@ -134,6 +134,56 @@ class LLMJobProcessor(BaseJobProcessor):
         }
 
     @classmethod
+    def _dialogue_scenes_schema(cls, expected_items) -> dict:
+        dialogues = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "script_index": {"type": "integer", "minimum": 0},
+                    "speaker": {"type": "string"},
+                    "line": {"type": "string"},
+                    "qwen3_speaker": {
+                        "type": "string",
+                        "enum": [
+                            "Vivian",
+                            "Serena",
+                            "Uncle_Fu",
+                            "Dylan",
+                            "Eric",
+                            "Ryan",
+                            "Aiden",
+                            "Ono_Anna",
+                            "Sohee",
+                        ],
+                    },
+                    "start_offset_seconds": {"type": "number", "minimum": 0, "maximum": 20},
+                },
+                "required": [
+                    "script_index",
+                    "speaker",
+                    "line",
+                    "qwen3_speaker",
+                    "start_offset_seconds",
+                ],
+                "additionalProperties": False,
+            },
+        }
+
+        if expected_items is not None:
+            dialogues["minItems"] = expected_items
+            dialogues["maxItems"] = expected_items
+
+        return {
+            **cls._base_json_schema("object"),
+            "properties": {
+                "dialogues": dialogues,
+            },
+            "required": ["dialogues"],
+            "additionalProperties": False,
+        }
+
+    @classmethod
     def _generic_object_schema(cls) -> dict:
         return {
             **cls._base_json_schema("object"),
@@ -148,6 +198,8 @@ class LLMJobProcessor(BaseJobProcessor):
             return cls._generation_style_schema()
         if job_type == "activity_scenarios":
             return cls._activity_scenarios_schema(expected_items)
+        if job_type == "dialogue_scenes":
+            return cls._dialogue_scenes_schema(expected_items)
         if job_type == "music_prompt":
             return cls._music_prompt_schema()
         return cls._generic_object_schema()
@@ -175,6 +227,18 @@ class LLMJobProcessor(BaseJobProcessor):
             if expected_items is not None and len(scenarios) != expected_items:
                 logging.warning(
                     f"Schema constraint mismatch: expected {expected_items} scenarios but got {len(scenarios)}"
+                )
+            return parsed_json
+
+        if job_type == "dialogue_scenes":
+            if not isinstance(parsed_json, dict):
+                raise ValueError(f"Generated JSON is not an object. Got: {type(parsed_json).__name__}")
+            dialogues = parsed_json.get("dialogues")
+            if not isinstance(dialogues, list):
+                raise ValueError("Generated dialogue output is missing a dialogues array.")
+            if expected_items is not None and len(dialogues) != expected_items:
+                logging.warning(
+                    f"Schema constraint mismatch: expected {expected_items} dialogue lines but got {len(dialogues)}"
                 )
             return parsed_json
 

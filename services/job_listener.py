@@ -1626,6 +1626,28 @@ class JobListener:
                                                 logging.info(
                                                     "Started wan2gp_server.py as the Wan2GP container main process."
                                                 )
+                                            elif actual_service_type in {
+                                                "qwen",
+                                                "qwen-8gb",
+                                                "qwen-turbo-8gb",
+                                            }:
+                                                qwen_bootstrap = r"""
+set -e
+export PYTHONPATH="${PYTHONPATH:-}:/opt/ComfyUI/user/custom-packages"
+cd /opt/ComfyUI
+exec python main.py --listen
+"""
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    command=[
+                                                        "bash",
+                                                        "-lc",
+                                                        qwen_bootstrap,
+                                                    ],
+                                                )
+                                                logging.info(
+                                                    "Started Qwen ComfyUI container without runtime SageAttention install."
+                                                )
                                             elif actual_service_type == "ltx23-comfyui-video-8gb":
                                                 # The 8GB LTX image bakes split model files into
                                                 # ComfyUI's specialized folders, while some LTX loader

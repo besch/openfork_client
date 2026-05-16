@@ -419,6 +419,34 @@ class DockerCachePolicyTests(unittest.TestCase):
             else:
                 os.environ["OPENFORK_CLIENT_KIND"] = old_kind
 
+    def test_storage_limit_eviction_pause_expires_without_desktop_claim(self):
+        old_kind = os.environ.get("OPENFORK_CLIENT_KIND")
+        os.environ["OPENFORK_CLIENT_KIND"] = "desktop"
+        try:
+            docker_manager = PullRecordingDockerManager(
+                ["old", "incoming"],
+                cached_service_types=["old"],
+            )
+            docker_manager.services_config["old"]["disk_required_gb"] = 80
+            docker_manager.services_config["incoming"]["disk_required_gb"] = 80
+            manager = DockerDownloadManager(docker_manager, cache_limit_gb=120)
+
+            self.assertTrue(manager.start_background_download("incoming"))
+            self.assertTrue(manager._compaction_paused)
+
+            with manager._lock:
+                manager._compaction_pause_deadline = time.time() - 1
+                manager._post_download_hold_until = time.time() - 1
+
+            self.assertTrue(manager.start_next_queued_download(reason="test"))
+            self.assertFalse(manager._compaction_paused)
+            self.assertEqual(manager._download_queue, [])
+        finally:
+            if old_kind is None:
+                os.environ.pop("OPENFORK_CLIENT_KIND", None)
+            else:
+                os.environ["OPENFORK_CLIENT_KIND"] = old_kind
+
     def test_set_job_inactive_does_not_start_queue_before_listener_checks_jobs(self):
         docker_manager = PullRecordingDockerManager(["first", "second"])
         docker_manager.services_config["second"] = {"disk_required_gb": 0.001}

@@ -25,6 +25,73 @@ DOCKER_CLI_PULL_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_CLI_PULL_TIMEOUT_S
 
 
 class DockerProdManager:
+    def _build_docker_host_candidates(self):
+        allow_wsl_ip_fallback = (
+            os.environ.get("OPENFORK_ALLOW_WSL_DOCKER_IP_FALLBACK") == "1"
+        )
+        wsl_ip = self._get_wsl_ip() if allow_wsl_ip_fallback else None
+        explicit_host = os.environ.get("DOCKER_HOST")
+
+        candidates = []
+        if explicit_host:
+            candidates.append(explicit_host)
+        if os.name == "nt":
+            candidates.extend(
+                [
+                    "tcp://127.0.0.1:2375",
+                    "tcp://localhost:2375",
+                    f"tcp://{wsl_ip}:2375" if wsl_ip else None,
+                ]
+            )
+
+        return list(dict.fromkeys([host for host in candidates if host]))
+
+    def _connect_to_docker_hosts(self, hosts, retry_duration: int = 60) -> bool:
+        if not hosts:
+            return False
+
+        start_time = time.time()
+        iteration = 0
+        while True:
+            iteration += 1
+            elapsed = time.time() - start_time
+            if elapsed >= retry_duration:
+                logging.warning(
+                    "Docker connection retry timed out after %.1fs", elapsed
+                )
+                return False
+
+            logging.debug(
+                "Docker connection probe iteration %s, elapsed %.1fs",
+                iteration,
+                elapsed,
+            )
+            for host in hosts:
+                try:
+                    logging.info("Testing Docker endpoint %s...", host)
+                    client = docker.DockerClient(
+                        base_url=host,
+                        timeout=DOCKER_API_TIMEOUT_SECS,
+                    )
+                    client.ping()
+                    self.client = client
+                    logging.info("Successfully connected to Docker at %s", host)
+                    return True
+                except Exception as ex:
+                    logging.debug(
+                        "Docker endpoint %s failed: %s: %s",
+                        host,
+                        type(ex).__name__,
+                        ex,
+                    )
+
+            logging.info(
+                "Waiting for Docker daemon to become available... (%s/%s)",
+                int(elapsed),
+                retry_duration,
+            )
+            time.sleep(2)
+
     def _get_wsl_ip(self):
         """Attempts to detect the WSL VM IP address from Windows host."""
         import sys
@@ -51,14 +118,20 @@ class DockerProdManager:
     def __init__(self):
         try:
             logging.info("Initializing Docker client...")
-            self.client = docker.from_env(timeout=DOCKER_API_TIMEOUT_SECS)
-            self.client.ping()
-            logging.info("Successfully connected to Docker via from_env()")
+            self.client = None
+            preferred_hosts = self._build_docker_host_candidates()
+            if preferred_hosts and self._connect_to_docker_hosts(
+                preferred_hosts,
+                retry_duration=10,
+            ):
+                pass
+            else:
+                self.client = docker.from_env(timeout=DOCKER_API_TIMEOUT_SECS)
+                self.client.ping()
+                logging.info("Successfully connected to Docker via from_env()")
         except (docker.errors.DockerException, Exception) as e:
             # On Windows, from_env might fail if DOCKER_HOST isn't perfectly formed
             # or the pipe isn't available. Try explicit fallback connections with retry.
-            import os
-            import time
             import sys
 
             error_msg = (
@@ -67,90 +140,8 @@ class DockerProdManager:
             print(f"DEBUG: {error_msg}", file=sys.stderr, flush=True)
             logging.warning(error_msg)
 
-            allow_wsl_ip_fallback = (
-                os.environ.get("OPENFORK_ALLOW_WSL_DOCKER_IP_FALLBACK") == "1"
-            )
-            wsl_ip = self._get_wsl_ip() if allow_wsl_ip_fallback else None
-            explicit_host = os.environ.get("DOCKER_HOST")
-            if explicit_host:
-                # An explicit endpoint was configured for the OpenFork Ubuntu Docker daemon.
-                # Trust it and add the common local TCP variants to handle WSL IP churn.
-                if explicit_host.startswith("tcp://"):
-                    docker_hosts = [
-                        explicit_host,
-                        "tcp://127.0.0.1:2375",
-                        "tcp://localhost:2375",
-                        f"tcp://{wsl_ip}:2375" if wsl_ip else None,
-                    ]
-                else:
-                    docker_hosts = [explicit_host]
-            else:
-                # No explicit endpoint: probe the OpenFork Ubuntu Docker daemon directly.
-                docker_hosts = [
-                    "tcp://127.0.0.1:2375",
-                    "tcp://localhost:2375",
-                    f"tcp://{wsl_ip}:2375" if wsl_ip else None,
-                ]
-
-            # Remove duplicates and None values while preserving order
-            docker_hosts = list(dict.fromkeys([h for h in docker_hosts if h]))
-
-            connected = False
-            start_time = time.time()
-            retry_duration = 60
-            iteration = 0
-
-            while True:
-                iteration += 1
-                current_time = time.time()
-                elapsed = current_time - start_time
-
-                if elapsed >= retry_duration:
-                    debug_timeout = (
-                        f"Docker connection retry timed out after {elapsed:.1f}s"
-                    )
-                    print(f"DEBUG: {debug_timeout}", file=sys.stderr, flush=True)
-                    break
-
-                print(
-                    f"DEBUG: Loop iteration {iteration}, elapsed {elapsed:.1f}s",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-                for host in docker_hosts:
-                    if not host:
-                        continue
-                    try:
-                        print(f"DEBUG: Testing {host}...", file=sys.stderr, flush=True)
-                        self.client = docker.DockerClient(
-                            base_url=host,
-                            timeout=DOCKER_API_TIMEOUT_SECS,
-                        )
-                        self.client.ping()
-
-                        success_msg = f"Successfully connected to Docker at {host}"
-                        print(f"INFO: {success_msg}", flush=True)
-                        logging.info(success_msg)
-                        connected = True
-                        break
-                    except Exception as ex:
-                        # Log specific error for each host to understand why it fails
-                        print(
-                            f"DEBUG: {host} failed: {type(ex).__name__}: {ex}",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-
-                if connected:
-                    break
-
-                wait_msg = f"Waiting for Docker daemon to become available... ({int(elapsed)}/{retry_duration}s)"
-                print(f"INFO: {wait_msg}", flush=True)
-                logging.info(wait_msg)
-                time.sleep(2)
-
-            if not connected:
+            docker_hosts = self._build_docker_host_candidates()
+            if not self._connect_to_docker_hosts(docker_hosts, retry_duration=60):
                 fail_msg = "CRITICAL: Docker daemon not found or not running after all fallback attempts."
                 print(f"ERROR: {fail_msg}", file=sys.stderr, flush=True)
                 logging.error(fail_msg)

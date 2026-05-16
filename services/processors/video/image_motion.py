@@ -135,10 +135,48 @@ class ImageMotionVideoProcessor(BaseJobProcessor, VideoOutputHandler):
         frames: int,
         camera_movement: str,
     ) -> str:
+        frame_span = max(frames - 1, 1)
+        movement = (camera_movement or "").strip().lower()
+
+        def centered_x() -> str:
+            return "iw/2-(iw/zoom/2)"
+
+        def centered_y() -> str:
+            return "ih/2-(ih/zoom/2)"
+
+        zoom = f"1+0.035*on/{frame_span}"
+        x = centered_x()
+        y = centered_y()
+
+        if movement in {"zoom-in", "dolly-in", "push-in", "tracking", "steadicam"}:
+            zoom = f"1+0.08*on/{frame_span}"
+        elif movement in {"zoom-out", "dolly-out", "pull-back"}:
+            zoom = f"1.08-0.08*on/{frame_span}"
+        elif movement == "pan-left":
+            zoom = "1.08"
+            x = f"(iw-iw/zoom)*(1-on/{frame_span})"
+        elif movement == "pan-right":
+            zoom = "1.08"
+            x = f"(iw-iw/zoom)*on/{frame_span}"
+        elif movement == "tilt-up":
+            zoom = "1.08"
+            y = f"(ih-ih/zoom)*(1-on/{frame_span})"
+        elif movement == "tilt-down":
+            zoom = "1.08"
+            y = f"(ih-ih/zoom)*on/{frame_span}"
+        elif movement in {"handheld", "orbit", "crane", "aerial"}:
+            zoom = "1.06"
+            x = f"(iw-iw/zoom)*(0.5+0.35*sin(on/{frame_span}*6.28318))"
+            y = f"(ih-ih/zoom)*(0.5+0.20*cos(on/{frame_span}*6.28318))"
+
+        duration = frames / self.FPS
         return (
             f"scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},"
-            f"fps={self.FPS},"
+            f"zoompan=z='{zoom}':x='{x}':y='{y}':d={frames}:"
+            f"s={width}x{height}:fps={self.FPS},"
+            f"trim=duration={duration:.6f},"
+            "setpts=PTS-STARTPTS,"
             "format=yuv420p"
         )
 
