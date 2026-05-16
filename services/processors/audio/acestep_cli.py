@@ -208,12 +208,13 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
                 requested_duration = float(requested_duration)
             except (TypeError, ValueError):
                 requested_duration = float(self.DEFAULT_MAX_DURATION)
-            actual_duration = min(requested_duration, self.max_audio_duration_seconds)
 
             seed = params.get("seed")
             use_random_seed = seed in (None, "", -1, "-1")
 
             service_type = self.client.get_service_type_for_workflow(self.workflow_type)
+            service_max_duration = 12 if service_type == "acestep-8gb" else self.max_audio_duration_seconds
+            actual_duration = min(requested_duration, service_max_duration)
             default_model_by_service = {
                 "acestep-8gb": "acestep-v15-turbo",
                 "acestep-16gb": "acestep-v15-xl-turbo",
@@ -225,7 +226,9 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
                 "lyrics": lyrics,
                 "audio_duration": float(actual_duration),
                 "audio_format": "wav",
-                "inference_steps": 8,
+                "inference_steps": 4 if service_type == "acestep-8gb" else 8,
+                "batch_size": 1 if service_type == "acestep-8gb" else 2,
+                "offload_to_cpu": service_type == "acestep-8gb",
                 "use_random_seed": use_random_seed,
             }
             if not use_random_seed:
@@ -238,7 +241,16 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
 
             response = self.session.post(f"{self.api_base_url}/release_task", json=payload, timeout=30)
             if response.status_code == 200:
-                return response.json().get("data", {}).get("task_id")
+                task_id = response.json().get("data", {}).get("task_id")
+                logging.info(
+                    "ACE-Step task submitted for job %s: task_id=%s duration=%ss steps=%s batch=%s",
+                    self.job_id,
+                    task_id,
+                    actual_duration,
+                    payload["inference_steps"],
+                    payload["batch_size"],
+                )
+                return task_id
             logging.error(f"release_task failed: {response.status_code} {response.text}")
             return None
         except requests.exceptions.RequestException as e:
@@ -294,20 +306,30 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
                     if items:
                         item = items[0]
                         status_code = item.get("status")
+                        progress_text = item.get("progress_text")
+                        result_data = self._parse_result_payload(item.get("result"))
+                        download_target = self._extract_download_target(result_data)
+                        logging.info(
+                            "ACE-Step poll job %s task %s: status=%s progress=%s has_download=%s",
+                            self.job_id,
+                            task_id,
+                            status_code,
+                            progress_text,
+                            bool(download_target),
+                        )
 
-                        if status_code == 1:  # Success
-                            result_data = self._parse_result_payload(item.get("result"))
-                            download_target = self._extract_download_target(result_data)
+                        if download_target:
                             return {"status": "completed", "download_target": download_target}
 
-                        elif status_code == 2:  # Failed
-                            error = item.get("progress_text", "Generation failed")
-                            result_data = self._parse_result_payload(item.get("result"))
+                        if status_code == 2:  # Failed
+                            error = progress_text or "Generation failed"
                             if result_data:
                                 error = result_data.get("error", error)
                             return {"status": "failed", "error": error}
 
-                        # status_code == 0: still queued/running, keep polling
+                        # Status 0 is queued/running. Some ACE-Step builds also
+                        # report 1 while the audio file is still being prepared,
+                        # so completion is keyed off an actual downloadable path.
 
             except requests.exceptions.RequestException:
                 pass

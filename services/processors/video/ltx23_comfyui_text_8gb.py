@@ -12,7 +12,7 @@ from utils.comfyui_workflow_utils import (
 
 
 class LTX23ComfyUITextToVideoProcessor8GB(ComfyUIProcessor, VideoOutputHandler):
-    """ComfyUI-based LTX-2.3 T2V processor, 8GB tier (512x288, 65 frames)."""
+    """ComfyUI-based LTX-2.3 T2V processor, 8GB tier (512x288, 33 frames)."""
 
     def process(self):
         if DEV_MODE:

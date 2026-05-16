@@ -11,7 +11,7 @@ import socket
 import uuid
 from collections import deque
 from typing import Union, Dict, Optional, Any, List, Tuple
-from urllib.parse import urljoin, urlparse, unquote
+from urllib.parse import quote, urljoin, urlparse, unquote
 
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
 
@@ -19,6 +19,8 @@ from config import (
     TimeoutConfig,
     MAX_INPUT_ASSET_BYTES,
     MAX_INPUT_ASSET_REDIRECTS,
+    SUPABASE_PUBLISHABLE_KEY,
+    SUPABASE_URL,
 )
 from exceptions import AuthError, ProviderError, TransientError, UpgradeRequiredError
 from openfork_version import (
@@ -597,7 +599,11 @@ class OrchestratorService:
 
         return parsed.geturl(), resolved
 
-    def _open_validated_asset_stream(self, asset_url: str) -> Tuple[str, requests.Response]:
+    def _open_validated_asset_stream(
+        self,
+        asset_url: str,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[str, requests.Response]:
         current_url = asset_url
 
         for redirect_count in range(MAX_INPUT_ASSET_REDIRECTS + 1):
@@ -607,6 +613,7 @@ class OrchestratorService:
                 stream=True,
                 timeout=120,
                 allow_redirects=False,
+                headers=headers,
             )
 
             peer_ip = self._get_response_peer_ip(response)
@@ -673,12 +680,20 @@ class OrchestratorService:
         safe_stem = stem[:80]
         return f"{safe_stem}-{uuid.uuid4().hex[:8]}{ext}"
 
-    def download_asset_by_url(self, asset_url: str, download_dir: str) -> Union[str, None]:
+    def download_asset_by_url(
+        self,
+        asset_url: str,
+        download_dir: str,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> Union[str, None]:
         """Download an asset from a given URL with validation."""
         file_path: Optional[str] = None
         try:
             os.makedirs(download_dir, exist_ok=True)
-            final_url, response = self._open_validated_asset_stream(asset_url)
+            final_url, response = self._open_validated_asset_stream(
+                asset_url,
+                headers=headers,
+            )
             with response:
                 content_type = response.headers.get('Content-Type', '').lower()
                 content_length = response.headers.get("Content-Length")
@@ -751,6 +766,42 @@ class OrchestratorService:
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
             return None
+
+    def download_storage_asset(
+        self,
+        bucket: str,
+        storage_path: str,
+        download_dir: str,
+    ) -> Union[str, None]:
+        """Download a Supabase storage object, including private project buckets."""
+        if not bucket or not storage_path:
+            return None
+
+        supabase_url = os.environ.get("SUPABASE_URL", SUPABASE_URL).rstrip("/")
+        encoded_path = "/".join(
+            quote(part, safe="")
+            for part in storage_path.replace("\\", "/").split("/")
+            if part
+        )
+        asset_url = f"{supabase_url}/storage/v1/object/{quote(bucket, safe='')}/{encoded_path}"
+        headers: Dict[str, str] = {}
+
+        publishable_key = os.environ.get(
+            "SUPABASE_PUBLISHABLE_KEY",
+            os.environ.get("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", SUPABASE_PUBLISHABLE_KEY),
+        )
+        if publishable_key:
+            headers["apikey"] = publishable_key
+
+        if not self.use_api_key and self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+
+        logging.info(
+            "Downloading storage asset from bucket '%s': %s",
+            bucket,
+            storage_path,
+        )
+        return self.download_asset_by_url(asset_url, download_dir, headers=headers)
 
     def _get_signed_upload_url(self, job_id: str, file_name: str) -> Union[Dict, None]:
         """Get a presigned URL for uploading a file directly to storage."""

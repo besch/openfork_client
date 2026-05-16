@@ -60,7 +60,7 @@ class ContainerMonitor:
         """Stop monitoring the container."""
         self._stop_monitoring.set()
         if self.monitor_thread:
-            self.monitor_thread.join(timeout=2.0)
+            self.monitor_thread.join(timeout=5.0)
             logging.debug(f"Stopped container monitor for {self.container_name}")
     
     def _monitor_loop(self):
@@ -73,6 +73,11 @@ class ContainerMonitor:
                     
                     # Check if container has exited unexpectedly
                     if status in ('exited', 'dead'):
+                        if self._stop_monitoring.is_set() or self.shutdown_event.is_set():
+                            logging.debug(
+                                f"Container {self.container_name} exited after monitor stop was requested"
+                            )
+                            return
                         # Get exit code and OOM status
                         container.reload()  # Refresh container state
                         exit_code = container.attrs.get('State', {}).get('ExitCode', -1)

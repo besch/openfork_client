@@ -1,10 +1,9 @@
 {
   "prompt": {
     "1": {
-      "class_type": "UNETLoader",
+      "class_type": "UnetLoaderGGUF",
       "inputs": {
-        "unet_name": "ltx-2.3-22b-dev-Q4_K_M.gguf",
-        "weight_dtype": "default"
+        "unet_name": "ltx-2.3-22b-dev-Q4_K_M.gguf"
       }
     },
     "2": {
@@ -16,11 +15,11 @@
       }
     },
     "5": {
-      "class_type": "LTXVGemmaCLIPModelLoader",
+      "class_type": "LTXAVTextEncoderLoader",
       "inputs": {
-        "gemma_path": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
-        "ltxv_path": "ltx-2.3-22b-dev_embeddings_connectors.safetensors",
-        "max_length": 1024
+        "text_encoder": "gemma_3_12B_it_fp8_e4m3fn.safetensors",
+        "ckpt_name": "ltx-2.3-22b-dev_embeddings_connectors.safetensors",
+        "device": "default"
       }
     },
     "7": {
@@ -63,14 +62,14 @@
       "inputs": {
         "width": 512,
         "height": 288,
-        "length": 65,
+        "length": 33,
         "batch_size": 1
       }
     },
     "8": {
       "class_type": "LTXVEmptyLatentAudio",
       "inputs": {
-        "frames_number": 65,
+        "frames_number": 33,
         "frame_rate": 25.0,
         "batch_size": 1,
         "audio_vae": ["7", 0]
@@ -124,7 +123,7 @@
     "13": {
       "class_type": "LTXVScheduler",
       "inputs": {
-        "steps": 8,
+        "steps": 6,
         "max_shift": 2.05,
         "base_shift": 0.95,
         "stretch": true,

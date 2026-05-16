@@ -219,6 +219,13 @@ class DockerDownloadManager:
         Transient Docker transport failures are reported as UNKNOWN so callers
         do not incorrectly treat a cached image as missing and trigger a pull.
         """
+        service_config = (getattr(self.docker_manager, "services_config", None) or {}).get(
+            service_type,
+            {},
+        )
+        if service_config.get("backend") == "local":
+            return ImageAvailability.AVAILABLE
+
         if not self.docker_manager:
             return ImageAvailability.AVAILABLE  # Headless mode - no Docker needed
 
@@ -274,6 +281,14 @@ class DockerDownloadManager:
         Return True only when the Docker image is confirmed to exist locally.
         """
         return self.get_image_availability(service_type) == ImageAvailability.AVAILABLE
+
+    def _is_local_service(self, service_type: str) -> bool:
+        """Return True for processor-only services that do not have Docker images."""
+        service_config = (getattr(self.docker_manager, "services_config", None) or {}).get(
+            service_type,
+            {},
+        )
+        return service_config.get("backend") == "local"
 
     def notify_job_complete(self, service_type: str):
         """Record that a service type was actually used to process a job."""
@@ -701,6 +716,8 @@ class DockerDownloadManager:
         """Return cached service types using the manager's known service list."""
         cached = []
         for service_type in self._get_known_service_types():
+            if self._is_local_service(service_type):
+                continue
             if self.get_image_availability(service_type) == ImageAvailability.AVAILABLE:
                 cached.append(service_type)
         return cached
@@ -716,6 +733,8 @@ class DockerDownloadManager:
 
         running = set()
         for service_type in self._get_known_service_types():
+            if self._is_local_service(service_type):
+                continue
             try:
                 container_name = self.docker_manager.get_container_name(service_type)
                 container = self.docker_manager.client.containers.get(container_name)
@@ -778,6 +797,9 @@ class DockerDownloadManager:
 
     def _get_service_required_bytes(self, service_type: str) -> int:
         """Return the expected disk footprint for a service image."""
+        if self._is_local_service(service_type):
+            return 0
+
         service_config = (getattr(self.docker_manager, "services_config", None) or {}).get(
             service_type,
             {},
@@ -797,6 +819,9 @@ class DockerDownloadManager:
         is the user-facing storage budget contract, so never count a cached
         OpenFork image below that configured footprint.
         """
+        if self._is_local_service(service_type):
+            return 0
+
         image_name = self.docker_manager.get_image_name(service_type)
         required_bytes = self._get_service_required_bytes(service_type)
         try:
@@ -930,6 +955,8 @@ class DockerDownloadManager:
 
     def service_fits_cache_budget(self, service_type: str) -> bool:
         """Whether one service image can fit inside the configured cache budget."""
+        if self._is_local_service(service_type):
+            return True
         if not self.cache_limit_bytes:
             return True
         try:
@@ -1219,6 +1246,9 @@ class DockerDownloadManager:
             
         if not self.docker_manager:
             return False  # Headless mode
+
+        if self._is_local_service(service_type):
+            return False  # Processor-only service; no Docker image to download.
         
         with self._lock:
             if self._shutdown:
@@ -1954,6 +1984,8 @@ class DockerDownloadManager:
         
         cached = []
         for service_type in all_service_types:
+            if self._is_local_service(service_type):
+                continue
             if self.get_image_availability(service_type) == ImageAvailability.AVAILABLE:
                 cached.append(service_type)
         

@@ -20,6 +20,170 @@ class LLMJobProcessor(BaseJobProcessor):
     """Processor for LLM-based text generation using Ollama."""
 
     @staticmethod
+    def _base_json_schema(schema_type: str) -> dict:
+        return {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": schema_type,
+        }
+
+    @classmethod
+    def _script_scene_schema(cls, num_scenes) -> dict:
+        schema = {
+            **cls._base_json_schema("array"),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Scene title"},
+                    "description": {"type": "string", "description": "Visual description"},
+                    "aspect_ratio": {"type": "string", "enum": ["16:9", "9:16"]},
+                    "camera_movement": {
+                        "type": "string",
+                        "enum": ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "dolly-in", "push-in", "pull-back"],
+                    },
+                    "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10},
+                },
+                "required": ["name", "description", "aspect_ratio", "camera_movement", "duration_seconds"],
+                "additionalProperties": False,
+            },
+        }
+
+        if num_scenes is not None:
+            schema["minItems"] = num_scenes
+            schema["maxItems"] = num_scenes
+            logging.info(f"Enforcing exactly {num_scenes} scene(s) via JSON schema constraints")
+
+        return schema
+
+    @classmethod
+    def _generation_style_schema(cls) -> dict:
+        return {
+            **cls._base_json_schema("object"),
+            "properties": {
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "prompt_prefix": {
+                    "type": "string",
+                    "description": "A compact reusable visual style prefix for image and video prompts.",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["animation", "cinematic", "artistic", "photo", "stylized", "custom"],
+                },
+            },
+            "required": ["name", "description", "prompt_prefix", "category"],
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def _activity_scenarios_schema(cls, expected_items) -> dict:
+        scenarios = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "creature_name": {"type": "string"},
+                    "activity": {"type": "string"},
+                    "scene_prompt": {"type": "string"},
+                    "image_edit_prompt": {"type": "string"},
+                    "video_prompt": {"type": "string"},
+                    "camera_movement": {
+                        "type": "string",
+                        "enum": ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "dolly-in", "push-in", "pull-back"],
+                    },
+                    "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10},
+                },
+                "required": [
+                    "creature_name",
+                    "activity",
+                    "scene_prompt",
+                    "image_edit_prompt",
+                    "video_prompt",
+                    "camera_movement",
+                    "duration_seconds",
+                ],
+                "additionalProperties": False,
+            },
+        }
+
+        if expected_items is not None:
+            scenarios["minItems"] = expected_items
+            scenarios["maxItems"] = expected_items
+
+        return {
+            **cls._base_json_schema("object"),
+            "properties": {
+                "scenarios": scenarios,
+            },
+            "required": ["scenarios"],
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def _music_prompt_schema(cls) -> dict:
+        return {
+            **cls._base_json_schema("object"),
+            "properties": {
+                "prompt": {"type": "string"},
+                "mood": {"type": "string"},
+                "tempo": {"type": "string"},
+                "instruments": {"type": "array", "items": {"type": "string"}},
+                "duration_seconds": {"type": "integer", "minimum": 5, "maximum": 300},
+            },
+            "required": ["prompt", "mood", "tempo", "instruments", "duration_seconds"],
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def _generic_object_schema(cls) -> dict:
+        return {
+            **cls._base_json_schema("object"),
+            "additionalProperties": True,
+        }
+
+    @classmethod
+    def _json_schema_for_job(cls, job_type: str, num_scenes, expected_items) -> dict:
+        if job_type == "script_generation":
+            return cls._script_scene_schema(num_scenes)
+        if job_type == "generation_style":
+            return cls._generation_style_schema()
+        if job_type == "activity_scenarios":
+            return cls._activity_scenarios_schema(expected_items)
+        if job_type == "music_prompt":
+            return cls._music_prompt_schema()
+        return cls._generic_object_schema()
+
+    @staticmethod
+    def _validate_generated_json(generated_text: str, job_type: str, num_scenes, expected_items):
+        parsed_json = json.loads(generated_text)
+
+        if job_type == "script_generation":
+            if not isinstance(parsed_json, list):
+                raise ValueError(f"Generated JSON is not an array. Got: {type(parsed_json).__name__}")
+            actual_count = len(parsed_json)
+            if num_scenes is not None and actual_count != num_scenes:
+                logging.warning(
+                    f"Schema constraint mismatch: expected {num_scenes} scenes but got {actual_count}"
+                )
+            return parsed_json
+
+        if job_type == "activity_scenarios":
+            if not isinstance(parsed_json, dict):
+                raise ValueError(f"Generated JSON is not an object. Got: {type(parsed_json).__name__}")
+            scenarios = parsed_json.get("scenarios")
+            if not isinstance(scenarios, list):
+                raise ValueError("Generated activity scenario output is missing a scenarios array.")
+            if expected_items is not None and len(scenarios) != expected_items:
+                logging.warning(
+                    f"Schema constraint mismatch: expected {expected_items} scenarios but got {len(scenarios)}"
+                )
+            return parsed_json
+
+        if not isinstance(parsed_json, dict):
+            raise ValueError(f"Generated JSON is not an object. Got: {type(parsed_json).__name__}")
+
+        return parsed_json
+
+    @staticmethod
     def _is_transient_ollama_error(exc: Exception) -> bool:
         text = str(exc).lower()
         transient_markers = (
@@ -115,32 +279,9 @@ class LLMJobProcessor(BaseJobProcessor):
         try:
             inputs = self.job.get("inputs", {})
             num_scenes = inputs.get("num_scenes")
-
-            # JSON schema for script scenes - forces Ollama to output valid JSON
-            # Must be a proper JSON Schema with $schema and additionalProperties for Ollama compatibility
-            json_schema = {
-                "$schema": "http://json-schema.org/draft-07/schema#",
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Scene title"},
-                        "description": {"type": "string", "description": "Visual description"},
-                        "aspect_ratio": {"type": "string", "enum": ["16:9", "9:16"]},
-                        "camera_movement": {"type": "string", "enum": ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "dolly-in", "push-in", "pull-back"]},
-                        "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10}
-                    },
-                    "required": ["name", "description", "aspect_ratio", "camera_movement", "duration_seconds"],
-                    "additionalProperties": False
-                }
-            }
-
-            # Enforce exact scene count via JSON schema constraints
-            # Note: minItems and maxItems are added at the array level, not within items
-            if num_scenes is not None:
-                json_schema["minItems"] = num_scenes
-                json_schema["maxItems"] = num_scenes
-                logging.info(f"Enforcing exactly {num_scenes} scene(s) via JSON schema constraints")
+            job_type = inputs.get("job_type") or ("script_generation" if num_scenes is not None else "general")
+            expected_items = inputs.get("expected_items")
+            json_schema = self._json_schema_for_job(job_type, num_scenes, expected_items)
 
             # Dynamically size the context window to fit the requested output.
             # num_ctx must be >= (input tokens + max_tokens).  We add a 2048-token
@@ -148,7 +289,10 @@ class LLMJobProcessor(BaseJobProcessor):
             # for efficiency in the attention implementation.
             raw_ctx = max_tokens + 2048
             num_ctx = max(8192, int(2 ** math.ceil(math.log2(raw_ctx))))
-            logging.info(f"Context window sizing: max_tokens={max_tokens}, num_ctx={num_ctx}, num_scenes={num_scenes}")
+            logging.info(
+                f"Context window sizing: max_tokens={max_tokens}, num_ctx={num_ctx}, "
+                f"job_type={job_type}, num_scenes={num_scenes}, expected_items={expected_items}"
+            )
 
             # Use chat API with format parameter for structured output
             payload = {
@@ -235,25 +379,36 @@ class LLMJobProcessor(BaseJobProcessor):
                 self._fail_job(f"Ollama returned empty response. Full result: {result}")
                 return
 
-            # Validate the generated JSON matches the expected schema
             try:
-                parsed_json = json.loads(generated_text)
-                if isinstance(parsed_json, list):
-                    actual_count = len(parsed_json)
-                    if num_scenes is not None and actual_count != num_scenes:
-                        logging.warning(f"Schema constraint mismatch: expected {num_scenes} scenes but got {actual_count}")
-                        # Still proceed - the schema should have enforced this, but log the mismatch
-                else:
-                    logging.error(f"Generated content is not a JSON array: {type(parsed_json)}")
-                    self._fail_job(f"Generated JSON is not an array. Got: {type(parsed_json).__name__}")
-                    return
+                parsed_json = self._validate_generated_json(
+                    generated_text,
+                    job_type,
+                    num_scenes,
+                    expected_items,
+                )
             except json.JSONDecodeError as e:
                 self._fail_job(f"Generated content is not valid JSON: {e}")
                 return
+            except ValueError as e:
+                self._fail_job(str(e))
+                return
 
-            logging.info(f"Generation complete. Generated {len(parsed_json)} scene(s). Length: {len(generated_text)} chars.")
+            if isinstance(parsed_json, list):
+                logging.info(
+                    f"Generation complete. Generated {len(parsed_json)} item(s). Length: {len(generated_text)} chars."
+                )
+            elif job_type == "activity_scenarios":
+                logging.info(
+                    "Generation complete. Generated %s scenario(s). Length: %s chars.",
+                    len(parsed_json.get("scenarios", [])),
+                    len(generated_text),
+                )
+            else:
+                logging.info(
+                    f"Generation complete for {job_type}. Length: {len(generated_text)} chars."
+                )
 
-            output_filename = f"{self.job_id}_script.txt"
+            output_filename = f"{self.job_id}_{job_type}.txt"
             output_path = os.path.join(self.cache_dir, output_filename)
 
             with open(output_path, "w", encoding="utf-8") as f:
@@ -266,8 +421,14 @@ class LLMJobProcessor(BaseJobProcessor):
                 return
 
             if storage_path:
+                completion_metadata = self.job.get("completion_metadata") or {}
+                completion_metadata = dict(completion_metadata)
+                completion_metadata.update({"model": model_name, "job_type": job_type})
                 self.orchestrator_service.update_job_status(
-                    self.job_id, "completed", storage_path=storage_path, completion_metadata={"model": model_name}
+                    self.job_id,
+                    "completed",
+                    storage_path=storage_path,
+                    completion_metadata=completion_metadata,
                 )
             else:
                 self._fail_job("Failed to upload generated script.")

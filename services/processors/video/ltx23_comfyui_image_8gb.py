@@ -14,7 +14,7 @@ from utils.comfyui_workflow_utils import (
 
 
 class LTX23ComfyUIImageToVideoProcessor8GB(ComfyUIProcessor, VideoOutputHandler):
-    """ComfyUI-based LTX-2.3 I2V processor, 8GB tier (512x288, 65 frames)."""
+    """ComfyUI-based LTX-2.3 I2V processor, 8GB tier (512x288, 33 frames)."""
 
     def process(self):
         if DEV_MODE:
@@ -57,19 +57,27 @@ class LTX23ComfyUIImageToVideoProcessor8GB(ComfyUIProcessor, VideoOutputHandler)
 
             if input_storage_path:
                 bucket = self.job.get("bucket", "projects_public")
-                supabase_url = os.environ.get(
-                    "SUPABASE_URL", self.client.config.get("SUPABASE_URL", SUPABASE_URL)
+                downloaded_path = self.orchestrator_service.download_storage_asset(
+                    bucket,
+                    input_storage_path,
+                    self.input_dir,
                 )
-                if supabase_url:
-                    source_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{input_storage_path}"
-                    logging.info(f"Downloading start image from: {source_url}")
-                    downloaded_path = self.orchestrator_service.download_asset_by_url(
-                        source_url, self.input_dir
-                    )
-                    if downloaded_path:
-                        start_image_filename = os.path.basename(downloaded_path)
+                if downloaded_path:
+                    start_image_filename = os.path.basename(downloaded_path)
                 else:
-                    logging.warning("SUPABASE_URL not found; cannot download start image.")
+                    supabase_url = os.environ.get(
+                        "SUPABASE_URL", self.client.config.get("SUPABASE_URL", SUPABASE_URL)
+                    )
+                    if supabase_url:
+                        source_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                        logging.info(f"Downloading start image from: {source_url}")
+                        downloaded_path = self.orchestrator_service.download_asset_by_url(
+                            source_url, self.input_dir
+                        )
+                        if downloaded_path:
+                            start_image_filename = os.path.basename(downloaded_path)
+                    else:
+                        logging.warning("SUPABASE_URL not found; cannot download start image.")
 
         if not start_image_filename:
             self._fail_job(f"Failed to materialise start image for job {self.job_id}.")

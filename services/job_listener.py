@@ -1526,8 +1526,16 @@ class JobListener:
                                             is_ollama = (
                                                 service_cfg.get("backend") == "ollama"
                                             )
+                                            is_local = (
+                                                service_cfg.get("backend") == "local"
+                                            )
 
-                                            if is_wan2gp:
+                                            if is_local:
+                                                logging.info(
+                                                    "Service '%s' uses local backend; skipping Docker container start.",
+                                                    actual_service_type,
+                                                )
+                                            elif is_wan2gp:
                                                 # LTX/Wan2GP images are expected to contain
                                                 # their model files. If a dependency tries to
                                                 # fetch from Hugging Face at runtime, fail
@@ -1618,6 +1626,52 @@ class JobListener:
                                                 logging.info(
                                                     "Started wan2gp_server.py as the Wan2GP container main process."
                                                 )
+                                            elif actual_service_type == "ltx23-comfyui-video-8gb":
+                                                # The 8GB LTX image bakes split model files into
+                                                # ComfyUI's specialized folders, while some LTX loader
+                                                # nodes enumerate generic registries. Expose the bundled
+                                                # connector and audio VAE through the checkpoint registry
+                                                # before ComfyUI imports nodes.
+                                                ltx23_bootstrap = r"""
+set -e
+mkdir -p /opt/ComfyUI/models/checkpoints
+ln -sf /opt/ComfyUI/models/text_encoders/ltx-2.3-22b-dev_embeddings_connectors.safetensors /opt/ComfyUI/models/checkpoints/ltx-2.3-22b-dev_embeddings_connectors.safetensors
+ln -sf /opt/ComfyUI/models/vae/ltx-2.3-22b-dev_audio_vae.safetensors /opt/ComfyUI/models/checkpoints/ltx-2.3-22b-dev_audio_vae.safetensors
+python - <<'PY'
+from pathlib import Path
+
+path = Path("/opt/ComfyUI/custom_nodes/ComfyUI-LTXVideo/low_vram_loaders.py")
+text = path.read_text(encoding="utf-8")
+if "import comfy.sd" not in text:
+    text = text.replace("import comfy.utils\n", "import comfy.utils\nimport comfy.sd\n")
+old = (
+    "        sd, metadata = comfy.utils.load_torch_file(ckpt_path, return_metadata=True)\n"
+    "        audio_vae = AudioVAE(sd, metadata)\n"
+    "        return (audio_vae,)"
+)
+new = (
+    "        sd, metadata = comfy.utils.load_torch_file(ckpt_path, return_metadata=True)\n"
+    '        sd = comfy.utils.state_dict_prefix_replace(sd, {"audio_vae.": "autoencoder.", "vocoder.": "vocoder."}, filter_keys=True)\n'
+    "        audio_vae = comfy.sd.VAE(sd=sd, metadata=metadata)\n"
+    "        audio_vae.throw_exception_if_invalid()\n"
+    "        return (audio_vae,)"
+)
+if old in text:
+    path.write_text(text.replace(old, new), encoding="utf-8")
+PY
+exec python main.py --listen --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention
+"""
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    command=[
+                                                        "bash",
+                                                        "-lc",
+                                                        ltx23_bootstrap,
+                                                    ],
+                                                )
+                                                logging.info(
+                                                    "Started LTX-2.3 ComfyUI container with 8GB model registry bootstrap."
+                                                )
                                             elif is_ollama:
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,
@@ -1638,51 +1692,52 @@ class JobListener:
                                                     service_type=actual_service_type,
                                                 )
 
-                                            # Start container crash monitor
-                                            # This detects OOM kills and unexpected container crashes
-                                            def handle_container_crash(
-                                                crashed_job_id: str,
-                                                reason: str,
-                                                container_logs: Optional[str],
-                                            ):
-                                                """Called when container crashes unexpectedly."""
-                                                container_crash_event.set()
-                                                logging.error(
-                                                    f"Container crash detected for job {crashed_job_id}: {reason}"
+                                            if not is_local:
+                                                # Start container crash monitor
+                                                # This detects OOM kills and unexpected container crashes
+                                                def handle_container_crash(
+                                                    crashed_job_id: str,
+                                                    reason: str,
+                                                    container_logs: Optional[str],
+                                                ):
+                                                    """Called when container crashes unexpectedly."""
+                                                    container_crash_event.set()
+                                                    logging.error(
+                                                        f"Container crash detected for job {crashed_job_id}: {reason}"
+                                                    )
+
+                                                    self._requeue_job_after_infrastructure_error(
+                                                        job,
+                                                        InfrastructureError(reason),
+                                                        reason="provider_container_crash",
+                                                    )
+
+                                                container_monitor = ContainerMonitor(
+                                                    docker_client=docker_manager.client,
+                                                    container_name=docker_manager.get_container_name(
+                                                        actual_service_type
+                                                    ),
+                                                    job_id=job_id,
+                                                    on_container_crash=handle_container_crash,
+                                                    shutdown_event=self.shutdown_event,
                                                 )
+                                                container_monitor.start()
+                                                # Register on self so every cleanup path
+                                                # (error, cancellation, shutdown) can stop it
+                                                # without relying on locals().
+                                                self._active_container_monitor = container_monitor
 
-                                                self._requeue_job_after_infrastructure_error(
-                                                    job,
-                                                    InfrastructureError(reason),
-                                                    reason="provider_container_crash",
+                                                # Start log streaming in a background thread
+                                                # This allows seeing ComfyUI/container logs in the DGN client console
+                                                log_thread = threading.Thread(
+                                                    target=docker_manager.stream_logs,
+                                                    args=(
+                                                        actual_service_type,
+                                                        self.shutdown_event,
+                                                    ),
+                                                    daemon=True,
                                                 )
-
-                                            container_monitor = ContainerMonitor(
-                                                docker_client=docker_manager.client,
-                                                container_name=docker_manager.get_container_name(
-                                                    actual_service_type
-                                                ),
-                                                job_id=job_id,
-                                                on_container_crash=handle_container_crash,
-                                                shutdown_event=self.shutdown_event,
-                                            )
-                                            container_monitor.start()
-                                            # Register on self so every cleanup path
-                                            # (error, cancellation, shutdown) can stop it
-                                            # without relying on locals().
-                                            self._active_container_monitor = container_monitor
-
-                                            # Start log streaming in a background thread
-                                            # This allows seeing ComfyUI/container logs in the DGN client console
-                                            log_thread = threading.Thread(
-                                                target=docker_manager.stream_logs,
-                                                args=(
-                                                    actual_service_type,
-                                                    self.shutdown_event,
-                                                ),
-                                                daemon=True,
-                                            )
-                                            log_thread.start()
+                                                log_thread.start()
                                         else:
                                             logging.info(
                                                 "Headless mode - container already running, skipping Docker management."
@@ -1772,12 +1827,13 @@ class JobListener:
                                                 # the intentional removal.
                                                 self._stop_container_monitor()
 
-                                                logging.info(
-                                                    f"Stopping container for service '{actual_service_type}'..."
-                                                )
-                                                docker_manager.stop_container(
-                                                    service_type=actual_service_type
-                                                )
+                                                if service_config.get("backend") != "local":
+                                                    logging.info(
+                                                        f"Stopping container for service '{actual_service_type}'..."
+                                                    )
+                                                    docker_manager.stop_container(
+                                                        service_type=actual_service_type
+                                                    )
                                             self.client.active_service_type = None
                                             self.orchestrator_service.update_provider_status(
                                                 self.provider_id, "available"

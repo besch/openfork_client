@@ -126,9 +126,17 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
                 storage_path = maybe
 
         if storage_path:
+            bucket = self.job.get("bucket", "projects_public")
+            path = self.orchestrator_service.download_storage_asset(
+                bucket,
+                storage_path,
+                self.input_dir,
+            )
+            if path:
+                return path
+
             supabase_url = os.environ.get("SUPABASE_URL", SUPABASE_URL)
             if supabase_url:
-                bucket = self.job.get("bucket", "projects_public")
                 src = f"{supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
                 path = self.orchestrator_service.download_asset_by_url(
                     src, self.input_dir
