@@ -750,6 +750,7 @@ class JobListener:
                     service_type=self.client.active_service_type
                 )
                 self.client.active_service_type = None
+                self.client.active_container_crash_event = None
             except Exception as e:
                 logging.debug(f"Could not stop container: {e}")
 
@@ -1515,9 +1516,14 @@ class JobListener:
                                             },
                                         )
 
+                                        self.client.active_container_crash_event = None
+
                                         if not HEADLESS_MODE:
                                             logging.info("Starting container...")
                                             container_crash_event = threading.Event()
+                                            self.client.active_container_crash_event = (
+                                                container_crash_event
+                                            )
                                             service_cfg = (
                                                 self.client.services_config.get(
                                                     actual_service_type, {}
@@ -1885,6 +1891,7 @@ exec python main.py --listen --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorc
                                                         service_type=actual_service_type
                                                     )
                                             self.client.active_service_type = None
+                                            self.client.active_container_crash_event = None
                                             self.orchestrator_service.update_provider_status(
                                                 self.provider_id, "available"
                                             )

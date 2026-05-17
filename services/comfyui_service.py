@@ -183,7 +183,8 @@ class ComfyUIClient:
         orchestrator_service,
         terminal_node_ids: Optional[List[str]] = None,
         timeout_sec: Optional[int] = None,
-        shutdown_event: Optional[threading.Event] = None
+        shutdown_event: Optional[threading.Event] = None,
+        abort_event: Optional[threading.Event] = None,
     ) -> Union[Dict[str, Any], None, str]:
         """Get the output of a completed workflow by listening on WS in a separate thread.
         
@@ -231,7 +232,8 @@ class ComfyUIClient:
         logging.info("WebSocket reader thread started.")
 
         start_ts = time.time()
-        last_poll_ts = start_ts
+        last_cancel_poll_ts = start_ts
+        last_status_check_ts = start_ts
         all_node_outputs = {}
         executed_nodes = set()
 
@@ -242,14 +244,23 @@ class ComfyUIClient:
                     self.interrupt_workflow()
                     return "interrupted"
 
+                if abort_event and abort_event.is_set():
+                    logging.warning(
+                        "Abort event received while waiting for ComfyUI output "
+                        "for prompt_id %s. Treating as interrupted.",
+                        prompt_id,
+                    )
+                    self.interrupt_workflow()
+                    return "interrupted"
+
                 if (time.time() - start_ts) > timeout_sec:
                     logging.warning(f"Workflow output timed out after {timeout_sec} seconds for prompt_id: {prompt_id}. Breaking loop to fetch history.")
                     self.interrupt_workflow()
                     break
 
                 # Polling mechanism for cancellation
-                if time.time() - last_poll_ts > 5:
-                    last_poll_ts = time.time()
+                if time.time() - last_cancel_poll_ts > 5:
+                    last_cancel_poll_ts = time.time()
                     try:
                         job_details = orchestrator_service.get_job(job_id)
                         status = job_details.get("status") if isinstance(job_details, dict) else None
@@ -280,7 +291,8 @@ class ComfyUIClient:
                 except Empty:
                     logging.debug("Queue empty, continuing to wait for messages.")
                     # Fallback check if it's been a while without activity
-                    if time.time() - last_poll_ts > 30:
+                    if time.time() - last_status_check_ts > 30:
+                        last_status_check_ts = time.time()
                         try:
                             # 1. Log Queue Status
                             queue_blocks = requests.get(f"{self.http_base}/queue", timeout=5).json()

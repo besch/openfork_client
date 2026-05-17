@@ -31,6 +31,7 @@ class ComfyUIProcessor(BaseJobProcessor):
             orchestrator_service=self.orchestrator_service,
             timeout_sec=7200,
             shutdown_event=self.shutdown_event,
+            abort_event=getattr(self.client, "active_container_crash_event", None),
         )
 
         if self._check_interruption(outputs):
