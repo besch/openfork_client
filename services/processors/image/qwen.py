@@ -36,9 +36,15 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         source_image_filename = self._get_source_image()
         if not source_image_filename:
             return
+        second_image_requested = self._has_second_source_image_input()
+        second_image_filename = self._get_second_source_image()
+        if second_image_requested and not second_image_filename:
+            return
 
         # Copy the image to the Docker container
         self._copy_image_to_container(source_image_filename)
+        if second_image_filename:
+            self._copy_image_to_container(second_image_filename)
 
         # Inject prompt and image into workflow
         seed = inputs.get("seed")
@@ -47,6 +53,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             self.positive_prompt,
             source_image_filename,
             denoise_strength,
+            second_image_filename=second_image_filename,
             aspect_ratio=aspect_ratio,
             seed=seed,
         )
@@ -111,6 +118,108 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         
         return source_image_filename
 
+    def _has_second_source_image_input(self):
+        inputs = self.job.get("inputs", {})
+        return any(
+            inputs.get(key)
+            for key in (
+                "reference_image_2_base64",
+                "reference_image2_base64",
+                "second_reference_image_base64",
+                "reference_image_2_url",
+                "reference_image2_url",
+                "second_reference_image_url",
+                "reference_image_2_storage_path",
+                "reference_image2_storage_path",
+                "second_reference_image_storage_path",
+                "reference_image_2",
+                "reference_image2",
+            )
+        )
+
+    def _materialize_base64_image(self, data_url, prefix):
+        """Save a base64 image input into the ComfyUI input directory."""
+        if not data_url:
+            return None
+
+        try:
+            image_base64 = data_url
+            extension = "png"
+            if "," in image_base64:
+                header, image_base64 = image_base64.split(",", 1)
+                if "image/jpeg" in header or "image/jpg" in header:
+                    extension = "jpg"
+                elif "image/webp" in header:
+                    extension = "webp"
+
+            image_data = base64.b64decode(image_base64)
+            filename = f"{prefix}_{uuid.uuid4().hex[:8]}.{extension}"
+            image_path = os.path.join(self.client.input_dir, filename)
+            with open(image_path, "wb") as f:
+                f.write(image_data)
+            logging.info(f"Saved {prefix} image to: {image_path}")
+            return filename
+        except Exception as e:
+            self._fail_job(f"Failed to process {prefix} image: {str(e)}")
+            return None
+
+    def _get_second_source_image(self):
+        """Get optional second edit image from base64, signed URL, or storage."""
+        inputs = self.job.get("inputs", {})
+
+        second_image_filename = self._materialize_base64_image(
+            inputs.get("reference_image_2_base64")
+            or inputs.get("reference_image2_base64")
+            or inputs.get("second_reference_image_base64"),
+            "reference_image_2",
+        )
+        if second_image_filename:
+            return second_image_filename
+
+        second_image_url = (
+            inputs.get("reference_image_2_url")
+            or inputs.get("reference_image2_url")
+            or inputs.get("second_reference_image_url")
+        )
+        if second_image_url:
+            logging.info(f"Downloading second edit image from signed URL: {second_image_url}")
+            downloaded_path = self.orchestrator_service.download_asset_by_url(
+                second_image_url,
+                self.client.input_dir,
+            )
+            if downloaded_path:
+                return os.path.basename(downloaded_path)
+
+        second_storage_path = (
+            inputs.get("reference_image_2_storage_path")
+            or inputs.get("reference_image2_storage_path")
+            or inputs.get("second_reference_image_storage_path")
+            or inputs.get("reference_image_2")
+            or inputs.get("reference_image2")
+        )
+        if second_storage_path:
+            bucket = self.job.get("bucket", "projects_public")
+            downloaded_path = self.orchestrator_service.download_storage_asset(
+                bucket,
+                second_storage_path,
+                self.client.input_dir,
+            )
+            if not downloaded_path:
+                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{second_storage_path}"
+                logging.info(f"Downloading second edit image from: {source_url}")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(
+                    source_url,
+                    self.client.input_dir,
+                )
+            if downloaded_path:
+                second_image_filename = os.path.basename(downloaded_path)
+                logging.info(f"Downloaded second edit image: {second_image_filename}")
+                return second_image_filename
+
+        if self._has_second_source_image_input():
+            self._fail_job("Failed to load second edit image for Qwen edit workflow.")
+        return None
+
     def _copy_image_to_container(self, image_filename):
         """Copy image to Docker container."""
         image_full_path = os.path.join(self.client.input_dir, image_filename)
@@ -136,23 +245,52 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy image to container: {e}")
 
-    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, aspect_ratio="1:1", seed=None):
+    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, second_image_filename=None, aspect_ratio="1:1", seed=None):
         """Inject prompt and image into the editing workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
         # Calculate dimensions
         width, height = self._get_dimensions(aspect_ratio)
         max_dim = max(width, height)
+        load_image_ids = [
+            node_id
+            for node_id, node in wf.items()
+            if node.get("class_type") == "LoadImage"
+        ]
+        second_image_ref = (
+            [load_image_ids[1], 0]
+            if second_image_filename and len(load_image_ids) > 1
+            else None
+        )
+        if not second_image_filename:
+            for unused_node_id in load_image_ids[1:]:
+                wf.pop(unused_node_id, None)
 
         # Update prompt in CLIPTextEncode node
+        image_node_count = 0
         for node_id, node in wf.items():
-            if node.get("class_type") == "CLIPTextEncode":
+            class_type = node.get("class_type")
+            inputs = node.get("inputs", {})
+
+            if class_type == "CLIPTextEncode":
                 node["inputs"]["text"] = prompt
-            elif node.get("class_type") == "LoadImage":
-                node["inputs"]["image"] = image_filename
-            elif node.get("class_type") == "ImageScaleToMaxDimension":
+            elif class_type == "TextEncodeQwenImageEditPlus":
+                if inputs.get("prompt"):
+                    inputs["prompt"] = prompt
+                if second_image_ref:
+                    inputs["image2"] = second_image_ref
+                else:
+                    inputs.pop("image2", None)
+                inputs.pop("image3", None)
+            elif class_type == "LoadImage":
+                if image_node_count == 0:
+                    node["inputs"]["image"] = image_filename
+                elif second_image_filename:
+                    node["inputs"]["image"] = second_image_filename
+                image_node_count += 1
+            elif class_type == "ImageScaleToMaxDimension":
                 node["inputs"]["largest_size"] = max_dim
-            elif node.get("class_type") == "KSampler":
+            elif class_type == "KSampler":
                 node["inputs"]["denoise"] = denoise_strength
                 if seed is not None:
                     node["inputs"]["seed"] = seed
