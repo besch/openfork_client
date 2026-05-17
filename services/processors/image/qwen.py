@@ -55,7 +55,10 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         if not outputs:
             return
 
-        image_storage_path = self.handle_image_output(outputs)
+        image_storage_path = self.handle_image_output(
+            outputs,
+            target_dimensions=self._get_dimensions(aspect_ratio),
+        )
         if not image_storage_path:
             return
 
@@ -162,13 +165,13 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         """Calculate width and height based on aspect ratio."""
         ratio_map = {
             "1:1": (1024, 1024),
-            "16:9": (1360, 768),
-            "9:16": (768, 1360),
+            "16:9": (1280, 720),
+            "9:16": (720, 1280),
             "4:3": (1152, 864),
             "3:4": (864, 1152),
-            "3:2": (1216, 832),
-            "2:3": (832, 1216),
-            "21:9": (1536, 640),
+            "3:2": (1248, 832),
+            "2:3": (832, 1248),
+            "21:9": (1344, 576),
         }
         return ratio_map.get(aspect_ratio, (1024, 1024))
 
@@ -218,7 +221,10 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         if not outputs:
             return
 
-        image_storage_path = self.handle_image_output(outputs)
+        image_storage_path = self.handle_image_output(
+            outputs,
+            target_dimensions=self._get_dimensions(aspect_ratio),
+        )
         if not image_storage_path:
             return
 
@@ -364,13 +370,13 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         """Calculate width and height based on aspect ratio."""
         ratio_map = {
             "1:1": (1024, 1024),
-            "16:9": (1360, 768),
-            "9:16": (768, 1360),
+            "16:9": (1280, 720),
+            "9:16": (720, 1280),
             "4:3": (1152, 864),
             "3:4": (864, 1152),
-            "3:2": (1216, 832),
-            "2:3": (832, 1216),
-            "21:9": (1536, 640),
+            "3:2": (1248, 832),
+            "2:3": (832, 1248),
+            "21:9": (1344, 576),
         }
         return ratio_map.get(aspect_ratio, (1024, 1024))
 
@@ -407,7 +413,10 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
         if not outputs:
             return
 
-        image_storage_path = self.handle_image_output(outputs)
+        image_storage_path = self.handle_image_output(
+            outputs,
+            target_dimensions=(width, height),
+        )
         if not image_storage_path:
             return
 
@@ -423,13 +432,13 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
         """Calculate width and height based on aspect ratio."""
         ratio_map = {
             "1:1": (1024, 1024),
-            "16:9": (1360, 768),
-            "9:16": (768, 1360),
+            "16:9": (1280, 720),
+            "9:16": (720, 1280),
             "4:3": (1152, 864),
             "3:4": (864, 1152),
-            "3:2": (1216, 832),
-            "2:3": (832, 1216),
-            "21:9": (1536, 640),
+            "3:2": (1248, 832),
+            "2:3": (832, 1248),
+            "21:9": (1344, 576),
         }
         return ratio_map.get(aspect_ratio, (1024, 1024))
 

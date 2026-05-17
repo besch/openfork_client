@@ -81,7 +81,7 @@ class LLMJobProcessor(BaseJobProcessor):
             "items": {
                 "type": "object",
                 "properties": {
-                    "creature_name": {"type": "string"},
+                    "character_name": {"type": "string"},
                     "activity": {"type": "string"},
                     "scene_prompt": {"type": "string"},
                     "image_edit_prompt": {"type": "string"},
@@ -93,7 +93,7 @@ class LLMJobProcessor(BaseJobProcessor):
                     "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10},
                 },
                 "required": [
-                    "creature_name",
+                    "character_name",
                     "activity",
                     "scene_prompt",
                     "image_edit_prompt",

@@ -202,6 +202,9 @@ class DockerProdManager:
         text = str(exc).lower()
         transient_markers = (
             "connection aborted",
+            "actively refused",
+            "failed to establish a new connection",
+            "max retries exceeded",
             "timed out",
             "timeout",
             "named pipe",
@@ -928,6 +931,36 @@ class DockerProdManager:
             return None
         except docker.errors.APIError as e:
             logging.error(f"exec_run failed in '{container_name}': {e}")
+            return None
+        except Exception as e:
+            if self._is_transient_transport_error(e):
+                logging.warning(
+                    f"Docker transport error during exec in '{container_name}': {e}. "
+                    "Reconnecting and retrying once..."
+                )
+                if self._refresh_client_connection():
+                    try:
+                        container = self.client.containers.get(container_name)
+                        return container.exec_run(
+                            command,
+                            detach=detach,
+                            environment=environment,
+                        )
+                    except docker.errors.NotFound:
+                        logging.error(f"Container '{container_name}' not found after reconnect for exec.")
+                        return None
+                    except docker.errors.APIError as retry_error:
+                        logging.error(
+                            f"exec_run retry failed in '{container_name}': {retry_error}"
+                        )
+                        return None
+                    except Exception as retry_error:
+                        logging.error(
+                            f"exec_run retry hit a transport error in '{container_name}': {retry_error}"
+                        )
+                        return None
+
+            logging.error(f"Unexpected exec_run error in '{container_name}': {e}")
             return None
 
     def _copy_pre_start_files(

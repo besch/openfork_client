@@ -168,6 +168,9 @@ class JobListener:
         transient_markers = (
             "connection aborted",
             "connection refused",
+            "actively refused",
+            "failed to establish a new connection",
+            "max retries exceeded",
             "timed out",
             "timeout",
             "npipe",
@@ -1631,11 +1634,32 @@ class JobListener:
                                                 "qwen-8gb",
                                                 "qwen-turbo-8gb",
                                             }:
+                                                qwen_args = [
+                                                    "--listen",
+                                                ]
+                                                qwen_env = {
+                                                    "CUDA_MODULE_LOADING": "LAZY",
+                                                    "PYTORCH_CUDA_ALLOC_CONF": (
+                                                        "expandable_segments:True,"
+                                                        "max_split_size_mb:128"
+                                                    ),
+                                                    "MALLOC_ARENA_MAX": "2",
+                                                }
+                                                if "8gb" in actual_service_type:
+                                                    qwen_args.extend(
+                                                        [
+                                                            "--lowvram",
+                                                            "--cpu-vae",
+                                                            "--reserve-vram",
+                                                            "0.5",
+                                                            "--use-pytorch-cross-attention",
+                                                        ]
+                                                    )
                                                 qwen_bootstrap = r"""
 set -e
 export PYTHONPATH="${PYTHONPATH:-}:/opt/ComfyUI/user/custom-packages"
 cd /opt/ComfyUI
-exec python main.py --listen
+exec python main.py "$@"
 """
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,
@@ -1643,7 +1667,10 @@ exec python main.py --listen
                                                         "bash",
                                                         "-lc",
                                                         qwen_bootstrap,
+                                                        "openfork-qwen",
+                                                        *qwen_args,
                                                     ],
+                                                    environment=qwen_env,
                                                 )
                                                 logging.info(
                                                     "Started Qwen ComfyUI container without runtime SageAttention install."
@@ -1701,6 +1728,7 @@ exec python main.py --listen --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorc
                                                     command=["serve"],
                                                     environment={
                                                         "OLLAMA_HOST": "0.0.0.0:11434",
+                                                        "OLLAMA_LOAD_TIMEOUT": "10m",
                                                         "OLLAMA_MAX_LOADED_MODELS": "1",
                                                         "OLLAMA_NUM_PARALLEL": "2",
                                                         "OLLAMA_ORIGINS": "*",

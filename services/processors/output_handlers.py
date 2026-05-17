@@ -174,9 +174,79 @@ class AudioOutputHandler(OutputHandlerMixin):
 
 
 class ImageOutputHandler(OutputHandlerMixin):
-    """Mixin for handling image output: find, copy, upload."""
+    """Mixin for handling image output: find, copy, optionally normalize, upload."""
 
-    def handle_image_output(self, outputs) -> Union[str, None]:
+    def _normalize_image_to_dimensions(self, file_path: str, target_dimensions) -> None:
+        if not target_dimensions:
+            return
+
+        try:
+            target_width, target_height = target_dimensions
+            target_width = int(target_width)
+            target_height = int(target_height)
+        except (TypeError, ValueError):
+            return
+
+        if target_width <= 0 or target_height <= 0:
+            return
+
+        try:
+            from PIL import Image
+
+            with Image.open(file_path) as img:
+                source_width, source_height = img.size
+                if source_width <= 0 or source_height <= 0:
+                    return
+
+                target_ratio = target_width / target_height
+                source_ratio = source_width / source_height
+
+                if (
+                    (source_width, source_height) == (target_width, target_height)
+                    and abs(source_ratio - target_ratio) < 0.001
+                ):
+                    return
+
+                if source_ratio > target_ratio:
+                    crop_width = max(1, int(round(source_height * target_ratio)))
+                    left = max(0, (source_width - crop_width) // 2)
+                    box = (left, 0, left + crop_width, source_height)
+                else:
+                    crop_height = max(1, int(round(source_width / target_ratio)))
+                    top = max(0, (source_height - crop_height) // 2)
+                    box = (0, top, source_width, top + crop_height)
+
+                resampling = getattr(
+                    getattr(Image, "Resampling", Image),
+                    "LANCZOS",
+                    Image.LANCZOS,
+                )
+                normalized = img.crop(box)
+                if normalized.size != (target_width, target_height):
+                    normalized = normalized.resize(
+                        (target_width, target_height),
+                        resampling,
+                    )
+
+                if normalized.mode not in ("RGB", "RGBA"):
+                    normalized = normalized.convert("RGB")
+                normalized.save(file_path, format="PNG")
+                logging.info(
+                    "Normalized image output for job %s from %sx%s to %sx%s.",
+                    self.job_id,
+                    source_width,
+                    source_height,
+                    target_width,
+                    target_height,
+                )
+        except Exception as exc:
+            logging.warning(
+                "Could not normalize image output for job %s: %s",
+                self.job_id,
+                exc,
+            )
+
+    def handle_image_output(self, outputs, target_dimensions=None) -> Union[str, None]:
         """
         Process image output from ComfyUI workflow.
 
@@ -195,6 +265,7 @@ class ImageOutputHandler(OutputHandlerMixin):
             return None
 
         try:
+            self._normalize_image_to_dimensions(temp_host_path, target_dimensions)
             image_storage_path = self.orchestrator_service.upload_image_output(temp_host_path, self.job_id)
             if not image_storage_path:
                 self._fail_job(f"Image upload failed for job {self.job_id}.")
