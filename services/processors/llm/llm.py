@@ -35,6 +35,10 @@ class LLMJobProcessor(BaseJobProcessor):
                 "properties": {
                     "name": {"type": "string", "description": "Scene title"},
                     "description": {"type": "string", "description": "Visual description"},
+                    "image_prompt": {
+                        "type": "string",
+                        "description": "Production-ready first-frame image prompt with subject, action, setting, lighting, and identity anchors",
+                    },
                     "aspect_ratio": {"type": "string", "enum": ["16:9", "9:16"]},
                     "camera_movement": {
                         "type": "string",
@@ -42,7 +46,7 @@ class LLMJobProcessor(BaseJobProcessor):
                     },
                     "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10},
                 },
-                "required": ["name", "description", "aspect_ratio", "camera_movement", "duration_seconds"],
+                "required": ["name", "description", "image_prompt", "aspect_ratio", "camera_movement", "duration_seconds"],
                 "additionalProperties": False,
             },
         }
@@ -115,6 +119,45 @@ class LLMJobProcessor(BaseJobProcessor):
                 "scenarios": scenarios,
             },
             "required": ["scenarios"],
+            "additionalProperties": False,
+        }
+
+    @classmethod
+    def _character_profiles_schema(cls, expected_items) -> dict:
+        characters = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Proper character/object name, never a story beat label",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Narrative role and story function of this reusable character",
+                    },
+                    "visual_prompt": {
+                        "type": "string",
+                        "description": "Concrete reusable visual identity anchors for image generation",
+                    },
+                    "personality": {"type": "string"},
+                },
+                "required": ["name", "description", "visual_prompt", "personality"],
+                "additionalProperties": False,
+            },
+            "minItems": 1,
+        }
+
+        if expected_items is not None:
+            characters["maxItems"] = expected_items
+
+        return {
+            **cls._base_json_schema("object"),
+            "properties": {
+                "characters": characters,
+            },
+            "required": ["characters"],
             "additionalProperties": False,
         }
 
@@ -198,6 +241,8 @@ class LLMJobProcessor(BaseJobProcessor):
             return cls._generation_style_schema()
         if job_type == "activity_scenarios":
             return cls._activity_scenarios_schema(expected_items)
+        if job_type == "character_profiles":
+            return cls._character_profiles_schema(expected_items)
         if job_type == "dialogue_scenes":
             return cls._dialogue_scenes_schema(expected_items)
         if job_type == "music_prompt":
@@ -227,6 +272,20 @@ class LLMJobProcessor(BaseJobProcessor):
             if expected_items is not None and len(scenarios) != expected_items:
                 logging.warning(
                     f"Schema constraint mismatch: expected {expected_items} scenarios but got {len(scenarios)}"
+                )
+            return parsed_json
+
+        if job_type == "character_profiles":
+            if not isinstance(parsed_json, dict):
+                raise ValueError(f"Generated JSON is not an object. Got: {type(parsed_json).__name__}")
+            characters = parsed_json.get("characters")
+            if not isinstance(characters, list):
+                raise ValueError("Generated character profile output is missing a characters array.")
+            if not characters:
+                raise ValueError("Generated character profile output is empty.")
+            if expected_items is not None and len(characters) > expected_items:
+                logging.warning(
+                    f"Schema constraint mismatch: expected at most {expected_items} characters but got {len(characters)}"
                 )
             return parsed_json
 
