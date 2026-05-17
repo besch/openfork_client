@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1.4
+# DramaBox REST image for expressive TTS and voice cloning.
+
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/models
+ENV HUGGINGFACE_HUB_CACHE=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV TORCH_HOME=/app/models
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-pip \
+    git curl wget ffmpeg libsndfile1 build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+    && python3 -m pip install --no-cache-dir \
+        torch==2.8.0 torchaudio==2.8.0 \
+        --index-url https://download.pytorch.org/whl/cu128
+
+RUN git clone --depth=1 https://github.com/resemble-ai/DramaBox.git /opt/DramaBox \
+    && python3 -m pip install --no-cache-dir -r /opt/DramaBox/requirements.txt \
+    && python3 -m pip install --no-cache-dir \
+        fastapi \
+        "uvicorn[standard]" \
+        python-multipart \
+        requests \
+    && cp -r /opt/DramaBox/src /app/src \
+    && cp -r /opt/DramaBox/ltx2 /app/ltx2 \
+    && cp -r /opt/DramaBox/configs /app/configs \
+    && mkdir -p /app/input /app/output /app/models
+
+COPY dramabox_api.py /app/dramabox_api.py
+
+EXPOSE 8000
+
+CMD ["python3", "/app/dramabox_api.py"]

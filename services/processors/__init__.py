@@ -60,6 +60,11 @@ from .audio.qwen3_tts import (
     Qwen3VoiceDesignJobProcessor,
     Qwen3VoiceCloneJobProcessor,
 )
+from .audio.scenema_audio import (
+    ScenemaAudioTTSProcessor,
+    ScenemaAudioVoiceCloneProcessor,
+)
+from .audio.dramabox import DramaboxTTSProcessor, DramaboxVoiceCloneProcessor
 from .audio.mmaudio import MMAudioJobProcessor
 from .audio.lavasr import LavaSRJobProcessor
 from .audio.prismaudio import PrismAudioJobProcessor
@@ -139,6 +144,10 @@ __all__ = [
     "Qwen3TTSJobProcessor",
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
+    "ScenemaAudioTTSProcessor",
+    "ScenemaAudioVoiceCloneProcessor",
+    "DramaboxTTSProcessor",
+    "DramaboxVoiceCloneProcessor",
     "QwenImageEditTurboProcessor",
     "QwenImageInpaintTurboProcessor",
     "QwenImageT2ITurboProcessor",

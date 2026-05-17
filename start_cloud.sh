@@ -328,6 +328,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/audiox_api.py" ] && cp -v "$DGN_SOURCE_DIR/audiox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/dramabox_api.py" ] && cp -v "$DGN_SOURCE_DIR/dramabox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
           [ -f "$DGN_SOURCE_DIR/sparkvsr_api.py" ] && cp -v "$DGN_SOURCE_DIR/sparkvsr_api.py" /app/
@@ -412,6 +413,8 @@ START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
 START_AUDIOX="false"
 START_QWEN3TTS="false"
+START_SCENEMA_AUDIO="false"
+START_DRAMABOX="false"
 START_DIAGDISTILL="false"
 START_WAN2GP="false"
 START_COMFYUI="true"
@@ -453,6 +456,14 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
       START_QWEN3TTS="true"
       SERVICE_TYPE="qwen3-tts"
+  elif [ -f "/app/dramabox_api.py" ]; then
+      log "Auto-mode: Detected DramaBox image. Selecting DramaBox service."
+      START_DRAMABOX="true"
+      SERVICE_TYPE="dramabox"
+  elif [ -f "/app/src/server.py" ] && [ -f "/app/src/audio_core/processor.py" ]; then
+      log "Auto-mode: Detected Scenema Audio image. Selecting Scenema Audio service."
+      START_SCENEMA_AUDIO="true"
+      SERVICE_TYPE="scenema-audio"
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
@@ -570,6 +581,8 @@ else
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"audiox"* ]]; then START_AUDIOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
+  if [[ "$SERVICE_TYPE" == *"scenema-audio"* ]]; then START_SCENEMA_AUDIO="true"; fi
+  if [[ "$SERVICE_TYPE" == *"dramabox"* ]]; then START_DRAMABOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
   if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
@@ -608,6 +621,16 @@ fi
 
 if [ "$START_AUDIOX" = "true" ]; then
   log "AudioX selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_SCENEMA_AUDIO" = "true" ]; then
+  log "Scenema Audio selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_DRAMABOX" = "true" ]; then
+  log "DramaBox selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
 fi
 
@@ -1035,6 +1058,21 @@ if [ "$START_QWEN3TTS" = "true" ] && [ -f "/app/qwen3_tts_api.py" ]; then
   log "Found Qwen3-TTS API script. Starting..."
   (cd /app && "$PYTHON_EXE" qwen3_tts_api.py > /tmp/qwen3_tts_api.log 2>&1) &
   wait_for_url "Qwen3-TTS API" "http://127.0.0.1:8000/health" 300 "/tmp/qwen3_tts_api.log"
+fi
+
+# Start Scenema Audio REST API
+if [ "$START_SCENEMA_AUDIO" = "true" ] && [ -f "/app/src/server.py" ]; then
+  log "Found Scenema Audio server. Starting..."
+  (cd /app/src && "$PYTHON_EXE" -m server > /tmp/scenema_audio_api.log 2>&1) &
+  wait_for_url "Scenema Audio API" "http://127.0.0.1:8000/health" 900 "/tmp/scenema_audio_api.log"
+fi
+
+# Start DramaBox REST API
+if [ "$START_DRAMABOX" = "true" ] && [ -f "/app/dramabox_api.py" ]; then
+  log "Found DramaBox API script. Starting..."
+  export DRAMABOX_MODEL_CACHE="${DRAMABOX_MODEL_CACHE:-/app/models}"
+  (cd /app && "$PYTHON_EXE" dramabox_api.py > /tmp/dramabox_api.log 2>&1) &
+  wait_for_url "DramaBox API" "http://127.0.0.1:8000/health" 900 "/tmp/dramabox_api.log"
 fi
 
 # Start HeartMuLa REST API

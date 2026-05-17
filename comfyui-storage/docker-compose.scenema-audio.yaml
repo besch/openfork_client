@@ -1,0 +1,31 @@
+services:
+  scenema-audio:
+    build:
+      context: .
+      dockerfile: Dockerfile.scenema-audio
+    container_name: scenema-audio
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/scenema-audio/input:/app/input
+      - ./storage/scenema-audio/output:/app/output
+      - ./storage/scenema-audio/models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/models
+      - MODEL_DIR=/app/models
+    tty: true
+    stdin_open: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s

@@ -1,0 +1,31 @@
+services:
+  dramabox:
+    build:
+      context: .
+      dockerfile: Dockerfile.dramabox
+    container_name: dramabox
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/dramabox/input:/app/input
+      - ./storage/dramabox/output:/app/output
+      - ./storage/dramabox/models:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/app/models
+      - TRANSFORMERS_CACHE=/app/models
+    tty: true
+    stdin_open: true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
