@@ -42,7 +42,7 @@ class LLMJobProcessor(BaseJobProcessor):
                         "type": "array",
                         "items": {"type": "string"},
                         "minItems": 1,
-                        "description": "Exact established cast names visible in the scene; never locations or labels",
+                        "description": "Exact established cast or documentary subject names visible in the scene; never locations or labels",
                     },
                     "dialogue": {
                         "type": "array",
@@ -60,7 +60,7 @@ class LLMJobProcessor(BaseJobProcessor):
                         },
                         "minItems": 1,
                         "maxItems": 2,
-                        "description": "One or two short dialogue lines using exact cast names",
+                        "description": "One or two short dialogue/narration lines. Use exact cast names for character dialogue or Narrator for voiceover.",
                     },
                     "image_prompt": {
                         "type": "string",
@@ -175,7 +175,7 @@ class LLMJobProcessor(BaseJobProcessor):
                     },
                     "visual_prompt": {
                         "type": "string",
-                        "description": "Concrete reusable visual identity anchors for image generation: skin tone, face shape, hair shape/color, wardrobe items/colors, accessories, silhouette, and signature props",
+                        "description": "Concrete reusable visual identity anchors for image generation. For people, include face, silhouette, wardrobe, colors, accessories, and signature props. For non-human subjects, include shape, scale, color, surface texture, environment, motion behavior, and forbidden visual changes.",
                     },
                     "personality": {"type": "string"},
                     "voice_profile": {
@@ -325,9 +325,9 @@ class LLMJobProcessor(BaseJobProcessor):
                 raise ValueError(f"Generated JSON is not an array. Got: {type(parsed_json).__name__}")
             actual_count = len(parsed_json)
             if num_scenes is not None and actual_count != num_scenes:
-                logging.warning(
-                    f"Schema constraint mismatch: expected {num_scenes} scenes but got {actual_count}"
-                )
+                raise ValueError(f"Expected exactly {num_scenes} scenes but got {actual_count}.")
+            seen_scene_names = set()
+            forbidden_title_terms = ("credit", "black screen", "cutscene")
             for index, scene in enumerate(parsed_json):
                 if not isinstance(scene, dict):
                     raise ValueError(f"Scene {index + 1} is not an object.")
@@ -336,9 +336,19 @@ class LLMJobProcessor(BaseJobProcessor):
                     raise ValueError(f"Scene {index + 1} has a generic title: {name!r}.")
                 if len(name.split()) > 7 or len(name) > 70:
                     raise ValueError(f"Scene {index + 1} title is too long: {name!r}.")
+                normalized_name = " ".join(name.lower().split())
+                if normalized_name in seen_scene_names:
+                    raise ValueError(f"Scene {index + 1} repeats an earlier title: {name!r}.")
+                seen_scene_names.add(normalized_name)
+                if any(term in normalized_name for term in forbidden_title_terms):
+                    raise ValueError(f"Scene {index + 1} is not a visual story moment: {name!r}.")
                 characters = scene.get("characters")
                 if not isinstance(characters, list) or not characters:
                     raise ValueError(f"Scene {index + 1} is missing a non-empty characters array.")
+                description_text = str(scene.get("description") or "").lower()
+                image_prompt_text = str(scene.get("image_prompt") or "").lower()
+                if "black screen" in description_text or "black screen" in image_prompt_text:
+                    raise ValueError(f"Scene {index + 1} uses a black screen instead of renderable imagery.")
                 dialogue = scene.get("dialogue")
                 if not isinstance(dialogue, list) or not dialogue:
                     raise ValueError(f"Scene {index + 1} is missing a non-empty dialogue array.")
@@ -356,9 +366,7 @@ class LLMJobProcessor(BaseJobProcessor):
             if not isinstance(scenarios, list):
                 raise ValueError("Generated activity scenario output is missing a scenarios array.")
             if expected_items is not None and len(scenarios) != expected_items:
-                logging.warning(
-                    f"Schema constraint mismatch: expected {expected_items} scenarios but got {len(scenarios)}"
-                )
+                raise ValueError(f"Expected exactly {expected_items} scenarios but got {len(scenarios)}.")
             return parsed_json
 
         if job_type == "character_profiles":
@@ -369,10 +377,8 @@ class LLMJobProcessor(BaseJobProcessor):
                 raise ValueError("Generated character profile output is missing a characters array.")
             if not characters:
                 raise ValueError("Generated character profile output is empty.")
-            if expected_items is not None and len(characters) > expected_items:
-                logging.warning(
-                    f"Schema constraint mismatch: expected at most {expected_items} characters but got {len(characters)}"
-                )
+            if expected_items is not None and len(characters) != expected_items:
+                raise ValueError(f"Expected exactly {expected_items} characters but got {len(characters)}.")
             return parsed_json
 
         if job_type == "dialogue_scenes":
@@ -382,9 +388,7 @@ class LLMJobProcessor(BaseJobProcessor):
             if not isinstance(dialogues, list):
                 raise ValueError("Generated dialogue output is missing a dialogues array.")
             if expected_items is not None and len(dialogues) != expected_items:
-                logging.warning(
-                    f"Schema constraint mismatch: expected {expected_items} dialogue lines but got {len(dialogues)}"
-                )
+                raise ValueError(f"Expected exactly {expected_items} dialogue lines but got {len(dialogues)}.")
             return parsed_json
 
         if not isinstance(parsed_json, dict):
