@@ -33,8 +33,35 @@ class LLMJobProcessor(BaseJobProcessor):
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Scene title"},
-                    "description": {"type": "string", "description": "Visual description"},
+                    "name": {
+                        "type": "string",
+                        "description": "Literal 2-5 word story moment title, not a generic Scene/Beat label",
+                    },
+                    "description": {"type": "string", "description": "Visual story action"},
+                    "characters": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": "Exact established cast names visible in the scene; never locations or labels",
+                    },
+                    "dialogue": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "speaker": {"type": "string"},
+                                "line": {
+                                    "type": "string",
+                                    "description": "Short character line under 18 words",
+                                },
+                            },
+                            "required": ["speaker", "line"],
+                            "additionalProperties": False,
+                        },
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "description": "One or two short dialogue lines using exact cast names",
+                    },
                     "image_prompt": {
                         "type": "string",
                         "description": "Production-ready first-frame image prompt with subject, action, setting, lighting, and identity anchors",
@@ -46,7 +73,16 @@ class LLMJobProcessor(BaseJobProcessor):
                     },
                     "duration_seconds": {"type": "integer", "minimum": 4, "maximum": 10},
                 },
-                "required": ["name", "description", "image_prompt", "aspect_ratio", "camera_movement", "duration_seconds"],
+                "required": [
+                    "name",
+                    "description",
+                    "characters",
+                    "dialogue",
+                    "image_prompt",
+                    "aspect_ratio",
+                    "camera_movement",
+                    "duration_seconds",
+                ],
                 "additionalProperties": False,
             },
         }
@@ -139,17 +175,48 @@ class LLMJobProcessor(BaseJobProcessor):
                     },
                     "visual_prompt": {
                         "type": "string",
-                        "description": "Concrete reusable visual identity anchors for image generation",
+                        "description": "Concrete reusable visual identity anchors for image generation: skin tone, face shape, hair shape/color, wardrobe items/colors, accessories, silhouette, and signature props",
                     },
                     "personality": {"type": "string"},
+                    "voice_profile": {
+                        "type": "string",
+                        "description": "Reusable TTS identity: age, pitch, pace, rhythm, energy, and emotional default",
+                    },
+                    "voice_direction": {
+                        "type": "string",
+                        "description": "Line delivery guidance that can be reused for TTS jobs",
+                    },
+                    "qwen3_speaker": {
+                        "type": "string",
+                        "enum": [
+                            "Vivian",
+                            "Serena",
+                            "Uncle_Fu",
+                            "Dylan",
+                            "Eric",
+                            "Ryan",
+                            "Aiden",
+                            "Ono_Anna",
+                            "Sohee",
+                        ],
+                    },
                 },
-                "required": ["name", "description", "visual_prompt", "personality"],
+                "required": [
+                    "name",
+                    "description",
+                    "visual_prompt",
+                    "personality",
+                    "voice_profile",
+                    "voice_direction",
+                    "qwen3_speaker",
+                ],
                 "additionalProperties": False,
             },
             "minItems": 1,
         }
 
         if expected_items is not None:
+            characters["minItems"] = expected_items
             characters["maxItems"] = expected_items
 
         return {
@@ -261,6 +328,25 @@ class LLMJobProcessor(BaseJobProcessor):
                 logging.warning(
                     f"Schema constraint mismatch: expected {num_scenes} scenes but got {actual_count}"
                 )
+            for index, scene in enumerate(parsed_json):
+                if not isinstance(scene, dict):
+                    raise ValueError(f"Scene {index + 1} is not an object.")
+                name = str(scene.get("name") or "").strip()
+                if not name or name.lower().startswith(("scene ", "beat ", "hook", "setup", "payoff")):
+                    raise ValueError(f"Scene {index + 1} has a generic title: {name!r}.")
+                if len(name.split()) > 7 or len(name) > 70:
+                    raise ValueError(f"Scene {index + 1} title is too long: {name!r}.")
+                characters = scene.get("characters")
+                if not isinstance(characters, list) or not characters:
+                    raise ValueError(f"Scene {index + 1} is missing a non-empty characters array.")
+                dialogue = scene.get("dialogue")
+                if not isinstance(dialogue, list) or not dialogue:
+                    raise ValueError(f"Scene {index + 1} is missing a non-empty dialogue array.")
+                for line_index, line in enumerate(dialogue):
+                    if not isinstance(line, dict):
+                        raise ValueError(f"Scene {index + 1} dialogue {line_index + 1} is not an object.")
+                    if not str(line.get("speaker") or "").strip() or not str(line.get("line") or "").strip():
+                        raise ValueError(f"Scene {index + 1} dialogue {line_index + 1} is missing speaker or line.")
             return parsed_json
 
         if job_type == "activity_scenarios":
@@ -417,103 +503,151 @@ class LLMJobProcessor(BaseJobProcessor):
                 f"job_type={job_type}, num_scenes={num_scenes}, expected_items={expected_items}"
             )
 
-            # Use chat API with format parameter for structured output
-            payload = {
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": self.positive_prompt}
-                ],
-                "stream": False,
-                "format": json_schema,
-                "options": {"temperature": temperature, "num_predict": max_tokens, "seed": seed, "num_ctx": num_ctx},
-            }
-
             logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
             response = None
-            max_attempts = 4
-            for attempt in range(1, max_attempts + 1):
-                response_holder: list = [None]
-                error_holder: list = [None]
+            parsed_json = None
+            generated_text = ""
+            validation_error = None
+            content_attempts = 3
 
-                def _do_request():
-                    try:
-                        response_holder[0] = requests.post(
-                            f"{api_base}/api/chat", json=payload, timeout=1200
-                        )
-                    except Exception as exc:
-                        error_holder[0] = exc
-
-                req_thread = threading.Thread(target=_do_request, daemon=True)
-                req_thread.start()
-                while req_thread.is_alive():
-                    req_thread.join(timeout=1.0)
-                    if self.is_cancelled():
-                        logging.info("Shutdown event received during LLM generation. Aborting.")
-                        return
-
-                if error_holder[0]:
-                    if (
-                        attempt < max_attempts
-                        and self._is_transient_ollama_error(error_holder[0])
-                    ):
-                        delay = min(30, 5 * attempt)
-                        logging.warning(
-                            "Ollama chat request failed during startup/model load "
-                            "(attempt %s/%s): %s. Retrying in %ss.",
-                            attempt,
-                            max_attempts,
-                            error_holder[0],
-                            delay,
-                        )
-                        self.shutdown_event.wait(delay)
-                        if self.is_cancelled():
-                            logging.info("Shutdown event received during LLM retry delay. Aborting.")
-                            return
-                        continue
-                    raise error_holder[0]
-
-                response = response_holder[0]
-                try:
-                    response.raise_for_status()
-                    break
-                except requests.exceptions.RequestException as exc:
-                    if attempt < max_attempts and self._is_transient_ollama_error(exc):
-                        delay = min(30, 5 * attempt)
-                        logging.warning(
-                            "Ollama chat returned a transient error "
-                            "(attempt %s/%s): %s. Retrying in %ss.",
-                            attempt,
-                            max_attempts,
-                            exc,
-                            delay,
-                        )
-                        self.shutdown_event.wait(delay)
-                        if self.is_cancelled():
-                            logging.info("Shutdown event received during LLM retry delay. Aborting.")
-                            return
-                        continue
-                    raise
-
-            result = response.json()
-            generated_text = result.get("message", {}).get("content", "")
-
-            if not generated_text:
-                self._fail_job(f"Ollama returned empty response. Full result: {result}")
-                return
-
-            try:
-                parsed_json = self._validate_generated_json(
-                    generated_text,
-                    job_type,
-                    num_scenes,
-                    expected_items,
+            for content_attempt in range(1, content_attempts + 1):
+                attempt_max_tokens = min(
+                    16000,
+                    max_tokens
+                    if content_attempt == 1
+                    else max(max_tokens * (content_attempt + 1), max_tokens + 1024),
                 )
-            except json.JSONDecodeError as e:
-                self._fail_job(f"Generated content is not valid JSON: {e}")
-                return
-            except ValueError as e:
-                self._fail_job(str(e))
+                attempt_num_ctx = max(
+                    8192,
+                    int(2 ** math.ceil(math.log2(attempt_max_tokens + 2048))),
+                )
+                attempt_temperature = temperature if content_attempt == 1 else min(temperature, 0.35)
+                attempt_seed = seed if content_attempt == 1 else seed + content_attempt
+                retry_guard = ""
+
+                if content_attempt > 1:
+                    retry_guard = (
+                        "\n\nThe previous output failed JSON validation. Return complete valid JSON only, "
+                        "with no markdown, no commentary, no trailing prose, and every string, array, and object closed. "
+                        "Keep field values concise enough to fit the token budget."
+                    )
+
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": system_prompt + retry_guard},
+                        {"role": "user", "content": self.positive_prompt + retry_guard},
+                    ],
+                    "stream": False,
+                    "format": json_schema,
+                    "options": {
+                        "temperature": attempt_temperature,
+                        "num_predict": attempt_max_tokens,
+                        "seed": attempt_seed,
+                        "num_ctx": attempt_num_ctx,
+                    },
+                }
+
+                response = None
+                max_attempts = 4
+                for attempt in range(1, max_attempts + 1):
+                    response_holder: list = [None]
+                    error_holder: list = [None]
+
+                    def _do_request():
+                        try:
+                            response_holder[0] = requests.post(
+                                f"{api_base}/api/chat", json=payload, timeout=1200
+                            )
+                        except Exception as exc:
+                            error_holder[0] = exc
+
+                    req_thread = threading.Thread(target=_do_request, daemon=True)
+                    req_thread.start()
+                    while req_thread.is_alive():
+                        req_thread.join(timeout=1.0)
+                        if self.is_cancelled():
+                            logging.info("Shutdown event received during LLM generation. Aborting.")
+                            return
+
+                    if error_holder[0]:
+                        if (
+                            attempt < max_attempts
+                            and self._is_transient_ollama_error(error_holder[0])
+                        ):
+                            delay = min(30, 5 * attempt)
+                            logging.warning(
+                                "Ollama chat request failed during startup/model load "
+                                "(attempt %s/%s): %s. Retrying in %ss.",
+                                attempt,
+                                max_attempts,
+                                error_holder[0],
+                                delay,
+                            )
+                            self.shutdown_event.wait(delay)
+                            if self.is_cancelled():
+                                logging.info("Shutdown event received during LLM retry delay. Aborting.")
+                                return
+                            continue
+                        raise error_holder[0]
+
+                    response = response_holder[0]
+                    try:
+                        response.raise_for_status()
+                        break
+                    except requests.exceptions.RequestException as exc:
+                        if attempt < max_attempts and self._is_transient_ollama_error(exc):
+                            delay = min(30, 5 * attempt)
+                            logging.warning(
+                                "Ollama chat returned a transient error "
+                                "(attempt %s/%s): %s. Retrying in %ss.",
+                                attempt,
+                                max_attempts,
+                                exc,
+                                delay,
+                            )
+                            self.shutdown_event.wait(delay)
+                            if self.is_cancelled():
+                                logging.info("Shutdown event received during LLM retry delay. Aborting.")
+                                return
+                            continue
+                        raise
+
+                result = response.json()
+                generated_text = result.get("message", {}).get("content", "")
+
+                if not generated_text:
+                    self._fail_job(f"Ollama returned empty response. Full result: {result}")
+                    return
+
+                try:
+                    parsed_json = self._validate_generated_json(
+                        generated_text,
+                        job_type,
+                        num_scenes,
+                        expected_items,
+                    )
+                    validation_error = None
+                    break
+                except (json.JSONDecodeError, ValueError) as exc:
+                    validation_error = exc
+                    preview = generated_text[:500].replace("\n", " ")
+                    logging.warning(
+                        "Generated content failed validation on attempt %s/%s for %s: %s. "
+                        "done_reason=%s, length=%s, preview=%s",
+                        content_attempt,
+                        content_attempts,
+                        job_type,
+                        exc,
+                        result.get("done_reason"),
+                        len(generated_text),
+                        preview,
+                    )
+                    if content_attempt >= content_attempts:
+                        break
+
+            if parsed_json is None:
+                self._fail_job(f"Generated content is not valid JSON: {validation_error}")
                 return
 
             if isinstance(parsed_json, list):

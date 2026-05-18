@@ -300,18 +300,24 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         return wf
 
     def _get_dimensions(self, aspect_ratio):
-        """Calculate width and height based on aspect ratio."""
+        """Calculate edit dimensions for 8GB GPUs.
+
+        Qwen edit can technically run larger frames, but on 8GB cards large
+        two-reference edits are too slow for multi-scene workflow runs. Keep
+        the long edge around 768px so character-action variations stay
+        practical and leave WAN22 to handle the final motion render.
+        """
         ratio_map = {
-            "1:1": (1024, 1024),
-            "16:9": (1280, 720),
-            "9:16": (720, 1280),
-            "4:3": (1152, 864),
-            "3:4": (864, 1152),
-            "3:2": (1248, 832),
-            "2:3": (832, 1248),
-            "21:9": (1344, 576),
+            "1:1": (768, 768),
+            "16:9": (768, 432),
+            "9:16": (432, 768),
+            "4:3": (768, 576),
+            "3:4": (576, 768),
+            "3:2": (768, 512),
+            "2:3": (512, 768),
+            "21:9": (768, 330),
         }
-        return ratio_map.get(aspect_ratio, (1024, 1024))
+        return ratio_map.get(aspect_ratio, (768, 768))
 
 
 class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):

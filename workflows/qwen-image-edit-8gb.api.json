@@ -92,14 +92,14 @@
       "inputs": {
         "seed": 0,
         "control_after_generate": "randomize",
-        "steps": 20,
-        "cfg": 4,
+        "steps": 6,
+        "cfg": 1,
         "sampler_name": "euler",
         "scheduler": "simple",
         "denoise": 1,
         "model": ["12", 0],
         "positive": ["8", 0],
-        "negative": ["9", 0],
+        "negative": ["8", 0],
         "latent_image": ["10", 0]
       }
     },
