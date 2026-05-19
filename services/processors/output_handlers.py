@@ -7,6 +7,7 @@ These eliminate code duplication across processors.
 
 import os
 import logging
+from collections import deque
 from typing import Union, Tuple
 
 from services.docker_manager import docker_manager
@@ -246,6 +247,132 @@ class ImageOutputHandler(OutputHandlerMixin):
                 exc,
             )
 
+    def _should_make_transparent_background(self) -> bool:
+        job = getattr(self, "job", None) or {}
+        inputs = job.get("inputs") or {}
+        metadata = job.get("completion_metadata") or {}
+
+        return any(
+            value is True
+            for value in (
+                inputs.get("transparent_background"),
+                inputs.get("transparent_ready"),
+                inputs.get("remove_background"),
+                metadata.get("transparent_ready"),
+            )
+        )
+
+    def _apply_transparent_background_if_requested(self, file_path: str) -> None:
+        """Turn clean plain-background reference renders into alpha cutouts."""
+        if not self._should_make_transparent_background():
+            return
+
+        try:
+            from PIL import Image, ImageFilter
+
+            with Image.open(file_path) as img:
+                rgba = img.convert("RGBA")
+                alpha = rgba.getchannel("A")
+                if alpha.getextrema()[0] < 255:
+                    logging.info(
+                        "Image output for job %s already contains transparency.",
+                        self.job_id,
+                    )
+                    return
+
+                rgb = rgba.convert("RGB")
+                width, height = rgb.size
+                if width < 4 or height < 4:
+                    return
+
+                pixels = rgb.load()
+                edge_pixels = []
+                for x in range(width):
+                    edge_pixels.append(pixels[x, 0])
+                    edge_pixels.append(pixels[x, height - 1])
+                for y in range(height):
+                    edge_pixels.append(pixels[0, y])
+                    edge_pixels.append(pixels[width - 1, y])
+
+                def median_channel(index: int) -> int:
+                    values = sorted(pixel[index] for pixel in edge_pixels)
+                    return values[len(values) // 2]
+
+                background = tuple(median_channel(i) for i in range(3))
+                brightness = sum(background) / 3
+                threshold = 52 if brightness < 40 or brightness > 215 else 42
+                threshold_sq = threshold * threshold
+
+                def near_background(pixel) -> bool:
+                    return (
+                        (pixel[0] - background[0]) ** 2
+                        + (pixel[1] - background[1]) ** 2
+                        + (pixel[2] - background[2]) ** 2
+                    ) <= threshold_sq
+
+                visited = bytearray(width * height)
+                queue = deque()
+
+                def enqueue(x: int, y: int) -> None:
+                    idx = y * width + x
+                    if visited[idx] or not near_background(pixels[x, y]):
+                        return
+                    visited[idx] = 1
+                    queue.append((x, y))
+
+                for x in range(width):
+                    enqueue(x, 0)
+                    enqueue(x, height - 1)
+                for y in range(height):
+                    enqueue(0, y)
+                    enqueue(width - 1, y)
+
+                while queue:
+                    x, y = queue.popleft()
+                    if x > 0:
+                        enqueue(x - 1, y)
+                    if x < width - 1:
+                        enqueue(x + 1, y)
+                    if y > 0:
+                        enqueue(x, y - 1)
+                    if y < height - 1:
+                        enqueue(x, y + 1)
+
+                mask = Image.new("L", (width, height), 255)
+                mask_pixels = mask.load()
+                removed_pixels = 0
+                for y in range(height):
+                    offset = y * width
+                    for x in range(width):
+                        if visited[offset + x]:
+                            mask_pixels[x, y] = 0
+                            removed_pixels += 1
+
+                removed_ratio = removed_pixels / float(width * height)
+                if removed_ratio < 0.02:
+                    logging.info(
+                        "Transparent-background pass for job %s found no removable plain background.",
+                        self.job_id,
+                    )
+                    return
+
+                mask = mask.filter(ImageFilter.MedianFilter(3)).filter(
+                    ImageFilter.GaussianBlur(0.7)
+                )
+                rgba.putalpha(mask)
+                rgba.save(file_path, format="PNG")
+                logging.info(
+                    "Applied transparent-background alpha cutout for job %s; removed %.1f%% of pixels.",
+                    self.job_id,
+                    removed_ratio * 100,
+                )
+        except Exception as exc:
+            logging.warning(
+                "Could not apply transparent background for job %s: %s",
+                self.job_id,
+                exc,
+            )
+
     def handle_image_output(self, outputs, target_dimensions=None) -> Union[str, None]:
         """
         Process image output from ComfyUI workflow.
@@ -266,6 +393,7 @@ class ImageOutputHandler(OutputHandlerMixin):
 
         try:
             self._normalize_image_to_dimensions(temp_host_path, target_dimensions)
+            self._apply_transparent_background_if_requested(temp_host_path)
             image_storage_path = self.orchestrator_service.upload_image_output(temp_host_path, self.job_id)
             if not image_storage_path:
                 self._fail_job(f"Image upload failed for job {self.job_id}.")

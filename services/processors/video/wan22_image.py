@@ -36,7 +36,7 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         start_image_filename = None
 
         if start_image_url:
-            logging.info(f"Downloading start image from signed URL: {start_image_url}")
+            logging.info("Downloading start image from signed URL")
             downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.input_dir)
             if downloaded_path:
                 start_image_filename = os.path.basename(downloaded_path)

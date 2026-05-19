@@ -278,8 +278,7 @@ def copy_file_from_container_api(container, source_path: str, dest_path: str, sh
             _wait_before_retry(shutdown_event, retry_delay, source_path, dest_path)
 
 
-def copy_file_to_container_api(container, source_path: str, dest_path: str, shutdown_event: threading.Event):
-    """Copies a file from the host into a container using the Docker API."""
+def _copy_file_to_container_api_once(container, source_path: str, dest_path: str, shutdown_event: threading.Event):
     _raise_if_shutdown(
         shutdown_event,
         f"Shutdown event set. Aborting Docker API file copy from {source_path} to {dest_path}.",
@@ -323,4 +322,31 @@ def copy_file_to_container_api(container, source_path: str, dest_path: str, shut
     finally:
         if temp_tar_path and os.path.exists(temp_tar_path):
             os.remove(temp_tar_path)
+
+
+def copy_file_to_container_api(container, source_path: str, dest_path: str, shutdown_event: threading.Event):
+    """Copies a file from the host into a container using the Docker API."""
+    for attempt in range(1, _DOCKER_COPY_MAX_ATTEMPTS + 1):
+        try:
+            _copy_file_to_container_api_once(container, source_path, dest_path, shutdown_event)
+            return
+        except Exception as e:
+            if (
+                shutdown_event.is_set()
+                or attempt >= _DOCKER_COPY_MAX_ATTEMPTS
+                or not _is_transient_docker_copy_error(e)
+            ):
+                logging.error(
+                    f"Failed Docker API file copy from {source_path} to {dest_path} "
+                    f"after {attempt} attempt(s): {e}",
+                    exc_info=True,
+                )
+                raise
+
+            retry_delay = _DOCKER_COPY_RETRY_BASE_SECONDS * attempt
+            logging.warning(
+                f"Transient Docker API file copy failure from {source_path} to {dest_path} "
+                f"on attempt {attempt}/{_DOCKER_COPY_MAX_ATTEMPTS}; retrying in {retry_delay:.1f}s: {e}"
+            )
+            _wait_before_retry(shutdown_event, retry_delay, source_path, dest_path)
 

@@ -145,6 +145,19 @@ def inject_prompt_and_image_into_workflow(
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
 
+    # Node 6 is the positive prompt and node 7 is the negative prompt in
+    # current WAN image-to-video workflows. Keep the generic fallback for
+    # older exported workflows that still include descriptive titles.
+    if '6' in api_graph and 'inputs' in api_graph['6'] and 'text' in api_graph['6']['inputs']:
+        api_graph['6']['inputs']['text'] = prompt
+    else:
+        logging.warning("Could not find positive prompt node 6 in image-to-video workflow")
+
+    if '7' in api_graph and 'inputs' in api_graph['7'] and 'text' in api_graph['7']['inputs']:
+        api_graph['7']['inputs']['text'] = negative_prompt
+    else:
+        logging.warning("Could not find negative prompt node 7 in image-to-video workflow")
+
     # Inject prompts and image filename
     for node in api_graph.values():
         if node["class_type"] == "CLIPTextEncode":
