@@ -17,10 +17,11 @@ from typing import Optional
 
 from config import TimeoutConfig
 from services.processors.base import BaseJobProcessor
+from services.processors.output_handlers import ImageOutputHandler
 from services.orchestrator_service import TokenExpiredError
 
 
-class ErnieImageProcessor(BaseJobProcessor):
+class ErnieImageProcessor(BaseJobProcessor, ImageOutputHandler):
     """
     Job processor for ERNIE-Image text-to-image generation via REST API.
 
@@ -93,6 +94,7 @@ class ErnieImageProcessor(BaseJobProcessor):
                 self._fail_job("Failed to download ERNIE-Image output")
                 return
 
+            self._apply_transparent_background_if_requested(local_path)
             image_storage_path = self.orchestrator_service.upload_image_output(
                 local_path, self.job_id
             )
