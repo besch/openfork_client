@@ -96,6 +96,21 @@ class JobListener:
 
         return None
 
+    def _wait_for_terminal_job_status(
+        self,
+        job_id: Optional[str],
+        attempts: int = 3,
+        delay_seconds: float = 1.0,
+    ) -> Optional[str]:
+        """Give the orchestrator a short grace period to reflect terminal status."""
+        for attempt in range(max(1, attempts)):
+            terminal_status = self._get_terminal_job_status(job_id)
+            if terminal_status:
+                return terminal_status
+            if attempt < attempts - 1:
+                self.shutdown_event.wait(delay_seconds)
+        return None
+
     def _emit_job_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         print(json.dumps({"type": event_type, "payload": payload}), flush=True)
 
@@ -571,7 +586,7 @@ class JobListener:
             # Job may have been cancelled externally (e.g., by the cancellation monitor)
             # while the processor was still winding down.  If the processor itself already
             # marked the job completed, still emit the local completion notifications.
-            terminal_status = self._get_terminal_job_status(job_id)
+            terminal_status = self._wait_for_terminal_job_status(job_id)
             if terminal_status:
                 self.orchestrator_service.clear_active_job(job_id)
                 if terminal_status == "completed":
@@ -592,6 +607,31 @@ class JobListener:
                     "emitting a completion/failure notification."
                 )
                 self._emit_job_cleared(job_id, service_type_for_cache, terminal_status)
+                return True
+
+            if job_id:
+                message = (
+                    f"Processor for job {job_id} returned without setting a terminal "
+                    "job status. Marking the job failed so it cannot remain stuck "
+                    "in processing."
+                )
+                logging.error(message)
+                self._emit_job_event(
+                    "JOB_FAILED",
+                    {
+                        "id": job_id,
+                        "service_type": service_type_for_cache,
+                        "error": message,
+                    },
+                )
+                self.orchestrator_service.update_job_status(
+                    job_id,
+                    "failed",
+                    completion_metadata={
+                        "error": message,
+                        "processor_returned_without_terminal_status": True,
+                    },
+                )
                 return True
 
             self._emit_job_completed(job, service_type_for_cache, _job_duration)
