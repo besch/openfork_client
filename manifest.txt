@@ -69,7 +69,6 @@ services/processors/video/davinci_magihuman.py
 services/processors/video/dreamid_omni.py
 services/processors/video/hunyuan_image.py
 services/processors/video/hunyuan_text.py
-services/processors/video/image_motion.py
 services/processors/video/inspatio_world.py
 services/processors/video/ltx23_comfyui_image.py
 services/processors/video/ltx23_comfyui_image_12gb.py
