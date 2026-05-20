@@ -15,6 +15,8 @@ import requests
 
 from services.processors.base import BaseJobProcessor
 
+MAX_LLM_OUTPUT_TOKENS = int(os.getenv("OPENFORK_LLM_MAX_TOKENS", "24576"))
+
 
 class LLMJobProcessor(BaseJobProcessor):
     """Processor for LLM-based text generation using Ollama."""
@@ -516,7 +518,7 @@ class LLMJobProcessor(BaseJobProcessor):
 
             for content_attempt in range(1, content_attempts + 1):
                 attempt_max_tokens = min(
-                    16000,
+                    MAX_LLM_OUTPUT_TOKENS,
                     max_tokens
                     if content_attempt == 1
                     else max(max_tokens * (content_attempt + 1), max_tokens + 1024),
