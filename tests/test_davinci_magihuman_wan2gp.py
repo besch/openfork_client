@@ -57,7 +57,7 @@ class DaVinciMagiHumanWan2GPTests(unittest.TestCase):
 
     def test_headless_comfyui_services_tail_comfyui_log(self):
         self.assertEqual(
-            get_headless_log_paths("ltx23-comfyui-video-12gb"),
+            get_headless_log_paths("dreamid-omni-24gb"),
             ["/tmp/comfyui.log"],
         )
 

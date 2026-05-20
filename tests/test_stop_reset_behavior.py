@@ -604,7 +604,7 @@ class StopResetBehaviorTests(unittest.TestCase):
         orchestrator_service.get_job.side_effect = get_job_once
         client = SimpleNamespace(
             orchestrator_service=orchestrator_service,
-            active_service_type="ltx23-comfyui-video-8gb",
+            active_service_type="dreamid-omni-24gb",
         )
         processor = SimpleNamespace(comfyui_client=Mock())
         listener = JobListener(
@@ -626,7 +626,7 @@ class StopResetBehaviorTests(unittest.TestCase):
         orchestrator_service = Mock()
         client = SimpleNamespace(
             orchestrator_service=orchestrator_service,
-            active_service_type="ltx23-comfyui-video-8gb",
+            active_service_type="dreamid-omni-24gb",
         )
         processor = SimpleNamespace(comfyui_client=Mock())
         events = []
@@ -651,7 +651,7 @@ class StopResetBehaviorTests(unittest.TestCase):
                 "cancelled",
             )
 
-        self.assertEqual(events, ["interrupt", "stop:ltx23-comfyui-video-8gb"])
+        self.assertEqual(events, ["interrupt", "stop:dreamid-omni-24gb"])
         orchestrator_service.clear_active_job.assert_called_once_with("job-cancelled")
         orchestrator_service.update_job_status.assert_not_called()
 

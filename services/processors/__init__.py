@@ -19,14 +19,6 @@ from .video.hunyuan_text import HunyuanTextToVideoJobProcessor
 from .video.hunyuan_image import HunyuanImageToVideoJobProcessor
 from .video.ltx23_text import LTX23TextToVideoWan2GPProcessor
 from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
-from .video.ltx23_comfyui_text import LTX23ComfyUITextToVideoProcessor
-from .video.ltx23_comfyui_image import LTX23ComfyUIImageToVideoProcessor
-from .video.ltx23_comfyui_text_16gb import LTX23ComfyUITextToVideoProcessor16GB
-from .video.ltx23_comfyui_image_16gb import LTX23ComfyUIImageToVideoProcessor16GB
-from .video.ltx23_comfyui_text_8gb import LTX23ComfyUITextToVideoProcessor8GB
-from .video.ltx23_comfyui_image_8gb import LTX23ComfyUIImageToVideoProcessor8GB
-from .video.ltx23_comfyui_text_12gb import LTX23ComfyUITextToVideoProcessor12GB
-from .video.ltx23_comfyui_image_12gb import LTX23ComfyUIImageToVideoProcessor12GB
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.sparkvsr import SparkVSRUpscalerJobProcessor
 from .video.turbodiffusion import (
@@ -104,14 +96,6 @@ __all__ = [
     "HunyuanImageToVideoJobProcessor",
     "LTX23TextToVideoWan2GPProcessor",
     "LTX23ImageToVideoWan2GPProcessor",
-    "LTX23ComfyUITextToVideoProcessor",
-    "LTX23ComfyUIImageToVideoProcessor",
-    "LTX23ComfyUITextToVideoProcessor16GB",
-    "LTX23ComfyUIImageToVideoProcessor16GB",
-    "LTX23ComfyUITextToVideoProcessor8GB",
-    "LTX23ComfyUIImageToVideoProcessor8GB",
-    "LTX23ComfyUITextToVideoProcessor12GB",
-    "LTX23ComfyUIImageToVideoProcessor12GB",
     "VideoUpscalerJobProcessor",
     "SparkVSRUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",

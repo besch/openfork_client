@@ -1721,52 +1721,6 @@ exec python main.py "$@"
                                                 logging.info(
                                                     "Started Qwen ComfyUI container without runtime SageAttention install."
                                                 )
-                                            elif actual_service_type == "ltx23-comfyui-video-8gb":
-                                                # The 8GB LTX image bakes split model files into
-                                                # ComfyUI's specialized folders, while some LTX loader
-                                                # nodes enumerate generic registries. Expose the bundled
-                                                # connector and audio VAE through the checkpoint registry
-                                                # before ComfyUI imports nodes.
-                                                ltx23_bootstrap = r"""
-set -e
-mkdir -p /opt/ComfyUI/models/checkpoints
-ln -sf /opt/ComfyUI/models/text_encoders/ltx-2.3-22b-dev_embeddings_connectors.safetensors /opt/ComfyUI/models/checkpoints/ltx-2.3-22b-dev_embeddings_connectors.safetensors
-ln -sf /opt/ComfyUI/models/vae/ltx-2.3-22b-dev_audio_vae.safetensors /opt/ComfyUI/models/checkpoints/ltx-2.3-22b-dev_audio_vae.safetensors
-python - <<'PY'
-from pathlib import Path
-
-path = Path("/opt/ComfyUI/custom_nodes/ComfyUI-LTXVideo/low_vram_loaders.py")
-text = path.read_text(encoding="utf-8")
-if "import comfy.sd" not in text:
-    text = text.replace("import comfy.utils\n", "import comfy.utils\nimport comfy.sd\n")
-old = (
-    "        sd, metadata = comfy.utils.load_torch_file(ckpt_path, return_metadata=True)\n"
-    "        audio_vae = AudioVAE(sd, metadata)\n"
-    "        return (audio_vae,)"
-)
-new = (
-    "        sd, metadata = comfy.utils.load_torch_file(ckpt_path, return_metadata=True)\n"
-    '        sd = comfy.utils.state_dict_prefix_replace(sd, {"audio_vae.": "autoencoder.", "vocoder.": "vocoder."}, filter_keys=True)\n'
-    "        audio_vae = comfy.sd.VAE(sd=sd, metadata=metadata)\n"
-    "        audio_vae.throw_exception_if_invalid()\n"
-    "        return (audio_vae,)"
-)
-if old in text:
-    path.write_text(text.replace(old, new), encoding="utf-8")
-PY
-exec python main.py --listen --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention
-"""
-                                                docker_manager.run_container(
-                                                    service_type=actual_service_type,
-                                                    command=[
-                                                        "bash",
-                                                        "-lc",
-                                                        ltx23_bootstrap,
-                                                    ],
-                                                )
-                                                logging.info(
-                                                    "Started LTX-2.3 ComfyUI container with 8GB model registry bootstrap."
-                                                )
                                             elif is_ollama:
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,

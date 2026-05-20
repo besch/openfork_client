@@ -522,21 +522,6 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ltx23-video-16gb"
           log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
-  elif [ -f "/opt/ComfyUI/models/checkpoints/ltx-2.3-22b-distilled.safetensors" ]; then
-      log "Auto-mode: Detected LTX-2.3 ComfyUI image (BF16 safetensors present)."
-      if [ "$TOTAL_VRAM_MB" -gt 20000 ]; then
-          SERVICE_TYPE="ltx23-comfyui-video-24gb"
-          log "Auto-selected LTX-2.3 ComfyUI 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      elif [ "$TOTAL_VRAM_MB" -gt 14000 ]; then
-          SERVICE_TYPE="ltx23-comfyui-video-16gb"
-          log "Auto-selected LTX-2.3 ComfyUI 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      elif [ "$TOTAL_VRAM_MB" -gt 10000 ]; then
-          SERVICE_TYPE="ltx23-comfyui-video-12gb"
-          log "Auto-selected LTX-2.3 ComfyUI 12GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      else
-          SERVICE_TYPE="ltx23-comfyui-video-8gb"
-          log "Auto-selected LTX-2.3 ComfyUI 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
-      fi
   elif [ -f "/opt/ComfyUI/models/DreamID-Omni/DreamID_Omni/dreamid_omni.fp8_e4m3fn.safetensors" ]; then
       log "Auto-mode: Detected DreamID-Omni FP8 ComfyUI image."
       SERVICE_TYPE="dreamid-omni-24gb"
@@ -588,9 +573,8 @@ else
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
-  # Wan2GP backend for LTX-2.3 Audio-Video services (NOT the ComfyUI variants),
-  # daVinci-MagiHuman, SCAIL, and Vista4D services.
-  if { [[ "$SERVICE_TYPE" == *"ltx23"* ]] && [[ "$SERVICE_TYPE" != *"comfyui"* ]]; } || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
+  # Wan2GP backend for LTX-2.3 Audio-Video, daVinci-MagiHuman, SCAIL, and Vista4D services.
+  if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
       START_WAN2GP="true"
       log "Wan2GP service requested for ${SERVICE_TYPE}."
   fi
@@ -956,39 +940,20 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
   
   case "$SERVICE_TYPE" in
-    # LTX-2.3 ComfyUI variants — must appear BEFORE generic ltx2*/8gb patterns
-    # Uses --use-pytorch-cross-attention (better than xformers for offloaded 46GB model)
-    # and --cpu-vae on 8/16GB to keep VRAM free for attention activations
-    *ltx23*comfyui*8gb*|*ltx23-comfyui*-8gb*)
-      log "Applying 8GB optimizations for LTX-2.3 ComfyUI (512x288, 65 frames)"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention --cache-none"
-      ;;
-    *ltx23*comfyui*12gb*|*ltx23-comfyui*-12gb*)
-      log "Applying 12GB optimizations for LTX-2.3 ComfyUI (544x304, 81 frames)"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention --cache-none"
-      ;;
-    *ltx23*comfyui*16gb*|*ltx23-comfyui*-16gb*)
-      log "Applying 16GB optimizations for LTX-2.3 ComfyUI (576x320, 97 frames)"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --use-pytorch-cross-attention --cache-none"
-      ;;
-    *ltx23*comfyui*24gb*|*ltx23-comfyui*-24gb*)
-      log "Applying 24GB optimizations for LTX-2.3 ComfyUI (768x432, 121 frames)"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention"
-      ;;
     *dreamid*omni*|*dreamid-omni*)
       log "Applying 24GB optimizations for DreamID-Omni FP8"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention --cache-none"
       ;;
-    *ltx23*-8gb*|*ltx2*-8gb*|*8gb*)
+    *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
       ;;
-    *ltx23*-16gb*|*ltx2*-16gb*|*16gb*)
+    *ltx2*-16gb*|*16gb*)
       log "Applying 16GB VRAM optimizations for ComfyUI (lowvram mode for model offloading)"
       # IMPORTANT: Use --lowvram because total model size (~29.5GB) far exceeds 16GB VRAM
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none"
       ;;
-    *ltx23*-24gb*|*ltx2*-24gb*|*24gb*)
+    *ltx2*-24gb*|*24gb*)
       log "Applying 24GB VRAM optimizations for ComfyUI (GGUF Q8_0 model)"
       # GGUF Q8_0 (~20.4GB) + Gemma FP8 (~6GB) = ~26.4GB total, slightly over 24GB VRAM
       # Use --lowvram to allow CPU offloading when needed
