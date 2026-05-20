@@ -20,6 +20,10 @@ from typing import Optional
 
 from services.processors.base import BaseJobProcessor
 from services.processors.output_handlers import VideoOutputHandler
+from services.processors.rest_recovery import (
+    clean_container_exit_detected,
+    recover_output_from_clean_container_exit,
+)
 from config import THUMBNAIL_WIDTH
 from utils.media_utils import (
     generate_thumbnail,
@@ -198,6 +202,8 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
 
     def _poll_for_completion(self, task_id: str) -> dict:
         start = time.time()
+        saw_task = False
+        consecutive_connection_errors = 0
         while time.time() - start < self.MAX_WAIT_TIME:
             if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
@@ -207,6 +213,8 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
                     timeout=10,
                 )
                 if resp.status_code == 200:
+                    saw_task = True
+                    consecutive_connection_errors = 0
                     items = resp.json().get("data", [])
                     if items:
                         item = items[0]
@@ -218,8 +226,20 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
                                 "status": "failed",
                                 "error": item.get("error", "Generation failed"),
                             }
-            except requests.exceptions.RequestException:
-                pass
+            except requests.exceptions.RequestException as exc:
+                consecutive_connection_errors += 1
+                log.warning(f"InSpatio-World status check failed: {exc}")
+                if (
+                    saw_task
+                    and consecutive_connection_errors >= 3
+                    and clean_container_exit_detected(self)
+                ):
+                    log.warning(
+                        "InSpatio-World API exited cleanly before final status for "
+                        "task %s; attempting output recovery from container.",
+                        task_id,
+                    )
+                    return {"status": "completed", "recovered_from_clean_container_exit": True}
             time.sleep(self.POLL_INTERVAL)
         return {"status": "failed", "error": "Timeout"}
 
@@ -241,7 +261,21 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
                         f.write(chunk)
                 return output_path
             log.error(f"Download failed: {resp.status_code} {resp.text}")
-            return None
+            output_path = os.path.join(self.cache_dir, f"{self.job_id}_inspatio.mp4")
+            return recover_output_from_clean_container_exit(
+                self,
+                output_path,
+                container_output_path=f"/data/inspatio_tasks/{task_id}/output",
+                extensions=(".mp4", ".avi", ".mov", ".mkv"),
+                prefer_name=task_id,
+            )
         except requests.exceptions.RequestException as e:
             log.error(f"Download error: {e}")
-            return None
+            output_path = os.path.join(self.cache_dir, f"{self.job_id}_inspatio.mp4")
+            return recover_output_from_clean_container_exit(
+                self,
+                output_path,
+                container_output_path=f"/data/inspatio_tasks/{task_id}/output",
+                extensions=(".mp4", ".avi", ".mov", ".mkv"),
+                prefer_name=task_id,
+            )

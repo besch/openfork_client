@@ -54,6 +54,7 @@ services/processors/audio/stable_audio.py
 services/processors/audio/vibevoice.py
 services/processors/base.py
 services/processors/comfyui_processor.py
+services/processors/rest_recovery.py
 services/processors/image/__init__.py
 services/processors/image/anima.py
 services/processors/image/ernie_image.py

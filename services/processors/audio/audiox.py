@@ -14,6 +14,10 @@ import requests
 
 from services.orchestrator_service import TokenExpiredError
 from services.processors.base import BaseJobProcessor
+from services.processors.rest_recovery import (
+    poll_rest_job_with_clean_exit,
+    recover_output_from_clean_container_exit,
+)
 from utils.media_utils import get_audio_duration
 
 
@@ -231,26 +235,14 @@ class AudioXJobProcessor(BaseJobProcessor):
         return self.FIXED_TEXT_AUDIO_DURATION
 
     def _poll_for_completion(self, remote_job_id: str) -> Dict:
-        start_time = time.time()
-        while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.is_cancelled():
-                return {"status": "cancelled", "error": "Shutdown requested"}
-            try:
-                response = requests.get(
-                    f"{self.api_base_url}/status/{remote_job_id}",
-                    timeout=10,
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") in {"completed", "failed"}:
-                        return data
-                else:
-                    logging.warning("AudioX status check returned %s", response.status_code)
-            except requests.exceptions.RequestException as exc:
-                logging.warning("AudioX status check failed: %s", exc)
-            time.sleep(self.POLL_INTERVAL)
-
-        return {"status": "failed", "error": "Timeout waiting for AudioX generation"}
+        return poll_rest_job_with_clean_exit(
+            self,
+            self.api_base_url,
+            remote_job_id,
+            poll_interval=self.POLL_INTERVAL,
+            max_wait_time=self.MAX_WAIT_TIME,
+            service_label="AudioX",
+        )
 
     def _download_output(self, remote_job_id: str) -> Optional[str]:
         try:
@@ -263,7 +255,13 @@ class AudioXJobProcessor(BaseJobProcessor):
             )
             if response.status_code != 200:
                 logging.error("Failed to download AudioX output: %s", response.status_code)
-                return None
+                return recover_output_from_clean_container_exit(
+                    self,
+                    local_path,
+                    container_output_path=f"/app/output/{remote_job_id}.wav",
+                    extensions=(".wav",),
+                    prefer_name=remote_job_id,
+                )
 
             with open(local_path, "wb") as handle:
                 for chunk in response.iter_content(chunk_size=8192):
@@ -271,7 +269,13 @@ class AudioXJobProcessor(BaseJobProcessor):
             return local_path
         except requests.exceptions.RequestException as exc:
             logging.error("Failed to download AudioX output: %s", exc)
-            return None
+            return recover_output_from_clean_container_exit(
+                self,
+                local_path,
+                container_output_path=f"/app/output/{remote_job_id}.wav",
+                extensions=(".wav",),
+                prefer_name=remote_job_id,
+            )
 
     def _cleanup_remote_job(self, remote_job_id: str) -> None:
         if not remote_job_id:

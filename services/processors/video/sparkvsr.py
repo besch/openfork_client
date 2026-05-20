@@ -21,6 +21,10 @@ import requests
 
 from services.processors.base import BaseJobProcessor
 from services.processors.output_handlers import VideoOutputHandler
+from services.processors.rest_recovery import (
+    clean_container_exit_detected,
+    recover_output_from_clean_container_exit,
+)
 from config import THUMBNAIL_WIDTH
 from utils.media_utils import (
     find_video_in_output,
@@ -136,6 +140,8 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
         max_wait = 1800  # 30 minutes max
         poll_interval = 10
         elapsed = 0
+        saw_task = False
+        consecutive_connection_errors = 0
 
         while elapsed < max_wait:
             if self.is_cancelled():
@@ -151,6 +157,8 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
                     logging.warning(f"[SparkVSR] Status check failed: {status_resp.status_code}")
                     continue
 
+                saw_task = True
+                consecutive_connection_errors = 0
                 status_data = status_resp.json()
                 status = status_data.get("status", "unknown")
 
@@ -169,7 +177,19 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
                     logging.warning(f"[SparkVSR] Unknown status: {status}")
 
             except Exception as e:
+                consecutive_connection_errors += 1
                 logging.warning(f"[SparkVSR] Status poll error: {e}")
+                if (
+                    saw_task
+                    and consecutive_connection_errors >= 3
+                    and clean_container_exit_detected(self)
+                ):
+                    logging.warning(
+                        "[SparkVSR] API exited cleanly before final status for task %s; "
+                        "attempting output recovery from container.",
+                        task_id,
+                    )
+                    break
 
         else:
             self._fail_job(f"SparkVSR job {self.job_id} timed out after {max_wait}s")
@@ -179,19 +199,40 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
         try:
             result_resp = requests.get(f"{self.RESULT_ENDPOINT}/{task_id}", timeout=60, stream=True)
             if result_resp.status_code != 200:
-                self._fail_job(f"Failed to download SparkVSR result: {result_resp.status_code}")
-                return
+                output_path = os.path.join(self.cache_dir, f"{self.job_id}_sparkvsr_output.mp4")
+                recovered_path = recover_output_from_clean_container_exit(
+                    self,
+                    output_path,
+                    container_output_path=f"/app/output/{task_id}_out.mp4",
+                    extensions=(".mp4",),
+                    prefer_name=task_id,
+                )
+                if not recovered_path:
+                    self._fail_job(f"Failed to download SparkVSR result: {result_resp.status_code}")
+                    return
 
-            output_path = os.path.join(self.cache_dir, f"{self.job_id}_sparkvsr_output.mp4")
-            with open(output_path, "wb") as f:
-                for chunk in result_resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
+                output_path = recovered_path
+            else:
+                output_path = os.path.join(self.cache_dir, f"{self.job_id}_sparkvsr_output.mp4")
+                with open(output_path, "wb") as f:
+                    for chunk in result_resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
 
             logging.info(f"[SparkVSR] Downloaded result to {output_path}")
 
         except Exception as e:
-            self._fail_job(f"Failed to download SparkVSR result: {e}")
-            return
+            output_path = os.path.join(self.cache_dir, f"{self.job_id}_sparkvsr_output.mp4")
+            recovered_path = recover_output_from_clean_container_exit(
+                self,
+                output_path,
+                container_output_path=f"/app/output/{task_id}_out.mp4",
+                extensions=(".mp4",),
+                prefer_name=task_id,
+            )
+            if not recovered_path:
+                self._fail_job(f"Failed to download SparkVSR result: {e}")
+                return
+            output_path = recovered_path
 
         # ── 7. Upload result and complete job ──
         try:

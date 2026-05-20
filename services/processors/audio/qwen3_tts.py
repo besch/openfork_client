@@ -16,6 +16,7 @@ from typing import Optional, Dict
 
 from config import SUPABASE_URL
 from services.processors.base import BaseJobProcessor
+from services.processors.rest_recovery import recover_output_from_clean_container_exit
 from services.docker_manager import docker_manager
 from services.orchestrator_service import TokenExpiredError
 from utils.media_utils import get_audio_duration
@@ -73,26 +74,12 @@ def _copy_qwen_output_from_container(
     processor: BaseJobProcessor,
     local_path: str,
 ) -> Optional[str]:
-    service_type = _qwen_service_type(processor)
-    if not service_type:
-        return None
-    try:
-        docker_manager.copy_file_from_container(
-            service_type,
-            "/app/output",
-            local_path,
-            processor.shutdown_event,
-        )
-        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
-            logging.info(
-                "Recovered Qwen output for job %s from exited container: %s",
-                processor.job_id,
-                local_path,
-            )
-            return local_path
-    except Exception as exc:
-        logging.warning("Could not recover Qwen output from container: %s", exc)
-    return None
+    return recover_output_from_clean_container_exit(
+        processor,
+        local_path,
+        container_output_path="/app/output",
+        extensions=(".wav",),
+    )
 
 
 def _poll_qwen_for_completion(

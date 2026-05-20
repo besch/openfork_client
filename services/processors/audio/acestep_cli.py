@@ -11,6 +11,10 @@ from typing import Optional, Dict, Any
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from services.processors.base import BaseJobProcessor
+from services.processors.rest_recovery import (
+    clean_container_exit_detected,
+    recover_output_from_clean_container_exit,
+)
 from services.orchestrator_service import TokenExpiredError
 from utils.media_utils import get_audio_duration
 
@@ -292,6 +296,8 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
         Status codes from API: 0=queued/running, 1=success, 2=failed
         """
         start_time = time.time()
+        saw_task = False
+        consecutive_connection_errors = 0
         while time.time() - start_time < self.MAX_WAIT_TIME:
             if self.is_cancelled():
                 return {"status": "cancelled", "error": "Shutdown requested"}
@@ -304,6 +310,8 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
                 if response.status_code == 200:
                     items = response.json().get("data", [])
                     if items:
+                        saw_task = True
+                        consecutive_connection_errors = 0
                         item = items[0]
                         status_code = item.get("status")
                         progress_text = item.get("progress_text")
@@ -331,8 +339,20 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
                         # report 1 while the audio file is still being prepared,
                         # so completion is keyed off an actual downloadable path.
 
-            except requests.exceptions.RequestException:
-                pass
+            except requests.exceptions.RequestException as exc:
+                consecutive_connection_errors += 1
+                logging.warning("ACE-Step status check failed: %s", exc)
+                if (
+                    saw_task
+                    and consecutive_connection_errors >= 3
+                    and clean_container_exit_detected(self)
+                ):
+                    logging.warning(
+                        "ACE-Step API exited cleanly before final status for task %s; "
+                        "attempting output recovery from container.",
+                        task_id,
+                    )
+                    return {"status": "completed"}
             time.sleep(self.POLL_INTERVAL)
         return {"status": "failed", "error": "Timeout"}
 
@@ -360,7 +380,13 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
         """Download audio from either a 1.5 download URL or a raw server-side file path."""
         if not download_target:
             logging.error(f"No server download target returned for task {task_id}")
-            return None
+            return recover_output_from_clean_container_exit(
+                self,
+                os.path.join(self.cache_dir, f"{self.job_id}.wav"),
+                container_output_path="/app/output",
+                extensions=(".wav", ".mp3", ".flac", ".ogg", ".opus", ".aac"),
+                prefer_name=task_id,
+            )
         try:
             os.makedirs(self.cache_dir, exist_ok=True)
             if download_target.startswith(("http://", "https://")):
@@ -385,7 +411,19 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
                         f.write(chunk)
                 return local_path
             logging.error(f"Audio download failed: {response.status_code} {response.text}")
-            return None
+            return recover_output_from_clean_container_exit(
+                self,
+                os.path.join(self.cache_dir, f"{self.job_id}.wav"),
+                container_output_path="/app/output",
+                extensions=(".wav", ".mp3", ".flac", ".ogg", ".opus", ".aac"),
+                prefer_name=task_id,
+            )
         except requests.exceptions.RequestException as e:
             logging.error(f"Audio download request error: {e}")
-            return None
+            return recover_output_from_clean_container_exit(
+                self,
+                os.path.join(self.cache_dir, f"{self.job_id}.wav"),
+                container_output_path="/app/output",
+                extensions=(".wav", ".mp3", ".flac", ".ogg", ".opus", ".aac"),
+                prefer_name=task_id,
+            )

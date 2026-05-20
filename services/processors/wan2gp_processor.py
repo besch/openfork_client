@@ -24,6 +24,10 @@ import requests
 from config import THUMBNAIL_WIDTH
 from exceptions import InfrastructureError
 from services.processors.base import BaseJobProcessor
+from services.processors.rest_recovery import (
+    clean_container_exit_detected,
+    recover_output_from_clean_container_exit,
+)
 from utils.media_utils import generate_thumbnail, get_video_duration
 
 WAN2GP_HTTP_URL = os.environ.get("WAN2GP_HTTP_URL", "http://127.0.0.1:8188")
@@ -250,6 +254,9 @@ class Wan2GPProcessor(BaseJobProcessor):
                     self.job_id,
                 )
                 return []
+            recovered = self._recover_output_after_clean_exit()
+            if recovered:
+                return recovered
             logging.error(
                 f"Wan2GP generate request failed for job {self.job_id}: {error_holder[0]}"
             )
@@ -272,12 +279,12 @@ class Wan2GPProcessor(BaseJobProcessor):
             logging.error(
                 f"Wan2GP server returned error for job {self.job_id}: {detail}"
             )
-            return []
+            return self._recover_output_after_clean_exit()
 
         basenames = resp.json().get("files", [])
         if not basenames:
             logging.error(f"Wan2GP returned no output files for job {self.job_id}")
-            return []
+            return self._recover_output_after_clean_exit()
 
         # Download each output file to a local temp path
         local_paths = []
@@ -291,6 +298,10 @@ class Wan2GPProcessor(BaseJobProcessor):
                 dl = requests.get(download_url, timeout=300, stream=True)
                 dl.raise_for_status()
             except requests.exceptions.RequestException as e:
+                recovered_path = self._recover_named_output_after_clean_exit(name)
+                if recovered_path:
+                    local_paths.append(recovered_path)
+                    continue
                 logging.error(
                     f"Failed to download output '{name}' for job {self.job_id}: {e}"
                 )
@@ -324,6 +335,65 @@ class Wan2GPProcessor(BaseJobProcessor):
                 )
 
         return local_paths
+
+    def _recover_output_after_clean_exit(self) -> List[str]:
+        if not clean_container_exit_detected(self):
+            return []
+
+        os.makedirs(self.cache_dir, exist_ok=True)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".mp4",
+                dir=self.cache_dir,
+            ) as tmp:
+                tmp_path = tmp.name
+
+            recovered = recover_output_from_clean_container_exit(
+                self,
+                tmp_path,
+                container_output_path="/opt/wan2gp/outputs",
+                extensions=(".mp4", ".mov", ".webm", ".mkv"),
+                prefer_name=self.job_id,
+            )
+            return [recovered] if recovered else []
+        finally:
+            if tmp_path and os.path.exists(tmp_path) and os.path.getsize(tmp_path) == 0:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+    def _recover_named_output_after_clean_exit(self, name: str) -> Optional[str]:
+        if not clean_container_exit_detected(self):
+            return None
+
+        suffix = Path(name).suffix or ".mp4"
+        os.makedirs(self.cache_dir, exist_ok=True)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=suffix,
+                dir=self.cache_dir,
+            ) as tmp:
+                tmp_path = tmp.name
+
+            recovered = recover_output_from_clean_container_exit(
+                self,
+                tmp_path,
+                container_output_path=f"/opt/wan2gp/outputs/{Path(name).name}",
+                extensions=(".mp4", ".mov", ".webm", ".mkv"),
+                prefer_name=Path(name).stem,
+            )
+            return recovered
+        finally:
+            if tmp_path and os.path.exists(tmp_path) and os.path.getsize(tmp_path) == 0:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     def _handle_video_output(
         self, file_path: str

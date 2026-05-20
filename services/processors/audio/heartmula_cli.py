@@ -14,6 +14,10 @@ import requests
 from typing import Optional, Dict, Any
 
 from services.processors.base import BaseJobProcessor
+from services.processors.rest_recovery import (
+    poll_rest_job_with_clean_exit,
+    recover_output_from_clean_container_exit,
+)
 from services.orchestrator_service import TokenExpiredError
 from utils.media_utils import get_audio_duration
 
@@ -288,39 +292,14 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
 
     def _poll_for_completion(self, remote_job_id: str) -> Dict:
         """Poll the API for job completion."""
-        start_time = time.time()
-
-        while time.time() - start_time < self.max_wait_time:
-            if self.is_cancelled():
-                return {"status": "cancelled", "error": "Shutdown requested"}
-
-            try:
-                response = requests.get(f"{self.api_base_url}/status/{remote_job_id}", timeout=10)
-
-                if response.status_code == 200:
-                    data = response.json()
-                    status = data.get("status")
-
-                    if status == "completed":
-                        logging.info(f"Remote job {remote_job_id} completed")
-                        return data
-                    elif status == "failed":
-                        logging.error(f"Remote job {remote_job_id} failed: {data.get('error')}")
-                        return data
-                    else:
-                        logging.debug(f"Remote job {remote_job_id} status: {status}")
-                else:
-                    logging.warning(f"Status check returned {response.status_code}")
-
-            except requests.exceptions.RequestException as e:
-                logging.warning(f"Status check failed: {e}")
-
-            time.sleep(self.POLL_INTERVAL)
-
-        return {
-            "status": "failed",
-            "error": f"Timeout waiting for generation after {self.max_wait_time}s",
-        }
+        return poll_rest_job_with_clean_exit(
+            self,
+            self.api_base_url,
+            remote_job_id,
+            poll_interval=self.POLL_INTERVAL,
+            max_wait_time=self.max_wait_time,
+            service_label="HeartMula",
+        )
 
     def _download_output(self, remote_job_id: str) -> Optional[str]:
         """Download the generated audio file from the API."""
@@ -337,13 +316,24 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
 
                 logging.info(f"Downloaded output to {local_path}")
                 return local_path
-            else:
-                logging.error(f"Failed to download output: {response.status_code}")
-                return None
+            logging.error(f"Failed to download output: {response.status_code}")
+            return recover_output_from_clean_container_exit(
+                self,
+                local_path,
+                container_output_path=f"/app/output/{remote_job_id}.wav",
+                extensions=(".wav",),
+                prefer_name=remote_job_id,
+            )
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Failed to download output: {e}")
-            return None
+            return recover_output_from_clean_container_exit(
+                self,
+                local_path,
+                container_output_path=f"/app/output/{remote_job_id}.wav",
+                extensions=(".wav",),
+                prefer_name=remote_job_id,
+            )
 
     def _cleanup_remote_job(self, remote_job_id: str):
         """Clean up the remote job and its files."""

@@ -6,6 +6,10 @@ import time
 
 from config import SUPABASE_URL
 from services.processors.base import BaseJobProcessor
+from services.processors.rest_recovery import (
+    poll_rest_job_with_clean_exit,
+    recover_output_from_clean_container_exit,
+)
 from utils.media_utils import get_audio_duration
 
 logger = logging.getLogger(__name__)
@@ -111,54 +115,56 @@ class LavaSRJobProcessor(BaseJobProcessor):
 
             # 5. Poll for completion
             logger.info(f"Polling LavaSR job {restoration_job_id} for job {self.job_id}")
-            completed = False
-            start_time = time.time()
-            
-            while time.time() - start_time < self.MAX_WAIT_TIME:
-                if self.is_cancelled():
-                    return
-
-                try:
-                    poll_resp = requests.get(f"{api_url}/status/{restoration_job_id}", timeout=10)
-                    if poll_resp.status_code == 200:
-                        status_data = poll_resp.json()
-                        status = status_data.get("status")
-
-                        if status == "completed":
-                            completed = True
-                            break
-                        elif status == "failed":
-                            self._fail_job(f"LavaSR restoration failed: {status_data.get('error')}")
-                            return
-                    else:
-                        logger.error(f"Failed to poll LavaSR status: {poll_resp.status_code}")
-                except requests.exceptions.RequestException as e:
-                    logger.warning(f"LavaSR status check failed: {e}")
-                
-                time.sleep(self.POLL_INTERVAL)
-
-            if not completed:
-                self._fail_job(
-                    f"LavaSR restoration timed out after {self.MAX_WAIT_TIME}s"
-                )
+            result = poll_rest_job_with_clean_exit(
+                self,
+                api_url,
+                restoration_job_id,
+                poll_interval=self.POLL_INTERVAL,
+                max_wait_time=self.MAX_WAIT_TIME,
+                service_label="LavaSR",
+            )
+            if result.get("status") == "cancelled":
+                return
+            if result.get("status") != "completed":
+                self._fail_job(f"LavaSR restoration failed: {result.get('error', 'Unknown error')}")
                 return
 
             # 6. Download restored audio
             output_filename = f"{self.job_id}_restored.wav"
             output_path = os.path.join(self.cache_dir, output_filename)
-            
-            download_resp = requests.get(
-                f"{api_url}/download/{restoration_job_id}",
-                stream=True,
-                timeout=120,
-            )
-            if download_resp.status_code == 200:
-                with open(output_path, 'wb') as f:
-                    for chunk in download_resp.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            else:
-                self._fail_job(f"Failed to download restored audio from LavaSR: {download_resp.text}")
-                return
+
+            try:
+                download_resp = requests.get(
+                    f"{api_url}/download/{restoration_job_id}",
+                    stream=True,
+                    timeout=120,
+                )
+                if download_resp.status_code == 200:
+                    with open(output_path, 'wb') as f:
+                        for chunk in download_resp.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                else:
+                    recovered_path = recover_output_from_clean_container_exit(
+                        self,
+                        output_path,
+                        container_output_path=f"/app/output/{restoration_job_id}_restored.wav",
+                        extensions=(".wav",),
+                        prefer_name=restoration_job_id,
+                    )
+                    if not recovered_path:
+                        self._fail_job(f"Failed to download restored audio from LavaSR: {download_resp.text}")
+                        return
+            except requests.exceptions.RequestException as e:
+                recovered_path = recover_output_from_clean_container_exit(
+                    self,
+                    output_path,
+                    container_output_path=f"/app/output/{restoration_job_id}_restored.wav",
+                    extensions=(".wav",),
+                    prefer_name=restoration_job_id,
+                )
+                if not recovered_path:
+                    self._fail_job(f"Failed to download restored audio from LavaSR: {e}")
+                    return
 
             # 7. Upload to Supabase
             if os.path.exists(output_path):

@@ -18,6 +18,10 @@ from typing import Optional
 from config import TimeoutConfig
 from services.processors.base import BaseJobProcessor
 from services.processors.output_handlers import ImageOutputHandler
+from services.processors.rest_recovery import (
+    poll_rest_job_with_clean_exit,
+    recover_output_from_clean_container_exit,
+)
 from services.orchestrator_service import TokenExpiredError
 
 
@@ -277,42 +281,15 @@ class ErnieImageProcessor(BaseJobProcessor, ImageOutputHandler):
             return None
 
     def _poll_for_completion(self, api_job_id: str) -> dict:
-        start_time = time.time()
-        last_log = -30
-        while time.time() - start_time < self.MAX_WAIT_TIME:
-            if self.is_cancelled():
-                return {"status": "cancelled", "error": "Shutdown requested"}
-            elapsed = int(time.time() - start_time)
-            try:
-                response = self.session.get(
-                    f"{self.api_base_url}/status/{api_job_id}", timeout=10
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    status = data.get("status")
-                    if status == "completed":
-                        return {"status": "completed"}
-                    elif status == "failed":
-                        return {
-                            "status": "failed",
-                            "error": data.get("error", "Generation failed"),
-                        }
-                    elif elapsed - last_log >= 30:
-                        logging.info(
-                            "ERNIE-Image job %s still %s (%ss/%ss)",
-                            api_job_id,
-                            status or "processing",
-                            elapsed,
-                            self.MAX_WAIT_TIME,
-                        )
-                        last_log = elapsed
-            except requests.exceptions.RequestException:
-                pass
-            time.sleep(self.POLL_INTERVAL)
-        return {
-            "status": "failed",
-            "error": f"Timeout waiting for generation after {self.MAX_WAIT_TIME}s",
-        }
+        return poll_rest_job_with_clean_exit(
+            self,
+            self.api_base_url,
+            api_job_id,
+            poll_interval=self.POLL_INTERVAL,
+            max_wait_time=self.MAX_WAIT_TIME,
+            service_label="ERNIE-Image",
+            session=self.session,
+        )
 
     def _download_output(self, api_job_id: str) -> Optional[str]:
         try:
@@ -332,10 +309,22 @@ class ErnieImageProcessor(BaseJobProcessor, ImageOutputHandler):
             logging.error(
                 f"ERNIE-Image download failed: {response.status_code} {response.text}"
             )
-            return None
+            return recover_output_from_clean_container_exit(
+                self,
+                local_path,
+                container_output_path=f"/app/output/{api_job_id}.png",
+                extensions=(".png", ".jpg", ".jpeg", ".webp"),
+                prefer_name=api_job_id,
+            )
         except requests.exceptions.RequestException as e:
             logging.error(f"ERNIE-Image download error: {e}")
-            return None
+            return recover_output_from_clean_container_exit(
+                self,
+                local_path,
+                container_output_path=f"/app/output/{api_job_id}.png",
+                extensions=(".png", ".jpg", ".jpeg", ".webp"),
+                prefer_name=api_job_id,
+            )
 
     def _resolve_dimensions(self, aspect_ratio: Optional[str]) -> tuple:
         # Standard resolutions — suitable for 16GB+ VRAM.
