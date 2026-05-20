@@ -54,7 +54,6 @@ services/processors/audio/stable_audio.py
 services/processors/audio/vibevoice.py
 services/processors/base.py
 services/processors/comfyui_processor.py
-services/processors/rest_recovery.py
 services/processors/image/__init__.py
 services/processors/image/anima.py
 services/processors/image/ernie_image.py
@@ -65,6 +64,7 @@ services/processors/image/zimage.py
 services/processors/llm/__init__.py
 services/processors/llm/llm.py
 services/processors/output_handlers.py
+services/processors/rest_recovery.py
 services/processors/video/__init__.py
 services/processors/video/davinci_magihuman.py
 services/processors/video/dreamid_omni.py
