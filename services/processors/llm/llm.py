@@ -12,6 +12,7 @@ import random
 import json
 import threading
 import requests
+import re
 
 from services.processors.base import BaseJobProcessor
 
@@ -99,6 +100,114 @@ class LLMJobProcessor(BaseJobProcessor):
             if fragment in lowered:
                 return fragment
         return None
+
+    @classmethod
+    def _sanitize_visual_story_text(cls, text: str) -> str:
+        """Remove copied prompt-rule clauses while keeping positive story detail."""
+        value = str(text or "").strip()
+        if not value or not cls._forbidden_visual_rule_fragment(value):
+            return value
+
+        replacements = (
+            r"\bwithout (?:visible )?(?:text|writing|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:text|writing|labels|logos|watermarks?|captions|subtitles))*\b",
+            r"\bno (?:visible )?(?:text|writing|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:text|writing|labels|logos|watermarks?|captions|subtitles))*\b",
+            r"\bnever print[^.;,]*",
+            r"\bdo not (?:render|include|put)[^.;,]*",
+            r"\bmetadata only\b",
+            r"\bno readable symbols\b",
+            r"\breadable symbols\b",
+            r"\bprinted words\b",
+            r"\b(?:captions|subtitles|title cards|name tags|speech bubbles|floating words|diagram text|annotation lines|watermarks?)\b",
+            r"\bui/hud\b",
+        )
+        cleaned = value
+        for pattern in replacements:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*:\s*", ": ", cleaned)
+        cleaned = re.sub(r"\s+([,.;])", r"\1", cleaned)
+        cleaned = re.sub(r"\b(?:or|and)\s*([,.;])", r"\1", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"([,.;]){2,}", r"\1", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ;,.")
+        if cleaned and not cls._forbidden_visual_rule_fragment(cleaned):
+            return cleaned
+
+        split_value = re.sub(r"\bDr\.\s+", "Dr ", value)
+        parts = re.split(r"([.;]\s+|\n+)", split_value)
+        cleaned_parts = []
+        for index in range(0, len(parts), 2):
+            clause = parts[index].strip()
+            separator = parts[index + 1] if index + 1 < len(parts) else ""
+            if not clause:
+                continue
+            if cls._forbidden_visual_rule_fragment(clause):
+                continue
+            cleaned_parts.append(clause + separator)
+
+        cleaned = "".join(cleaned_parts).strip()
+        if cleaned:
+            return re.sub(r"\s+", " ", cleaned).strip(" ;,.")
+
+        return cleaned or value
+
+    @classmethod
+    def _is_generic_scene_title(cls, name: str) -> bool:
+        normalized = " ".join(str(name or "").strip().casefold().split())
+        if not normalized:
+            return True
+        if normalized.startswith(("scene ", "beat ", "hook", "setup", "payoff")):
+            return True
+        return bool(re.fullmatch(r"(?:scene|shot|beat|moment)\s*[-#:]?\s*\d+", normalized))
+
+    @classmethod
+    def _scene_title_from_content(cls, scene: dict, index: int, seen_names: set) -> str:
+        source = str(scene.get("description") or scene.get("image_prompt") or "").strip()
+        source = cls._sanitize_visual_story_text(source)
+        source = re.sub(r"\bDr\.\s+", "Dr ", source)
+        words = re.findall(r"[A-Za-z][A-Za-z0-9'-]*", source)
+        stop_words = {
+            "the",
+            "and",
+            "with",
+            "into",
+            "from",
+            "that",
+            "this",
+            "their",
+            "while",
+            "scene",
+            "shot",
+            "camera",
+            "close",
+            "wide",
+            "medium",
+            "open",
+            "opens",
+            "cold",
+            "tiny",
+        }
+        title_words = []
+        for word in words:
+            if len(title_words) >= 5:
+                break
+            normalized = word.strip("'").casefold()
+            if len(normalized) < 3 or normalized in stop_words:
+                continue
+            title_words.append(word.strip("'"))
+
+        if len(title_words) < 2:
+            title_words = ["Story", "Moment", str(index + 1)]
+
+        base_title = " ".join(word[:1].upper() + word[1:] for word in title_words[:5])
+        base_title = re.sub(r"\s+", " ", base_title).strip()
+        if cls._is_generic_scene_title(base_title):
+            base_title = f"Story Moment {index + 1}"
+
+        title = base_title
+        suffix = 2
+        while " ".join(title.casefold().split()) in seen_names:
+            title = f"{base_title} {suffix}"
+            suffix += 1
+        return title
 
     @classmethod
     def _script_scene_schema(cls, num_scenes, allowed_characters=None, allowed_speakers=None) -> dict:
@@ -442,7 +551,15 @@ class LLMJobProcessor(BaseJobProcessor):
                 if not isinstance(scene, dict):
                     raise ValueError(f"Scene {index + 1} is not an object.")
                 name = str(scene.get("name") or "").strip()
-                if not name or name.lower().startswith(("scene ", "beat ", "hook", "setup", "payoff")):
+                if cls._is_generic_scene_title(name):
+                    name = cls._scene_title_from_content(scene, index, seen_scene_names)
+                    scene["name"] = name
+                    logging.info(
+                        "Repaired generic script scene title for scene %s to %r.",
+                        index + 1,
+                        name,
+                    )
+                if cls._is_generic_scene_title(name):
                     raise ValueError(f"Scene {index + 1} has a generic title: {name!r}.")
                 if len(name.split()) > 7 or len(name) > 70:
                     raise ValueError(f"Scene {index + 1} title is too long: {name!r}.")
@@ -467,6 +584,23 @@ class LLMJobProcessor(BaseJobProcessor):
                 image_prompt_text = str(scene.get("image_prompt") or "")
                 if "black screen" in description_text.casefold() or "black screen" in image_prompt_text.casefold():
                     raise ValueError(f"Scene {index + 1} uses a black screen instead of renderable imagery.")
+                for field_name, field_text in (
+                    ("description", description_text),
+                    ("image_prompt", image_prompt_text),
+                ):
+                    cleaned_text = cls._sanitize_visual_story_text(field_text)
+                    if cleaned_text != field_text:
+                        logging.info(
+                            "Sanitized copied visual-rule text from scene %s %s.",
+                            index + 1,
+                            field_name,
+                        )
+                        scene[field_name] = cleaned_text
+                    if not cleaned_text:
+                        raise ValueError(f"Scene {index + 1} {field_name} is empty after cleanup.")
+
+                description_text = str(scene.get("description") or "")
+                image_prompt_text = str(scene.get("image_prompt") or "")
                 for field_name, field_text, max_length in (
                     ("description", description_text, 520),
                     ("image_prompt", image_prompt_text, 1100),
@@ -518,6 +652,17 @@ class LLMJobProcessor(BaseJobProcessor):
                     )
                 for field_name in ("scene_prompt", "image_edit_prompt", "video_prompt"):
                     field_text = str(scenario.get(field_name) or "")
+                    cleaned_text = cls._sanitize_visual_story_text(field_text)
+                    if cleaned_text != field_text:
+                        logging.info(
+                            "Sanitized copied visual-rule text from scenario %s %s.",
+                            index + 1,
+                            field_name,
+                        )
+                        scenario[field_name] = cleaned_text
+                        field_text = cleaned_text
+                    if not field_text:
+                        raise ValueError(f"Scenario {index + 1} {field_name} is empty after cleanup.")
                     forbidden_fragment = cls._forbidden_visual_rule_fragment(field_text)
                     if forbidden_fragment:
                         raise ValueError(
@@ -713,8 +858,9 @@ class LLMJobProcessor(BaseJobProcessor):
                     if job_type == "script_generation":
                         story_guard = (
                             " Every scene must be a concrete visual story beat that can be rendered as image/video. "
-                            "Do not include credits, title cards, intro cards, recap cards, outro cards, black screens, "
-                            "logos, captions, visible written text, or meta-production moments."
+                            "Every JSON field must describe positive story content only; do not write rule phrases "
+                            "about text, logos, captions, watermarks, credits, title cards, black screens, or "
+                            "meta-production moments."
                         )
                         if allowed_character_names:
                             story_guard += (
@@ -832,6 +978,7 @@ class LLMJobProcessor(BaseJobProcessor):
                         allowed_character_names,
                         allowed_dialogue_speakers,
                     )
+                    generated_text = json.dumps(parsed_json, ensure_ascii=False, indent=2)
                     validation_error = None
                     break
                 except (json.JSONDecodeError, ValueError) as exc:
