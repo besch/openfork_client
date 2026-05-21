@@ -173,11 +173,11 @@ class LLMJobProcessor(BaseJobProcessor):
                     },
                     "description": {
                         "type": "string",
-                        "description": "Narrative role and story function of this reusable character",
+                        "description": "Reusable physical identity and story role; never workflow rules, reference-image instructions, or rendering constraints",
                     },
                     "visual_prompt": {
                         "type": "string",
-                        "description": "Concrete reusable visual identity anchors for image generation. For people, include face, silhouette, wardrobe, colors, accessories, and signature props. For non-human subjects, include shape, scale, color, surface texture, environment, motion behavior, and forbidden visual changes.",
+                        "description": "Concrete reusable visual identity anchors for image generation. For people, include face, silhouette, wardrobe, colors, accessories, and permanent signature props. For non-human subjects, include shape, scale, color, surface texture, and physically attached identity parts. Never include environment, scene action, workflow rules, transparent-background instructions, no-text rules, forbidden-change lists, or reference-image format instructions.",
                     },
                     "personality": {"type": "string"},
                     "voice_profile": {
