@@ -1748,7 +1748,7 @@ class JobListener:
                                                             "--cache-none",
                                                             "--preview-method",
                                                             "none",
-                                                            "--use-pytorch-cross-attention",
+                                                            "--use-split-cross-attention",
                                                         ]
                                                     )
                                                 qwen_bootstrap = r"""
