@@ -51,30 +51,59 @@ def _qwen_service_type(processor: BaseJobProcessor) -> Optional[str]:
         return None
 
 
-def _qwen_container_exited_cleanly(processor: BaseJobProcessor) -> bool:
+def _qwen_container_state(processor: BaseJobProcessor) -> Optional[Dict]:
     service_type = _qwen_service_type(processor)
     if not service_type:
-        return False
+        return None
     try:
         container_name = docker_manager.get_container_name(service_type)
         container = docker_manager.client.containers.get(container_name)
         container.reload()
-        state = container.attrs.get("State", {})
-        return (
-            state.get("Status") in ("exited", "dead")
-            and state.get("ExitCode") == 0
-            and not state.get("OOMKilled", False)
-        )
+        state = dict(container.attrs.get("State", {}) or {})
+        state["container_name"] = container_name
+        return state
     except Exception as exc:
         if exc.__class__.__name__ == "NotFound":
             logging.warning(
-                "Qwen container for service %s disappeared while polling; "
-                "treating it as stopped so the job can recover or fail promptly.",
+                "Qwen container for service %s disappeared while polling.",
                 service_type,
             )
-            return True
+            return {"Status": "not_found", "ExitCode": None, "OOMKilled": False}
         logging.debug("Could not inspect Qwen container state: %s", exc)
+        return None
+
+
+def _qwen_container_exited_cleanly(processor: BaseJobProcessor) -> bool:
+    state = _qwen_container_state(processor)
+    if not state:
         return False
+    return (
+        state.get("Status") in ("exited", "dead")
+        and state.get("ExitCode") == 0
+        and not state.get("OOMKilled", False)
+    )
+
+
+def _qwen_stopped_failure(processor: BaseJobProcessor) -> Optional[str]:
+    state = _qwen_container_state(processor)
+    if not state:
+        return None
+
+    status = state.get("Status")
+    if status == "not_found":
+        return "Qwen API container disappeared before a final status response"
+
+    if status not in ("exited", "dead"):
+        return None
+
+    exit_code = state.get("ExitCode")
+    oom_killed = bool(state.get("OOMKilled", False))
+    if exit_code == 0 and not oom_killed:
+        return None
+
+    if oom_killed:
+        return f"Qwen API container stopped while polling (exit code {exit_code}, OOM killed)"
+    return f"Qwen API container stopped while polling (exit code {exit_code})"
 
 
 def _copy_qwen_output_from_container(
@@ -131,20 +160,29 @@ def _poll_qwen_for_completion(
         except requests.exceptions.RequestException as exc:
             consecutive_connection_errors += 1
             logging.warning("Status check failed: %s", exc)
-            if (
-                saw_remote_job
-                and consecutive_connection_errors >= 3
-                and _qwen_container_exited_cleanly(processor)
-            ):
-                logging.warning(
-                    "Qwen API exited cleanly before a final status response for "
-                    "remote job %s; attempting output recovery from container.",
-                    remote_job_id,
-                )
-                return {
-                    "status": "completed",
-                    "recovered_from_clean_container_exit": True,
-                }
+            if saw_remote_job and consecutive_connection_errors >= 3:
+                if _qwen_container_exited_cleanly(processor):
+                    logging.warning(
+                        "Qwen API exited cleanly before a final status response for "
+                        "remote job %s; attempting output recovery from container.",
+                        remote_job_id,
+                    )
+                    return {
+                        "status": "completed",
+                        "recovered_from_clean_container_exit": True,
+                    }
+
+                stopped_error = _qwen_stopped_failure(processor)
+                if stopped_error:
+                    logging.error(
+                        "%s for remote job %s",
+                        stopped_error,
+                        remote_job_id,
+                    )
+                    return {
+                        "status": "failed",
+                        "error": stopped_error,
+                    }
 
         processor.shutdown_event.wait(poll_interval)
 
