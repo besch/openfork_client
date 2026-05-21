@@ -63,21 +63,35 @@ class OutputHandlerMixin:
                 logging.error("Cannot copy from container: no active service type is set.")
                 return None
 
-            try:
-                docker_manager.copy_file_from_container(
-                    service_type=self.client.active_service_type,
-                    source_in_container=source_path,
-                    dest_on_host=dest_on_host,
-                    shutdown_event=self.shutdown_event,
-                )
-                if os.path.exists(dest_on_host):
-                    logging.info(f"Successfully copied file to temporary host path: {dest_on_host}")
-                    return dest_on_host
-                else:
+            import time
+
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    if os.path.exists(dest_on_host):
+                        os.remove(dest_on_host)
+                    docker_manager.copy_file_from_container(
+                        service_type=self.client.active_service_type,
+                        source_in_container=source_path,
+                        dest_on_host=dest_on_host,
+                        shutdown_event=self.shutdown_event,
+                    )
+                    if os.path.exists(dest_on_host):
+                        logging.info(f"Successfully copied file to temporary host path: {dest_on_host}")
+                        return dest_on_host
                     raise RuntimeError("docker cp command finished but destination file does not exist.")
-            except Exception as e:
-                logging.error(f"Failed to copy file from container: {e}", exc_info=True)
-                return None
+                except Exception as e:
+                    if attempt < max_attempts and not self.shutdown_event.is_set():
+                        logging.warning(
+                            "Copy from container failed on attempt %s/%s; retrying shortly: %s",
+                            attempt,
+                            max_attempts,
+                            e,
+                        )
+                        time.sleep(min(2 * attempt, 5))
+                        continue
+                    logging.error(f"Failed to copy file from container: {e}", exc_info=True)
+                    return None
 
 
 class VideoOutputHandler(OutputHandlerMixin):
