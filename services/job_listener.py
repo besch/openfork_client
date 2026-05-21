@@ -65,6 +65,19 @@ class JobListener:
             monitor.stop()
             self._active_container_monitor = None
 
+    @staticmethod
+    def _should_keep_container_warm(service_config: Dict[str, Any]) -> bool:
+        """Return whether this service explicitly opts into container reuse."""
+        if HEADLESS_MODE:
+            return False
+        if service_config.get("backend") == "local":
+            return False
+
+        keep_warm = service_config.get("keep_container_warm", False)
+        if isinstance(keep_warm, str):
+            return keep_warm.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(keep_warm)
+
     def _job_has_terminal_status(self, job_id: Optional[str]) -> bool:
         """Check whether a job has already reached a terminal status."""
         return self._get_terminal_job_status(job_id) is not None
@@ -1534,8 +1547,46 @@ class JobListener:
                                                 "Unknown service type for workflow: "
                                                 f"{workflow_type}"
                                             )
+                                        previous_service_type = getattr(
+                                            self.client, "active_service_type", None
+                                        )
+                                        if (
+                                            previous_service_type
+                                            and previous_service_type
+                                            != actual_service_type
+                                            and not HEADLESS_MODE
+                                        ):
+                                            previous_service_config = (
+                                                self.client.services_config.get(
+                                                    previous_service_type, {}
+                                                )
+                                            )
+                                            if (
+                                                previous_service_config.get("backend")
+                                                != "local"
+                                            ):
+                                                logging.info(
+                                                    "Switching from service '%s' to '%s'; stopping warm container.",
+                                                    previous_service_type,
+                                                    actual_service_type,
+                                                )
+                                                self._stop_container_monitor()
+                                                docker_manager.stop_container(
+                                                    service_type=previous_service_type
+                                                )
+
                                         self.client.active_service_type = (
                                             actual_service_type
+                                        )
+                                        service_config = (
+                                            self.client.services_config.get(
+                                                actual_service_type, {}
+                                            )
+                                        )
+                                        keep_container_warm = (
+                                            self._should_keep_container_warm(
+                                                service_config
+                                            )
                                         )
                                         logging.info(
                                             f"Job requires service '{actual_service_type}'."
@@ -1564,19 +1615,14 @@ class JobListener:
                                             self.client.active_container_crash_event = (
                                                 container_crash_event
                                             )
-                                            service_cfg = (
-                                                self.client.services_config.get(
-                                                    actual_service_type, {}
-                                                )
-                                            )
                                             is_wan2gp = (
-                                                service_cfg.get("backend") == "wan2gp"
+                                                service_config.get("backend") == "wan2gp"
                                             )
                                             is_ollama = (
-                                                service_cfg.get("backend") == "ollama"
+                                                service_config.get("backend") == "ollama"
                                             )
                                             is_local = (
-                                                service_cfg.get("backend") == "local"
+                                                service_config.get("backend") == "local"
                                             )
 
                                             if is_local:
@@ -1671,6 +1717,7 @@ class JobListener:
                                                     environment=wan2gp_env,
                                                     pre_start_copies=pre_start_copies,
                                                     shutdown_event=self.shutdown_event,
+                                                    force_restart=not keep_container_warm,
                                                 )
                                                 logging.info(
                                                     "Started wan2gp_server.py as the Wan2GP container main process."
@@ -1717,6 +1764,7 @@ exec python main.py "$@"
                                                         *qwen_args,
                                                     ],
                                                     environment=qwen_env,
+                                                    force_restart=not keep_container_warm,
                                                 )
                                                 logging.info(
                                                     "Started Qwen ComfyUI container without runtime SageAttention install."
@@ -1740,6 +1788,7 @@ exec python main.py "$@"
                                                             "mode": "rw",
                                                         },
                                                     },
+                                                    force_restart=not keep_container_warm,
                                                 )
                                                 logging.info(
                                                     "Started Ollama as the container main process."
@@ -1747,6 +1796,7 @@ exec python main.py "$@"
                                             else:
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,
+                                                    force_restart=not keep_container_warm,
                                                 )
 
                                             if not is_local:
@@ -1821,11 +1871,6 @@ exec python main.py "$@"
                                                 log_thread.start()
 
                                         # Check if service uses ComfyUI backend from configuration
-                                        service_config = (
-                                            self.client.services_config.get(
-                                                actual_service_type, {}
-                                            )
-                                        )
                                         backend = service_config.get(
                                             "backend", "comfyui"
                                         )
@@ -1879,19 +1924,27 @@ exec python main.py "$@"
                                         if not self.shutdown_event.is_set():
                                             logging.info(f"Job processing finished.")
                                             if not HEADLESS_MODE:
-                                                # Stop the monitor before the container so it
-                                                # cannot fire a spurious crash callback on
-                                                # the intentional removal.
+                                                # Stop the per-job crash monitor before any
+                                                # intentional container cleanup.
                                                 self._stop_container_monitor()
-
-                                                if service_config.get("backend") != "local":
+                                                if service_config.get("backend") == "local":
+                                                    self.client.active_service_type = None
+                                                elif keep_container_warm:
                                                     logging.info(
-                                                        f"Stopping container for service '{actual_service_type}'..."
+                                                        "Keeping container for service '%s' warm for subsequent jobs.",
+                                                        actual_service_type,
+                                                    )
+                                                else:
+                                                    logging.info(
+                                                        "Stopping container for service '%s' after job; warm reuse is not enabled for this service.",
+                                                        actual_service_type,
                                                     )
                                                     docker_manager.stop_container(
                                                         service_type=actual_service_type
                                                     )
-                                            self.client.active_service_type = None
+                                                    self.client.active_service_type = None
+                                            else:
+                                                self.client.active_service_type = None
                                             self.client.active_container_crash_event = None
                                             self.orchestrator_service.update_provider_status(
                                                 self.provider_id, "available"
