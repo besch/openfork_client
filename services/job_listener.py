@@ -353,7 +353,7 @@ class JobListener:
             return True
 
         inputs = job.get("inputs") or {}
-        model_name = inputs.get("model", "qwen2.5:3b")
+        model_name = inputs.get("model", "qwen3:4b")
         if not self._is_safe_ollama_model_name(model_name):
             logging.warning(
                 "Skipping Ollama warmup for unsafe model name %r; processor will "

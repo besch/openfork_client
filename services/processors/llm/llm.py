@@ -425,8 +425,8 @@ class LLMJobProcessor(BaseJobProcessor):
             return
 
         inputs = self.job.get("inputs", {})
-        # Default to qwen2.5:3b (blazing fast, excellent at JSON and creative writing)
-        model_name = inputs.get("model", "qwen2.5:3b")
+        # Default to the best quality model that still fits the 4GB LLM service.
+        model_name = inputs.get("model", "qwen3:4b")
             
         system_prompt = inputs.get("system_prompt", "You are a helpful assistant.")
         temperature = inputs.get("temperature", 0.7)
