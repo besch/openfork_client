@@ -74,7 +74,7 @@ class OrchestratorService:
         # The client can have a heartbeat thread, cancellation checks, job peeks,
         # status updates, and asset downloads all active at once, so the default
         # pool size of 10 is easy to exhaust.
-        pool_size = int(os.environ.get("OPENFORK_HTTP_POOL_SIZE", "32"))
+        pool_size = int(os.environ.get("OPENFORK_HTTP_POOL_SIZE", "128"))
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=pool_size,
             pool_maxsize=pool_size,

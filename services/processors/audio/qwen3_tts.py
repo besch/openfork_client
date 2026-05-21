@@ -66,6 +66,13 @@ def _qwen_container_exited_cleanly(processor: BaseJobProcessor) -> bool:
             and not state.get("OOMKilled", False)
         )
     except Exception as exc:
+        if exc.__class__.__name__ == "NotFound":
+            logging.warning(
+                "Qwen container for service %s disappeared while polling; "
+                "treating it as stopped so the job can recover or fail promptly.",
+                service_type,
+            )
+            return True
         logging.debug("Could not inspect Qwen container state: %s", exc)
         return False
 
