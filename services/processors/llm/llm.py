@@ -532,10 +532,23 @@ class LLMJobProcessor(BaseJobProcessor):
                 retry_guard = ""
 
                 if content_attempt > 1:
+                    validation_feedback = (
+                        f" Validation error to fix: {validation_error}."
+                        if validation_error
+                        else ""
+                    )
+                    story_guard = ""
+                    if job_type == "script_generation":
+                        story_guard = (
+                            " Every scene must be a concrete visual story beat that can be rendered as image/video. "
+                            "Do not include credits, title cards, intro cards, recap cards, outro cards, black screens, "
+                            "logos, captions, visible written text, or meta-production moments."
+                        )
                     retry_guard = (
                         "\n\nThe previous output failed JSON validation. Return complete valid JSON only, "
                         "with no markdown, no commentary, no trailing prose, and every string, array, and object closed. "
                         "Keep field values concise enough to fit the token budget."
+                        f"{validation_feedback}{story_guard}"
                     )
 
                 payload = {
