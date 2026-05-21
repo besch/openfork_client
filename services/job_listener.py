@@ -1744,7 +1744,10 @@ class JobListener:
                                                             "--lowvram",
                                                             "--cpu-vae",
                                                             "--reserve-vram",
-                                                            "0.5",
+                                                            "1.0",
+                                                            "--cache-none",
+                                                            "--preview-method",
+                                                            "none",
                                                             "--use-pytorch-cross-attention",
                                                         ]
                                                     )
