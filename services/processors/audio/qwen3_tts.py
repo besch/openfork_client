@@ -257,13 +257,17 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
 
             if audio_storage_path:
                 duration = get_audio_duration(local_path)
-                completion_metadata = self.job.get("completion_metadata") or {}
+                completion_metadata = dict(self.job.get("completion_metadata") or {})
+                original_speaker = completion_metadata.get("speaker")
                 completion_metadata.update({
                     "language": language,
-                    "speaker": speaker,
+                    "qwen3_speaker": speaker,
+                    "model_speaker": speaker,
                     "has_instruct": bool(instruct),
                     "processor": "Qwen3TTSJobProcessor",
                 })
+                if original_speaker is not None:
+                    completion_metadata["speaker"] = original_speaker
 
                 self.orchestrator_service.update_job_status(
                     self.job_id,
