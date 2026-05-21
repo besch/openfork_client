@@ -29,7 +29,87 @@ class LLMJobProcessor(BaseJobProcessor):
         }
 
     @classmethod
-    def _script_scene_schema(cls, num_scenes) -> dict:
+    def _normalize_allowed_values(cls, value) -> list[str]:
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, list):
+            values = value
+        else:
+            return []
+
+        normalized = []
+        seen = set()
+        for item in values:
+            text = str(item or "").strip()
+            key = " ".join(text.casefold().split())
+            if text and key not in seen:
+                normalized.append(text)
+                seen.add(key)
+        return normalized
+
+    @staticmethod
+    def _text_key(value) -> str:
+        return " ".join(str(value or "").strip().casefold().split())
+
+    @classmethod
+    def _allowed_speakers_for_inputs(cls, inputs: dict, allowed_characters: list[str]) -> list[str]:
+        allowed_speakers = cls._normalize_allowed_values(
+            inputs.get("allowed_speakers") or inputs.get("allowed_dialogue_speakers")
+        )
+        if allowed_speakers:
+            return allowed_speakers
+
+        if not allowed_characters:
+            return []
+
+        speakers = list(allowed_characters)
+        if inputs.get("allow_narrator", True) is not False:
+            speakers.append("Narrator")
+        return speakers
+
+    @classmethod
+    def _forbidden_visual_rule_fragment(cls, text: str):
+        lowered = text.casefold()
+        forbidden_fragments = (
+            "no visible writing",
+            "do not render",
+            "do not include",
+            "do not put",
+            "never print",
+            "no text",
+            "without text",
+            "no labels",
+            "no logos",
+            "no watermark",
+            "captions",
+            "subtitles",
+            "title cards",
+            "name tags",
+            "speech bubbles",
+            "floating words",
+            "diagram text",
+            "annotation lines",
+            "ui/hud",
+            "watermarks",
+            "printed words",
+            "readable symbols",
+            "metadata only",
+        )
+        for fragment in forbidden_fragments:
+            if fragment in lowered:
+                return fragment
+        return None
+
+    @classmethod
+    def _script_scene_schema(cls, num_scenes, allowed_characters=None, allowed_speakers=None) -> dict:
+        character_item_schema = {"type": "string"}
+        if allowed_characters:
+            character_item_schema["enum"] = allowed_characters
+
+        speaker_schema = {"type": "string"}
+        if allowed_speakers:
+            speaker_schema["enum"] = allowed_speakers
+
         schema = {
             **cls._base_json_schema("array"),
             "items": {
@@ -42,7 +122,7 @@ class LLMJobProcessor(BaseJobProcessor):
                     "description": {"type": "string", "description": "Visual story action"},
                     "characters": {
                         "type": "array",
-                        "items": {"type": "string"},
+                        "items": character_item_schema,
                         "minItems": 1,
                         "description": "Exact established cast or documentary subject names visible in the scene; never locations or labels",
                     },
@@ -51,7 +131,7 @@ class LLMJobProcessor(BaseJobProcessor):
                         "items": {
                             "type": "object",
                             "properties": {
-                                "speaker": {"type": "string"},
+                                "speaker": speaker_schema,
                                 "line": {
                                     "type": "string",
                                     "description": "Short character line under 18 words",
@@ -117,13 +197,17 @@ class LLMJobProcessor(BaseJobProcessor):
         }
 
     @classmethod
-    def _activity_scenarios_schema(cls, expected_items) -> dict:
+    def _activity_scenarios_schema(cls, expected_items, allowed_characters=None) -> dict:
+        character_name_schema = {"type": "string"}
+        if allowed_characters:
+            character_name_schema["enum"] = allowed_characters
+
         scenarios = {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "character_name": {"type": "string"},
+                    "character_name": character_name_schema,
                     "activity": {"type": "string"},
                     "scene_prompt": {"type": "string"},
                     "image_edit_prompt": {"type": "string"},
@@ -246,14 +330,18 @@ class LLMJobProcessor(BaseJobProcessor):
         }
 
     @classmethod
-    def _dialogue_scenes_schema(cls, expected_items) -> dict:
+    def _dialogue_scenes_schema(cls, expected_items, allowed_speakers=None) -> dict:
+        speaker_schema = {"type": "string"}
+        if allowed_speakers:
+            speaker_schema["enum"] = allowed_speakers
+
         dialogues = {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
                     "script_index": {"type": "integer", "minimum": 0},
-                    "speaker": {"type": "string"},
+                    "speaker": speaker_schema,
                     "line": {"type": "string"},
                     "qwen3_speaker": {
                         "type": "string",
@@ -303,24 +391,44 @@ class LLMJobProcessor(BaseJobProcessor):
         }
 
     @classmethod
-    def _json_schema_for_job(cls, job_type: str, num_scenes, expected_items) -> dict:
+    def _json_schema_for_job(cls, job_type: str, num_scenes, expected_items, inputs=None) -> dict:
+        inputs = inputs or {}
+        allowed_characters = cls._normalize_allowed_values(
+            inputs.get("allowed_characters") or inputs.get("allowed_character_names")
+        )
+        allowed_speakers = cls._allowed_speakers_for_inputs(inputs, allowed_characters)
+
         if job_type == "script_generation":
-            return cls._script_scene_schema(num_scenes)
+            return cls._script_scene_schema(num_scenes, allowed_characters, allowed_speakers)
         if job_type == "generation_style":
             return cls._generation_style_schema()
         if job_type == "activity_scenarios":
-            return cls._activity_scenarios_schema(expected_items)
+            return cls._activity_scenarios_schema(expected_items, allowed_characters)
         if job_type == "character_profiles":
             return cls._character_profiles_schema(expected_items)
         if job_type == "dialogue_scenes":
-            return cls._dialogue_scenes_schema(expected_items)
+            return cls._dialogue_scenes_schema(expected_items, allowed_speakers)
         if job_type == "music_prompt":
             return cls._music_prompt_schema()
         return cls._generic_object_schema()
 
-    @staticmethod
-    def _validate_generated_json(generated_text: str, job_type: str, num_scenes, expected_items):
+    @classmethod
+    def _validate_generated_json(
+        cls,
+        generated_text: str,
+        job_type: str,
+        num_scenes,
+        expected_items,
+        allowed_characters=None,
+        allowed_speakers=None,
+    ):
         parsed_json = json.loads(generated_text)
+        allowed_character_keys = {
+            cls._text_key(value): value for value in (allowed_characters or [])
+        }
+        allowed_speaker_keys = {
+            cls._text_key(value): value for value in (allowed_speakers or [])
+        }
 
         if job_type == "script_generation":
             if not isinstance(parsed_json, list):
@@ -347,18 +455,48 @@ class LLMJobProcessor(BaseJobProcessor):
                 characters = scene.get("characters")
                 if not isinstance(characters, list) or not characters:
                     raise ValueError(f"Scene {index + 1} is missing a non-empty characters array.")
-                description_text = str(scene.get("description") or "").lower()
-                image_prompt_text = str(scene.get("image_prompt") or "").lower()
-                if "black screen" in description_text or "black screen" in image_prompt_text:
+                if allowed_character_keys:
+                    for character in characters:
+                        character_name = str(character or "").strip()
+                        if cls._text_key(character_name) not in allowed_character_keys:
+                            raise ValueError(
+                                f"Scene {index + 1} uses unknown character {character_name!r}; "
+                                f"allowed characters are: {', '.join(allowed_characters)}."
+                            )
+                description_text = str(scene.get("description") or "")
+                image_prompt_text = str(scene.get("image_prompt") or "")
+                if "black screen" in description_text.casefold() or "black screen" in image_prompt_text.casefold():
                     raise ValueError(f"Scene {index + 1} uses a black screen instead of renderable imagery.")
+                for field_name, field_text, max_length in (
+                    ("description", description_text, 520),
+                    ("image_prompt", image_prompt_text, 1100),
+                ):
+                    if len(field_text) > max_length:
+                        raise ValueError(
+                            f"Scene {index + 1} {field_name} is too long ({len(field_text)} chars); "
+                            "use concise positive visual direction."
+                        )
+                    forbidden_fragment = cls._forbidden_visual_rule_fragment(field_text)
+                    if forbidden_fragment:
+                        raise ValueError(
+                            f"Scene {index + 1} {field_name} repeats a visual rule phrase "
+                            f"{forbidden_fragment!r}; describe only visible story content."
+                        )
                 dialogue = scene.get("dialogue")
                 if not isinstance(dialogue, list) or not dialogue:
                     raise ValueError(f"Scene {index + 1} is missing a non-empty dialogue array.")
                 for line_index, line in enumerate(dialogue):
                     if not isinstance(line, dict):
                         raise ValueError(f"Scene {index + 1} dialogue {line_index + 1} is not an object.")
-                    if not str(line.get("speaker") or "").strip() or not str(line.get("line") or "").strip():
+                    speaker = str(line.get("speaker") or "").strip()
+                    dialogue_line = str(line.get("line") or "").strip()
+                    if not speaker or not dialogue_line:
                         raise ValueError(f"Scene {index + 1} dialogue {line_index + 1} is missing speaker or line.")
+                    if allowed_speaker_keys and cls._text_key(speaker) not in allowed_speaker_keys:
+                        raise ValueError(
+                            f"Scene {index + 1} dialogue {line_index + 1} uses unknown speaker {speaker!r}; "
+                            f"allowed speakers are: {', '.join(allowed_speakers)}."
+                        )
             return parsed_json
 
         if job_type == "activity_scenarios":
@@ -369,6 +507,23 @@ class LLMJobProcessor(BaseJobProcessor):
                 raise ValueError("Generated activity scenario output is missing a scenarios array.")
             if expected_items is not None and len(scenarios) != expected_items:
                 raise ValueError(f"Expected exactly {expected_items} scenarios but got {len(scenarios)}.")
+            for index, scenario in enumerate(scenarios):
+                if not isinstance(scenario, dict):
+                    raise ValueError(f"Scenario {index + 1} is not an object.")
+                character_name = str(scenario.get("character_name") or "").strip()
+                if allowed_character_keys and cls._text_key(character_name) not in allowed_character_keys:
+                    raise ValueError(
+                        f"Scenario {index + 1} uses unknown character {character_name!r}; "
+                        f"allowed characters are: {', '.join(allowed_characters)}."
+                    )
+                for field_name in ("scene_prompt", "image_edit_prompt", "video_prompt"):
+                    field_text = str(scenario.get(field_name) or "")
+                    forbidden_fragment = cls._forbidden_visual_rule_fragment(field_text)
+                    if forbidden_fragment:
+                        raise ValueError(
+                            f"Scenario {index + 1} {field_name} repeats a visual rule phrase "
+                            f"{forbidden_fragment!r}; describe only visible story content."
+                        )
             return parsed_json
 
         if job_type == "character_profiles":
@@ -391,6 +546,15 @@ class LLMJobProcessor(BaseJobProcessor):
                 raise ValueError("Generated dialogue output is missing a dialogues array.")
             if expected_items is not None and len(dialogues) != expected_items:
                 raise ValueError(f"Expected exactly {expected_items} dialogue lines but got {len(dialogues)}.")
+            for index, dialogue in enumerate(dialogues):
+                if not isinstance(dialogue, dict):
+                    raise ValueError(f"Dialogue {index + 1} is not an object.")
+                speaker = str(dialogue.get("speaker") or "").strip()
+                if allowed_speaker_keys and cls._text_key(speaker) not in allowed_speaker_keys:
+                    raise ValueError(
+                        f"Dialogue {index + 1} uses unknown speaker {speaker!r}; "
+                        f"allowed speakers are: {', '.join(allowed_speakers)}."
+                    )
             return parsed_json
 
         if not isinstance(parsed_json, dict):
@@ -496,7 +660,14 @@ class LLMJobProcessor(BaseJobProcessor):
             num_scenes = inputs.get("num_scenes")
             job_type = inputs.get("job_type") or ("script_generation" if num_scenes is not None else "general")
             expected_items = inputs.get("expected_items")
-            json_schema = self._json_schema_for_job(job_type, num_scenes, expected_items)
+            allowed_character_names = self._normalize_allowed_values(
+                inputs.get("allowed_characters") or inputs.get("allowed_character_names")
+            )
+            allowed_dialogue_speakers = self._allowed_speakers_for_inputs(
+                inputs,
+                allowed_character_names,
+            )
+            json_schema = self._json_schema_for_job(job_type, num_scenes, expected_items, inputs)
 
             # Dynamically size the context window to fit the requested output.
             # num_ctx must be >= (input tokens + max_tokens).  We add a 2048-token
@@ -517,11 +688,12 @@ class LLMJobProcessor(BaseJobProcessor):
             content_attempts = 3
 
             for content_attempt in range(1, content_attempts + 1):
+                retry_max_tokens = int(max_tokens * 1.15) + 512
                 attempt_max_tokens = min(
                     MAX_LLM_OUTPUT_TOKENS,
                     max_tokens
                     if content_attempt == 1
-                    else max(max_tokens * (content_attempt + 1), max_tokens + 1024),
+                    else max(retry_max_tokens, max_tokens + 768),
                 )
                 attempt_num_ctx = max(
                     8192,
@@ -544,6 +716,17 @@ class LLMJobProcessor(BaseJobProcessor):
                             "Do not include credits, title cards, intro cards, recap cards, outro cards, black screens, "
                             "logos, captions, visible written text, or meta-production moments."
                         )
+                        if allowed_character_names:
+                            story_guard += (
+                                " Use only these exact character names in characters arrays: "
+                                f"{', '.join(allowed_character_names)}. "
+                                "Use only those names or Narrator as dialogue speakers."
+                            )
+                    elif job_type in {"activity_scenarios", "dialogue_scenes"} and allowed_character_names:
+                        story_guard = (
+                            " Use only these exact established character names where a character or speaker is required: "
+                            f"{', '.join(allowed_character_names)}."
+                        )
                     retry_guard = (
                         "\n\nThe previous output failed JSON validation. Return complete valid JSON only, "
                         "with no markdown, no commentary, no trailing prose, and every string, array, and object closed. "
@@ -558,6 +741,7 @@ class LLMJobProcessor(BaseJobProcessor):
                         {"role": "user", "content": self.positive_prompt + retry_guard},
                     ],
                     "stream": False,
+                    "think": False,
                     "format": json_schema,
                     "options": {
                         "temperature": attempt_temperature,
@@ -645,6 +829,8 @@ class LLMJobProcessor(BaseJobProcessor):
                         job_type,
                         num_scenes,
                         expected_items,
+                        allowed_character_names,
+                        allowed_dialogue_speakers,
                     )
                     validation_error = None
                     break

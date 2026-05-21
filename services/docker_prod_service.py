@@ -1034,6 +1034,7 @@ class DockerProdManager:
         command: list = None,
         entrypoint: list = None,
         environment: dict = None,
+        volumes: dict = None,
         pre_start_copies: list[tuple[str, str]] = None,
         shutdown_event: threading.Event = None,
     ):
@@ -1141,6 +1142,8 @@ class DockerProdManager:
                 run_kwargs["entrypoint"] = entrypoint
             if environment:
                 run_kwargs["environment"] = environment
+            if volumes:
+                run_kwargs["volumes"] = volumes
             max_attempts = 5
             last_missing_conflict_id = None
             missing_conflict_count = 0

@@ -1728,10 +1728,17 @@ exec python main.py "$@"
                                                     command=["serve"],
                                                     environment={
                                                         "OLLAMA_HOST": "0.0.0.0:11434",
+                                                        "OLLAMA_MODELS": "/root/.ollama",
                                                         "OLLAMA_LOAD_TIMEOUT": "10m",
                                                         "OLLAMA_MAX_LOADED_MODELS": "1",
-                                                        "OLLAMA_NUM_PARALLEL": "2",
+                                                        "OLLAMA_NUM_PARALLEL": "1",
                                                         "OLLAMA_ORIGINS": "*",
+                                                    },
+                                                    volumes={
+                                                        "openfork-ollama-models": {
+                                                            "bind": "/root/.ollama",
+                                                            "mode": "rw",
+                                                        },
                                                     },
                                                 )
                                                 logging.info(
