@@ -1752,6 +1752,32 @@ class JobListener:
 set -e
 export PYTHONPATH="${PYTHONPATH:-}:/opt/ComfyUI/user/custom-packages"
 cd /opt/ComfyUI
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+config_path = Path("/opt/ComfyUI/user/__manager/config.ini")
+config_path.parent.mkdir(parents=True, exist_ok=True)
+if config_path.exists():
+    config = config_path.read_text(encoding="utf-8", errors="ignore")
+else:
+    config = "[default]\n"
+
+if not re.search(r"(?m)^\s*\[default\]\s*$", config):
+    config = "[default]\n" + config
+
+if re.search(r"(?m)^\s*network_mode\s*=", config):
+    config = re.sub(
+        r"(?m)^\s*network_mode\s*=.*$",
+        "network_mode = offline",
+        config,
+    )
+else:
+    config = config.rstrip() + "\nnetwork_mode = offline\n"
+
+config_path.write_text(config, encoding="utf-8")
+print("Configured ComfyUI-Manager network_mode=offline for job runtime.")
+PY
 exec python main.py "$@"
 """
                                                 docker_manager.run_container(
