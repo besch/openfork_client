@@ -255,7 +255,7 @@ class ComfyUIClient:
                         "for prompt_id %s. Treating as interrupted.",
                         prompt_id,
                     )
-                    self.interrupt_workflow()
+                    self.interrupt_workflow(quiet_if_unreachable=True)
                     return "interrupted"
 
                 if (time.time() - start_ts) > timeout_sec:

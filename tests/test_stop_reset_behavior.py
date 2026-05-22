@@ -758,6 +758,36 @@ class StopResetBehaviorTests(unittest.TestCase):
         fake_thread.start.assert_called_once()
         fake_thread.join.assert_called_once_with(timeout=5)
 
+    def test_comfyui_output_wait_quietly_interrupts_on_abort_event(self):
+        client = ComfyUIClient("ws://127.0.0.1:8188/ws?clientId={}")
+        orchestrator_service = Mock()
+        abort_event = threading.Event()
+        abort_event.set()
+        fake_ws = Mock()
+        fake_thread = Mock()
+
+        with patch("services.comfyui_service.websocket.WebSocket", return_value=fake_ws), patch(
+            "services.comfyui_service.threading.Thread",
+            return_value=fake_thread,
+        ), patch("services.comfyui_service.logging.info"), patch(
+            "services.comfyui_service.logging.warning"
+        ), patch("services.comfyui_service.logging.error"), patch(
+            "services.comfyui_service.logging.debug"
+        ), patch.object(client, "interrupt_workflow") as interrupt_mock:
+            result = client.get_workflow_output(
+                "prompt-123",
+                "job-container-crash",
+                orchestrator_service,
+                abort_event=abort_event,
+                timeout_sec=60,
+            )
+
+        self.assertEqual(result, "interrupted")
+        interrupt_mock.assert_called_once_with(quiet_if_unreachable=True)
+        fake_ws.close.assert_called_once()
+        fake_thread.start.assert_called_once()
+        fake_thread.join.assert_called_once_with(timeout=5)
+
     def test_orchestrator_service_clears_active_job_when_job_lease_is_lost(self):
         service = OrchestratorService("http://example.test")
         service._active_job_id = "job-lease-lost"
