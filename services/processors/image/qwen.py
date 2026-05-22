@@ -49,6 +49,9 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         target_dimensions = self._get_dimensions(
             aspect_ratio,
             has_second_image=bool(second_image_filename),
+            requested_long_edge=inputs.get("max_long_edge")
+            or inputs.get("long_edge")
+            or inputs.get("target_long_edge"),
         )
 
         # Inject prompt and image into workflow
@@ -61,6 +64,9 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             second_image_filename=second_image_filename,
             aspect_ratio=aspect_ratio,
             seed=seed,
+            requested_long_edge=inputs.get("max_long_edge")
+            or inputs.get("long_edge")
+            or inputs.get("target_long_edge"),
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload, timeout_sec=1200)
@@ -263,7 +269,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
                 return [node_id, 0]
         return source_ref
 
-    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, second_image_filename=None, aspect_ratio="1:1", seed=None):
+    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, second_image_filename=None, aspect_ratio="1:1", seed=None, requested_long_edge=None):
         """Inject prompt and image into the editing workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
@@ -271,6 +277,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         width, height = self._get_dimensions(
             aspect_ratio,
             has_second_image=bool(second_image_filename),
+            requested_long_edge=requested_long_edge,
         )
         max_dim = max(width, height)
         uses_empty_latent = any(
@@ -340,14 +347,23 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         
         return wf
 
-    def _get_dimensions(self, aspect_ratio, has_second_image=False):
+    def _get_dimensions(self, aspect_ratio, has_second_image=False, requested_long_edge=None):
         """Calculate edit dimensions for 8GB GPUs.
 
         Qwen edit can technically run larger frames, but on 8GB cards
         two-reference edits need a smaller latent to avoid CUDA fallback stalls.
         Keep the long edge conservative and let the video model handle motion.
         """
-        long_edge = 384 if has_second_image else 512
+        default_long_edge = 384 if has_second_image else 512
+        try:
+            long_edge = int(requested_long_edge or default_long_edge)
+        except (TypeError, ValueError):
+            long_edge = default_long_edge
+
+        if has_second_image:
+            long_edge = max(256, min(long_edge, 512))
+        else:
+            long_edge = max(320, min(long_edge, 768))
         ratio_map = {
             "1:1": (long_edge, long_edge),
             "16:9": (long_edge, round(long_edge * 9 / 16)),

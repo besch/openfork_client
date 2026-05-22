@@ -1902,7 +1902,7 @@ exec python main.py "$@"
                                                             "--lowvram",
                                                             "--cpu-vae",
                                                             "--reserve-vram",
-                                                            "1.0",
+                                                            "0.25",
                                                             "--cache-none",
                                                             "--preview-method",
                                                             "none",
