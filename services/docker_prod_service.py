@@ -1468,6 +1468,7 @@ class DockerProdManager:
 
         container_name = self.get_container_name(service_type)
         logging.info(f"Attempting to stop and remove container '{container_name}'...")
+        removed_id = None
         try:
             container = self.client.containers.get(container_name)
             logging.info(f"Container '{container_name}' found. Forcefully removing it.")
@@ -1483,7 +1484,31 @@ class DockerProdManager:
         except docker.errors.NotFound:
             logging.info(f"Container '{container_name}' not found. Nothing to stop.")
         except docker.errors.APIError as e:
+            if self._is_container_removal_in_progress_error(e):
+                logging.info(
+                    f"Container '{container_name}' removal is already in progress. "
+                    "Waiting for Docker to release the container name."
+                )
+                if self._wait_for_container_removal(
+                    container_name, container_id=removed_id, timeout=15.0
+                ):
+                    logging.info(f"Container '{container_name}' removed.")
+                else:
+                    logging.warning(
+                        f"Container '{container_name}' removal is still pending "
+                        "after waiting."
+                    )
+                return
             logging.error(f"Failed to stop or remove container '{container_name}': {e}")
+
+    @staticmethod
+    def _is_container_removal_in_progress_error(exc: Exception) -> bool:
+        if not isinstance(exc, docker.errors.APIError):
+            return False
+        if getattr(exc, "status_code", None) != 409:
+            return False
+        text = str(exc).lower()
+        return "removal of container" in text and "already in progress" in text
 
     def copy_file_from_container(
         self,

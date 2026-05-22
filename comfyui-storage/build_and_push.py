@@ -24,7 +24,7 @@ class ImageConfig:
     build: bool = False
     push: bool = False
     build_args: dict = None
-    direct_push: bool = True  # Stream layers directly to registry during build (bypasses local image store)
+    direct_push: bool = False  # Stream layers directly to registry during build when push is requested.
 
 
 # Define the images to build and push
@@ -82,7 +82,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.audiox", "beschiak/openfork-audiox:latest", build=True, push=True),
     # ImageConfig("Dockerfile.dreamid-omni-24gb", "beschiak/openfork-dreamid-omni-24gb:latest", build=True, push=True),
     # ImageConfig( "Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True, ),
-    ImageConfig("Dockerfile.flux-kontext-dev-8gb", "beschiak/openfork-flux-kontext-dev-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.flux-kontext-dev-8gb", "beschiak/openfork-flux-kontext-dev-8gb:latest", build=True, push=False),
     # ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-24gb", "beschiak/openfork-flux-kontext-dev-24gb:latest", build=True, push=True),
@@ -234,17 +234,29 @@ def build_and_push_image(
     global_build: bool = False,
     fresh_clone: bool = False,
     force_direct_push: bool = False,
+    explicit_actions: bool = False,
 ) -> str:
     """
     Build and push a single image based on its configuration and global flags.
     Returns: "success", "skipped", "build_failed", or "push_failed"
     """
-    use_direct_push = config.direct_push or force_direct_push
+    if explicit_actions:
+        should_build = global_build
+        should_push = global_push
+    else:
+        should_build = config.build
+        should_push = config.push
+
+    direct_push_requested = config.direct_push or force_direct_push
+    use_direct_push = direct_push_requested and should_build and should_push
 
     print(f"\n{'#' * 60}")
     print(f"# Processing: {config.dockerfile} -> {config.tag}")
     print(
-        f"# Config: build={config.build}, push={config.push}, direct_push={use_direct_push}"
+        f"# Config: build={config.build}, push={config.push}, direct_push={config.direct_push}"
+    )
+    print(
+        f"# Effective: build={should_build}, push={should_push}, direct_push={use_direct_push}"
     )
     print("#" * 60)
 
@@ -253,9 +265,12 @@ def build_and_push_image(
             "ℹ️  direct_push mode: layers will be streamed to the registry during build."
         )
         print("   Ensure you are logged in (`docker login`) before proceeding.")
+    elif direct_push_requested and should_build and not should_push:
+        print("ℹ️  direct_push disabled because push was not requested.")
+    elif direct_push_requested and should_push and not should_build:
+        print("ℹ️  direct_push only applies when build and push are both requested.")
 
     # Build the image if configured (per-image or global)
-    should_build = config.build or global_build
     if should_build:
         if not build_image(
             config.dockerfile,
@@ -274,24 +289,12 @@ def build_and_push_image(
         print(f"⏭️ Skipping build for {config.tag} as configured")
 
     # Push the image if configured (per-image or global)
-    should_push = config.push or global_push
-
     # In direct_push mode the image is already in the registry after a build.
-    if use_direct_push and should_build:
+    if use_direct_push:
         print(
             f"\n🎉 {config.tag} was pushed to the registry during build (direct_push mode)."
         )
         return "success"
-
-    if use_direct_push:
-        if should_push:
-            print(
-                f"\n💥 Cannot push {config.tag} separately in direct_push mode. "
-                "Run with --build so the registry push happens during build."
-            )
-            return "push_failed"
-        print(f"⏭️ Skipping push for {config.tag}")
-        return "skipped"
 
     if should_push:
         if not push_image(config.tag):
@@ -393,8 +396,19 @@ def main():
             "Requires prior `docker login`. Overrides per-image direct_push setting."
         ),
     )
+    parser.add_argument(
+        "actions",
+        nargs="*",
+        choices=("build", "push"),
+        help="Optional action aliases. Example: build push",
+    )
 
     args = parser.parse_args()
+    if "build" in args.actions:
+        args.build = True
+    if "push" in args.actions:
+        args.push = True
+    explicit_actions = args.build or args.push
 
     print("\n" + "=" * 60)
     print("🐳 Docker Build and Push Script")
@@ -439,6 +453,7 @@ def main():
             args.build,
             getattr(args, "fresh_clone", False),
             force_direct_push=getattr(args, "direct_push", False),
+            explicit_actions=explicit_actions,
         )
         if result == "success":
             successful.append(config.tag)

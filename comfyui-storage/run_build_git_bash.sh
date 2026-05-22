@@ -1,8 +1,9 @@
 #!/bin/bash
 # Run build_and_push.py via Git Bash calling WSL Ubuntu distro
 # Works with Git Bash on Windows
-# Usage: ./run_build_git_bash.sh [options]
-# Example: export HF_TOKEN="hf_xxxxx" && ./run_build_git_bash.sh --build --push
+# Usage: ./run_build_git_bash.sh [build] [push] [options]
+# Example: export HF_TOKEN="hf_xxxxx" && ./run_build_git_bash.sh build
+# Example: export HF_TOKEN="hf_xxxxx" && ./run_build_git_bash.sh build push
 
 set -e
 
