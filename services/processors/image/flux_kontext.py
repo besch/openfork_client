@@ -147,6 +147,17 @@ class FluxKontextWorkflowMixin:
                     inputs["denoise"] = self._as_float(denoise_strength, inputs.get("denoise", 1.0))
             elif class_type == "ImageScaleToMaxDimension":
                 inputs["largest_size"] = max(width, height)
+                inputs.setdefault("upscale_method", "lanczos")
+            elif class_type == "FluxKontextImageScale" and self._is_8gb_tier():
+                # ComfyUI's FluxKontextImageScale snaps 16:9 images to large
+                # Kontext-preferred resolutions, which can exceed 8GB VRAM.
+                # Keep the reference latent aligned with the requested job size.
+                node["class_type"] = "ImageScaleToMaxDimension"
+                node["inputs"] = {
+                    "image": inputs.get("image"),
+                    "upscale_method": "lanczos",
+                    "largest_size": max(width, height),
+                }
             elif class_type == "FluxKontextImageScale" and "largest_size" in inputs:
                 inputs["largest_size"] = max(width, height)
 

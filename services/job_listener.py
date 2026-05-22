@@ -128,10 +128,8 @@ class JobListener:
                     "--cpu-vae",
                     "--fp16-unet",
                     "--reserve-vram",
-                    "1.5",
+                    "0.25",
                     "--use-split-cross-attention",
-                    "--disable-dynamic-vram",
-                    "--disable-async-offload",
                     "--disable-pinned-memory",
                 ]
             )

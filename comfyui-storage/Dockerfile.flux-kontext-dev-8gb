@@ -59,4 +59,4 @@ RUN mkdir -p models/text_encoders models/unet models/vae \
 RUN mkdir -p user/__manager \
     && printf "[default]\nnetwork_mode = offline\n" > user/__manager/config.ini
 
-CMD ["sh", "-c", "cd /opt/ComfyUI && python main.py --listen 0.0.0.0 --port 8188 --lowvram --cpu-vae --fp16-unet --reserve-vram 1.5 --cache-none --use-split-cross-attention --preview-method none --disable-dynamic-vram --disable-async-offload --disable-pinned-memory"]
+CMD ["sh", "-c", "cd /opt/ComfyUI && python main.py --listen 0.0.0.0 --port 8188 --lowvram --cpu-vae --fp16-unet --reserve-vram 0.25 --cache-none --use-split-cross-attention --preview-method none --disable-pinned-memory"]
