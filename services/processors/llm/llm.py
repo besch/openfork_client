@@ -80,8 +80,11 @@ class LLMJobProcessor(BaseJobProcessor):
             "no text",
             "without text",
             "no labels",
+            "no signage",
             "no logos",
             "no watermark",
+            "visible text",
+            "visible signage",
             "captions",
             "subtitles",
             "title cards",
@@ -105,19 +108,20 @@ class LLMJobProcessor(BaseJobProcessor):
     def _sanitize_visual_story_text(cls, text: str) -> str:
         """Remove copied prompt-rule clauses while keeping positive story detail."""
         value = cls._sanitize_rendered_text_bait(str(text or "").strip())
+        value = cls._strip_prompt_instruction_artifacts(value)
         if not value or not cls._forbidden_visual_rule_fragment(value):
             return value
 
         replacements = (
-            r"\bwithout (?:visible )?(?:text|writing|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:text|writing|labels|logos|watermarks?|captions|subtitles))*\b",
-            r"\bno (?:visible )?(?:text|writing|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:text|writing|labels|logos|watermarks?|captions|subtitles))*\b",
+            r"\bwithout (?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles))*\b",
+            r"\bno (?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles))*\b",
             r"\bnever print[^.;,]*",
             r"\bdo not (?:render|include|put)[^.;,]*",
             r"\bmetadata only\b",
             r"\bno readable symbols\b",
             r"\breadable symbols\b",
             r"\bprinted words\b",
-            r"\b(?:captions|subtitles|title cards|name tags|speech bubbles|floating words|diagram text|annotation lines|watermarks?)\b",
+            r"\b(?:captions|subtitles|title cards|name tags|speech bubbles|floating words|diagram text|annotation lines|watermarks?|visible text|visible signage)\b",
             r"\bui/hud\b",
         )
         cleaned = value
@@ -150,6 +154,28 @@ class LLMJobProcessor(BaseJobProcessor):
         return cleaned or value
 
     @classmethod
+    def _strip_prompt_instruction_artifacts(cls, text: str) -> str:
+        """Remove trailing instruction fragments that local models sometimes copy into fields."""
+        value = str(text or "").strip()
+        if not value:
+            return value
+
+        patterns = (
+            r"\s*(?:[,.;:-]\s*)?\b(?:under|around|about|approximately|approx\.?|max(?:imum)?|no more than)?\s*\d+\s+words?\b\.?\s*$",
+            r"\s*(?:[,.;:-]\s*)?\b\d+\s+word\s+(?:prompt|description|limit)\b\.?\s*$",
+            r"\s*(?:[,.;:-]\s*)?\b(?:under|around|about|approximately|approx\.?|max(?:imum)?|no more than)?\s*\d+\s+(?:tokens?|characters?)\b\.?\s*$",
+        )
+        previous = None
+        while previous != value:
+            previous = value
+            for pattern in patterns:
+                value = re.sub(pattern, "", value, flags=re.IGNORECASE).strip()
+
+        value = re.sub(r"\s+([,.;])", r"\1", value)
+        value = re.sub(r"([,.;]){2,}", r"\1", value)
+        return value.strip(" ;,.")
+
+    @classmethod
     def _sanitize_rendered_text_bait(cls, text: str) -> str:
         """Replace common visual phrases that make image models render text."""
         value = str(text or "").strip()
@@ -157,6 +183,10 @@ class LLMJobProcessor(BaseJobProcessor):
             return value
 
         replacements = (
+            (
+                r"\b(?:no|without)\s+(?:visible\s+)?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:visible\s+)?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles))*\b",
+                "",
+            ),
             (
                 r"\b(?:expired\s+)?coupons?\s+(?:with|showing|covered\s+in|bearing)?\s*(?:readable\s*)?(?:markings?|words?|letters?|numbers?|text|labels?|stamps?|signatures?)\b",
                 "blank voucher-shaped color slips",
@@ -171,13 +201,13 @@ class LLMJobProcessor(BaseJobProcessor):
                 r"\b(?:writing|writes|write|scribbling|scribbles)\s+(?:a\s+|the\s+)?(?:safety\s+)?(?:report|form|document|note|letter|label|signature)[^.!?;]*",
                 "making quick hand gestures over a plain unmarked pad",
             ),
-            (r"\b(?:report|document|form|paper|ticket|badge)s?\b", "plain color slip"),
+            (r"\b(?:report|document|form|ticket|badge)s?\b", "plain color slip"),
             (r"\b(?:signature|signatures)\b", "abstract color seal"),
             (r"\b(?:stamp|stamps|stamped)\b", "round color seal"),
             (r"\b(?:notification|notifications)\b", "glowing reaction cue"),
             (r"\b(?:screen|display|interface|ui|hud)\b", "glowing control surface"),
             (
-                r"\b(?:logo|watermark|caption|subtitle|title card|speech bubble|floating words)\b",
+                r"\b(?:logo|watermark|caption|subtitle|title card|speech bubble|floating words|signage)\b",
                 "plain visual accent",
             ),
             (
@@ -188,6 +218,7 @@ class LLMJobProcessor(BaseJobProcessor):
         cleaned = value
         for pattern, replacement in replacements:
             cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\b(?:with|and|or)\s*$", "", cleaned, flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", cleaned).strip()
 
     @classmethod
@@ -200,7 +231,7 @@ class LLMJobProcessor(BaseJobProcessor):
                 "visible writing cue",
             ),
             (
-                r"\b(?:screen|display|interface|ui/hud|ui|hud|notification|caption|subtitle|title card|speech bubble|floating words|diagram text|annotation)\b",
+                r"\b(?:screen|display|interface|ui/hud|ui|hud|notification|caption|subtitle|title card|speech bubble|floating words|diagram text|annotation|signage|signs?)\b",
                 "visible UI/text surface cue",
             ),
             (
@@ -313,9 +344,9 @@ class LLMJobProcessor(BaseJobProcessor):
                             "required": ["speaker", "line"],
                             "additionalProperties": False,
                         },
-                        "minItems": 1,
+                        "minItems": 0,
                         "maxItems": 2,
-                        "description": "One or two short dialogue/narration lines. Use exact cast names for character dialogue or Narrator for voiceover.",
+                        "description": "Zero, one, or two short dialogue/narration lines. Use [] for silent scenes. Use exact cast names for character dialogue or Narrator for voiceover.",
                     },
                     "image_prompt": {
                         "type": "string",
@@ -702,8 +733,8 @@ class LLMJobProcessor(BaseJobProcessor):
                             "use blank shapes, glowing objects, physical reactions, or abstract unreadable color seals."
                         )
                 dialogue = scene.get("dialogue")
-                if not isinstance(dialogue, list) or not dialogue:
-                    raise ValueError(f"Scene {index + 1} is missing a non-empty dialogue array.")
+                if not isinstance(dialogue, list):
+                    raise ValueError(f"Scene {index + 1} is missing a dialogue array.")
                 for line_index, line in enumerate(dialogue):
                     if not isinstance(line, dict):
                         raise ValueError(f"Scene {index + 1} dialogue {line_index + 1} is not an object.")

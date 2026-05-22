@@ -362,7 +362,7 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
 
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
-        denoise_strength = inputs.get("denoise_strength", inputs.get("strength", 1.0))
+        denoise_strength = inputs.get("denoise_strength", inputs.get("strength", 0.65))
         requested_long_edge = self._requested_long_edge(inputs)
         width, height = self._get_dimensions(
             aspect_ratio,
@@ -389,9 +389,10 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
                 return
             source_image_filename = composed_filename
             prompt = (
-                "Source combines the scene plate and character cutout. Blend into "
-                "one seamless final frame, keep the cutout identity, remove pasted "
-                "edges, and avoid panels. "
+                "Source combines a wide scene plate and a character cutout. Preserve "
+                "the wide source composition, keep every visible character full-body "
+                "and uncropped, blend into one seamless final frame, keep the cutout "
+                "identity, remove pasted edges, and avoid panels or portrait crops. "
                 + prompt
             )
             prompt = self._compact_flux_prompt(prompt)
