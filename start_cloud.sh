@@ -406,6 +406,10 @@ PYTORCH_NVIDIA_LIBRARY_PATHS=$(python -c "import site; p=site.getsitepackages()[
 export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${PYTORCH_NVIDIA_LIBRARY_PATHS}:${LD_LIBRARY_PATH:-}"
 log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 
+# TorchScript can crash native extensions during ComfyUI startup on some tight
+# CUDA/Python combinations (observed in kornia import on 8GB FLUX Kontext).
+export PYTORCH_JIT="${PYTORCH_JIT:-0}"
+
 # --- Service Selection & Resource Management ---
 
 # Defaults
