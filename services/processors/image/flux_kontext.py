@@ -7,11 +7,14 @@ low-VRAM operation, while keeping the standard ComfyUI Flux Kontext sampler grap
 
 import copy
 import logging
+import os
 import random
+import uuid
 
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import ImageOutputHandler
 from services.processors.image.qwen import QwenImageEditProcessor
+from PIL import Image, ImageChops, ImageFilter, ImageStat
 
 
 class FluxKontextWorkflowMixin:
@@ -173,6 +176,18 @@ class FluxKontextWorkflowMixin:
     def _prepare_workflow(self, workflow_data):
         return copy.deepcopy(workflow_data.get("prompt", workflow_data))
 
+    def _compact_flux_prompt(self, prompt, limit=1500):
+        text = " ".join(str(prompt or "").split())
+        if len(text) <= limit:
+            return text
+
+        suffix = (
+            " No visible text, letters, numbers, labels, signs, UI, logos, "
+            "captions, subtitles, title cards, watermarks, or readable symbols."
+        )
+        head_limit = max(200, limit - len(suffix) - 3)
+        return text[:head_limit].rsplit(" ", 1)[0].rstrip(" .,;:") + "." + suffix
+
 
 class FluxKontextT2IProcessor(FluxKontextWorkflowMixin, ComfyUIProcessor, ImageOutputHandler):
     """Processor for FLUX.1 Kontext [dev] text-to-image generation."""
@@ -197,7 +212,7 @@ class FluxKontextT2IProcessor(FluxKontextWorkflowMixin, ComfyUIProcessor, ImageO
         wf_ready = self._prepare_workflow(workflow_data)
         self._apply_common_workflow_inputs(
             wf_ready,
-            self.positive_prompt,
+            self._compact_flux_prompt(self.positive_prompt),
             width,
             height,
             seed=inputs.get("seed"),
@@ -226,6 +241,116 @@ class FluxKontextT2IProcessor(FluxKontextWorkflowMixin, ComfyUIProcessor, ImageO
 class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor):
     """Processor for FLUX.1 Kontext [dev] instruction-based single-image editing."""
 
+    def _fit_cover(self, image, width, height):
+        scale = max(width / image.width, height / image.height)
+        resized = image.resize(
+            (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+        left = max(0, (resized.width - width) // 2)
+        top = max(0, (resized.height - height) // 2)
+        return resized.crop((left, top, left + width, top + height))
+
+    def _crop_alpha_bounds(self, image):
+        alpha = image.getchannel("A")
+        bbox = alpha.getbbox()
+        return image.crop(bbox) if bbox else image
+
+    def _remove_flat_matte_background(self, image):
+        """Convert common pale character-reference mattes into transparency."""
+        image = image.convert("RGBA")
+        alpha = image.getchannel("A")
+        full_bbox = (0, 0, image.width, image.height)
+        if alpha.getbbox() and alpha.getbbox() != full_bbox:
+            return self._crop_alpha_bounds(image)
+
+        corner = max(8, min(32, image.width // 12, image.height // 12))
+        samples = [
+            image.crop((0, 0, corner, corner)).convert("RGB"),
+            image.crop((image.width - corner, 0, image.width, corner)).convert("RGB"),
+            image.crop((0, image.height - corner, corner, image.height)).convert("RGB"),
+            image.crop((image.width - corner, image.height - corner, image.width, image.height)).convert("RGB"),
+        ]
+        channels = [[], [], []]
+        for sample in samples:
+            mean = ImageStat.Stat(sample).mean
+            for idx in range(3):
+                channels[idx].append(mean[idx])
+        matte = tuple(int(sum(values) / len(values)) for values in channels)
+
+        matte_image = Image.new("RGB", image.size, matte)
+        diff = ImageChops.difference(image.convert("RGB"), matte_image).convert("L")
+        mask = diff.point(lambda value: 255 if value > 24 else 0)
+        mask = mask.filter(ImageFilter.MedianFilter(3))
+        mask = mask.filter(ImageFilter.MinFilter(3))
+        mask = mask.filter(ImageFilter.MaxFilter(5))
+        if not mask.getbbox():
+            return image
+
+        cutout = image.copy()
+        cutout.putalpha(mask)
+        return self._crop_alpha_bounds(cutout)
+
+    def _compose_reference_source(self, scene_filename, reference_filename, width, height):
+        """Create one Flux-compatible source image from scene + identity reference.
+
+        The public Flux Kontext edit workflow has a single LoadImage node. For 8GB
+        combine/edit jobs, precomposing the scene plate and transparent character
+        reference gives the model both sources without requiring a multi-input graph.
+        """
+        scene_path = os.path.join(self.client.input_dir, scene_filename)
+        reference_path = os.path.join(self.client.input_dir, reference_filename)
+        try:
+            scene = Image.open(scene_path).convert("RGBA")
+            reference = self._remove_flat_matte_background(
+                Image.open(reference_path).convert("RGBA")
+            )
+
+            canvas = self._fit_cover(scene, width, height)
+            max_reference_width = max(1, round(width * 0.34))
+            max_reference_height = max(1, round(height * 0.82))
+            reference.thumbnail(
+                (max_reference_width, max_reference_height),
+                Image.Resampling.LANCZOS,
+            )
+
+            try:
+                target_index = int(
+                    (self.job.get("completion_metadata") or {}).get("target_index", 0)
+                )
+            except (TypeError, ValueError):
+                target_index = 0
+            anchors = (
+                0.08,
+                0.62,
+                0.36,
+            )
+            x = round(width * anchors[target_index % len(anchors)])
+            y = height - reference.height - max(8, round(height * 0.04))
+            x = max(4, min(x, width - reference.width - 4))
+
+            shadow_alpha = reference.getchannel("A").filter(ImageFilter.GaussianBlur(5))
+            shadow = Image.new("RGBA", reference.size, (0, 0, 0, 70))
+            shadow.putalpha(shadow_alpha)
+            canvas.alpha_composite(shadow, (x + 3, y + 4))
+            canvas.alpha_composite(reference, (x, y))
+
+            output_name = f"flux_reference_source_{uuid.uuid4().hex[:8]}.png"
+            output_path = os.path.join(self.client.input_dir, output_name)
+            canvas.convert("RGB").save(output_path, "PNG", optimize=True)
+            logging.info(
+                "Created Flux reference source %s from scene %s and reference %s at %sx%s",
+                output_name,
+                scene_filename,
+                reference_filename,
+                width,
+                height,
+            )
+            return output_name
+        except Exception as exc:
+            self._fail_job(f"Failed to compose Flux reference source: {exc}")
+            return None
+
     def process(self):
         if not self.job:
             self._fail_job("Job object is None for FluxKontextEditProcessor. Cannot proceed.")
@@ -247,12 +372,35 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
         source_image_filename = self._get_source_image()
         if not source_image_filename:
             return
+        second_image_requested = self._has_second_source_image_input()
+        second_image_filename = self._get_second_source_image()
+        if second_image_requested and not second_image_filename:
+            return
+
+        prompt = self._compact_flux_prompt(self.positive_prompt)
+        if second_image_filename:
+            composed_filename = self._compose_reference_source(
+                source_image_filename,
+                second_image_filename,
+                width,
+                height,
+            )
+            if not composed_filename:
+                return
+            source_image_filename = composed_filename
+            prompt = (
+                "Source combines the scene plate and character cutout. Blend into "
+                "one seamless final frame, keep the cutout identity, remove pasted "
+                "edges, and avoid panels. "
+                + prompt
+            )
+            prompt = self._compact_flux_prompt(prompt)
 
         self._copy_image_to_container(source_image_filename)
 
         wf_ready = self._inject_edit_workflow(
             workflow_data,
-            self.positive_prompt,
+            prompt,
             source_image_filename,
             denoise_strength,
             aspect_ratio=aspect_ratio,
