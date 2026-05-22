@@ -99,6 +99,76 @@ class JobListener:
             return keep_warm.strip().lower() in {"1", "true", "yes", "on"}
         return bool(keep_warm)
 
+    @staticmethod
+    def _flux_kontext_runtime_config(service_type: str):
+        """Return ComfyUI launch args/env tuned for FLUX Kontext GGUF tiers."""
+        lowered_service = (service_type or "").lower()
+        args = [
+            "--listen",
+            "--port",
+            "8188",
+            "--cache-none",
+            "--preview-method",
+            "none",
+        ]
+        env = {
+            "CUDA_MODULE_LOADING": "LAZY",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True,max_split_size_mb:128",
+            "PYTORCH_JIT": "0",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "HF_HUB_DISABLE_TELEMETRY": "1",
+            "MALLOC_ARENA_MAX": "2",
+        }
+
+        if "8gb" in lowered_service:
+            args.extend(
+                [
+                    "--lowvram",
+                    "--cpu-vae",
+                    "--fp16-unet",
+                    "--reserve-vram",
+                    "1.5",
+                    "--use-split-cross-attention",
+                    "--disable-dynamic-vram",
+                    "--disable-async-offload",
+                    "--disable-pinned-memory",
+                ]
+            )
+        elif "12gb" in lowered_service:
+            args.extend(
+                [
+                    "--lowvram",
+                    "--fp16-vae",
+                    "--reserve-vram",
+                    "1.0",
+                    "--use-split-cross-attention",
+                    "--disable-pinned-memory",
+                ]
+            )
+        elif "16gb" in lowered_service:
+            args.extend(
+                [
+                    "--lowvram",
+                    "--fp16-vae",
+                    "--reserve-vram",
+                    "1.0",
+                    "--use-split-cross-attention",
+                ]
+            )
+        else:
+            args.extend(
+                [
+                    "--lowvram",
+                    "--fp16-vae",
+                    "--reserve-vram",
+                    "1.5",
+                    "--use-pytorch-cross-attention",
+                ]
+            )
+
+        return args, env
+
     def _job_has_terminal_status(self, job_id: Optional[str]) -> bool:
         """Check whether a job has already reached a terminal status."""
         return self._get_terminal_job_status(job_id) is not None
@@ -1755,6 +1825,60 @@ class JobListener:
                                                 )
                                                 logging.info(
                                                     "Started wan2gp_server.py as the Wan2GP container main process."
+                                                )
+                                            elif actual_service_type.startswith(
+                                                "flux-kontext-dev-"
+                                            ):
+                                                flux_args, flux_env = (
+                                                    self._flux_kontext_runtime_config(
+                                                        actual_service_type
+                                                    )
+                                                )
+                                                flux_bootstrap = r"""
+set -e
+cd /opt/ComfyUI
+python - <<'PY'
+from pathlib import Path
+import re
+
+config_path = Path("/opt/ComfyUI/user/__manager/config.ini")
+config_path.parent.mkdir(parents=True, exist_ok=True)
+if config_path.exists():
+    config = config_path.read_text(encoding="utf-8", errors="ignore")
+else:
+    config = "[default]\n"
+
+if not re.search(r"(?m)^\s*\[default\]\s*$", config):
+    config = "[default]\n" + config
+
+if re.search(r"(?m)^\s*network_mode\s*=", config):
+    config = re.sub(
+        r"(?m)^\s*network_mode\s*=.*$",
+        "network_mode = offline",
+        config,
+    )
+else:
+    config = config.rstrip() + "\nnetwork_mode = offline\n"
+
+config_path.write_text(config, encoding="utf-8")
+print("Configured ComfyUI-Manager network_mode=offline for FLUX Kontext runtime.")
+PY
+exec python main.py "$@"
+"""
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    command=[
+                                                        "bash",
+                                                        "-lc",
+                                                        flux_bootstrap,
+                                                        "openfork-flux-kontext",
+                                                        *flux_args,
+                                                    ],
+                                                    environment=flux_env,
+                                                    force_restart=not keep_container_warm,
+                                                )
+                                                logging.info(
+                                                    "Started FLUX Kontext ComfyUI container with tier-specific low-VRAM flags."
                                                 )
                                             elif actual_service_type in {
                                                 "qwen",

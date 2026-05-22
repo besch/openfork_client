@@ -688,6 +688,29 @@ class StopResetBehaviorTests(unittest.TestCase):
         )
         orchestrator_service.clear_active_job.assert_called_once_with("job-cancelled")
 
+    def test_flux_kontext_8gb_runtime_config_uses_conservative_memory_path(self):
+        args, env = JobListener._flux_kontext_runtime_config(
+            "flux-kontext-dev-8gb"
+        )
+
+        self.assertIn("--cpu-vae", args)
+        self.assertIn("--fp16-unet", args)
+        self.assertIn("--disable-dynamic-vram", args)
+        self.assertIn("--disable-async-offload", args)
+        self.assertIn("--disable-pinned-memory", args)
+        self.assertNotIn("--fp32-vae", args)
+        self.assertNotIn("--force-fp16", args)
+        self.assertEqual(env["PYTORCH_JIT"], "0")
+
+    def test_flux_kontext_12gb_runtime_config_keeps_pinned_memory_off(self):
+        args, _env = JobListener._flux_kontext_runtime_config(
+            "flux-kontext-dev-12gb"
+        )
+
+        self.assertIn("--fp16-vae", args)
+        self.assertIn("--disable-pinned-memory", args)
+        self.assertNotIn("--disable-dynamic-vram", args)
+
     def test_comfyui_wait_for_ready_aborts_on_container_crash_event(self):
         shutdown_event = threading.Event()
         abort_event = threading.Event()

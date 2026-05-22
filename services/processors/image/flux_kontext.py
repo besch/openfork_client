@@ -23,7 +23,7 @@ class FluxKontextWorkflowMixin:
         model_key = f"{workflow_type} {service_type}"
 
         if "8gb" in model_key:
-            return 768
+            return 640
         if "12gb" in model_key:
             return 896
         return 1024

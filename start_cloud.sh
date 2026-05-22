@@ -969,19 +969,19 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       ;;
     *flux-kontext*8gb*)
       log "Applying FLUX Kontext 8GB GGUF optimizations"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --fp16-unet --reserve-vram 1.5 --cache-none --use-split-cross-attention --preview-method none --disable-dynamic-vram --disable-async-offload --disable-pinned-memory"
       ;;
     *flux-kontext*12gb*)
       log "Applying FLUX Kontext 12GB GGUF optimizations"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-pinned-memory"
       ;;
     *flux-kontext*16gb*)
       log "Applying FLUX Kontext 16GB GGUF optimizations"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
       ;;
     *flux-kontext*24gb*)
       log "Applying FLUX Kontext 24GB GGUF optimizations"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.5 --use-pytorch-cross-attention --preview-method none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.5 --use-pytorch-cross-attention --preview-method none"
       ;;
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
@@ -1017,6 +1017,15 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       fi
       ;;
   esac
+
+  if [[ "$SERVICE_TYPE" == *"flux-kontext"* ]]; then
+    mkdir -p /opt/ComfyUI/user/__manager
+    cat > /opt/ComfyUI/user/__manager/config.ini <<'EOF'
+[default]
+network_mode = offline
+EOF
+    log "Configured ComfyUI-Manager network_mode=offline for FLUX Kontext runtime."
+  fi
 
   # Check if ComfyUI is already starting (port 8188 bound)
   PORT_BOUND=false

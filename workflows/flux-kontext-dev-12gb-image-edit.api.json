@@ -16,9 +16,12 @@
       }
     },
     "3": {
-      "class_type": "UnetLoaderGGUF",
+      "class_type": "UnetLoaderGGUFAdvanced",
       "inputs": {
-        "unet_name": "flux1-kontext-dev-Q5_K_M.gguf"
+        "unet_name": "flux1-kontext-dev-Q5_K_M.gguf",
+        "dequant_dtype": "float16",
+        "patch_dtype": "float16",
+        "patch_on_device": false
       }
     },
     "4": {
