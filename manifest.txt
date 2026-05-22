@@ -57,6 +57,7 @@ services/processors/comfyui_processor.py
 services/processors/image/__init__.py
 services/processors/image/anima.py
 services/processors/image/ernie_image.py
+services/processors/image/flux_kontext.py
 services/processors/image/qwen.py
 services/processors/image/qwen_turbo.py
 services/processors/image/text_to_image.py
@@ -95,6 +96,14 @@ workflows/chatterbox-tts.api.json
 workflows/chatterbox-voice-clone.api.json
 workflows/diagdistill-t2v.api.json
 workflows/dreamid-omni-image-to-video-24gb.api.json
+workflows/flux-kontext-dev-12gb-image-edit.api.json
+workflows/flux-kontext-dev-12gb-text-to-image.api.json
+workflows/flux-kontext-dev-16gb-image-edit.api.json
+workflows/flux-kontext-dev-16gb-text-to-image.api.json
+workflows/flux-kontext-dev-24gb-image-edit.api.json
+workflows/flux-kontext-dev-24gb-text-to-image.api.json
+workflows/flux-kontext-dev-8gb-image-edit.api.json
+workflows/flux-kontext-dev-8gb-text-to-image.api.json
 workflows/flux-text-to-image.api.json
 workflows/hunyuan-image-to-video-fp8.api.json
 workflows/hunyuan-image-to-video.api.json
