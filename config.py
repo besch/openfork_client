@@ -41,6 +41,14 @@ MAX_INPUT_ASSET_REDIRECTS = int(
 # OpenFork images exceed this budget, least-recently-used images are evicted.
 DOCKER_IMAGE_CACHE_LIMIT_GB = int(os.getenv("DOCKER_IMAGE_CACHE_LIMIT_GB", "250"))
 
+# Short pause after intentionally removing a GPU service container before the
+# provider advertises itself as available again. On desktop/WSL systems this
+# gives CUDA, overlay2, and port bindings time to settle before the next
+# back-to-back job starts a fresh heavyweight container.
+CONTAINER_RESTART_SETTLE_SECONDS = int(
+    os.getenv("OPENFORK_CONTAINER_RESTART_SETTLE_SECONDS", "12")
+)
+
 # Policy-specific idle timeouts for Python-side Docker image eviction (minutes).
 # The download manager applies these during idle cleanup windows and batches
 # stale removals so Windows VHDX compaction can happen after enough space is freed.
@@ -174,6 +182,7 @@ def _apply_overrides() -> None:
     # Scalar overrides
     _scalar_keys = {
         "DOCKER_IMAGE_CACHE_LIMIT_GB": int,
+        "CONTAINER_RESTART_SETTLE_SECONDS": int,
         "DISK_PRESSURE_HEALTHY_GB": int,
         "DISK_PRESSURE_CRITICAL_GB": int,
     }

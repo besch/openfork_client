@@ -6,7 +6,11 @@ import time
 import traceback
 from typing import Dict, Any, Optional
 
-from config import HEADLESS_MODE, TimeoutConfig
+from config import (
+    CONTAINER_RESTART_SETTLE_SECONDS,
+    HEADLESS_MODE,
+    TimeoutConfig,
+)
 from services.docker_manager import docker_manager
 from services.container_monitor import ContainerMonitor
 from services.docker_download_manager import ImageAvailability, POST_DOWNLOAD_SETTLE_SECS
@@ -64,6 +68,21 @@ class JobListener:
         if monitor is not None:
             monitor.stop()
             self._active_container_monitor = None
+
+    def _wait_after_container_cleanup(self, service_type: str) -> None:
+        """Let desktop GPU container cleanup settle before the next reservation."""
+        delay = max(0, int(CONTAINER_RESTART_SETTLE_SECONDS or 0))
+        if delay <= 0 or self.shutdown_event.is_set():
+            return
+
+        logging.info(
+            "Waiting %ss after stopping service '%s' before polling for the next job.",
+            delay,
+            service_type,
+        )
+        deadline = time.time() + delay
+        while time.time() < deadline and not self.shutdown_event.is_set():
+            time.sleep(min(0.5, deadline - time.time()))
 
     @staticmethod
     def _should_keep_container_warm(service_config: Dict[str, Any]) -> bool:
@@ -1970,6 +1989,9 @@ exec python main.py "$@"
                                                     )
                                                     docker_manager.stop_container(
                                                         service_type=actual_service_type
+                                                    )
+                                                    self._wait_after_container_cleanup(
+                                                        actual_service_type
                                                     )
                                                     self.client.active_service_type = None
                                             else:

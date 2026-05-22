@@ -104,7 +104,7 @@ class LLMJobProcessor(BaseJobProcessor):
     @classmethod
     def _sanitize_visual_story_text(cls, text: str) -> str:
         """Remove copied prompt-rule clauses while keeping positive story detail."""
-        value = str(text or "").strip()
+        value = cls._sanitize_rendered_text_bait(str(text or "").strip())
         if not value or not cls._forbidden_visual_rule_fragment(value):
             return value
 
@@ -148,6 +148,70 @@ class LLMJobProcessor(BaseJobProcessor):
             return re.sub(r"\s+", " ", cleaned).strip(" ;,.")
 
         return cleaned or value
+
+    @classmethod
+    def _sanitize_rendered_text_bait(cls, text: str) -> str:
+        """Replace common visual phrases that make image models render text."""
+        value = str(text or "").strip()
+        if not value:
+            return value
+
+        replacements = (
+            (
+                r"\b(?:expired\s+)?coupons?\s+(?:with|showing|covered\s+in|bearing)?\s*(?:readable\s*)?(?:markings?|words?|letters?|numbers?|text|labels?|stamps?|signatures?)\b",
+                "blank voucher-shaped color slips",
+            ),
+            (r"\bfloating\s+coupons?\b", "floating blank voucher-shaped slips"),
+            (r"\bexpired\s+coupons?\b", "flickering blank voucher-shaped slips"),
+            (
+                r"\b(?:loyalty|access|identity|membership)\s+cards?\b",
+                "plain glowing token card",
+            ),
+            (
+                r"\b(?:writing|writes|write|scribbling|scribbles)\s+(?:a\s+|the\s+)?(?:safety\s+)?(?:report|form|document|note|letter|label|signature)[^.!?;]*",
+                "making quick hand gestures over a plain unmarked pad",
+            ),
+            (r"\b(?:report|document|form|paper|ticket|badge)s?\b", "plain color slip"),
+            (r"\b(?:signature|signatures)\b", "abstract color seal"),
+            (r"\b(?:stamp|stamps|stamped)\b", "round color seal"),
+            (r"\b(?:notification|notifications)\b", "glowing reaction cue"),
+            (r"\b(?:screen|display|interface|ui|hud)\b", "glowing control surface"),
+            (
+                r"\b(?:logo|watermark|caption|subtitle|title card|speech bubble|floating words)\b",
+                "plain visual accent",
+            ),
+            (
+                r"\b(?:readable|written|printed|lettered|numbered|labeled|captioned|subtitled)\s+",
+                "",
+            ),
+        )
+        cleaned = value
+        for pattern, replacement in replacements:
+            cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    @classmethod
+    def _forbidden_rendered_text_cue(cls, text: str):
+        """Detect positive visual requests likely to create rendered writing."""
+        value = str(text or "").casefold()
+        patterns = (
+            (
+                r"\b(?:readable|written|writing|handwriting|printed|lettered|numbered|labeled|captioned|subtitled|typography|signature|watermark|logo)\b",
+                "visible writing cue",
+            ),
+            (
+                r"\b(?:screen|display|interface|ui/hud|ui|hud|notification|caption|subtitle|title card|speech bubble|floating words|diagram text|annotation)\b",
+                "visible UI/text surface cue",
+            ),
+            (
+                r"\b(?:coupon|card|ticket|badge|form|report|document|paper|slip|sign|stamp)[^.!?]{0,50}\b(?:words?|letters?|numbers?|text|labels?|signatures?|markings?|glyphs?)\b",
+                "marked document or prop cue",
+            ),
+        )
+        for pattern, label in patterns:
+            if re.search(pattern, value, flags=re.IGNORECASE):
+                return label
+        return None
 
     @classmethod
     def _is_generic_scene_title(cls, name: str) -> bool:
@@ -562,10 +626,25 @@ class LLMJobProcessor(BaseJobProcessor):
                 if cls._is_generic_scene_title(name):
                     raise ValueError(f"Scene {index + 1} has a generic title: {name!r}.")
                 if len(name.split()) > 7 or len(name) > 70:
-                    raise ValueError(f"Scene {index + 1} title is too long: {name!r}.")
+                    name = cls._scene_title_from_content(scene, index, seen_scene_names)
+                    scene["name"] = name
+                    logging.info(
+                        "Repaired long script scene title for scene %s to %r.",
+                        index + 1,
+                        name,
+                    )
                 normalized_name = " ".join(name.lower().split())
                 if normalized_name in seen_scene_names:
-                    raise ValueError(f"Scene {index + 1} repeats an earlier title: {name!r}.")
+                    original_name = name
+                    name = cls._scene_title_from_content(scene, index, seen_scene_names)
+                    scene["name"] = name
+                    normalized_name = " ".join(name.lower().split())
+                    logging.info(
+                        "Repaired duplicate script scene title for scene %s from %r to %r.",
+                        index + 1,
+                        original_name,
+                        name,
+                    )
                 seen_scene_names.add(normalized_name)
                 if any(term in normalized_name for term in forbidden_title_terms):
                     raise ValueError(f"Scene {index + 1} is not a visual story moment: {name!r}.")
@@ -615,6 +694,12 @@ class LLMJobProcessor(BaseJobProcessor):
                         raise ValueError(
                             f"Scene {index + 1} {field_name} repeats a visual rule phrase "
                             f"{forbidden_fragment!r}; describe only visible story content."
+                        )
+                    forbidden_text_cue = cls._forbidden_rendered_text_cue(field_text)
+                    if forbidden_text_cue:
+                        raise ValueError(
+                            f"Scene {index + 1} {field_name} still contains {forbidden_text_cue}; "
+                            "use blank shapes, glowing objects, physical reactions, or abstract unreadable color seals."
                         )
                 dialogue = scene.get("dialogue")
                 if not isinstance(dialogue, list) or not dialogue:
@@ -669,6 +754,12 @@ class LLMJobProcessor(BaseJobProcessor):
                             f"Scenario {index + 1} {field_name} repeats a visual rule phrase "
                             f"{forbidden_fragment!r}; describe only visible story content."
                         )
+                    forbidden_text_cue = cls._forbidden_rendered_text_cue(field_text)
+                    if forbidden_text_cue:
+                        raise ValueError(
+                            f"Scenario {index + 1} {field_name} still contains {forbidden_text_cue}; "
+                            "use blank shapes, glowing objects, physical reactions, or abstract unreadable color seals."
+                        )
             return parsed_json
 
         if job_type == "character_profiles":
@@ -720,6 +811,26 @@ class LLMJobProcessor(BaseJobProcessor):
             "timed out",
         )
         return any(marker in text for marker in transient_markers)
+
+    @staticmethod
+    def _positive_int(value, default=None):
+        try:
+            parsed = int(value)
+            return parsed if parsed > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _context_limit_for_job(cls, inputs: dict) -> int:
+        """Default to an 8GB-safe long-form context window unless the caller opts up."""
+        override = (
+            cls._positive_int(inputs.get("max_context_tokens"))
+            or cls._positive_int(inputs.get("num_ctx"))
+            or cls._positive_int(os.getenv("OPENFORK_LLM_MAX_CONTEXT_TOKENS"))
+        )
+        if override:
+            return max(4096, min(32768, override))
+        return 12288
 
     def process(self):
         if not self.job:
@@ -813,16 +924,21 @@ class LLMJobProcessor(BaseJobProcessor):
                 allowed_character_names,
             )
             json_schema = self._json_schema_for_job(job_type, num_scenes, expected_items, inputs)
+            context_limit = self._context_limit_for_job(inputs)
 
             # Dynamically size the context window to fit the requested output.
             # num_ctx must be >= (input tokens + max_tokens).  We add a 2048-token
             # buffer for the system/user prompts and round up to the next power-of-two
             # for efficiency in the attention implementation.
             raw_ctx = max_tokens + 2048
-            num_ctx = max(8192, int(2 ** math.ceil(math.log2(raw_ctx))))
+            num_ctx = min(
+                context_limit,
+                max(4096, int(2 ** math.ceil(math.log2(raw_ctx)))),
+            )
             logging.info(
                 f"Context window sizing: max_tokens={max_tokens}, num_ctx={num_ctx}, "
-                f"job_type={job_type}, num_scenes={num_scenes}, expected_items={expected_items}"
+                f"context_limit={context_limit}, job_type={job_type}, "
+                f"num_scenes={num_scenes}, expected_items={expected_items}"
             )
 
             logging.info(f"Calling Ollama chat API with structured output at {api_base}/api/chat")
@@ -840,10 +956,23 @@ class LLMJobProcessor(BaseJobProcessor):
                     if content_attempt == 1
                     else max(retry_max_tokens, max_tokens + 768),
                 )
-                attempt_num_ctx = max(
-                    8192,
-                    int(2 ** math.ceil(math.log2(attempt_max_tokens + 2048))),
+                attempt_num_ctx = min(
+                    context_limit,
+                    max(
+                        4096,
+                        int(2 ** math.ceil(math.log2(attempt_max_tokens + 2048))),
+                    ),
                 )
+                max_predict_for_context = max(512, attempt_num_ctx - 2048)
+                if attempt_max_tokens > max_predict_for_context:
+                    logging.info(
+                        "Capping LLM max output tokens from %s to %s for "
+                        "num_ctx=%s.",
+                        attempt_max_tokens,
+                        max_predict_for_context,
+                        attempt_num_ctx,
+                    )
+                    attempt_max_tokens = max_predict_for_context
                 attempt_temperature = temperature if content_attempt == 1 else min(temperature, 0.35)
                 attempt_seed = seed if content_attempt == 1 else seed + content_attempt
                 retry_guard = ""
