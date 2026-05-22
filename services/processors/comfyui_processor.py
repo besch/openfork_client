@@ -16,7 +16,7 @@ class ComfyUIProcessor(BaseJobProcessor):
         super().__init__(client, job, shutdown_event)
         self.comfyui_client = client.comfyui_client
 
-    def _trigger_and_get_output(self, payload):
+    def _trigger_and_get_output(self, payload, timeout_sec=None):
         """Trigger ComfyUI workflow and wait for output."""
         prompt_id = self.comfyui_client.trigger_workflow(payload)
         if not prompt_id:
@@ -29,7 +29,7 @@ class ComfyUIProcessor(BaseJobProcessor):
             prompt_id,
             job_id=self.job_id,
             orchestrator_service=self.orchestrator_service,
-            timeout_sec=7200,
+            timeout_sec=timeout_sec or 7200,
             shutdown_event=self.shutdown_event,
             abort_event=getattr(self.client, "active_container_crash_event", None),
         )

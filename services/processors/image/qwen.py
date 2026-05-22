@@ -46,6 +46,11 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         if second_image_filename:
             self._copy_image_to_container(second_image_filename)
 
+        target_dimensions = self._get_dimensions(
+            aspect_ratio,
+            has_second_image=bool(second_image_filename),
+        )
+
         # Inject prompt and image into workflow
         seed = inputs.get("seed")
         wf_ready = self._inject_edit_workflow(
@@ -58,13 +63,13 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             seed=seed,
         )
         payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
+        outputs = self._trigger_and_get_output(payload, timeout_sec=1200)
         if not outputs:
             return
 
         image_storage_path = self.handle_image_output(
             outputs,
-            target_dimensions=self._get_dimensions(aspect_ratio),
+            target_dimensions=target_dimensions,
         )
         if not image_storage_path:
             return
@@ -245,23 +250,46 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy image to container: {e}")
 
+    def _find_scaled_image_ref(self, wf, image_node_id):
+        """Return the scaled image node attached to a LoadImage node when present."""
+        source_ref = [image_node_id, 0]
+        for node_id, node in wf.items():
+            if node.get("class_type") not in (
+                "FluxKontextImageScale",
+                "ImageScaleToMaxDimension",
+            ):
+                continue
+            if node.get("inputs", {}).get("image") == source_ref:
+                return [node_id, 0]
+        return source_ref
+
     def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, second_image_filename=None, aspect_ratio="1:1", seed=None):
         """Inject prompt and image into the editing workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
         # Calculate dimensions
-        width, height = self._get_dimensions(aspect_ratio)
+        width, height = self._get_dimensions(
+            aspect_ratio,
+            has_second_image=bool(second_image_filename),
+        )
         max_dim = max(width, height)
+        uses_empty_latent = any(
+            node.get("class_type") in ("EmptySD3LatentImage", "EmptyQwenImageLayeredLatentImage")
+            for node in wf.values()
+        )
         load_image_ids = [
             node_id
             for node_id, node in wf.items()
             if node.get("class_type") == "LoadImage"
         ]
-        second_image_ref = (
-            [load_image_ids[1], 0]
-            if second_image_filename and len(load_image_ids) > 1
+        source_image_ref = (
+            self._find_scaled_image_ref(wf, load_image_ids[0])
+            if load_image_ids
             else None
         )
+        second_image_ref = None
+        if second_image_filename and len(load_image_ids) > 1:
+            second_image_ref = self._find_scaled_image_ref(wf, load_image_ids[1])
         if not second_image_filename:
             for unused_node_id in load_image_ids[1:]:
                 wf.pop(unused_node_id, None)
@@ -275,11 +303,21 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             if class_type == "CLIPTextEncode":
                 node["inputs"]["text"] = prompt
             elif class_type == "TextEncodeQwenImageEditPlus":
-                if inputs.get("prompt"):
+                has_prompt = bool(str(inputs.get("prompt") or "").strip())
+                if has_prompt:
                     inputs["prompt"] = prompt
-                if second_image_ref:
-                    inputs["image2"] = second_image_ref
+                    template_has_image2 = "image2" in inputs
+                    if second_image_ref and not template_has_image2:
+                        inputs["image1"] = second_image_ref
+                    elif source_image_ref:
+                        inputs["image1"] = source_image_ref
+                    if second_image_ref and template_has_image2:
+                        inputs["image2"] = second_image_ref
+                    else:
+                        inputs.pop("image2", None)
                 else:
+                    inputs.pop("vae", None)
+                    inputs.pop("image1", None)
                     inputs.pop("image2", None)
                 inputs.pop("image3", None)
             elif class_type == "LoadImage":
@@ -290,8 +328,11 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
                 image_node_count += 1
             elif class_type == "ImageScaleToMaxDimension":
                 node["inputs"]["largest_size"] = max_dim
+            elif class_type in ("EmptySD3LatentImage", "EmptyQwenImageLayeredLatentImage"):
+                node["inputs"]["width"] = width
+                node["inputs"]["height"] = height
             elif class_type == "KSampler":
-                node["inputs"]["denoise"] = denoise_strength
+                node["inputs"]["denoise"] = 1.0 if uses_empty_latent else denoise_strength
                 if seed is not None:
                     node["inputs"]["seed"] = seed
                 else:
@@ -299,25 +340,25 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         
         return wf
 
-    def _get_dimensions(self, aspect_ratio):
+    def _get_dimensions(self, aspect_ratio, has_second_image=False):
         """Calculate edit dimensions for 8GB GPUs.
 
-        Qwen edit can technically run larger frames, but on 8GB cards large
-        two-reference edits are too slow for multi-scene workflow runs. Keep
-        the long edge around 768px so character-action variations stay
-        practical and leave WAN22 to handle the final motion render.
+        Qwen edit can technically run larger frames, but on 8GB cards
+        two-reference edits need a smaller latent to avoid CUDA fallback stalls.
+        Keep the long edge conservative and let the video model handle motion.
         """
+        long_edge = 384 if has_second_image else 512
         ratio_map = {
-            "1:1": (768, 768),
-            "16:9": (768, 432),
-            "9:16": (432, 768),
-            "4:3": (768, 576),
-            "3:4": (576, 768),
-            "3:2": (768, 512),
-            "2:3": (512, 768),
-            "21:9": (768, 330),
+            "1:1": (long_edge, long_edge),
+            "16:9": (long_edge, round(long_edge * 9 / 16)),
+            "9:16": (round(long_edge * 9 / 16), long_edge),
+            "4:3": (long_edge, round(long_edge * 3 / 4)),
+            "3:4": (round(long_edge * 3 / 4), long_edge),
+            "3:2": (long_edge, round(long_edge * 2 / 3)),
+            "2:3": (round(long_edge * 2 / 3), long_edge),
+            "21:9": (long_edge, round(long_edge * 9 / 21)),
         }
-        return ratio_map.get(aspect_ratio, (768, 768))
+        return ratio_map.get(aspect_ratio, (long_edge, long_edge))
 
 
 class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):

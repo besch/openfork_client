@@ -1028,8 +1028,9 @@ class OrchestratorService:
                 payload["duration_seconds"] = duration_seconds
             if metadata_payload is not None:
                 payload["completion_metadata"] = metadata_payload
-            if prompt:
-                payload["prompt"] = prompt
+            # The submit path already stores the prompt. The completion route
+            # does not persist this field, and very detailed workflow prompts
+            # can exceed its validation cap if resent here.
 
             response = self._make_request(
                 'put',

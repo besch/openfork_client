@@ -27,9 +27,11 @@
       }
     },
     "5": {
-      "class_type": "FluxKontextImageScale",
+      "class_type": "ImageScaleToMaxDimension",
       "inputs": {
-        "image": ["4", 0]
+        "image": ["4", 0],
+        "upscale_method": "lanczos",
+        "largest_size": 512
       }
     },
     "6": {
@@ -39,17 +41,14 @@
         "clip": ["1", 0],
         "vae": ["2", 0],
         "image1": ["5", 0],
-        "image2": ["14", 0]
+        "image2": ["17", 0]
       }
     },
     "7": {
       "class_type": "TextEncodeQwenImageEditPlus",
       "inputs": {
         "prompt": "",
-        "clip": ["1", 0],
-        "vae": ["2", 0],
-        "image1": ["5", 0],
-        "image2": ["14", 0]
+        "clip": ["1", 0]
       }
     },
     "8": {
@@ -92,14 +91,14 @@
       "inputs": {
         "seed": 0,
         "control_after_generate": "randomize",
-        "steps": 6,
+        "steps": 8,
         "cfg": 1,
         "sampler_name": "euler",
         "scheduler": "simple",
         "denoise": 1,
         "model": ["12", 0],
         "positive": ["8", 0],
-        "negative": ["8", 0],
+        "negative": ["9", 0],
         "latent_image": ["10", 0]
       }
     },
@@ -121,6 +120,14 @@
       "inputs": {
         "filename_prefix": "qwen_edit",
         "images": ["15", 0]
+      }
+    },
+    "17": {
+      "class_type": "ImageScaleToMaxDimension",
+      "inputs": {
+        "image": ["14", 0],
+        "upscale_method": "lanczos",
+        "largest_size": 512
       }
     }
   }
