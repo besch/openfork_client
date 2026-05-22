@@ -17,13 +17,18 @@ from services.processors.image.qwen import QwenImageEditProcessor
 class FluxKontextWorkflowMixin:
     """Shared workflow injection helpers for FLUX Kontext image jobs."""
 
+    def _is_8gb_tier(self):
+        workflow_type = (self.workflow_type or "").lower()
+        service_type = (getattr(self.client, "active_service_type", "") or "").lower()
+        return "8gb" in f"{workflow_type} {service_type}"
+
     def _tier_long_edge(self):
         workflow_type = (self.workflow_type or "").lower()
         service_type = (getattr(self.client, "active_service_type", "") or "").lower()
         model_key = f"{workflow_type} {service_type}"
 
         if "8gb" in model_key:
-            return 640
+            return 512
         if "12gb" in model_key:
             return 896
         return 1024
@@ -46,9 +51,26 @@ class FluxKontextWorkflowMixin:
     def _round_to_multiple(value, multiple=16):
         return max(multiple, int(round(value / multiple)) * multiple)
 
-    def _get_dimensions(self, aspect_ratio, has_second_image=False):
+    def _requested_long_edge(self, inputs=None):
+        values = inputs or self.job.get("inputs", {})
+        requested = (
+            values.get("max_long_edge")
+            or values.get("long_edge")
+            or values.get("target_long_edge")
+        )
+        if requested is None:
+            return self._tier_long_edge()
+        if self._is_8gb_tier():
+            return max(256, min(self._as_int(requested, self._tier_long_edge()), 512))
+        return max(384, min(self._as_int(requested, self._tier_long_edge()), self._tier_long_edge()))
+
+    def _get_dimensions(self, aspect_ratio, has_second_image=False, requested_long_edge=None):
         """Return tier-aware dimensions for generated/normalized output."""
-        long_edge = self._tier_long_edge()
+        long_edge = (
+            self._requested_long_edge({"max_long_edge": requested_long_edge})
+            if requested_long_edge is not None
+            else self._requested_long_edge()
+        )
         ratio_map = {
             "1:1": (long_edge, long_edge),
             "16:9": (long_edge, self._round_to_multiple(long_edge * 9 / 16)),
@@ -66,8 +88,9 @@ class FluxKontextWorkflowMixin:
 
     def _advanced_settings(self):
         inputs = self.job.get("inputs", {})
+        default_steps = 12 if self._is_8gb_tier() else 20
         return {
-            "steps": self._as_int(inputs.get("steps"), 20),
+            "steps": self._as_int(inputs.get("steps"), default_steps),
             "guidance": self._as_float(
                 inputs.get("cfg", inputs.get("cfg_scale")),
                 2.5,
@@ -97,6 +120,8 @@ class FluxKontextWorkflowMixin:
 
             if class_type == "CLIPTextEncode" and inputs.get("text") not in ("", None):
                 inputs["text"] = prompt
+            elif class_type == "DualCLIPLoader" and self._is_8gb_tier():
+                inputs["device"] = "cpu"
             elif class_type == "LoadImage" and image_filename:
                 inputs["image"] = image_filename
             elif class_type == "EmptySD3LatentImage":
@@ -152,7 +177,11 @@ class FluxKontextT2IProcessor(FluxKontextWorkflowMixin, ComfyUIProcessor, ImageO
 
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
-        width, height = self._get_dimensions(aspect_ratio)
+        requested_long_edge = self._requested_long_edge(inputs)
+        width, height = self._get_dimensions(
+            aspect_ratio,
+            requested_long_edge=requested_long_edge,
+        )
 
         wf_ready = self._prepare_workflow(workflow_data)
         self._apply_common_workflow_inputs(
@@ -198,7 +227,11 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
         denoise_strength = inputs.get("denoise_strength", inputs.get("strength", 1.0))
-        width, height = self._get_dimensions(aspect_ratio)
+        requested_long_edge = self._requested_long_edge(inputs)
+        width, height = self._get_dimensions(
+            aspect_ratio,
+            requested_long_edge=requested_long_edge,
+        )
 
         source_image_filename = self._get_source_image()
         if not source_image_filename:
