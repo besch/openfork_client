@@ -1,0 +1,127 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "DualCLIPLoader",
+      "inputs": {
+        "clip_name1": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "clip_name2": "clip_l.safetensors",
+        "type": "flux",
+        "device": "default"
+      }
+    },
+    "2": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "ae.safetensors"
+      }
+    },
+    "3": {
+      "class_type": "UnetLoaderGGUF",
+      "inputs": {
+        "unet_name": "flux1-kontext-dev-Q8_0.gguf"
+      }
+    },
+    "4": {
+      "class_type": "ModelSamplingFlux",
+      "inputs": {
+        "max_shift": 1.15,
+        "base_shift": 0.5,
+        "width": 1024,
+        "height": 1024,
+        "model": ["3", 0]
+      }
+    },
+    "5": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "input_image.png"
+      }
+    },
+    "6": {
+      "class_type": "FluxKontextImageScale",
+      "inputs": {
+        "image": ["5", 0]
+      }
+    },
+    "7": {
+      "class_type": "VAEEncode",
+      "inputs": {
+        "pixels": ["6", 0],
+        "vae": ["2", 0]
+      }
+    },
+    "8": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "text": "Change the background to a warm sunset beach while preserving the subject",
+        "clip": ["1", 0]
+      }
+    },
+    "9": {
+      "class_type": "FluxGuidance",
+      "inputs": {
+        "guidance": 2.5,
+        "conditioning": ["8", 0]
+      }
+    },
+    "10": {
+      "class_type": "ReferenceLatent",
+      "inputs": {
+        "conditioning": ["9", 0],
+        "latent": ["7", 0]
+      }
+    },
+    "11": {
+      "class_type": "RandomNoise",
+      "inputs": {
+        "noise_seed": 0
+      }
+    },
+    "12": {
+      "class_type": "KSamplerSelect",
+      "inputs": {
+        "sampler_name": "euler"
+      }
+    },
+    "13": {
+      "class_type": "BasicScheduler",
+      "inputs": {
+        "scheduler": "simple",
+        "steps": 20,
+        "denoise": 1.0,
+        "model": ["4", 0]
+      }
+    },
+    "14": {
+      "class_type": "BasicGuider",
+      "inputs": {
+        "model": ["4", 0],
+        "conditioning": ["10", 0]
+      }
+    },
+    "15": {
+      "class_type": "SamplerCustomAdvanced",
+      "inputs": {
+        "noise": ["11", 0],
+        "guider": ["14", 0],
+        "sampler": ["12", 0],
+        "sigmas": ["13", 0],
+        "latent_image": ["7", 0]
+      }
+    },
+    "16": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["15", 0],
+        "vae": ["2", 0]
+      }
+    },
+    "17": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename_prefix": "flux_kontext_edit_24gb",
+        "images": ["16", 0]
+      }
+    }
+  }
+}

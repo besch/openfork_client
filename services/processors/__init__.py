@@ -77,6 +77,10 @@ from .image.qwen_turbo import (
     QwenImageInpaintTurboProcessor,
     QwenImageT2ITurboProcessor,
 )
+from .image.flux_kontext import (
+    FluxKontextEditProcessor,
+    FluxKontextT2IProcessor,
+)
 from .image.anima import AnimaTextToImageProcessor
 from .image.ernie_image import ErnieImageProcessor
 
@@ -133,6 +137,8 @@ __all__ = [
     "QwenImageEditTurboProcessor",
     "QwenImageInpaintTurboProcessor",
     "QwenImageT2ITurboProcessor",
+    "FluxKontextEditProcessor",
+    "FluxKontextT2IProcessor",
     "AnimaTextToImageProcessor",
     "ErnieImageProcessor",
     "MMAudioJobProcessor",

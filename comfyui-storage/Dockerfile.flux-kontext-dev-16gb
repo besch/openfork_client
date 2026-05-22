@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.4
+# FLUX.1 Kontext [dev] GGUF Q6_K Docker Image
+# Balanced 16GB VRAM tier using ComfyUI-GGUF.
+
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+
+RUN echo "deb http://archive.ubuntu.com/ubuntu jammy universe" >> /etc/apt/sources.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget libgl1-mesa-glx libgl1-mesa-dri \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg ninja uv "huggingface_hub[cli]>=0.32"
+
+WORKDIR /opt/ComfyUI
+
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && rm -rf .git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
+    && git clone --depth=1 https://github.com/city96/ComfyUI-GGUF custom_nodes/ComfyUI-GGUF \
+    && rm -rf custom_nodes/ComfyUI-GGUF/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-GGUF/requirements.txt \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+RUN mkdir -p models/text_encoders models/unet models/vae \
+    && hf download comfyanonymous/flux_text_encoders \
+        --include "clip_l.safetensors" \
+        --include "t5xxl_fp8_e4m3fn_scaled.safetensors" \
+        --local-dir models/text_encoders \
+    && hf download Comfy-Org/Omnigen2_ComfyUI_repackaged \
+        --include "split_files/vae/ae.safetensors" \
+        --local-dir /tmp/flux_kontext \
+    && mv /tmp/flux_kontext/split_files/vae/ae.safetensors models/vae/ \
+    && hf download QuantStack/FLUX.1-Kontext-dev-GGUF \
+        --include "flux1-kontext-dev-Q6_K.gguf" \
+        --local-dir models/unet \
+    && rm -rf /tmp/flux_kontext
+
+CMD ["sh", "-c", "cd /opt/ComfyUI && python main.py --listen 0.0.0.0 --port 8188 --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"]

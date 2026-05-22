@@ -522,6 +522,25 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ltx23-video-16gb"
           log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif ls /opt/ComfyUI/models/unet/flux1-kontext-dev-*.gguf >/dev/null 2>&1; then
+      log "Auto-mode: Detected FLUX.1 Kontext [dev] GGUF ComfyUI image."
+      if [ -f "/opt/ComfyUI/models/unet/flux1-kontext-dev-Q8_0.gguf" ]; then
+          SERVICE_TYPE="flux-kontext-dev-24gb"
+          if [ "$TOTAL_VRAM_MB" -lt 22000 ]; then
+              log "WARNING: FLUX Kontext Q8_0 is configured as a 24GB tier; detected only ${TOTAL_VRAM_MB}MB VRAM."
+          else
+              log "Auto-selected FLUX Kontext 24GB tier (Q8_0, VRAM: ${TOTAL_VRAM_MB}MB)"
+          fi
+      elif [ -f "/opt/ComfyUI/models/unet/flux1-kontext-dev-Q6_K.gguf" ]; then
+          SERVICE_TYPE="flux-kontext-dev-16gb"
+          log "Auto-selected FLUX Kontext 16GB tier (Q6_K, VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ -f "/opt/ComfyUI/models/unet/flux1-kontext-dev-Q5_K_M.gguf" ]; then
+          SERVICE_TYPE="flux-kontext-dev-12gb"
+          log "Auto-selected FLUX Kontext 12GB tier (Q5_K_M, VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="flux-kontext-dev-8gb"
+          log "Auto-selected FLUX Kontext 8GB tier (Q4_K_M, VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/opt/ComfyUI/models/DreamID-Omni/DreamID_Omni/dreamid_omni.fp8_e4m3fn.safetensors" ]; then
       log "Auto-mode: Detected DreamID-Omni FP8 ComfyUI image."
       SERVICE_TYPE="dreamid-omni-24gb"
@@ -944,6 +963,22 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying 24GB optimizations for DreamID-Omni FP8"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention --cache-none"
       ;;
+    *flux-kontext*8gb*)
+      log "Applying FLUX Kontext 8GB GGUF optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
+      ;;
+    *flux-kontext*12gb*)
+      log "Applying FLUX Kontext 12GB GGUF optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
+      ;;
+    *flux-kontext*16gb*)
+      log "Applying FLUX Kontext 16GB GGUF optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
+      ;;
+    *flux-kontext*24gb*)
+      log "Applying FLUX Kontext 24GB GGUF optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.5 --use-pytorch-cross-attention --preview-method none"
+      ;;
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
@@ -1280,7 +1315,7 @@ fi
 if [ -d "/opt/ComfyUI" ]; then
   # Determine timeout based on service tier
   WAIT_TIME=120
-  if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"24gb"* ]] || [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"ltx2"* ]] || [[ "$SERVICE_TYPE" == *"flux-kontext"* ]]; then
     WAIT_TIME=600
     log "Large model detected ($SERVICE_TYPE). Extending ComfyUI readiness timeout to ${WAIT_TIME}s."
   fi

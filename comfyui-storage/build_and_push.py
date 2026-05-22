@@ -82,8 +82,12 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.audiox", "beschiak/openfork-audiox:latest", build=True, push=True),
     # ImageConfig("Dockerfile.dreamid-omni-24gb", "beschiak/openfork-dreamid-omni-24gb:latest", build=True, push=True),
     # ImageConfig( "Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True, ),
-    ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.dramabox", "beschiak/openfork-dramabox-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.flux-kontext-dev-8gb", "beschiak/openfork-flux-kontext-dev-8gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.flux-kontext-dev-24gb", "beschiak/openfork-flux-kontext-dev-24gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.dramabox", "beschiak/openfork-dramabox-24gb:latest", build=True, push=True, direct_push=True),
 ]
 
 PUSH_ATTEMPTS = 4
