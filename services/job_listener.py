@@ -56,6 +56,8 @@ class JobListener:
         # the monitor thread fires a crash callback after the container has already
         # been stopped on an error path.
         self._active_container_monitor = None
+        self._remote_stop_cleanup_jobs = set()
+        self._remote_stop_cleanup_lock = threading.Lock()
 
     def _stop_container_monitor(self) -> None:
         """Stop and clear the active container monitor, if any.
@@ -777,6 +779,9 @@ class JobListener:
                 self.client.interrupted_job_id = job_id
                 self.client.interrupted_job_execution_token = job.get("execution_token")
             self.client.current_job = None
+            if job_id:
+                with self._remote_stop_cleanup_lock:
+                    self._remote_stop_cleanup_jobs.discard(job_id)
 
     def _cleanup_remote_cancelled_job(
         self,
@@ -784,6 +789,16 @@ class JobListener:
         processor,
         remote_status: str,
     ) -> None:
+        with self._remote_stop_cleanup_lock:
+            if job_id in self._remote_stop_cleanup_jobs:
+                logging.debug(
+                    "Remote-stop cleanup for job %s already completed; "
+                    "skipping duplicate cleanup.",
+                    job_id,
+                )
+                return
+            self._remote_stop_cleanup_jobs.add(job_id)
+
         self.orchestrator_service.clear_active_job(job_id)
         logging.warning(
             f"Job {job_id} received remote stop status '{remote_status}'. "
@@ -799,7 +814,7 @@ class JobListener:
         comfyui_client = getattr(processor, "comfyui_client", None)
         if comfyui_client:
             try:
-                comfyui_client.interrupt_workflow()
+                comfyui_client.interrupt_workflow(quiet_if_unreachable=True)
             except Exception as e:
                 logging.debug(f"Could not interrupt workflow: {e}")
 
@@ -1982,7 +1997,10 @@ exec python main.py "$@"
                                                         "Keeping container for service '%s' warm for subsequent jobs.",
                                                         actual_service_type,
                                                     )
-                                                else:
+                                                elif (
+                                                    getattr(self.client, "active_service_type", None)
+                                                    == actual_service_type
+                                                ):
                                                     logging.info(
                                                         "Stopping container for service '%s' after job; warm reuse is not enabled for this service.",
                                                         actual_service_type,
@@ -1994,6 +2012,11 @@ exec python main.py "$@"
                                                         actual_service_type
                                                     )
                                                     self.client.active_service_type = None
+                                                else:
+                                                    logging.info(
+                                                        "Container for service '%s' was already stopped during job cleanup.",
+                                                        actual_service_type,
+                                                    )
                                             else:
                                                 self.client.active_service_type = None
                                             self.client.active_container_crash_event = None

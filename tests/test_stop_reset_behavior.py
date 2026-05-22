@@ -450,7 +450,7 @@ class StopResetBehaviorTests(unittest.TestCase):
                 return None
 
         orchestrator_service = Mock()
-        orchestrator_service.get_job.return_value = {"status": "processing"}
+        orchestrator_service.get_job.return_value = {"status": "completed"}
         client = SimpleNamespace(
             stop_requested=False,
             interrupted_job_id="job-retry",
@@ -630,8 +630,8 @@ class StopResetBehaviorTests(unittest.TestCase):
         )
         processor = SimpleNamespace(comfyui_client=Mock())
         events = []
-        processor.comfyui_client.interrupt_workflow.side_effect = lambda: events.append(
-            "interrupt"
+        processor.comfyui_client.interrupt_workflow.side_effect = (
+            lambda *args, **kwargs: events.append("interrupt")
         )
 
         listener = JobListener(
@@ -654,6 +654,39 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertEqual(events, ["interrupt", "stop:dreamid-omni-24gb"])
         orchestrator_service.clear_active_job.assert_called_once_with("job-cancelled")
         orchestrator_service.update_job_status.assert_not_called()
+
+    def test_remote_cancel_cleanup_is_idempotent(self):
+        shutdown_event = threading.Event()
+        orchestrator_service = Mock()
+        client = SimpleNamespace(
+            orchestrator_service=orchestrator_service,
+            active_service_type="qwen-8gb",
+        )
+        processor = SimpleNamespace(comfyui_client=Mock())
+
+        listener = JobListener(
+            client,
+            provider_id="provider-1",
+            shutdown_event=shutdown_event,
+        )
+
+        with patch("services.job_listener.docker_manager") as docker_manager_mock:
+            listener._cleanup_remote_cancelled_job(
+                "job-cancelled",
+                processor,
+                "cancelled",
+            )
+            listener._cleanup_remote_cancelled_job(
+                "job-cancelled",
+                processor,
+                "cancelled",
+            )
+
+        processor.comfyui_client.interrupt_workflow.assert_called_once()
+        docker_manager_mock.stop_container.assert_called_once_with(
+            service_type="qwen-8gb"
+        )
+        orchestrator_service.clear_active_job.assert_called_once_with("job-cancelled")
 
     def test_comfyui_wait_for_ready_aborts_on_container_crash_event(self):
         shutdown_event = threading.Event()
@@ -697,7 +730,7 @@ class StopResetBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result, "interrupted")
         orchestrator_service.get_job.assert_called_once_with("job-lease-lost")
-        interrupt_mock.assert_called_once()
+        interrupt_mock.assert_called_once_with(quiet_if_unreachable=True)
         fake_ws.close.assert_called_once()
         fake_thread.start.assert_called_once()
         fake_thread.join.assert_called_once_with(timeout=5)

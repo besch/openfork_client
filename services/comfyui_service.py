@@ -146,7 +146,7 @@ class ComfyUIClient:
 
         return prompt_id
 
-    def interrupt_workflow(self):
+    def interrupt_workflow(self, quiet_if_unreachable: bool = False):
         """Interrupts the currently running workflow in ComfyUI."""
         try:
             req = urllib.request.Request(f"{self.http_base}/interrupt", method='POST', data=b'')
@@ -156,7 +156,12 @@ class ComfyUIClient:
                 else:
                     logging.warning(f"ComfyUI interrupt request returned status {resp.status}")
         except Exception as e:
-            logging.error(f"Failed to send interrupt request to ComfyUI: {e}")
+            if quiet_if_unreachable:
+                logging.info(
+                    f"ComfyUI interrupt skipped because the endpoint is no longer reachable: {e}"
+                )
+            else:
+                logging.error(f"Failed to send interrupt request to ComfyUI: {e}")
 
     def _ws_reader_thread(self, ws, q, shutdown_event):
         while not shutdown_event.is_set():
@@ -270,7 +275,7 @@ class ComfyUIClient:
                                 f"(polled status: {status}). Interrupting workflow "
                                 "so the worker can recover and accept other jobs."
                             )
-                            self.interrupt_workflow()
+                            self.interrupt_workflow(quiet_if_unreachable=True)
                             return "interrupted"
                     except TokenExpiredError:
                         orchestrator_service.signal_auth_expired()
