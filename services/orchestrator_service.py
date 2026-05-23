@@ -831,14 +831,12 @@ class OrchestratorService:
         """Uploads a file directly to storage using a presigned URL."""
         file_name = os.path.basename(file_path)
         file_size = os.path.getsize(file_path)
-        
+
         upload_info = self._get_signed_upload_url(job_id, file_name)
         if not upload_info or not upload_info.get('success'):
             logging.error(f"Failed to get a presigned URL for job {job_id}")
             return None
-        
-        upload_url = upload_info['uploadUrl']
-        storage_path = upload_info['storagePath']
+
         max_file_size = upload_info.get('maxFileSize')
 
         try:
@@ -853,52 +851,95 @@ class OrchestratorService:
             )
             return None
 
-        try:
-            with open(file_path, 'rb') as f:
-                response = self._make_request(
-                    'put',
-                    upload_url,
-                    auth_required=False,
-                    data=f,
-                    headers={'Content-Type': content_type}
-                )
+        max_attempts = max(1, int(getattr(TimeoutConfig, "API_MAX_RETRIES", 3)))
+        last_error: Optional[BaseException] = None
+
+        for attempt in range(1, max_attempts + 1):
+            if attempt > 1:
+                upload_info = self._get_signed_upload_url(job_id, file_name)
+                if not upload_info or not upload_info.get('success'):
+                    logging.error(
+                        f"Failed to get a fresh presigned URL for job {job_id} "
+                        f"on upload retry {attempt}/{max_attempts}"
+                    )
+                    return None
+
+            upload_url = upload_info['uploadUrl']
+            storage_path = upload_info['storagePath']
+
+            try:
+                with open(file_path, 'rb') as f:
+                    # Do not send streaming file objects through _make_request's
+                    # tenacity retry wrapper. After a timeout, requests may have
+                    # consumed the file handle; retrying the same object can PUT an
+                    # empty body, which upload-finalize correctly rejects as
+                    # object_empty. Reopen the file and use a fresh signed URL for
+                    # each attempt instead.
+                    response = self._session.request(
+                        'put',
+                        upload_url,
+                        data=f,
+                        headers={'Content-Type': content_type},
+                        timeout=TimeoutConfig.API_REQUEST_TIMEOUT,
+                    )
+                    self._record_latency_sample(response)
                 response.raise_for_status()
 
-            logging.info(
-                f"Successfully uploaded {file_name} ({file_size} bytes) for job {job_id}. "
-                f"Storage path: {storage_path}"
-            )
+                logging.info(
+                    f"Successfully uploaded {file_name} ({file_size} bytes) for job {job_id}. "
+                    f"Storage path: {storage_path}"
+                )
 
-            # SECURITY: Defense-in-depth magic-byte verification. The presigned
-            # PUT path stores whatever bytes arrive — there is no server-side
-            # check that an .mp4 is really an mp4. We tell the orchestrator
-            # the upload finished; it downloads the first 32 bytes back and
-            # rejects anything that doesn't match the extension's magic
-            # signature (deleting the object server-side).
-            #
-            # Failing this is a hard error: workflow outputs are produced by
-            # trusted Docker images, so a magic-byte mismatch indicates either
-            # a bug in our pipeline or a tampered upload — neither should
-            # advance to job completion.
-            finalize_ok = self._finalize_upload(job_id, storage_path)
-            if not finalize_ok:
+                # SECURITY: Defense-in-depth magic-byte verification. The presigned
+                # PUT path stores whatever bytes arrive — there is no server-side
+                # check that an .mp4 is really an mp4. We tell the orchestrator
+                # the upload finished; it downloads the first 32 bytes back and
+                # rejects anything that doesn't match the extension's magic
+                # signature (deleting the object server-side).
+                #
+                # Failing this is a hard error: workflow outputs are produced by
+                # trusted Docker images, so a magic-byte mismatch indicates either
+                # a bug in our pipeline or a tampered upload — neither should
+                # advance to job completion. A transient empty-object rejection can
+                # happen after a network timeout, so retry with a fresh storage path.
+                finalize_ok = self._finalize_upload(job_id, storage_path)
+                if finalize_ok:
+                    return storage_path
+
                 logging.error(
                     f"Upload finalize rejected {storage_path} for job {job_id}; "
                     "the orchestrator deleted the object."
                 )
-                return None
+                last_error = RuntimeError("upload-finalize rejected uploaded object")
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                logging.warning(
+                    f"Could not upload file to presigned URL for job {job_id} "
+                    f"(attempt {attempt}/{max_attempts}): {e}"
+                )
+                if e.response is not None:
+                    logging.warning(f"Response content: {e.response.text}")
+                    if e.response.status_code == 413:
+                        logging.error(
+                            "Upload rejected by storage size limit. Increase the Supabase "
+                            "bucket file_size_limit for project buckets or reduce output bitrate."
+                        )
+                        return None
 
-            return storage_path
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Could not upload file to presigned URL: {e}")
-            if e.response is not None:
-                logging.error(f"Response content: {e.response.text}")
-                if e.response.status_code == 413:
-                    logging.error(
-                        "Upload rejected by storage size limit. Increase the Supabase "
-                        "bucket file_size_limit for project buckets or reduce output bitrate."
-                    )
-            return None
+            if attempt < max_attempts:
+                time.sleep(min(2 ** (attempt - 1), 8))
+
+        if last_error:
+            logging.error(
+                f"Could not upload file {file_name} for job {job_id} after "
+                f"{max_attempts} attempt(s): {last_error}"
+            )
+        else:
+            logging.error(
+                f"Could not upload file {file_name} for job {job_id} after "
+                f"{max_attempts} attempt(s)."
+            )
+        return None
 
     def _finalize_upload(self, job_id: str, storage_path: str) -> bool:
         """Ask the orchestrator to magic-byte-verify a freshly uploaded object.
