@@ -176,6 +176,21 @@ class LLMJobProcessor(BaseJobProcessor):
         return value.strip(" ;,.")
 
     @classmethod
+    def _repair_style_abbreviations(cls, text: str) -> str:
+        """Expand clipped style words that weaken downstream image prompts."""
+        value = str(text or "").strip()
+        if not value:
+            return value
+
+        replacements = (
+            (r"\bvolum\.\s*", "volumetric "),
+            (r"\bp\.\s+(?=soap bubbles\b)", "pearly "),
+        )
+        for pattern, replacement in replacements:
+            value = re.sub(pattern, replacement, value, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", value).strip()
+
+    @classmethod
     def _sanitize_rendered_text_bait(cls, text: str) -> str:
         """Replace common visual phrases that make image models render text."""
         value = str(text or "").strip()
@@ -389,7 +404,7 @@ class LLMJobProcessor(BaseJobProcessor):
                 "description": {"type": "string"},
                 "prompt_prefix": {
                     "type": "string",
-                    "description": "A compact reusable visual style prefix for image and video prompts.",
+                    "description": "A compact reusable visual style prefix for image and video prompts. Use complete words, no abbreviations or shorthand.",
                 },
                 "category": {
                     "type": "string",
@@ -633,6 +648,26 @@ class LLMJobProcessor(BaseJobProcessor):
         allowed_speaker_keys = {
             cls._text_key(value): value for value in (allowed_speakers or [])
         }
+
+        if job_type == "generation_style":
+            if not isinstance(parsed_json, dict):
+                raise ValueError(f"Generated JSON is not an object. Got: {type(parsed_json).__name__}")
+            for field_name in ("name", "description", "prompt_prefix"):
+                field_text = str(parsed_json.get(field_name) or "")
+                cleaned_text = cls._repair_style_abbreviations(
+                    cls._sanitize_visual_story_text(field_text)
+                )
+                if cleaned_text != field_text:
+                    logging.info(
+                        "Sanitized style %s from %r to %r.",
+                        field_name,
+                        field_text,
+                        cleaned_text,
+                    )
+                    parsed_json[field_name] = cleaned_text
+                if not cleaned_text:
+                    raise ValueError(f"Style {field_name} is empty after cleanup.")
+            return parsed_json
 
         if job_type == "script_generation":
             if not isinstance(parsed_json, list):
