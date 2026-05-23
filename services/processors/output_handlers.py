@@ -732,6 +732,15 @@ class ImageOutputHandler(OutputHandlerMixin):
                         and saturated_fraction < 0.08
                         and bright_fraction > 0.45
                     )
+                    tiny_detached_decoration = (
+                        component_area < max(5200, int(main_area * 0.012))
+                        and not allow_disjoint_identity
+                        and (
+                            bright_fraction > 0.32
+                            or saturated_fraction > 0.18
+                            or dark_fraction < 0.012
+                        )
+                    )
                     is_near_main = not (
                         right < main_left - expansion
                         or left > main_right + expansion
@@ -744,9 +753,10 @@ class ImageOutputHandler(OutputHandlerMixin):
                         protected_left <= center_x <= protected_right
                         and protected_top <= center_y <= protected_bottom
                     )
-                    keep_component = not low_ink_artifact and (
+                    keep_component = not (
+                        low_ink_artifact or tiny_detached_decoration
+                    ) and (
                         component_area >= min_keep_area
-                        or is_near_main
                         or is_in_protected_center
                         or (
                             allow_disjoint_identity
