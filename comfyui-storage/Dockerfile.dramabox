@@ -20,10 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN python3 -m pip install --no-cache-dir --upgrade pip \
-    && python3 -m pip install --no-cache-dir \
-        torch==2.8.0 torchaudio==2.8.0 \
-        --index-url https://download.pytorch.org/whl/cu128
+RUN python3 -m pip install --no-cache-dir \
+    torch==2.8.0 torchaudio==2.8.0 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 RUN git clone --depth=1 https://github.com/resemble-ai/DramaBox.git /opt/DramaBox \
     && python3 -m pip install --no-cache-dir -r /opt/DramaBox/requirements.txt \
