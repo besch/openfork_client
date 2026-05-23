@@ -257,13 +257,30 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
         bbox = alpha.getbbox()
         return image.crop(bbox) if bbox else image
 
+    def _clean_reference_alpha(self, image, alpha=None):
+        image = image.convert("RGBA")
+        alpha = alpha or image.getchannel("A")
+        mask = alpha.point(lambda value: 255 if value > 96 else 0)
+        mask = mask.filter(ImageFilter.MedianFilter(3))
+        # Close tiny gaps, then shrink the outside edge slightly. This removes
+        # pale matte halos, sticker borders, and soft pedestal shadows before
+        # Flux sees the temporary reference placement.
+        mask = mask.filter(ImageFilter.MaxFilter(3))
+        mask = mask.filter(ImageFilter.MinFilter(5))
+        if not mask.getbbox():
+            return image
+
+        cutout = image.copy()
+        cutout.putalpha(mask)
+        return self._crop_alpha_bounds(cutout)
+
     def _remove_flat_matte_background(self, image):
         """Convert common pale character-reference mattes into transparency."""
         image = image.convert("RGBA")
         alpha = image.getchannel("A")
         full_bbox = (0, 0, image.width, image.height)
         if alpha.getbbox() and alpha.getbbox() != full_bbox:
-            return self._crop_alpha_bounds(image)
+            return self._clean_reference_alpha(image, alpha)
 
         corner = max(8, min(32, image.width // 12, image.height // 12))
         samples = [
@@ -281,16 +298,14 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
 
         matte_image = Image.new("RGB", image.size, matte)
         diff = ImageChops.difference(image.convert("RGB"), matte_image).convert("L")
-        mask = diff.point(lambda value: 255 if value > 24 else 0)
+        mask = diff.point(lambda value: 255 if value > 34 else 0)
         mask = mask.filter(ImageFilter.MedianFilter(3))
-        mask = mask.filter(ImageFilter.MinFilter(3))
-        mask = mask.filter(ImageFilter.MaxFilter(5))
+        mask = mask.filter(ImageFilter.MaxFilter(3))
+        mask = mask.filter(ImageFilter.MinFilter(5))
         if not mask.getbbox():
             return image
 
-        cutout = image.copy()
-        cutout.putalpha(mask)
-        return self._crop_alpha_bounds(cutout)
+        return self._clean_reference_alpha(image, mask)
 
     def _normalize_image_input_list(self, value):
         if not value:
@@ -434,10 +449,6 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
                 y = height - reference.height - max(8, round(height * 0.04))
                 x = max(4, min(x, width - reference.width - 4))
 
-                shadow_alpha = reference.getchannel("A").filter(ImageFilter.GaussianBlur(5))
-                shadow = Image.new("RGBA", reference.size, (0, 0, 0, 70))
-                shadow.putalpha(shadow_alpha)
-                canvas.alpha_composite(shadow, (x + 3, y + 4))
                 canvas.alpha_composite(reference, (x, y))
 
             output_name = f"flux_reference_source_{uuid.uuid4().hex[:8]}.png"
@@ -468,7 +479,7 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
         default_denoise_strength = (
-            0.78 if self._has_additional_source_image_input() else 0.65
+            0.84 if self._has_additional_source_image_input() else 0.65
         )
         denoise_strength = inputs.get(
             "denoise_strength",
