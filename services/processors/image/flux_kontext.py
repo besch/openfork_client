@@ -849,7 +849,7 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
         default_denoise_strength = (
-            0.84 if self._has_additional_source_image_input() else 0.65
+            0.92 if self._has_additional_source_image_input() else 0.65
         )
         denoise_strength = inputs.get(
             "denoise_strength",
@@ -881,13 +881,15 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
                 return
             source_image_filename = composed_filename
             prompt = (
-                "Source combines a wide scene plate and character cutouts. Preserve "
-                "the wide source composition, keep every required visible character "
-                "full-body and uncropped, blend them into one seamless final frame, "
-                "keep each cutout identity separate, repaint the cutouts into the "
-                "scene lighting, erase any sticker border, white halo, flat-matte "
-                "fringe, pedestal shadow, reference-floor blob, or pasted edge, and "
-                "avoid panels or portrait crops. "
+                "Source combines a wide scene plate and temporary character identity "
+                "guides. Treat the pasted guide pixels as layout and identity reference "
+                "only, not final artwork. Preserve the wide source composition, keep "
+                "every required visible character full-body and uncropped, blend them "
+                "into one seamless final frame, keep each guide identity separate, "
+                "redraw each character natively into the scene lighting and action, "
+                "erase any sticker border, white halo, flat-matte fringe, pedestal "
+                "shadow, reference-floor blob, or pasted edge, and avoid panels or "
+                "portrait crops. "
                 + prompt
             )
             prompt = self._compact_flux_prompt(prompt)
