@@ -467,7 +467,13 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
 
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
-        denoise_strength = inputs.get("denoise_strength", inputs.get("strength", 0.65))
+        default_denoise_strength = (
+            0.78 if self._has_additional_source_image_input() else 0.65
+        )
+        denoise_strength = inputs.get(
+            "denoise_strength",
+            inputs.get("strength", default_denoise_strength),
+        )
         requested_long_edge = self._requested_long_edge(inputs)
         width, height = self._get_dimensions(
             aspect_ratio,
