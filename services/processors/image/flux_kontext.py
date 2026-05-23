@@ -11,6 +11,7 @@ import os
 import random
 import uuid
 
+from config import SUPABASE_URL
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import ImageOutputHandler
 from services.processors.image.qwen import QwenImageEditProcessor
@@ -291,58 +292,162 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
         cutout.putalpha(mask)
         return self._crop_alpha_bounds(cutout)
 
-    def _compose_reference_source(self, scene_filename, reference_filename, width, height):
-        """Create one Flux-compatible source image from scene + identity reference.
+    def _normalize_image_input_list(self, value):
+        if not value:
+            return []
+        if isinstance(value, (list, tuple)):
+            normalized = []
+            for item in value:
+                normalized.extend(self._normalize_image_input_list(item))
+            return normalized
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            return [part.strip() for part in text.split(",") if part.strip()]
+        return [str(value)]
+
+    def _plural_reference_storage_paths(self):
+        inputs = self.job.get("inputs", {})
+        paths = []
+        for key in (
+            "reference_image_2_storage_paths",
+            "reference_image2_storage_paths",
+            "second_reference_image_storage_paths",
+            "additional_reference_image_storage_paths",
+        ):
+            paths.extend(self._normalize_image_input_list(inputs.get(key)))
+        return list(dict.fromkeys(paths))
+
+    def _has_additional_source_image_input(self):
+        return self._has_second_source_image_input() or bool(
+            self._plural_reference_storage_paths()
+        )
+
+    def _download_reference_storage_image(self, storage_path):
+        bucket = self.job.get("bucket", "projects_public")
+        downloaded_path = self.orchestrator_service.download_storage_asset(
+            bucket,
+            storage_path,
+            self.client.input_dir,
+        )
+        if not downloaded_path:
+            source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{storage_path}"
+            logging.info("Downloading Flux reference image from: %s", source_url)
+            downloaded_path = self.orchestrator_service.download_asset_by_url(
+                source_url,
+                self.client.input_dir,
+            )
+        if downloaded_path:
+            filename = os.path.basename(downloaded_path)
+            logging.info("Downloaded Flux reference image: %s", filename)
+            return filename
+        return None
+
+    def _get_additional_source_images(self):
+        filenames = []
+        for storage_path in self._plural_reference_storage_paths():
+            filename = self._download_reference_storage_image(storage_path)
+            if filename:
+                filenames.append(filename)
+
+        if not filenames:
+            single_filename = self._get_second_source_image()
+            if single_filename:
+                filenames.append(single_filename)
+
+        deduped = []
+        for filename in filenames:
+            if filename not in deduped:
+                deduped.append(filename)
+
+        if self._has_additional_source_image_input() and not deduped:
+            self._fail_job("Failed to load additional edit images for Flux Kontext workflow.")
+        return deduped
+
+    def _compose_reference_source(self, scene_filename, reference_filenames, width, height):
+        """Create one Flux-compatible source image from scene + identity references.
 
         The public Flux Kontext edit workflow has a single LoadImage node. For 8GB
         combine/edit jobs, precomposing the scene plate and transparent character
-        reference gives the model both sources without requiring a multi-input graph.
+        references gives the model the sources without requiring a multi-input graph.
         """
+        if isinstance(reference_filenames, str):
+            reference_filenames = [reference_filenames]
+        reference_filenames = [filename for filename in reference_filenames if filename]
+        if not reference_filenames:
+            self._fail_job("No Flux reference images were available to compose.")
+            return None
+
         scene_path = os.path.join(self.client.input_dir, scene_filename)
-        reference_path = os.path.join(self.client.input_dir, reference_filename)
         try:
             scene = Image.open(scene_path).convert("RGBA")
-            reference = self._remove_flat_matte_background(
-                Image.open(reference_path).convert("RGBA")
-            )
+            references = [
+                self._remove_flat_matte_background(
+                    Image.open(os.path.join(self.client.input_dir, filename)).convert("RGBA")
+                )
+                for filename in reference_filenames
+            ]
 
             canvas = self._fit_cover(scene, width, height)
-            max_reference_width = max(1, round(width * 0.34))
-            max_reference_height = max(1, round(height * 0.82))
-            reference.thumbnail(
-                (max_reference_width, max_reference_height),
-                Image.Resampling.LANCZOS,
+            reference_count = len(references)
+            max_reference_width = max(
+                1,
+                round(width * (0.34 if reference_count == 1 else 0.28 if reference_count == 2 else 0.22)),
+            )
+            max_reference_height = max(
+                1,
+                round(height * (0.82 if reference_count == 1 else 0.76)),
             )
 
-            try:
-                target_index = int(
-                    (self.job.get("completion_metadata") or {}).get("target_index", 0)
+            if reference_count == 1:
+                try:
+                    target_index = int(
+                        (self.job.get("completion_metadata") or {}).get("target_index", 0)
+                    )
+                except (TypeError, ValueError):
+                    target_index = 0
+                anchors = (0.08, 0.62, 0.36)
+                center_positions = [
+                    anchors[target_index % len(anchors)] + max_reference_width / max(width, 1) / 2
+                ]
+            elif reference_count == 2:
+                center_positions = [0.32, 0.68]
+            elif reference_count == 3:
+                center_positions = [0.18, 0.5, 0.82]
+            else:
+                margin = 0.13
+                span = 1 - margin * 2
+                center_positions = [
+                    margin + span * (index + 0.5) / reference_count
+                    for index in range(reference_count)
+                ]
+
+            for index, reference in enumerate(references):
+                reference = reference.copy()
+                reference.thumbnail(
+                    (max_reference_width, max_reference_height),
+                    Image.Resampling.LANCZOS,
                 )
-            except (TypeError, ValueError):
-                target_index = 0
-            anchors = (
-                0.08,
-                0.62,
-                0.36,
-            )
-            x = round(width * anchors[target_index % len(anchors)])
-            y = height - reference.height - max(8, round(height * 0.04))
-            x = max(4, min(x, width - reference.width - 4))
+                center_x = center_positions[min(index, len(center_positions) - 1)]
+                x = round(width * center_x - reference.width / 2)
+                y = height - reference.height - max(8, round(height * 0.04))
+                x = max(4, min(x, width - reference.width - 4))
 
-            shadow_alpha = reference.getchannel("A").filter(ImageFilter.GaussianBlur(5))
-            shadow = Image.new("RGBA", reference.size, (0, 0, 0, 70))
-            shadow.putalpha(shadow_alpha)
-            canvas.alpha_composite(shadow, (x + 3, y + 4))
-            canvas.alpha_composite(reference, (x, y))
+                shadow_alpha = reference.getchannel("A").filter(ImageFilter.GaussianBlur(5))
+                shadow = Image.new("RGBA", reference.size, (0, 0, 0, 70))
+                shadow.putalpha(shadow_alpha)
+                canvas.alpha_composite(shadow, (x + 3, y + 4))
+                canvas.alpha_composite(reference, (x, y))
 
             output_name = f"flux_reference_source_{uuid.uuid4().hex[:8]}.png"
             output_path = os.path.join(self.client.input_dir, output_name)
             canvas.convert("RGB").save(output_path, "PNG", optimize=True)
             logging.info(
-                "Created Flux reference source %s from scene %s and reference %s at %sx%s",
+                "Created Flux reference source %s from scene %s and references %s at %sx%s",
                 output_name,
                 scene_filename,
-                reference_filename,
+                ", ".join(reference_filenames),
                 width,
                 height,
             )
@@ -372,16 +477,16 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
         source_image_filename = self._get_source_image()
         if not source_image_filename:
             return
-        second_image_requested = self._has_second_source_image_input()
-        second_image_filename = self._get_second_source_image()
-        if second_image_requested and not second_image_filename:
+        additional_images_requested = self._has_additional_source_image_input()
+        additional_image_filenames = self._get_additional_source_images()
+        if additional_images_requested and not additional_image_filenames:
             return
 
         prompt = self._compact_flux_prompt(self.positive_prompt)
-        if second_image_filename:
+        if additional_image_filenames:
             composed_filename = self._compose_reference_source(
                 source_image_filename,
-                second_image_filename,
+                additional_image_filenames,
                 width,
                 height,
             )
@@ -389,10 +494,11 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
                 return
             source_image_filename = composed_filename
             prompt = (
-                "Source combines a wide scene plate and a character cutout. Preserve "
-                "the wide source composition, keep every visible character full-body "
-                "and uncropped, blend into one seamless final frame, keep the cutout "
-                "identity, remove pasted edges, and avoid panels or portrait crops. "
+                "Source combines a wide scene plate and character cutouts. Preserve "
+                "the wide source composition, keep every required visible character "
+                "full-body and uncropped, blend them into one seamless final frame, "
+                "keep each cutout identity separate, remove pasted edges, and avoid "
+                "panels or portrait crops. "
                 + prompt
             )
             prompt = self._compact_flux_prompt(prompt)
