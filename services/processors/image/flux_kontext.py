@@ -92,7 +92,7 @@ class FluxKontextWorkflowMixin:
 
     def _advanced_settings(self):
         inputs = self.job.get("inputs", {})
-        default_steps = 12 if self._is_8gb_tier() else 20
+        default_steps = 20
         return {
             "steps": self._as_int(inputs.get("steps"), default_steps),
             "guidance": self._as_float(
