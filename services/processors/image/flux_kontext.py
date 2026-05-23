@@ -497,8 +497,10 @@ class FluxKontextEditProcessor(FluxKontextWorkflowMixin, QwenImageEditProcessor)
                 "Source combines a wide scene plate and character cutouts. Preserve "
                 "the wide source composition, keep every required visible character "
                 "full-body and uncropped, blend them into one seamless final frame, "
-                "keep each cutout identity separate, remove pasted edges, and avoid "
-                "panels or portrait crops. "
+                "keep each cutout identity separate, repaint the cutouts into the "
+                "scene lighting, erase any sticker border, white halo, flat-matte "
+                "fringe, pedestal shadow, reference-floor blob, or pasted edge, and "
+                "avoid panels or portrait crops. "
                 + prompt
             )
             prompt = self._compact_flux_prompt(prompt)
