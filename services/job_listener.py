@@ -1601,6 +1601,18 @@ class JobListener:
                                     image_availability == ImageAvailability.AVAILABLE
                                 )
 
+                                if (
+                                    image_availability == ImageAvailability.MISSING
+                                    and not self._uses_global_download_gate(_job_policy)
+                                ):
+                                    logging.info(
+                                        "Earlier private job %s requires missing Docker image '%s'. "
+                                        "Deferring later cached jobs so the image download can start.",
+                                        peeked_job.get("id"),
+                                        service_type,
+                                    )
+                                    break
+
                                 if image_available:
                                     # Image is ready - reserve and process this job
                                     if self._skip_new_work_for_compaction(
