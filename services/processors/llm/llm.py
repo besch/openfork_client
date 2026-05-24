@@ -431,6 +431,10 @@ class LLMJobProcessor(BaseJobProcessor):
                     "scene_prompt": {"type": "string"},
                     "image_edit_prompt": {"type": "string"},
                     "video_prompt": {"type": "string"},
+                    "sound_fx_prompt": {
+                        "type": "string",
+                        "description": "Non-dialogue text-to-audio prompt for ambience and physical sound effects only; no vocals, lyrics, or spoken words.",
+                    },
                     "camera_movement": {
                         "type": "string",
                         "enum": ["static", "zoom-in", "zoom-out", "pan-left", "pan-right", "dolly-in", "push-in", "pull-back"],
@@ -443,6 +447,7 @@ class LLMJobProcessor(BaseJobProcessor):
                     "scene_prompt",
                     "image_edit_prompt",
                     "video_prompt",
+                    "sound_fx_prompt",
                     "camera_movement",
                     "duration_seconds",
                 ],
