@@ -22,9 +22,9 @@ def _get_wsl_distro_base_path() -> Optional[str]:
     """
     if platform.system() != "win32":
         return None
-    
+
     distro = os.environ.get("OPENFORK_WSL_DISTRO") or "OpenFork"
-    
+
     try:
         ps_command = f"Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\*' | Where-Object DistributionName -eq '{distro}' | Select-Object -ExpandProperty BasePath"
         result = subprocess.run(
@@ -37,19 +37,19 @@ def _get_wsl_distro_base_path() -> Optional[str]:
             return result.stdout.strip()
     except Exception as e:
         logging.debug(f"Could not get WSL distro base path: {e}")
-    
+
     return None
 
 
 def get_docker_storage_path() -> str:
     """
     Get the Docker storage directory path based on the platform and mode.
-    
+
     Returns:
         str: Path to Docker storage directory
     """
     system = platform.system()
-    
+
     if system == "Windows":
         # OpenFork on Windows stores Docker data inside its dedicated WSL distro.
         wsl_base = _get_wsl_distro_base_path()
@@ -72,16 +72,16 @@ def get_docker_storage_path() -> str:
 def get_available_disk_space(path: Optional[str] = None) -> int:
     """
     Get available disk space in bytes for the given path.
-    
+
     Args:
         path: Path to check disk space for. If None, uses Docker storage path.
-        
+
     Returns:
         int: Available disk space in bytes
     """
     if path is None:
         path = get_docker_storage_path()
-    
+
     # Ensure path exists, otherwise use root/home
     if not os.path.exists(path):
         logging.debug(f"Path '{path}' does not exist, checking root directory instead")
@@ -89,7 +89,7 @@ def get_available_disk_space(path: Optional[str] = None) -> int:
             path = "C:\\"
         else:
             path = "/"
-    
+
     try:
         stat = shutil.disk_usage(path)
         return stat.free
@@ -102,18 +102,18 @@ def get_available_disk_space(path: Optional[str] = None) -> int:
 def estimate_image_size_bytes(image_name: str) -> int:
     """
     Estimate Docker image size based on the image name pattern.
-    
+
     This uses heuristics based on the services.json disk_required_gb values
     and common image naming patterns (8gb, 16gb, 24gb suffixes).
-    
+
     Args:
         image_name: Docker image name (e.g., "beschiak/openfork-ltx2-8gb:latest")
-        
+
     Returns:
         int: Estimated size in bytes
     """
     image_lower = image_name.lower()
-    
+
     # Map of service patterns to estimated sizes (in GB)
     # These are conservative estimates based on services.json disk_required_gb
     size_map = {
@@ -123,7 +123,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "chatterbox": 80,
         "stream-diffvsr": 80,
         "audiox": 120,
-        "stable-audio": 100,
+        "stable-audio": 40,
         "dreamid-omni": 140,
         "ltx-video": 100,  # LTX v1
         "ltxvideo": 100,
@@ -149,18 +149,18 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "wan22-16gb": 190,
         "ltx2-24gb": 210,
     }
-    
+
     # Try to find a matching pattern
     estimated_gb = 100  # Default conservative estimate
-    
+
     for pattern, size_gb in size_map.items():
         if pattern in image_lower:
             estimated_gb = size_gb
             break
-    
+
     # Convert GB to bytes
     estimated_bytes = estimated_gb * 1024**3
-    
+
     logging.debug(f"Estimated size for '{image_name}': {estimated_gb} GB ({estimated_bytes} bytes)")
     return estimated_bytes
 
@@ -172,21 +172,21 @@ def check_sufficient_space(
 ) -> Tuple[bool, int, int]:
     """
     Check if there is sufficient disk space for a Docker image download.
-    
+
     Args:
         required_bytes: Required space in bytes for the image
         buffer_gb: Additional safety buffer in GB (default: 5.0)
         path: Path to check disk space for (default: Docker storage path)
-        
+
     Returns:
         Tuple of (has_sufficient_space, available_bytes, required_with_buffer_bytes)
     """
     available_bytes = get_available_disk_space(path)
     buffer_bytes = int(buffer_gb * 1024**3)
     required_with_buffer = required_bytes + buffer_bytes
-    
+
     has_space = available_bytes >= required_with_buffer
-    
+
     if has_space:
         logging.debug(
             f"Disk space check passed: {available_bytes / 1024**3:.1f} GB available, "
@@ -197,30 +197,30 @@ def check_sufficient_space(
             f"Disk space check failed: {available_bytes / 1024**3:.1f} GB available, "
             f"{required_with_buffer / 1024**3:.1f} GB required (including {buffer_gb} GB buffer)"
         )
-    
+
     return has_space, available_bytes, required_with_buffer
 
 
 def get_disk_space_info(path: Optional[str] = None) -> dict:
     """
     Get comprehensive disk space information.
-    
+
     Args:
         path: Path to check disk space for. If None, uses Docker storage path.
-        
+
     Returns:
         dict: Dictionary with 'total', 'used', 'free' in bytes
     """
     if path is None:
         path = get_docker_storage_path()
-    
+
     # Ensure path exists, otherwise use root/home
     if not os.path.exists(path):
         if platform.system() == "Windows":
             path = "C:\\"
         else:
             path = "/"
-    
+
     try:
         stat = shutil.disk_usage(path)
         return {
@@ -238,4 +238,3 @@ def get_disk_space_info(path: Optional[str] = None) -> dict:
             "free": 0,
             "path": path
         }
-

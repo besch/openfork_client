@@ -12,6 +12,7 @@ comfyui-storage/prismaudio_api.py
 comfyui-storage/qwen3_tts_api.py
 comfyui-storage/setup_ckpts_symlinks.py
 comfyui-storage/sparkvsr_api.py
+comfyui-storage/stable_audio3_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
 comfyui-storage/temp_handler.py
 comfyui-storage/turbodiffusion_api_server.py

@@ -86,8 +86,9 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-24gb", "beschiak/openfork-flux-kontext-dev-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.dramabox", "beschiak/openfork-dramabox-24gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.dramabox", "beschiak/openfork-dramabox-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.stable.audio", "beschiak/openfork-stable-audio-3-sfx:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4

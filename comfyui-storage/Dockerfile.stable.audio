@@ -1,167 +1,73 @@
 # syntax=docker/dockerfile:1.4
-FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+# Stable Audio 3 Small-SFX REST image for sound-effects-only text-to-audio.
+
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
 ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
-ENV TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu126
+ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/models
+ENV HUGGINGFACE_HUB_CACHE=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV STABLE_AUDIO3_MODEL_ID=small-sfx
+ENV STABLE_AUDIO3_MODEL_HALF=true
+ENV STABLE_AUDIO3_MAX_DURATION_SECONDS=120
+ENV STABLE_AUDIO3_DEFAULT_DURATION=8
+ENV STABLE_AUDIO3_DEFAULT_STEPS=8
+ENV STABLE_AUDIO3_DEFAULT_CFG_SCALE=1.0
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
-    curl git wget sed git-lfs \
-    ffmpeg \
-    libavformat-dev libavcodec-dev libavdevice-dev \
-    libavutil-dev libavfilter-dev libswscale-dev libswresample-dev \
-    pkg-config \
-    libgl1-mesa-glx libgl1-mesa-dri \
-    libsndfile1 libsndfile1-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-distutils \
+    curl git wget ffmpeg libsndfile1 ca-certificates \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python
+WORKDIR /app
 
-RUN python -m pip install --upgrade pip
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu126 torchaudio==2.7.1+cu126 \
+        --index-url https://download.pytorch.org/whl/cu126
 
-# Set working directory
-WORKDIR /opt/ComfyUI
+RUN git clone --depth=1 https://github.com/Stability-AI/stable-audio-3.git /opt/stable-audio-3 \
+    && python -m pip install --no-cache-dir --no-deps -e /opt/stable-audio-3 \
+    && python -m pip install --no-cache-dir \
+        "einops>=0.8.2" \
+        "einops-exts>=0.0.4" \
+        "numpy>=2.2.6" \
+        "packaging>=26.0" \
+        "safetensors>=0.7.0" \
+        "tqdm>=4.67.3" \
+        "huggingface-hub>=1.7.1" \
+        "transformers>=5.8.0" \
+        "soundfile>=0.13.1" \
+        fastapi \
+        "uvicorn[standard]" \
+        requests
 
-# Clone ComfyUI first
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI
-RUN cd /opt/ComfyUI && git pull
+RUN mkdir -p /app/output /app/models
 
-# Install NumPy 1.x FIRST - critical for compatibility
-RUN python -m pip install "numpy>=1.24.0,<2.0.0"
+ARG HF_TOKEN=""
+RUN HF_TOKEN="$HF_TOKEN" python - <<'PY'
+from stable_audio_3 import StableAudioModel
 
-# Create a pip constraints file to prevent numpy upgrades and pin versions
-RUN echo "numpy<2.0.0" > /tmp/constraints.txt && \
-    echo "transformers>=4.45.0" >> /tmp/constraints.txt && \
-    echo "pydantic>=2.0,<3.0" >> /tmp/constraints.txt
-ENV PIP_CONSTRAINT=/tmp/constraints.txt
+model = StableAudioModel.from_pretrained("small-sfx", device="cpu", model_half=False)
+print("Stable Audio 3 Small-SFX downloaded:", model.model.sample_rate)
+PY
 
-# Uninstall any existing PyTorch installation
-RUN python -m pip uninstall -y torch torchvision torchaudio || true
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 
-# Install PyTorch 2.7.1 with CUDA 12.6
-RUN python -m pip install --force-reinstall --no-cache-dir --break-system-packages \
-    torch==2.7.1+cu126 \
-    torchvision==0.22.1+cu126 \
-    torchaudio==2.7.1+cu126 \
-    --extra-index-url https://download.pytorch.org/whl/cu126
+COPY stable_audio3_api.py /app/stable_audio3_api.py
 
-# Install xformers compatible with PyTorch 2.3.1
-RUN python -m pip install --no-cache-dir xformers==0.0.26.post1
+EXPOSE 8000
 
-# Install base dependencies
-RUN python -m pip install PyYAML opencv-python imageio-ffmpeg
-
-# Install PyAV for video handling (CRITICAL - needed before other packages)
-RUN python -m pip install --no-cache-dir av
-
-# Install ComfyUI core dependencies manually - use --no-deps and install dependencies carefully
-RUN python -m pip install --no-cache-dir \
-    einops \
-    Pillow \
-    pyyaml \
-    tqdm \
-    psutil
-
-# Install scipy and other scientific packages that might want numpy 2.x
-RUN python -m pip install --no-cache-dir --no-deps scipy && \
-    python -m pip install --no-cache-dir --no-deps kornia && \
-    python -m pip install --no-cache-dir --no-deps spandrel
-
-# Install their minimal dependencies without upgrading numpy
-RUN python -m pip install --no-cache-dir \
-    aiohttp \
-    safetensors>=0.4.2 \
-    torchsde \
-    kornia-rs \
-    pydantic-settings \
-    pydantic>=2.0 \
-    alembic \
-    resampy
-
-# Install transformers 4.45.0 which has Qwen2Tokenizer
-RUN python -m pip install --no-cache-dir --no-deps transformers==4.45.0 && \
-    python -m pip install --no-cache-dir "tokenizers>=0.20,<0.21" huggingface-hub filelock requests regex
-
-# Force numpy back to 1.x in case anything upgraded it
-RUN python -m pip install --force-reinstall --no-cache-dir "numpy>=1.24.0,<2.0.0"
-
-# Verify PyTorch can load and check versions
-RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
-RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}'); assert numpy.__version__.startswith('1.'), f'Wrong NumPy version'"
-RUN python -c "from transformers import Qwen2Tokenizer; print('✓ Qwen2Tokenizer available')"
-RUN python -c "import av; print(f'✓ PyAV available')"
-
-# Install ComfyUI Manager
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /opt/ComfyUI/custom_nodes/ComfyUI-Manager
-
-# Install Manager requirements, filtering out torch and transformers to prevent version conflicts
-RUN if [ -f /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt ]; then \
-        grep -v "^torch" /opt/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt | \
-        grep -v "^transformers" > /tmp/manager_reqs.txt && \
-        python -m pip install -r /tmp/manager_reqs.txt || true; \
-    fi
-
-# Install ComfyUI-Sound-Lab
-RUN git clone https://github.com/shadowcz007/comfyui-sound-lab /opt/ComfyUI/custom_nodes/comfyui-sound-lab
-RUN cd /opt/ComfyUI/custom_nodes/comfyui-sound-lab && \
-    python -m pip install -r requirements.txt
-
-# Install additional dependencies for Stable Audio
-RUN python -m pip install vector_quantize_pytorch
-
-# Install uv for ComfyUI-Manager
-RUN python -m pip install --no-cache-dir uv
-
-# CRITICAL: Force reinstall transformers 4.45.0 and tokenizers after all audio packages
-RUN echo "Forcing transformers 4.45.0 reinstall..." && \
-    python -m pip uninstall -y transformers tokenizers && \
-    python -m pip install --no-cache-dir transformers==4.45.0 "tokenizers>=0.20,<0.21"
-
-# Ensure pydantic V2 is properly installed with all components
-RUN python -m pip uninstall -y pydantic pydantic-core pydantic-settings && \
-    python -m pip install --no-cache-dir pydantic>=2.0 pydantic-core pydantic-settings
-
-# Install remaining ComfyUI optional dependencies
-RUN python -m pip install --no-cache-dir comfyui-workflow-templates comfyui-embedded-docs || true
-
-# Final verification - ensure correct versions are installed
-RUN echo "=== Build-time Package Verification ===" && \
-    python -c "import torch; print(f'✓ PyTorch: {torch.__version__}')" && \
-    python -c "import transformers; print(f'✓ Transformers: {transformers.__version__}')" && \
-    python -c "from transformers import Qwen2Tokenizer; print('✓ Qwen2Tokenizer available')" && \
-    python -c "import numpy; print(f'✓ NumPy: {numpy.__version__}')" && \
-    python -c "import pydantic; print(f'✓ Pydantic: {pydantic.__version__}')" && \
-    python -c "import av; print(f'✓ PyAV: {av.__version__}')" && \
-    echo "=== All checks passed ==="
-
-# Create models directories - CORRECTED PATHS for comfyui-sound-lab
-RUN mkdir -p /opt/ComfyUI/models/stable_audio
-RUN mkdir -p /opt/ComfyUI/models/text_encoders
-
-# Copy Stable Audio Open 1.0 models from temp directory (downloaded locally with huggingface-cli)
-COPY temp-models/stable_audio/model.safetensors /opt/ComfyUI/models/stable_audio/
-COPY temp-models/text_encoders/text_encoder/model.safetensors /opt/ComfyUI/models/text_encoders/t5_base.safetensors
-RUN echo "✓ Stable Audio models copied from temp directory"
-
-# Create a startup script that shows versions and starts ComfyUI
-RUN echo '#!/bin/bash' > /opt/startup.sh && \
-    echo 'echo "=== ComfyUI Starting - Package Versions ==="' >> /opt/startup.sh && \
-    echo 'python -c "import torch; print(f\"PyTorch: {torch.__version__}\")"' >> /opt/startup.sh && \
-    echo 'python -c "import transformers; print(f\"Transformers: {transformers.__version__}\")"' >> /opt/startup.sh && \
-    echo 'python -c "import numpy; print(f\"NumPy: {numpy.__version__}\")"' >> /opt/startup.sh && \
-    echo 'python -c "import pydantic; print(f\"Pydantic: {pydantic.__version__}\")"' >> /opt/startup.sh && \
-    echo 'python -c "import av; print(f\"PyAV: {av.__version__}\")"' >> /opt/startup.sh && \
-    echo 'echo "=========================================="' >> /opt/startup.sh && \
-    echo 'cd /opt/ComfyUI && python main.py --listen "$@"' >> /opt/startup.sh && \
-    chmod +x /opt/startup.sh
-
-# Set final working directory and command
-WORKDIR /opt/ComfyUI
-CMD ["/opt/startup.sh"]
+CMD ["/bin/bash", "-c", "curl -fsSL -o /app/stable_audio3_api.py https://raw.githubusercontent.com/besch/openfork_client/main/comfyui-storage/stable_audio3_api.py || echo 'WARNING: Could not update stable_audio3_api.py, using baked-in copy'; python /app/stable_audio3_api.py"]

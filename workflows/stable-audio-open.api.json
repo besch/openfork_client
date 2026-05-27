@@ -1,23 +1,18 @@
 {
-  "prompt": {
-    "1": {
-      "class_type": "StableAudio_",
-      "inputs": {
-        "prompt": "a dog barking",
-        "seconds": 5,
-        "steps": 100,
-        "cfg_scale": 7,
-        "seed": 0,
-        "sigma_min": 0.3,
-        "sigma_max": 500,
-        "device": "auto"
-      }
-    },
-    "2": {
-      "class_type": "AudioPlay",
-      "inputs": {
-        "audio": ["1", 0]
-      }
-    }
+  "backend": "stable-audio-3",
+  "model": "small-sfx",
+  "description": "Stable Audio 3 Small-SFX sound-effects-only workflow descriptor. Generation is executed by StableAudioJobProcessor through stable_audio3_api.py.",
+  "defaults": {
+    "duration_seconds": 8,
+    "steps": 8,
+    "cfg_scale": 1,
+    "seed": -1,
+    "negative_prompt": ""
+  },
+  "limits": {
+    "min_duration_seconds": 1,
+    "max_duration_seconds": 120,
+    "min_steps": 1,
+    "max_steps": 50
   }
 }
