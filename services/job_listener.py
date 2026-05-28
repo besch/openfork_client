@@ -171,6 +171,43 @@ class JobListener:
         """Check whether a job has already reached a terminal status."""
         return self._get_terminal_job_status(job_id) is not None
 
+    def _defer_reset_for_client_shutdown(
+        self,
+        job: Optional[Dict[str, Any]],
+        detail: str = "",
+    ) -> bool:
+        """Remember an in-flight job so process cleanup can requeue it.
+
+        The shutdown event is set both for graceful stops and for parent-process
+        loss (for example, Electron or the PyInstaller bootloader disappearing).
+        In both cases, a non-terminal active job should return to the DGN queue
+        instead of being marked as a workflow failure.
+        """
+        if not self.shutdown_event.is_set() or not job:
+            return False
+
+        job_id = job.get("id")
+        if not job_id:
+            return False
+
+        if self._job_was_interrupted_by_infrastructure(
+            job_id,
+            job.get("execution_token"),
+        ):
+            return False
+
+        if self._job_has_terminal_status(job_id):
+            return False
+
+        self.client.interrupted_job_id = job_id
+        self.client.interrupted_job_execution_token = job.get("execution_token")
+        suffix = f" {detail}" if detail else ""
+        logging.info(
+            f"Client shutdown interrupted job {job_id}.{suffix} "
+            "Deferring reset to cleanup."
+        )
+        return True
+
     @staticmethod
     def _remote_job_status(job_details: Any) -> Optional[str]:
         if not isinstance(job_details, dict):
@@ -767,19 +804,11 @@ class JobListener:
                 return True
 
             if (
-                self.shutdown_event.is_set()
-                and getattr(self.client, "stop_requested", False)
-                and not self._job_has_terminal_status(job_id)
-            ):
-                if job_id:
-                    self.client.interrupted_job_id = job_id
-                    self.client.interrupted_job_execution_token = job.get(
-                        "execution_token"
-                    )
-                logging.info(
-                    f"Shutdown interrupted job {job_id}. "
-                    "Skipping completion event and deferring reset to cleanup."
+                self._defer_reset_for_client_shutdown(
+                    job,
+                    "Processor returned before setting a terminal status.",
                 )
+            ):
                 return True
 
             _job_duration = int(_time.monotonic() - _job_start_time)
@@ -851,19 +880,11 @@ class JobListener:
             return True
         except Exception as e:
             if (
-                self.shutdown_event.is_set()
-                and getattr(self.client, "stop_requested", False)
-                and not self._job_has_terminal_status(job_id)
-            ):
-                if job_id:
-                    self.client.interrupted_job_id = job_id
-                    self.client.interrupted_job_execution_token = job.get(
-                        "execution_token"
-                    )
-                logging.info(
-                    f"Shutdown interrupted job {job_id} with in-flight error: {e}. "
-                    "Deferring reset to cleanup."
+                self._defer_reset_for_client_shutdown(
+                    job,
+                    f"Processor raised during shutdown: {e}.",
                 )
+            ):
                 return True
 
             # Processor threw because the container/workflow was stopped by the
@@ -933,18 +954,10 @@ class JobListener:
             if download_manager and service_type_for_cache and job_used_service:
                 download_manager.notify_job_complete(service_type_for_cache)
 
-            if (
-                self.shutdown_event.is_set()
-                and getattr(self.client, "stop_requested", False)
-                and job_id
-                and not self._job_was_interrupted_by_infrastructure(
-                    job_id,
-                    job.get("execution_token"),
-                )
-                and not self._job_has_terminal_status(job_id)
-            ):
-                self.client.interrupted_job_id = job_id
-                self.client.interrupted_job_execution_token = job.get("execution_token")
+            self._defer_reset_for_client_shutdown(
+                job,
+                "Final cleanup observed active shutdown.",
+            )
             self.client.current_job = None
             if job_id:
                 with self._remote_stop_cleanup_lock:

@@ -136,6 +136,56 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertIsNone(client.current_job)
         self.assertNotIn("JOB_COMPLETE", output.getvalue())
 
+    def test_job_listener_defers_reset_when_parent_pipe_closes_without_stop_request(self):
+        shutdown_event = threading.Event()
+
+        class FakeProcessor:
+            def process(self_inner):
+                shutdown_event.set()
+
+        orchestrator_service = Mock()
+        orchestrator_service.get_job.return_value = {"status": "processing"}
+        client = SimpleNamespace(
+            stop_requested=False,
+            interrupted_job_id=None,
+            interrupted_job_execution_token=None,
+            current_job={
+                "id": "job-parent-crash",
+                "execution_token": "token-parent-crash",
+            },
+            orchestrator_service=orchestrator_service,
+            services_config={},
+            available_vram=0,
+            get_service_type_for_workflow=lambda workflow_type: "llm",
+            _get_job_processor=lambda job, event: FakeProcessor(),
+            download_manager=None,
+        )
+
+        listener = JobListener(
+            client,
+            provider_id="provider-1",
+            shutdown_event=shutdown_event,
+        )
+        listener._monitor_job_cancellation = Mock()
+        output = io.StringIO()
+
+        with contextlib.redirect_stdout(output):
+            result = listener._process_job_safely(
+                {
+                    "id": "job-parent-crash",
+                    "workflow_type": "llm",
+                    "execution_token": "token-parent-crash",
+                }
+            )
+
+        self.assertTrue(result)
+        self.assertEqual(client.interrupted_job_id, "job-parent-crash")
+        self.assertEqual(client.interrupted_job_execution_token, "token-parent-crash")
+        self.assertIsNone(client.current_job)
+        orchestrator_service.update_job_status.assert_not_called()
+        self.assertNotIn("JOB_COMPLETE", output.getvalue())
+        self.assertNotIn("JOB_FAILED", output.getvalue())
+
     def test_job_listener_emits_job_cleared_when_job_is_cancelled_elsewhere(self):
         shutdown_event = threading.Event()
 
