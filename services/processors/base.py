@@ -56,7 +56,19 @@ class BaseJobProcessor(ABC):
 
     def is_cancelled(self) -> bool:
         """True when this job should stop without shutting down the client."""
-        return self.shutdown_event.is_set() or self.cancel_event.is_set()
+        container_crash_event = getattr(
+            self.client,
+            "active_container_crash_event",
+            None,
+        )
+        return (
+            self.shutdown_event.is_set()
+            or self.cancel_event.is_set()
+            or (
+                container_crash_event is not None
+                and container_crash_event.is_set()
+            )
+        )
 
     @property
     def workflow_file(self) -> str:

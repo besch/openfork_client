@@ -122,6 +122,17 @@ def _dockerfile_declares_hf_arg(dockerfile: str) -> bool:
         return True
 
 
+def _dockerfile_declares_hf_secret(dockerfile: str) -> bool:
+    try:
+        with open(dockerfile, "r", encoding="utf-8") as handle:
+            return any(
+                "--mount=type=secret" in line and "id=hf_token" in line
+                for line in handle
+            )
+    except OSError:
+        return False
+
+
 def run_command(command: List[str], description: str, extra_env: dict = None) -> bool:
     """
     Run a command and return True if successf ul, False otherwise.
@@ -179,11 +190,20 @@ def build_image(
 
         command.extend(["--build-arg", f"CACHEBUST={int(_time.time())}"])
 
-    if _dockerfile_declares_hf_arg(dockerfile):
+    uses_hf_secret = _dockerfile_declares_hf_secret(dockerfile)
+    if uses_hf_secret:
+        if not hf_token:
+            print(
+                f"❌ {dockerfile} requires HF_TOKEN as a BuildKit secret, "
+                "but no token was provided."
+            )
+            return False
+        command.extend(["--secret", "id=hf_token,env=HF_TOKEN"])
+    elif _dockerfile_declares_hf_arg(dockerfile):
         command.extend(["--build-arg", "HF_TOKEN"])
 
-    if hf_token and direct_push:
-        command.extend(["--secret", "id=HF_TOKEN,env=HF_TOKEN"])
+    if hf_token and direct_push and not uses_hf_secret:
+        command.extend(["--secret", "id=hf_token,env=HF_TOKEN"])
 
     if build_args:
         for key, value in build_args.items():
@@ -201,8 +221,13 @@ def build_image(
         print(f"\n📦 Building {tag} (single attempt)")
 
     command.append(".")
-    # Legacy builder avoids BuildKit daemon OOM on large downloads; incompatible with direct_push.
-    extra_env = {} if direct_push else {"DOCKER_BUILDKIT": "0"}
+    # Legacy builder avoids BuildKit daemon OOM on large downloads, but secret
+    # mounts and direct registry output require BuildKit.
+    extra_env = (
+        {"DOCKER_BUILDKIT": "1"}
+        if (direct_push or uses_hf_secret)
+        else {"DOCKER_BUILDKIT": "0"}
+    )
     if hf_token:
         extra_env["HF_TOKEN"] = hf_token
     return run_command(command, f"Building {tag}", extra_env=extra_env)
@@ -440,6 +465,8 @@ def main():
     print(f"Push attempts: {PUSH_ATTEMPTS} (1 initial + 1 retry)")
     print(f"Retry delay: {RETRY_DELAY_SECONDS} seconds")
 
+    hf_token = args.hf_token or os.environ.get("HF_TOKEN")
+
     successful = []
     skipped = []
     build_failed = []
@@ -448,7 +475,7 @@ def main():
     for config in IMAGES:
         result = build_and_push_image(
             config,
-            args.hf_token,
+            hf_token,
             args.rebuild,
             args.push,
             args.build,

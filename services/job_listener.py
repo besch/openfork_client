@@ -570,6 +570,105 @@ class JobListener:
         self.client.current_job = None
         self.client.active_service_type = None
 
+    def _get_non_retryable_container_crash_message(
+        self,
+        job: Dict[str, Any],
+        container_logs: Optional[str],
+    ) -> Optional[str]:
+        """Return an actionable failure when a crash cannot succeed by retrying.
+
+        This is intentionally narrow. Generic crashes are still requeued so a
+        transient Docker/GPU/provider issue can recover on the next attempt.
+        """
+        service_type = self._get_service_type_for_job(job)
+        if service_type != "stable-audio":
+            return None
+
+        logs = container_logs or ""
+        stable_audio_repo = "stabilityai/stable-audio-3-small-sfx"
+        has_repo_context = stable_audio_repo in logs or "Stable Audio 3" in logs
+        if not has_repo_context:
+            return None
+
+        if "GatedRepoError" in logs or "Cannot access gated repo" in logs:
+            return (
+                "Stable Audio 3 Small-SFX model access is gated. The provider "
+                "image or runtime needs an HF_TOKEN that is authorized for "
+                f"{stable_audio_repo}."
+            )
+
+        if (
+            "HF_HUB_OFFLINE" in logs
+            and "LocalEntryNotFoundError" in logs
+            and "model_config.json" in logs
+        ):
+            return (
+                "Stable Audio 3 image is running offline but the model files "
+                "are not baked into the Docker image/cache. Rebuild and publish "
+                "the image with an authorized HF_TOKEN so "
+                f"{stable_audio_repo} is present before offline startup."
+            )
+
+        return None
+
+    def _fail_job_after_non_retryable_container_crash(
+        self,
+        job: Dict[str, Any],
+        message: str,
+        container_logs: Optional[str],
+    ) -> None:
+        job_id = job.get("id") if job else None
+        if not job_id:
+            return
+
+        logging.error(
+            "Failing job %s after non-retryable provider container crash: %s",
+            job_id,
+            message,
+        )
+        service_type = self._get_service_type_for_job(job)
+        self._emit_job_event(
+            "JOB_FAILED",
+            {
+                "id": job_id,
+                "service_type": service_type,
+                "error": message,
+            },
+        )
+
+        metadata = job.get("completion_metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        log_lines = (container_logs or "").splitlines()
+        metadata.update(
+            {
+                "error": message,
+                "provider_failure_type": "non_retryable_container_crash",
+                "provider_logs_tail": log_lines[-100:],
+            }
+        )
+
+        try:
+            self.orchestrator_service.update_job_status(
+                job_id,
+                "failed",
+                completion_metadata=metadata,
+                execution_token=job.get("execution_token"),
+            )
+        finally:
+            active_service_type = getattr(self.client, "active_service_type", None)
+            if active_service_type and not HEADLESS_MODE:
+                self._stop_container_monitor()
+                try:
+                    docker_manager.stop_container(service_type=active_service_type)
+                except Exception as stop_error:
+                    logging.debug(
+                        "Failed to stop container after non-retryable crash: %s",
+                        stop_error,
+                    )
+            self.client.current_job = None
+            self.client.active_service_type = None
+
     def _process_job_safely(self, job: Dict[str, Any]) -> bool:
         """
         Process a job with proper error handling.
@@ -2009,6 +2108,20 @@ exec python main.py "$@"
                                                     logging.error(
                                                         f"Container crash detected for job {crashed_job_id}: {reason}"
                                                     )
+
+                                                    non_retryable_message = (
+                                                        self._get_non_retryable_container_crash_message(
+                                                            job,
+                                                            container_logs,
+                                                        )
+                                                    )
+                                                    if non_retryable_message:
+                                                        self._fail_job_after_non_retryable_container_crash(
+                                                            job,
+                                                            non_retryable_message,
+                                                            container_logs,
+                                                        )
+                                                        return
 
                                                     self._requeue_job_after_infrastructure_error(
                                                         job,
