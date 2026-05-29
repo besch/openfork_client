@@ -103,11 +103,13 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
         seed = inputs.get("seed")
+        vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
 
         wf_ready = inject_prompt_and_image_into_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps,
-            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler, seed=seed
+            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler, seed=seed,
+            vram_tier=vram_tier
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -186,11 +188,13 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
         flow_shift = inputs.get("flow_shift")
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
+        vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
 
         wf_ready = inject_prompt_and_image_into_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps,
-            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler
+            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler,
+            vram_tier=vram_tier
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)

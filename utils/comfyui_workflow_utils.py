@@ -15,12 +15,33 @@ from datetime import datetime
 # from config import OUTPUT_DIR, INPUT_DIR
 
 
-def get_dimensions(aspect_ratio: str, default_width: int = 768, default_height: int = 432) -> tuple[int, int]:
+def get_dimensions(
+    aspect_ratio: str,
+    default_width: int = 768,
+    default_height: int = 432,
+    vram_tier: str = "",
+) -> tuple[int, int]:
     """
     Returns (width, height) based on the aspect ratio string.
     Using smaller dimensions suitable for GPUs with less VRAM.
     All dimensions are divisible by 16.
     """
+    if "8gb" in str(vram_tier).lower():
+        if aspect_ratio == "16:9":
+            return 512, 288
+        elif aspect_ratio == "9:16":
+            return 288, 512
+        elif aspect_ratio == "1:1":
+            return 448, 448
+        elif aspect_ratio == "4:3":
+            return 448, 336
+        elif aspect_ratio == "3:4":
+            return 336, 448
+        elif aspect_ratio == "21:9":
+            return 512, 224
+        else:
+            return 512, 288
+
     if aspect_ratio == "16:9":
         return 768, 432  # 432p
     elif aspect_ratio == "9:16":
@@ -136,7 +157,8 @@ def inject_prompt_and_image_into_workflow(
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
     scheduler: Optional[str] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    vram_tier: str = "",
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
@@ -168,11 +190,11 @@ def inject_prompt_and_image_into_workflow(
         elif node["class_type"] == "LoadImage":
             node["inputs"]["image"] = start_image_filename
         elif node["class_type"] == "WanImageToVideo":
-            width, height = get_dimensions(aspect_ratio)
+            width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
         elif node["class_type"] == "ImageResizeKJv2":
-            width, height = get_dimensions(aspect_ratio)
+            width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
         elif node["class_type"] == "VHS_VideoCombine":
@@ -221,7 +243,8 @@ def inject_prompt_into_text_to_video_workflow(
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
     scheduler: Optional[str] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    vram_tier: str = "",
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
@@ -244,7 +267,7 @@ def inject_prompt_into_text_to_video_workflow(
     # Inject dimensions into WanImageToVideo
     for node in api_graph.values():
         if node.get("class_type") == "WanImageToVideo":
-            width, height = get_dimensions(aspect_ratio)
+            width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
 
