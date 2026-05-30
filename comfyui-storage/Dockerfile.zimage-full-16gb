@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
-# Z-Image Full (FP8 / 16GB) Docker Image
-# Optimized for 16GB VRAM using native FP8 weights
+# Z-Image FP8 (16GB) Docker Image
+# Optimized for 16GB VRAM using FP8 weights
 
 FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 
@@ -38,7 +38,7 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
+RUN mkdir -p models/text_encoders models/diffusion_models models/unet models/vae models/model_patches \
     && hf download Comfy-Org/z_image_turbo \
         --include "split_files/text_encoders/qwen_3_4b.safetensors" \
         --local-dir /tmp/z_image_turbo \
@@ -48,7 +48,11 @@ RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
         --local-dir /tmp/z_image_turbo \
     && mv /tmp/z_image_turbo/split_files/vae/ae.safetensors models/vae/ \
     && rm -rf /tmp/z_image_turbo \
-    && hf download Comfy-Org/z_image_full \
-        --include "*fp8.safetensors" --local-dir models/unet
+    && hf download Kijai/Z-Image_comfy_fp8_scaled \
+        --include "z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors" \
+        --local-dir /tmp/z_image_fp8 \
+    && mv /tmp/z_image_fp8/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors models/diffusion_models/z_image_fp8.safetensors \
+    && ln -sf ../diffusion_models/z_image_fp8.safetensors models/unet/z_image_fp8.safetensors \
+    && rm -rf /tmp/z_image_fp8
 
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]

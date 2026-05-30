@@ -673,6 +673,91 @@ if [ "$START_QWEN3TTS" = "true" ]; then
   fi
 fi
 
+ensure_zimage_full_models() {
+  local service="${SERVICE_TYPE:-}"
+  local model_name=""
+  local source_url=""
+  local min_bytes=1000000000
+
+  case "$service" in
+    *zimage-full-24gb*)
+      model_name="z_image_bf16.safetensors"
+      source_url="https://huggingface.co/Comfy-Org/z_image/resolve/main/split_files/diffusion_models/z_image_bf16.safetensors"
+      min_bytes=10000000000
+      ;;
+    *zimage-full-16gb*)
+      model_name="z_image_fp8.safetensors"
+      source_url="https://huggingface.co/Kijai/Z-Image_comfy_fp8_scaled/resolve/main/z-image-turbo_fp8_scaled_e4m3fn_KJ.safetensors"
+      min_bytes=5000000000
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  if [ "${ZIMAGE_SKIP_MODEL_REPAIR:-false}" = "true" ]; then
+    log "Z-Image model repair skipped by ZIMAGE_SKIP_MODEL_REPAIR=true."
+    return 0
+  fi
+
+  if [ ! -d "/opt/ComfyUI" ]; then
+    log "WARNING: Z-Image service selected, but /opt/ComfyUI is missing."
+    return 1
+  fi
+
+  local diffusion_dir="/opt/ComfyUI/models/diffusion_models"
+  local unet_dir="/opt/ComfyUI/models/unet"
+  local target="${diffusion_dir}/${model_name}"
+  mkdir -p "$diffusion_dir" "$unet_dir"
+
+  for candidate in \
+    "$unet_dir/$model_name" \
+    "$unet_dir/split_files/diffusion_models/$model_name" \
+    "$diffusion_dir/split_files/diffusion_models/$model_name"; do
+    if [ -f "$candidate" ] && [ ! -f "$target" ]; then
+      log "Moving misplaced Z-Image model from $candidate to $target"
+      mv "$candidate" "$target" || cp "$candidate" "$target"
+    fi
+  done
+
+  if [ -s "$target" ]; then
+    local existing_bytes
+    existing_bytes=$(wc -c < "$target" 2>/dev/null || echo 0)
+    if [ "$existing_bytes" -lt "$min_bytes" ]; then
+      log "Removing incomplete Z-Image model $target (${existing_bytes} bytes)."
+      rm -f "$target"
+    fi
+  fi
+
+  if [ ! -s "$target" ]; then
+    log "Z-Image model $model_name is missing; downloading from Hugging Face."
+    rm -f "${target}.tmp"
+    if ! curl --fail --location --retry 5 --retry-delay 20 --continue-at - \
+      --output "${target}.tmp" "$source_url"; then
+      log "ERROR: Failed to download $model_name."
+      return 1
+    fi
+    mv "${target}.tmp" "$target"
+  fi
+
+  local actual_bytes
+  actual_bytes=$(wc -c < "$target" 2>/dev/null || echo 0)
+  if [ "$actual_bytes" -lt "$min_bytes" ]; then
+    log "ERROR: $model_name is too small (${actual_bytes} bytes); expected at least ${min_bytes} bytes."
+    return 1
+  fi
+
+  ln -sf "../diffusion_models/$model_name" "$unet_dir/$model_name"
+  log "Z-Image model ready: $target (${actual_bytes} bytes)."
+}
+
+if [[ "${SERVICE_TYPE:-}" == *"zimage-full-"* ]]; then
+  if ! ensure_zimage_full_models; then
+    log "ERROR: Z-Image Full model repair failed; refusing to start an unusable provider."
+    exit 1
+  fi
+fi
+
 # Wan2GP backend (LTX-2.3 Audio-Video, daVinci-MagiHuman, SCAIL, and Vista4D)
 if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type

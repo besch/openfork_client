@@ -38,7 +38,7 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
-RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
+RUN mkdir -p models/text_encoders models/diffusion_models models/unet models/vae models/model_patches \
     && hf download Comfy-Org/z_image_turbo \
         --include "split_files/text_encoders/qwen_3_4b.safetensors" \
         --local-dir /tmp/z_image_turbo \
@@ -48,7 +48,11 @@ RUN mkdir -p models/text_encoders models/unet models/vae models/model_patches \
         --local-dir /tmp/z_image_turbo \
     && mv /tmp/z_image_turbo/split_files/vae/ae.safetensors models/vae/ \
     && rm -rf /tmp/z_image_turbo \
-    && hf download Comfy-Org/z_image_full \
-        --include "*bf16.safetensors" --local-dir models/unet
+    && hf download Comfy-Org/z_image \
+        --include "split_files/diffusion_models/z_image_bf16.safetensors" \
+        --local-dir /tmp/z_image \
+    && mv /tmp/z_image/split_files/diffusion_models/z_image_bf16.safetensors models/diffusion_models/ \
+    && ln -sf ../diffusion_models/z_image_bf16.safetensors models/unet/z_image_bf16.safetensors \
+    && rm -rf /tmp/z_image
 
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; cd /opt/ComfyUI && python main.py --listen"]
