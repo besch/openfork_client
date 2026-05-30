@@ -7,6 +7,7 @@ import docker
 import logging
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -20,7 +21,7 @@ from .docker_utils import (
     copy_file_to_container_api,
 )
 
-DOCKER_API_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_API_TIMEOUT_SECS", "3600"))
+DOCKER_API_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_API_TIMEOUT_SECS", "900"))
 DOCKER_CLI_PULL_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_CLI_PULL_TIMEOUT_SECS", "7200"))
 
 
@@ -210,6 +211,9 @@ class DockerProdManager:
             "named pipe",
             "docker daemon",
             "protocolerror",
+            "connection broken",
+            "incompleteread",
+            "incomplete read",
         )
         return any(marker in text for marker in transient_markers)
 
@@ -342,18 +346,28 @@ class DockerProdManager:
         shutdown_event: threading.Event = None,
     ) -> None:
         """Fallback pull path for WSL Docker when the SDK stream ends early."""
+        pull_args = ["docker", "pull"]
+        if platform:
+            pull_args.extend(["--platform", platform])
+        pull_args.append(image_name)
+
         if os.name == "nt" and os.environ.get("OPENFORK_WSL_DISTRO"):
             distro = os.environ["OPENFORK_WSL_DISTRO"]
-            command = ["wsl.exe", "-d", distro, "--", "docker", "pull"]
+            timeout_command = [
+                "timeout",
+                "--kill-after=20s",
+                f"{DOCKER_CLI_PULL_TIMEOUT_SECS}s",
+                *pull_args,
+            ]
+            shell_command = "exec " + " ".join(
+                shlex.quote(arg) for arg in timeout_command
+            )
+            command = ["wsl.exe", "-d", distro, "--", "bash", "-lc", shell_command]
             env = os.environ.copy()
             env.pop("DOCKER_HOST", None)
         else:
-            command = ["docker", "pull"]
+            command = pull_args
             env = self._docker_cli_env()
-
-        if platform:
-            command.extend(["--platform", platform])
-        command.append(image_name)
 
         logging.info("Running Docker CLI fallback pull for '%s'.", image_name)
         process = subprocess.Popen(
@@ -841,10 +855,10 @@ class DockerProdManager:
 
                 raise OSError(error_msg)
 
+            pull_platform = self._get_pull_platform()
             try:
                 from .docker_progress_logger import stream_pull_with_progress
 
-                pull_platform = self._get_pull_platform()
                 stream_pull_with_progress(
                     self.client,
                     image_name,
@@ -905,6 +919,35 @@ class DockerProdManager:
                         flush=True,
                     )
                     raise OSError(disk_error_msg)
+                logging.error(f"Failed to pull image '{image_name}': {e}")
+                raise
+            except Exception as e:
+                if shutdown_event and shutdown_event.is_set():
+                    raise
+                if self._is_transient_transport_error(e):
+                    logging.warning(
+                        "Docker SDK pull failed for '%s' due to a transient "
+                        "transport error: %s. Retrying via Docker CLI fallback.",
+                        image_name,
+                        e,
+                    )
+                    if not self._refresh_client_connection():
+                        self._restart_docker_in_wsl(wait_timeout=120)
+                    self._run_docker_cli_pull(
+                        image_name,
+                        pull_platform,
+                        shutdown_event=shutdown_event,
+                    )
+                    if not self._image_is_registered(image_name):
+                        raise RuntimeError(
+                            f"Docker CLI fallback completed for {image_name}, "
+                            "but the image was not registered locally."
+                        )
+                    logging.info(
+                        "Successfully pulled image via Docker CLI fallback: %s",
+                        image_name,
+                    )
+                    return
                 logging.error(f"Failed to pull image '{image_name}': {e}")
                 raise
 

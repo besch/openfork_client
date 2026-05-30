@@ -247,10 +247,14 @@ def setup_client(args):
         if args.service not in available_services:
             logging.error(f"Invalid service '{args.service}'. Available services from config: {', '.join(available_services)}")
             sys.exit(1)
+        if client.services_config.get(args.service, {}).get("disabled"):
+            logging.error(f"Service '{args.service}' is disabled in the DGN configuration.")
+            sys.exit(1)
         configured_workflows = [
             workflow_type
             for workflow_type, workflow_config in client.config.items()
             if workflow_config.get("service_name") == args.service
+            and not workflow_config.get("disabled")
         ]
         if (
             HEADLESS_MODE
@@ -277,7 +281,7 @@ def setup_client(args):
     # This doesn't affect credits - just helps route jobs to providers with cached images
     cached_images = []
     if client.download_manager and client.services_config:
-        all_service_types = list(client.services_config.keys())
+        all_service_types = list(client.compatible_services)
         cached_images = client.download_manager.get_cached_service_types(all_service_types)
 
 

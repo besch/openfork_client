@@ -392,6 +392,15 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         inputs = self.job.get("inputs", {})
         denoise_strength = inputs.get("denoise_strength", 0.8)
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
+        requested_long_edge = (
+            inputs.get("max_long_edge")
+            or inputs.get("long_edge")
+            or inputs.get("target_long_edge")
+        )
+        target_dimensions = self._get_dimensions(
+            aspect_ratio,
+            requested_long_edge=requested_long_edge,
+        )
 
         # Get source image
         source_image_filename = self._get_source_image()
@@ -416,6 +425,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             denoise_strength,
             aspect_ratio=aspect_ratio,
             seed=seed,
+            requested_long_edge=requested_long_edge,
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -424,7 +434,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
 
         image_storage_path = self.handle_image_output(
             outputs,
-            target_dimensions=self._get_dimensions(aspect_ratio),
+            target_dimensions=target_dimensions,
         )
         if not image_storage_path:
             return
@@ -537,12 +547,15 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy images to container: {e}")
 
-    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength, aspect_ratio="1:1", seed=None):
+    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength, aspect_ratio="1:1", seed=None, requested_long_edge=None):
         """Inject prompt and images into the inpainting workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
         # Calculate dimensions
-        width, height = self._get_dimensions(aspect_ratio)
+        width, height = self._get_dimensions(
+            aspect_ratio,
+            requested_long_edge=requested_long_edge,
+        )
         max_dim = max(width, height)
 
         image_node_count = 0
@@ -567,19 +580,26 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         
         return wf
 
-    def _get_dimensions(self, aspect_ratio):
+    def _get_dimensions(self, aspect_ratio, requested_long_edge=None):
         """Calculate width and height based on aspect ratio."""
+        default_long_edge = 512
+        try:
+            long_edge = int(requested_long_edge or default_long_edge)
+        except (TypeError, ValueError):
+            long_edge = default_long_edge
+
+        long_edge = max(320, min(long_edge, 768))
         ratio_map = {
-            "1:1": (1024, 1024),
-            "16:9": (1280, 720),
-            "9:16": (720, 1280),
-            "4:3": (1152, 864),
-            "3:4": (864, 1152),
-            "3:2": (1248, 832),
-            "2:3": (832, 1248),
-            "21:9": (1344, 576),
+            "1:1": (long_edge, long_edge),
+            "16:9": (long_edge, round(long_edge * 9 / 16)),
+            "9:16": (round(long_edge * 9 / 16), long_edge),
+            "4:3": (long_edge, round(long_edge * 3 / 4)),
+            "3:4": (round(long_edge * 3 / 4), long_edge),
+            "3:2": (long_edge, round(long_edge * 2 / 3)),
+            "2:3": (round(long_edge * 2 / 3), long_edge),
+            "21:9": (long_edge, round(long_edge * 9 / 21)),
         }
-        return ratio_map.get(aspect_ratio, (1024, 1024))
+        return ratio_map.get(aspect_ratio, (long_edge, long_edge))
 
 
 class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):

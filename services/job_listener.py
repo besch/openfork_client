@@ -2024,11 +2024,13 @@ exec python main.py "$@"
                                                             "--lowvram",
                                                             "--cpu-vae",
                                                             "--reserve-vram",
-                                                            "0.25",
+                                                            "1.25",
                                                             "--cache-none",
                                                             "--preview-method",
                                                             "none",
                                                             "--use-split-cross-attention",
+                                                            "--disable-async-offload",
+                                                            "--disable-pinned-memory",
                                                         ]
                                                     )
                                                 qwen_bootstrap = r"""
@@ -2077,6 +2079,124 @@ exec python main.py "$@"
                                                 )
                                                 logging.info(
                                                     "Started Qwen ComfyUI container without runtime SageAttention install."
+                                                )
+                                            elif actual_service_type.startswith(
+                                                "zimage-full-"
+                                            ):
+                                                zimage_bootstrap = r"""
+set -e
+export PYTHONPATH="${PYTHONPATH:-}:/opt/ComfyUI/user/custom-packages"
+cd /opt/ComfyUI
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+config_path = Path("/opt/ComfyUI/user/__manager/config.ini")
+config_path.parent.mkdir(parents=True, exist_ok=True)
+if config_path.exists():
+    config = config_path.read_text(encoding="utf-8", errors="ignore")
+else:
+    config = "[default]\n"
+
+if not re.search(r"(?m)^\s*\[default\]\s*$", config):
+    config = "[default]\n" + config
+
+if re.search(r"(?m)^\s*network_mode\s*=", config):
+    config = re.sub(
+        r"(?m)^\s*network_mode\s*=.*$",
+        "network_mode = offline",
+        config,
+    )
+else:
+    config = config.rstrip() + "\nnetwork_mode = offline\n"
+
+config_path.write_text(config, encoding="utf-8")
+print("Configured ComfyUI-Manager network_mode=offline for Z-Image runtime.")
+PY
+exec python main.py \
+  --listen \
+  --lowvram \
+  --cpu-vae \
+  --reserve-vram 0.25 \
+  --cache-none \
+  --preview-method none \
+  --use-split-cross-attention \
+  --disable-pinned-memory
+"""
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    command=[
+                                                        "bash",
+                                                        "-lc",
+                                                        zimage_bootstrap,
+                                                    ],
+                                                    force_restart=not keep_container_warm,
+                                                )
+                                                logging.info(
+                                                    "Started Z-Image ComfyUI container with ComfyUI-Manager offline."
+                                                )
+                                            elif actual_service_type.startswith("wan22"):
+                                                wan22_env = {
+                                                    "CUDA_MODULE_LOADING": "LAZY",
+                                                    "PYTORCH_CUDA_ALLOC_CONF": (
+                                                        "expandable_segments:True,"
+                                                        "max_split_size_mb:128"
+                                                    ),
+                                                    "MALLOC_ARENA_MAX": "2",
+                                                }
+                                                wan22_bootstrap = r"""
+set -e
+cd /opt/ComfyUI
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+config_path = Path("/opt/ComfyUI/user/__manager/config.ini")
+config_path.parent.mkdir(parents=True, exist_ok=True)
+if config_path.exists():
+    config = config_path.read_text(encoding="utf-8", errors="ignore")
+else:
+    config = "[default]\n"
+
+if not re.search(r"(?m)^\s*\[default\]\s*$", config):
+    config = "[default]\n" + config
+
+if re.search(r"(?m)^\s*network_mode\s*=", config):
+    config = re.sub(
+        r"(?m)^\s*network_mode\s*=.*$",
+        "network_mode = offline",
+        config,
+    )
+else:
+    config = config.rstrip() + "\nnetwork_mode = offline\n"
+
+config_path.write_text(config, encoding="utf-8")
+print("Configured ComfyUI-Manager network_mode=offline for WAN runtime.")
+PY
+exec python main.py \
+  --listen \
+  --lowvram \
+  --cpu-vae \
+  --reserve-vram 1.25 \
+  --cache-none \
+  --preview-method none \
+  --use-split-cross-attention \
+  --disable-async-offload \
+  --disable-cuda-malloc \
+  --disable-pinned-memory
+"""
+                                                docker_manager.run_container(
+                                                    service_type=actual_service_type,
+                                                    command=[
+                                                        "bash",
+                                                        "-lc",
+                                                        wan22_bootstrap,
+                                                    ],
+                                                    environment=wan22_env,
+                                                    force_restart=not keep_container_warm,
+                                                )
+                                                logging.info(
+                                                    "Started WAN ComfyUI container with ComfyUI-Manager offline."
                                                 )
                                             elif is_ollama:
                                                 docker_manager.run_container(

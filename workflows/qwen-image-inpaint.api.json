@@ -70,12 +70,17 @@
       }
     },
     "11": {
-      "class_type": "VAEEncodeForInpaint",
+      "class_type": "VAEEncode",
       "inputs": {
         "pixels": ["8", 0],
-        "vae": ["2", 0],
-        "mask": ["10", 0],
-        "grow_mask_by": 6
+        "vae": ["2", 0]
+      }
+    },
+    "16": {
+      "class_type": "SetLatentNoiseMask",
+      "inputs": {
+        "samples": ["11", 0],
+        "mask": ["10", 0]
       }
     },
     "12": {
@@ -98,7 +103,7 @@
         "model": ["12", 0],
         "positive": ["6", 0],
         "negative": ["7", 0],
-        "latent_image": ["11", 0]
+        "latent_image": ["16", 0]
       }
     },
     "14": {

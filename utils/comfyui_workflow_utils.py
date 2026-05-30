@@ -28,19 +28,19 @@ def get_dimensions(
     """
     if "8gb" in str(vram_tier).lower():
         if aspect_ratio == "16:9":
-            return 512, 288
+            return 320, 176
         elif aspect_ratio == "9:16":
-            return 288, 512
+            return 176, 320
         elif aspect_ratio == "1:1":
-            return 448, 448
+            return 256, 256
         elif aspect_ratio == "4:3":
-            return 448, 336
+            return 320, 240
         elif aspect_ratio == "3:4":
-            return 336, 448
+            return 240, 320
         elif aspect_ratio == "21:9":
-            return 512, 224
+            return 320, 144
         else:
-            return 512, 288
+            return 320, 176
 
     if aspect_ratio == "16:9":
         return 768, 432  # 432p
@@ -193,11 +193,15 @@ def inject_prompt_and_image_into_workflow(
             width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
+            if "8gb" in str(vram_tier).lower():
+                node["inputs"]["length"] = min(int(node["inputs"].get("length", 81)), 33)
         elif node["class_type"] == "ImageResizeKJv2":
             width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
         elif node["class_type"] == "VHS_VideoCombine":
+            if "8gb" in str(vram_tier).lower():
+                node["inputs"]["frame_rate"] = min(int(node["inputs"].get("frame_rate", 16)), 8)
             # Replace date token in filename_prefix
             prefix = node["inputs"].get("filename_prefix", "")
             if "%date:yyyy-MM-dd%" in prefix:
@@ -210,7 +214,7 @@ def inject_prompt_and_image_into_workflow(
         api_graph['57']['inputs']['noise_seed'] = actual_seed
 
     # Inject cfg and steps into KSampler nodes
-    if cfg_scale is not None or steps is not None:
+    if cfg_scale is not None or steps is not None or "8gb" in str(vram_tier).lower():
         for node in api_graph.values():
             class_type = node.get("class_type", "")
             if "KSampler" in class_type and "inputs" in node:
@@ -218,6 +222,8 @@ def inject_prompt_and_image_into_workflow(
                     node["inputs"]["cfg"] = cfg_scale
                 if steps is not None and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = steps
+                if "8gb" in str(vram_tier).lower() and "steps" in node["inputs"]:
+                    node["inputs"]["steps"] = min(int(node["inputs"].get("steps", 6)), 4)
     
     # Inject flow_shift, sampler, and scheduler (V2)
     for node in api_graph.values():
@@ -270,6 +276,11 @@ def inject_prompt_into_text_to_video_workflow(
             width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
+            if "8gb" in str(vram_tier).lower():
+                node["inputs"]["length"] = min(
+                    int(node["inputs"].get("length", 81)),
+                    33,
+                )
 
     # Set seed for node 57 (use provided seed or generate random)
     actual_seed = seed if seed is not None else random.randint(0, 2**63 - 1)
@@ -279,7 +290,7 @@ def inject_prompt_into_text_to_video_workflow(
         logging.warning("Could not find sampler node 57 to set seed")
 
     # Inject cfg and steps into KSamplerAdvanced nodes (57 and 58)
-    if cfg_scale is not None or steps is not None:
+    if cfg_scale is not None or steps is not None or "8gb" in str(vram_tier).lower():
         for node_id in ['57', '58']:
             if node_id in api_graph and api_graph[node_id].get("class_type") == "KSamplerAdvanced":
                 if cfg_scale is not None:
@@ -288,6 +299,11 @@ def inject_prompt_into_text_to_video_workflow(
                 if steps is not None:
                     api_graph[node_id]['inputs']['steps'] = steps
                     logging.info(f"Injected steps={steps} into KSamplerAdvanced node {node_id}")
+                if "8gb" in str(vram_tier).lower() and "steps" in api_graph[node_id]["inputs"]:
+                    api_graph[node_id]["inputs"]["steps"] = min(
+                        int(api_graph[node_id]["inputs"].get("steps", 6)),
+                        4,
+                    )
         
         # Also search for other KSampler variants by class_type
         for node in api_graph.values():
@@ -297,6 +313,11 @@ def inject_prompt_into_text_to_video_workflow(
                     node["inputs"]["cfg"] = cfg_scale
                 if steps is not None and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = steps
+                if "8gb" in str(vram_tier).lower() and "steps" in node["inputs"]:
+                    node["inputs"]["steps"] = min(
+                        int(node["inputs"].get("steps", 6)),
+                        4,
+                    )
         
         # Also handle V2 parameters (flow_shift, sampler, scheduler)
         for node in api_graph.values():
@@ -312,6 +333,11 @@ def inject_prompt_into_text_to_video_workflow(
     # Replace date token in filename_prefix for VHS_VideoCombine node
     for node in api_graph.values():
         if node.get("class_type") == "VHS_VideoCombine":
+            if "8gb" in str(vram_tier).lower():
+                node["inputs"]["frame_rate"] = min(
+                    int(node["inputs"].get("frame_rate", 16)),
+                    8,
+                )
             prefix = node["inputs"].get("filename_prefix", "")
             if "%date:yyyy-MM-dd%" in prefix:
                 datestr = datetime.now().strftime("%Y-%m-%d")
@@ -1779,13 +1805,25 @@ def get_zimage_dimensions(aspect_ratio: str) -> tuple[int, int]:
         return 1024, 1024
 
 
+def clamp_dimensions_to_max(width: int, height: int, max_dimension: Optional[int] = None) -> tuple[int, int]:
+    """Scale dimensions down to a multiple of 16 when an 8GB profile needs a tighter memory budget."""
+    if not max_dimension or max(width, height) <= max_dimension:
+        return width, height
+
+    scale = max_dimension / max(width, height)
+    scaled_width = max(16, int(round((width * scale) / 16)) * 16)
+    scaled_height = max(16, int(round((height * scale) / 16)) * 16)
+    return scaled_width, scaled_height
+
+
 def inject_prompt_into_zimage_workflow(
     workflow_api_data: Dict, 
     prompt: str, 
     negative_prompt: str = "",
     aspect_ratio: str = "1:1",
     advanced_settings: Optional[Dict] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    max_dimension: Optional[int] = None,
 ):
     """
     Loads a Z-Image ComfyUI API-formatted workflow, injects prompt and dimensions.
@@ -1820,7 +1858,7 @@ def inject_prompt_into_zimage_workflow(
         api_graph['42']['inputs']['text'] = negative_prompt
     
     # Inject dimensions into EmptySD3LatentImage (Node 41)
-    width, height = get_zimage_dimensions(aspect_ratio)
+    width, height = clamp_dimensions_to_max(*get_zimage_dimensions(aspect_ratio), max_dimension)
     if '41' in api_graph and 'inputs' in api_graph['41']:
         api_graph['41']['inputs']['width'] = width
         api_graph['41']['inputs']['height'] = height

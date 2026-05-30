@@ -112,9 +112,19 @@ class LLMJobProcessor(BaseJobProcessor):
         if not value or not cls._forbidden_visual_rule_fragment(value):
             return value
 
+        negative_rule_terms = (
+            r"(?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)"
+            r"|people|persons|faces|bodies|humanoids?|silhouettes?|characters?|performers?"
+            r"|actors?|crowds?|portraits?|human elements?"
+        )
+        negative_rule_list = (
+            rf"(?:{negative_rule_terms})"
+            rf"(?:\s*,\s*(?:and\s+|or\s+)?(?:{negative_rule_terms})"
+            rf"|\s+(?:or|and)\s+(?:{negative_rule_terms}))*"
+        )
         replacements = (
-            r"\bwithout (?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles))*\b",
-            r"\bno (?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:visible )?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles))*\b",
+            rf"\bwithout\s+{negative_rule_list}\b",
+            rf"\bno\s+{negative_rule_list}\b",
             r"\bnever print[^.;,]*",
             r"\bdo not (?:render|include|put)[^.;,]*",
             r"\bmetadata only\b",
@@ -197,9 +207,19 @@ class LLMJobProcessor(BaseJobProcessor):
         if not value:
             return value
 
+        negative_rule_terms = (
+            r"(?:(?:visible|readable)\s+)?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)"
+            r"|people|persons|faces|bodies|humanoids?|silhouettes?|characters?|performers?"
+            r"|actors?|crowds?|portraits?|human elements?"
+        )
+        negative_rule_list = (
+            rf"(?:{negative_rule_terms})"
+            rf"(?:\s*,\s*(?:and\s+|or\s+)?(?:{negative_rule_terms})"
+            rf"|\s+(?:or|and)\s+(?:{negative_rule_terms}))*"
+        )
         replacements = (
             (
-                r"\b(?:no|without)\s+(?:visible\s+)?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles)(?:\s+(?:or|and)\s+(?:visible\s+)?(?:text|writing|signage|labels|logos|watermarks?|captions|subtitles))*\b",
+                rf"\b(?:no|without)\s+{negative_rule_list}\b",
                 "",
             ),
             (
@@ -216,7 +236,10 @@ class LLMJobProcessor(BaseJobProcessor):
                 r"\b(?:writing|writes|write|scribbling|scribbles)\s+(?:a\s+|the\s+)?(?:safety\s+)?(?:report|form|document|note|letter|label|signature)[^.!?;]*",
                 "making quick hand gestures over a plain unmarked pad",
             ),
-            (r"\b(?:report|document|form|ticket|badge)s?\b", "plain color slip"),
+            (
+                r"\b(?:report|document|ticket|badge)s?\b|\b(?:application|registration|paperwork)\s+forms?\b",
+                "plain color slip",
+            ),
             (r"\b(?:signature|signatures)\b", "abstract color seal"),
             (r"\b(?:stamp|stamps|stamped)\b", "round color seal"),
             (r"\b(?:notification|notifications)\b", "glowing reaction cue"),

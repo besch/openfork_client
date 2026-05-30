@@ -183,6 +183,8 @@ class DGNClient:
 
         allowed_processor_names = set(job_processors_module.__all__)
         for workflow_type, config in self.config.items():
+            if self._is_workflow_disabled(config):
+                continue
             processor_name = config.get("processor")
             if processor_name:
                 if processor_name not in allowed_processor_names:
@@ -207,12 +209,23 @@ class DGNClient:
     def _build_processable_services(self):
         services = set()
         for workflow_type, config in self.config.items():
+            if self._is_workflow_disabled(config):
+                continue
             if workflow_type not in self.processor_map:
                 continue
             service_name = config.get("service_name")
             if service_name:
                 services.add(service_name)
         return services
+
+    def _is_workflow_disabled(self, workflow_config: dict) -> bool:
+        if workflow_config.get("disabled"):
+            return True
+        service_name = workflow_config.get("service_name")
+        if not service_name:
+            return False
+        service_config = self.services_config.get(service_name, {})
+        return bool(service_config.get("disabled"))
 
     def load_config(self):
         """Loads the configuration from the orchestrator."""
@@ -234,6 +247,7 @@ class DGNClient:
                 (config["service_name"], config["prod_image"])
                 for config in self.config.values()
                 if "service_name" in config and "prod_image" in config
+                and not self._is_workflow_disabled(config)
             }
             self.docker_image_map = {
                 service_name: image for service_name, image in unique_services
@@ -257,6 +271,8 @@ class DGNClient:
             # Check VRAM compatibility for each service
             self.compatible_services = set()
             for service_name, service_config in self.services_config.items():
+                if service_config.get("disabled"):
+                    continue
                 if can_run_service(
                     service_config,
                     self.available_vram,

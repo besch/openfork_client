@@ -20,6 +20,30 @@ from utils.comfyui_workflow_utils import (
 )
 
 
+def _coerce_int(value, default, minimum=None, maximum=None):
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        coerced = default
+    if minimum is not None:
+        coerced = max(minimum, coerced)
+    if maximum is not None:
+        coerced = min(maximum, coerced)
+    return coerced
+
+
+def _coerce_float(value, default, minimum=None, maximum=None):
+    try:
+        coerced = float(value)
+    except (TypeError, ValueError):
+        coerced = default
+    if minimum is not None:
+        coerced = max(minimum, coerced)
+    if maximum is not None:
+        coerced = min(maximum, coerced)
+    return coerced
+
+
 class ZImageTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
     """Processor for Z-Image text-to-image generation."""
 
@@ -34,6 +58,9 @@ class ZImageTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
 
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
+        service_type = self.job.get("service_type") or getattr(self.client, "active_service_type", "") or ""
+        workflow_type = self.job.get("workflow_type", "")
+        is_full_8gb = service_type == "zimage-full-8gb" or workflow_type.startswith("zimage-full-8gb")
         
         # Build advanced settings dict from inputs
         advanced_settings = {}
@@ -48,13 +75,29 @@ class ZImageTextToImageProcessor(ComfyUIProcessor, ImageOutputHandler):
         if "shift" in inputs:
             advanced_settings["shift"] = inputs["shift"]
 
+        max_dimension = None
+        if is_full_8gb:
+            max_dimension = _coerce_int(inputs.get("max_dimension"), 768, minimum=320, maximum=768)
+            advanced_settings["steps"] = _coerce_int(advanced_settings.get("steps"), 4, minimum=1, maximum=4)
+            advanced_settings["cfg"] = _coerce_float(advanced_settings.get("cfg"), 3.0, minimum=1.0, maximum=3.0)
+            advanced_settings.setdefault("sampler_name", "euler")
+            advanced_settings.setdefault("scheduler", "simple")
+            advanced_settings.setdefault("shift", 3)
+            logging.info(
+                "Z-Image Full 8GB text-to-image profile applied - max_dimension=%s steps=%s cfg=%s",
+                max_dimension,
+                advanced_settings["steps"],
+                advanced_settings["cfg"],
+            )
+
         wf_ready = inject_prompt_into_zimage_workflow(
             workflow_data, 
             self.positive_prompt, 
             negative_prompt=inputs.get("negative_prompt", ""),
             aspect_ratio=aspect_ratio,
             advanced_settings=advanced_settings if advanced_settings else None,
-            seed=inputs.get("seed")
+            seed=inputs.get("seed"),
+            max_dimension=max_dimension,
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
