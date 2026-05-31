@@ -42,8 +42,8 @@ RUN MAX_JOBS=2 python -m pip install --no-cache-dir flash-attn --no-build-isolat
 WORKDIR /opt
 RUN git clone --depth=1 https://github.com/thu-ml/TurboDiffusion.git \
     && cd TurboDiffusion \
-    && rm -rf .git \
-    && git submodule update --init --recursive
+    && git submodule update --init --recursive \
+    && rm -rf .git
 
 WORKDIR /opt/TurboDiffusion
 
