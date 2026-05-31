@@ -6,6 +6,7 @@ Runs inside the TurboDiffusion Docker container.
 """
 
 import os
+import sys
 import uuid
 import asyncio
 import logging
@@ -32,6 +33,33 @@ TURBODIFFUSION_DIR = Path("/opt/TurboDiffusion")
 # Job storage
 jobs = {}
 executor = ThreadPoolExecutor(max_workers=1)
+
+
+def _python_cmd() -> str:
+    return sys.executable or "python"
+
+
+def _format_process_error(result: subprocess.CompletedProcess) -> str:
+    stderr = (result.stderr or "").strip()
+    stdout = (result.stdout or "").strip()
+    parts = []
+    if stderr:
+        parts.append(f"stderr:\n{stderr[-3500:]}")
+    if stdout:
+        parts.append(f"stdout:\n{stdout[-1500:]}")
+    return "\n\n".join(parts) or f"Process exited with code {result.returncode}"
+
+
+def _inference_env() -> dict:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [
+            str(TURBODIFFUSION_DIR),
+            str(TURBODIFFUSION_DIR / "turbodiffusion"),
+            env.get("PYTHONPATH", ""),
+        ]
+    )
+    return env
 
 
 class T2VRequest(BaseModel):
@@ -67,7 +95,7 @@ def run_t2v_inference(job_id: str, prompt: str, resolution: str, num_steps: int,
         output_file = output_dir / "generated_video.mp4"
         
         cmd = [
-            "python", "turbodiffusion/inference/wan2.1_t2v_infer.py",
+            _python_cmd(), "turbodiffusion/inference/wan2.1_t2v_infer.py",
             "--model", "Wan2.1-1.3B",
             "--dit_path", str(CHECKPOINTS_DIR / "TurboWan2.1-T2V-1.3B-480P-quant.pth"),
             "--vae_path", str(CHECKPOINTS_DIR / "Wan2.1_VAE.pth"),
@@ -85,8 +113,7 @@ def run_t2v_inference(job_id: str, prompt: str, resolution: str, num_steps: int,
         
         logger.info(f"Running T2V command: {' '.join(cmd)}")
         
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(TURBODIFFUSION_DIR / "turbodiffusion")
+        env = _inference_env()
         
         result = subprocess.run(
             cmd,
@@ -98,9 +125,10 @@ def run_t2v_inference(job_id: str, prompt: str, resolution: str, num_steps: int,
         )
         
         if result.returncode != 0:
-            logger.error(f"T2V failed: {result.stderr}")
+            error = _format_process_error(result)
+            logger.error(f"T2V failed: {error}")
             jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = result.stderr[:500]
+            jobs[job_id]["error"] = error[-4000:]
             return
         
         # Find output video
@@ -133,7 +161,7 @@ def run_i2v_inference(job_id: str, image_path: str, prompt: str, resolution: str
         output_file = output_dir / "generated_video.mp4"
         
         cmd = [
-            "python", "turbodiffusion/inference/wan2.2_i2v_infer.py",
+            _python_cmd(), "turbodiffusion/inference/wan2.2_i2v_infer.py",
             "--model", "Wan2.2-A14B",
             "--low_noise_model_path", str(CHECKPOINTS_DIR / "TurboWan2.2-I2V-A14B-low-720P-quant.pth"),
             "--high_noise_model_path", str(CHECKPOINTS_DIR / "TurboWan2.2-I2V-A14B-high-720P-quant.pth"),
@@ -156,8 +184,7 @@ def run_i2v_inference(job_id: str, image_path: str, prompt: str, resolution: str
         
         logger.info(f"Running I2V command: {' '.join(cmd)}")
         
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(TURBODIFFUSION_DIR / "turbodiffusion")
+        env = _inference_env()
         
         result = subprocess.run(
             cmd,
@@ -169,9 +196,10 @@ def run_i2v_inference(job_id: str, image_path: str, prompt: str, resolution: str
         )
         
         if result.returncode != 0:
-            logger.error(f"I2V failed: {result.stderr}")
+            error = _format_process_error(result)
+            logger.error(f"I2V failed: {error}")
             jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = result.stderr[:500]
+            jobs[job_id]["error"] = error[-4000:]
             return
         
         # Find output video

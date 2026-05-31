@@ -31,7 +31,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         psutil ninja packaging wheel setuptools \
         "triton>=3.3.0" einops numpy pillow loguru "imageio[ffmpeg]" \
         pandas pyyaml omegaconf attrs fvcore ftfy regex transformers nvidia-ml-py \
-        accelerate diffusers sentencepiece opencv-python av \
+        accelerate diffusers sentencepiece opencv-python av iopath prompt-toolkit rich \
         scipy scikit-image lmdb tensorboard lpips matplotlib tqdm requests \
         fastapi uvicorn python-multipart aiofiles
 
