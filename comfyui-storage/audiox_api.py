@@ -111,18 +111,20 @@ def _model_window_seconds() -> float:
 
 
 def _conditioning_window_seconds() -> float:
-    # AudioX's audio/video prompt tensors must match the diffusion sample
-    # window. A longer conditioning window can make the model crash with
-    # tensor-length mismatches during cross-conditioning.
+    # AudioX's cross-conditioning path expects the prompt timeline to use the
+    # training window, not necessarily the raw sample_size / sample_rate value.
+    # Some checkpoints report a slightly longer audio sample window, which can
+    # create 55 video conditioning frames against a 50-frame diffusion timeline.
     model_window = _model_window_seconds()
     requested_window = max(1.0, min(float(MAX_DURATION_SECONDS), AUDIOX_CONDITIONING_SECONDS))
-    if abs(requested_window - model_window) > 0.01:
+    if requested_window > model_window:
         logger.info(
-            "AudioX conditioning window %.2fs adjusted to model window %.2fs",
+            "AudioX conditioning window %.2fs clipped to model window %.2fs",
             requested_window,
             model_window,
         )
-    return model_window
+        return model_window
+    return requested_window
 
 
 def _conditioning_tensor_dtype() -> torch.dtype:
@@ -214,7 +216,7 @@ def _generate_audiox(
                     "text_prompt": prompt or "",
                     "audio_prompt": audio_tensor.unsqueeze(0),
                     "seconds_start": 0,
-                    "seconds_total": model_duration,
+                    "seconds_total": conditioning_duration,
                 }
             ]
 
@@ -226,7 +228,7 @@ def _generate_audiox(
                         "text_prompt": negative_prompt,
                         "audio_prompt": audio_tensor.unsqueeze(0),
                         "seconds_start": 0,
-                        "seconds_total": model_duration,
+                        "seconds_total": conditioning_duration,
                     }
                 ]
 
