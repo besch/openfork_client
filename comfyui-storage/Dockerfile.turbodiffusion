@@ -71,7 +71,7 @@ RUN mkdir -p checkpoints outputs inputs \
         "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-low-720P-quant.pth"
 
 # Copy the API server script
-COPY comfyui-storage/turbodiffusion_api_server.py /opt/TurboDiffusion/api_server.py
+COPY turbodiffusion_api_server.py /opt/TurboDiffusion/api_server.py
 
 WORKDIR /opt/TurboDiffusion
 EXPOSE 8000
