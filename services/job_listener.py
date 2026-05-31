@@ -755,7 +755,8 @@ class JobListener:
                         error_msg = f"Job requires service '{service_type}' but hardware is incompatible: {reason}"
                         logging.error(error_msg)
 
-                        # Emit JOB_FAILED event
+                        # Emit a local failure event, then release the lease so
+                        # another compatible provider can retry the job.
                         self._emit_job_event(
                             "JOB_FAILED",
                             {
@@ -765,9 +766,25 @@ class JobListener:
                             },
                         )
 
-                        self.orchestrator_service.update_job_status(
-                            job.get("id"), "failed"
-                        )
+                        try:
+                            self.orchestrator_service.reset_interrupted_job(
+                                job.get("id"),
+                                execution_token=job.get("execution_token"),
+                                reason="provider_hardware_incompatible",
+                            )
+                        except Exception:
+                            logging.exception(
+                                "Failed to release hardware-incompatible job; "
+                                "marking it failed as a fallback."
+                            )
+                            self.orchestrator_service.update_job_status(
+                                job.get("id"),
+                                "failed",
+                                completion_metadata={
+                                    "error": error_msg,
+                                    "provider_recovery_failed": True,
+                                },
+                            )
                         return True
                 except ValueError:
                     # Unknown workflow type - let it proceed and fail later if needed
