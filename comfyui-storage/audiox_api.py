@@ -223,11 +223,11 @@ def _generate_audiox(
             if negative_prompt:
                 negative_conditioning = [
                     {
-                        "video_prompt": [video_tensor.unsqueeze(0)],
+                        "video_prompt": video_prompt,
                         "text_prompt": negative_prompt,
                         "audio_prompt": audio_tensor.unsqueeze(0),
                         "seconds_start": 0,
-                        "seconds_total": conditioning_duration,
+                        "seconds_total": model_duration,
                     }
                 ]
 
