@@ -104,7 +104,7 @@ def load_pid_model() -> None:
             raise RuntimeError("PiD requires CUDA; torch.cuda.is_available() is false")
 
         os.chdir(PID_DIR)
-        torch.enable_grad(False)
+        torch.set_grad_enabled(False)
         torch.backends.cuda.matmul.allow_tf32 = True
 
         checkpoint = get_pid_checkpoint(PID_BACKBONE, PID_CKPT_TYPE)
