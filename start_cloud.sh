@@ -1371,6 +1371,11 @@ fi
 # Start TurboDiffusion REST API (skip if DiagDistill already claimed port 8000)
 if [ "$START_DIAGDISTILL" != "true" ] && [ -f "/opt/TurboDiffusion/api_server.py" ]; then
   log "Found TurboDiffusion API script. Starting..."
+  if ! "$PYTHON_EXE" -c "import loguru" 2>/dev/null; then
+    log "TurboDiffusion dependency loguru is missing. Installing runtime repair..."
+    "$PYTHON_EXE" -m pip install --quiet --no-cache-dir loguru || \
+      log "WARNING: Failed to install loguru; TurboDiffusion may fail at inference import time."
+  fi
   (cd /opt/TurboDiffusion && "$PYTHON_EXE" api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
   wait_for_url "TurboDiffusion API" "http://127.0.0.1:8000/health" 120 "/tmp/turbodiffusion_api.log"
 fi
