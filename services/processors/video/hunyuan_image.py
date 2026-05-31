@@ -99,11 +99,15 @@ class HunyuanImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         flow_shift = inputs.get("flow_shift")
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
+        seed = inputs.get("seed")
+        num_frames = inputs.get("num_frames") or inputs.get("frames")
+        vram_tier = f"{self.job.get('service_type', '')} {self.job.get('workflow_type', '')}"
 
         wf_ready = inject_prompt_and_image_into_hunyuan_video_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps,
-            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler
+            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler,
+            seed=seed, num_frames=num_frames, vram_tier=vram_tier
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)

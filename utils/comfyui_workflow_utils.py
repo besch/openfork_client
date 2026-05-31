@@ -26,6 +26,23 @@ def get_dimensions(
     Using smaller dimensions suitable for GPUs with less VRAM.
     All dimensions are divisible by 16.
     """
+    tier = str(vram_tier).lower()
+    if "hunyuan" in tier and ("16gb" in tier or "fp8" in tier):
+        if aspect_ratio == "16:9":
+            return 512, 288
+        elif aspect_ratio == "9:16":
+            return 288, 512
+        elif aspect_ratio == "1:1":
+            return 384, 384
+        elif aspect_ratio == "4:3":
+            return 512, 384
+        elif aspect_ratio == "3:4":
+            return 384, 512
+        elif aspect_ratio == "21:9":
+            return 576, 256
+        else:
+            return 512, 288
+
     if "8gb" in str(vram_tier).lower():
         if aspect_ratio == "16:9":
             return 320, 176
@@ -56,6 +73,23 @@ def get_dimensions(
         return 896, 384
     else:
         return default_width, default_height
+
+
+def normalize_hunyuan_frame_count(value: Optional[int], default: Optional[int]) -> Optional[int]:
+    frame_count = value if value is not None else default
+    if frame_count is None:
+        return None
+    try:
+        frame_count = int(frame_count)
+    except (TypeError, ValueError):
+        return default
+    if frame_count < 1:
+        return default
+    # Hunyuan latent video lengths should stay on the common 4n + 1 cadence.
+    if (frame_count - 1) % 4 != 0:
+        frame_count = ((frame_count - 1) // 4) * 4 + 1
+    return max(frame_count, 1)
+
 
 def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
     """
@@ -821,7 +855,9 @@ def inject_prompt_into_hunyuan_video_workflow(
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
     scheduler: Optional[str] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    num_frames: Optional[int] = None,
+    vram_tier: str = "",
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for HunyuanVideo 1.5.
@@ -837,6 +873,10 @@ def inject_prompt_into_hunyuan_video_workflow(
     - Node 101: CreateVideo (needs fps parameter)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    is_16gb_fp8 = "hunyuan" in str(vram_tier).lower() and (
+        "16gb" in str(vram_tier).lower() or "fp8" in str(vram_tier).lower()
+    )
+    frame_count = normalize_hunyuan_frame_count(num_frames, 25 if is_16gb_fp8 else None)
 
     # Node 44 is positive prompt, Node 93 is negative prompt
     if '44' in api_graph and 'inputs' in api_graph['44'] and 'text' in api_graph['44']['inputs']:
@@ -853,9 +893,11 @@ def inject_prompt_into_hunyuan_video_workflow(
 
     # Inject dimensions into EmptyHunyuanLatentVideo (Node 133)
     if '133' in api_graph and api_graph['133'].get("class_type") == "EmptyHunyuanLatentVideo":
-        width, height = get_dimensions(aspect_ratio)
+        width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
         api_graph['133']['inputs']['width'] = width
         api_graph['133']['inputs']['height'] = height
+        if frame_count is not None:
+            api_graph['133']['inputs']['length'] = frame_count
         logging.info(f"Injected dimensions into HunyuanVideo node 133: {width}x{height}")
 
     # Set seed for RandomNoise node (Node 129) - use provided or generate random
@@ -921,7 +963,9 @@ def inject_prompt_and_image_into_hunyuan_video_workflow(
     flow_shift: Optional[float] = None,
     sampler: Optional[str] = None,
     scheduler: Optional[str] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    num_frames: Optional[int] = None,
+    vram_tier: str = "",
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image for HunyuanVideo 1.5 image-to-video.
@@ -938,6 +982,10 @@ def inject_prompt_and_image_into_hunyuan_video_workflow(
     - Node 101: CreateVideo (needs fps parameter)
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    is_16gb_fp8 = "hunyuan" in str(vram_tier).lower() and (
+        "16gb" in str(vram_tier).lower() or "fp8" in str(vram_tier).lower()
+    )
+    frame_count = normalize_hunyuan_frame_count(num_frames, 25 if is_16gb_fp8 else None)
 
     # Node 44 is positive prompt, Node 93 is negative prompt
     if '44' in api_graph and 'inputs' in api_graph['44'] and 'text' in api_graph['44']['inputs']:
@@ -961,16 +1009,20 @@ def inject_prompt_and_image_into_hunyuan_video_workflow(
 
     # Inject dimensions into HunyuanImageToVideo (Node 78)
     if '78' in api_graph and api_graph['78'].get("class_type") == "HunyuanImageToVideo":
-        width, height = get_dimensions(aspect_ratio)
+        width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
         api_graph['78']['inputs']['width'] = width
         api_graph['78']['inputs']['height'] = height
+        if frame_count is not None:
+            api_graph['78']['inputs']['length'] = frame_count
         logging.info(f"Injected dimensions into HunyuanVideo i2v node 78: {width}x{height}")
 
     # Inject dimensions into EmptyHunyuanLatentVideo (Node 133) - added for robust latent generation
     if '133' in api_graph and api_graph['133'].get("class_type") == "EmptyHunyuanLatentVideo":
-        width, height = get_dimensions(aspect_ratio)
+        width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
         api_graph['133']['inputs']['width'] = width
         api_graph['133']['inputs']['height'] = height
+        if frame_count is not None:
+            api_graph['133']['inputs']['length'] = frame_count
         logging.info(f"Injected dimensions into HunyuanVideo i2v node 133: {width}x{height}")
 
     # Set seed for RandomNoise node (Node 129) - use provided or generate random
