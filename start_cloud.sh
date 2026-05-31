@@ -509,6 +509,7 @@ START_COMFYUI="true"
 START_SPARKVSR="false"
 START_INSPATIO="false"
 START_ERNIE_IMAGE="false"
+START_PRISMAUDIO="false"
 ENABLE_4BIT="false"
 
 TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
@@ -544,6 +545,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
       START_QWEN3TTS="true"
       SERVICE_TYPE="qwen3-tts"
+  elif [ -f "/app/prismaudio_api.py" ]; then
+      log "Auto-mode: Detected PRiSM Audio image. Selecting PRiSM Audio service."
+      START_PRISMAUDIO="true"
+      if [ "$TOTAL_VRAM_MB" -gt 14000 ]; then
+          SERVICE_TYPE="prismaudio-16gb"
+          log "Auto-selected PRiSM Audio 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="prismaudio-8gb"
+          log "Auto-selected PRiSM Audio 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/app/dramabox_api.py" ]; then
       log "Auto-mode: Detected DramaBox image. Selecting DramaBox service."
       START_DRAMABOX="true"
@@ -673,6 +684,7 @@ else
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"audiox"* ]]; then START_AUDIOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
+  if [[ "$SERVICE_TYPE" == *"prismaudio"* ]]; then START_PRISMAUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"scenema-audio"* ]]; then START_SCENEMA_AUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"dramabox"* ]]; then START_DRAMABOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
@@ -755,6 +767,11 @@ if [ "$START_QWEN3TTS" = "true" ]; then
       export QWEN_MODEL_SIZE="0.6B"
       log "Selecting Qwen3-TTS 0.6B model for 8GB VRAM (Capacity: ${TOTAL_VRAM_MB}MB)"
   fi
+fi
+
+if [ "$START_PRISMAUDIO" = "true" ]; then
+  log "PRiSM Audio selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
 fi
 
 ensure_zimage_full_models() {
@@ -1244,6 +1261,19 @@ if [ "$START_QWEN3TTS" = "true" ] && [ -f "/app/qwen3_tts_api.py" ]; then
   log "Found Qwen3-TTS API script. Starting..."
   (cd /app && "$PYTHON_EXE" qwen3_tts_api.py > /tmp/qwen3_tts_api.log 2>&1) &
   wait_for_url "Qwen3-TTS API" "http://127.0.0.1:8000/health" 300 "/tmp/qwen3_tts_api.log"
+fi
+
+# Start PRiSM Audio REST API
+if [ "$START_PRISMAUDIO" = "true" ] && [ -f "/app/prismaudio_api.py" ]; then
+  log "Found PRiSM Audio API script. Starting..."
+  if command -v conda >/dev/null 2>&1 && conda env list | awk '{print $1}' | grep -qx "prismaudio"; then
+    log "Using prismaudio conda environment for PRiSM Audio API."
+    (cd /app && HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" conda run --no-capture-output -n prismaudio python prismaudio_api.py > /tmp/prismaudio_api.log 2>&1) &
+  else
+    log "WARNING: prismaudio conda environment not found. Falling back to $PYTHON_EXE."
+    (cd /app && HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" "$PYTHON_EXE" prismaudio_api.py > /tmp/prismaudio_api.log 2>&1) &
+  fi
+  wait_for_url "PRiSM Audio API" "http://127.0.0.1:8000/health" 900 "/tmp/prismaudio_api.log"
 fi
 
 # Start Scenema Audio REST API
