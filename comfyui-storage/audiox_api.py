@@ -111,7 +111,18 @@ def _model_window_seconds() -> float:
 
 
 def _conditioning_window_seconds() -> float:
-    return max(1.0, min(float(MAX_DURATION_SECONDS), AUDIOX_CONDITIONING_SECONDS))
+    # AudioX's audio/video prompt tensors must match the diffusion sample
+    # window. A longer conditioning window can make the model crash with
+    # tensor-length mismatches during cross-conditioning.
+    model_window = _model_window_seconds()
+    requested_window = max(1.0, min(float(MAX_DURATION_SECONDS), AUDIOX_CONDITIONING_SECONDS))
+    if abs(requested_window - model_window) > 0.01:
+        logger.info(
+            "AudioX conditioning window %.2fs adjusted to model window %.2fs",
+            requested_window,
+            model_window,
+        )
+    return model_window
 
 
 def _conditioning_tensor_dtype() -> torch.dtype:
@@ -267,6 +278,7 @@ async def health():
         "service": "audiox",
         "device": str(device),
         "sample_rate": sample_rate,
+        "model_window_seconds": _model_window_seconds(),
         "max_duration_seconds": MAX_DURATION_SECONDS,
     }
 
