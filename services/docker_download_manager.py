@@ -759,6 +759,45 @@ class DockerDownloadManager:
                 cached.append(service_type)
         return cached
 
+    def _get_image_name_for_service_type(self, service_type: str) -> Optional[str]:
+        """Resolve a service type to its Docker image name, if available."""
+        if not self.docker_manager:
+            return None
+        try:
+            return self.docker_manager.get_image_name(service_type)
+        except Exception:
+            return None
+
+    def _service_types_sharing_images(self, service_types: Set[str]) -> Set[str]:
+        """Expand service ids to aliases that point at the same Docker image.
+
+        Some service tiers intentionally share one image, for example
+        turbodiffusion and turbodiffusion-8gb. Cache eviction must treat those
+        aliases as one physical image; otherwise a freshly downloaded image can
+        be removed through its older alias before the waiting job can use it.
+        """
+        if not service_types:
+            return set()
+
+        protected_images = {
+            image_name
+            for image_name in (
+                self._get_image_name_for_service_type(st) for st in service_types
+            )
+            if image_name
+        }
+        if not protected_images:
+            return set(service_types)
+
+        expanded = set(service_types)
+        for candidate in self._get_known_service_types():
+            if self._is_local_service(candidate):
+                continue
+            image_name = self._get_image_name_for_service_type(candidate)
+            if image_name in protected_images:
+                expanded.add(candidate)
+        return expanded
+
     def _get_running_service_types(self) -> Set[str]:
         """Return service types whose containers are currently running."""
         if (
@@ -877,11 +916,17 @@ class DockerDownloadManager:
         exclude_service_types: Optional[Set[str]] = None,
     ) -> int:
         """Return total bytes used by cached OpenFork service images."""
-        exclude = exclude_service_types or set()
+        exclude = self._service_types_sharing_images(exclude_service_types or set())
         total = 0
+        seen_images: Set[str] = set()
         for service_type in self._get_cached_service_types():
             if service_type in exclude:
                 continue
+            image_name = self._get_image_name_for_service_type(service_type)
+            if image_name:
+                if image_name in seen_images:
+                    continue
+                seen_images.add(image_name)
             total += self._get_cached_image_size_bytes(service_type)
         return total
 
@@ -1043,6 +1088,7 @@ class DockerDownloadManager:
             | freshly_downloaded
             | exclude
         )
+        busy_service_types = self._service_types_sharing_images(busy_service_types)
 
         candidates: list[tuple[tuple[int, float, str], str]] = []
         for service_type in self._get_cached_service_types():
@@ -1081,8 +1127,11 @@ class DockerDownloadManager:
 
             self.docker_manager.client.images.remove(image=image_name, force=True)
             with self._lock:
-                self._download_status.pop(service_type_to_evict, None)
-                self._forget_cache_metadata_locked(service_type_to_evict)
+                for alias in self._service_types_sharing_images(
+                    {service_type_to_evict}
+                ):
+                    self._download_status.pop(alias, None)
+                    self._forget_cache_metadata_locked(alias)
             self._sync_cached_images_with_server()
             self._emit_image_evicted(
                 service_type=service_type_to_evict,
@@ -1120,8 +1169,11 @@ class DockerDownloadManager:
             # Image already gone; still surface the cleanup so the compaction tracker
             # doesn't think nothing happened. Use 0 freed bytes since we can't measure.
             with self._lock:
-                self._download_status.pop(service_type_to_evict, None)
-                self._forget_cache_metadata_locked(service_type_to_evict)
+                for alias in self._service_types_sharing_images(
+                    {service_type_to_evict}
+                ):
+                    self._download_status.pop(alias, None)
+                    self._forget_cache_metadata_locked(alias)
             self._sync_cached_images_with_server()
             self._emit_image_evicted(
                 service_type=service_type_to_evict,

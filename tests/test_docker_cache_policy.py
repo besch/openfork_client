@@ -300,6 +300,47 @@ class DockerCachePolicyTests(unittest.TestCase):
         self.assertEqual(eviction["payload"]["service_type"], "zimage-turbo-8gb")
         self.assertEqual(eviction["payload"]["freed_bytes"], 120 * 1024 ** 3)
 
+    def test_cache_usage_deduplicates_shared_docker_image_aliases(self):
+        docker_manager = FakeDockerManager(
+            ["turbodiffusion", "turbodiffusion-8gb", "llm"],
+            cached_service_types=["turbodiffusion-8gb", "llm"],
+        )
+        shared_image = docker_manager.get_image_name("turbodiffusion-8gb")
+        docker_manager.docker_image_map["turbodiffusion"] = shared_image
+        docker_manager.services_config["turbodiffusion"]["disk_required_gb"] = 160
+        docker_manager.services_config["turbodiffusion-8gb"]["disk_required_gb"] = 160
+        docker_manager.services_config["llm"]["disk_required_gb"] = 10
+        docker_manager.client.images.image_sizes[shared_image] = 160 * 1024 ** 3
+
+        manager = DockerDownloadManager(docker_manager, cache_limit_gb=250)
+
+        self.assertEqual(
+            manager._get_cache_usage_bytes(),
+            170 * 1024 ** 3,
+        )
+
+    def test_fresh_download_protects_shared_image_alias_from_eviction(self):
+        docker_manager = FakeDockerManager(
+            ["turbodiffusion", "turbodiffusion-8gb", "old"],
+            cached_service_types=["turbodiffusion-8gb", "old"],
+        )
+        shared_image = docker_manager.get_image_name("turbodiffusion-8gb")
+        old_image = docker_manager.get_image_name("old")
+        docker_manager.docker_image_map["turbodiffusion"] = shared_image
+        docker_manager.services_config["turbodiffusion"]["disk_required_gb"] = 160
+        docker_manager.services_config["turbodiffusion-8gb"]["disk_required_gb"] = 160
+        docker_manager.services_config["old"]["disk_required_gb"] = 80
+        docker_manager.client.images.image_sizes[shared_image] = 160 * 1024 ** 3
+        docker_manager.client.images.image_sizes[old_image] = 80 * 1024 ** 3
+        manager = DockerDownloadManager(docker_manager, cache_limit_gb=200)
+        manager._recently_downloaded["turbodiffusion-8gb"] = time.time()
+
+        evicted = manager._evict_until_within_cache_limit(reason="storage_limit")
+
+        self.assertEqual(evicted, 1)
+        self.assertEqual(docker_manager.client.images.removed, [(old_image, True)])
+        self.assertIn(shared_image, docker_manager.client.images.present)
+
     def test_job_completion_releases_fresh_image_eviction_shield(self):
         docker_manager = PullRecordingDockerManager(
             ["qwen3-tts", "zimage-turbo-8gb"],

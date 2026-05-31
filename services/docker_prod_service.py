@@ -121,11 +121,24 @@ class DockerProdManager:
             logging.info("Initializing Docker client...")
             self.client = None
             preferred_hosts = self._build_docker_host_candidates()
+            preferred_retry_duration = int(
+                os.getenv(
+                    "OPENFORK_DOCKER_INIT_RETRY_SECS",
+                    "60" if os.name == "nt" else "10",
+                )
+            )
             if preferred_hosts and self._connect_to_docker_hosts(
                 preferred_hosts,
-                retry_duration=10,
+                retry_duration=preferred_retry_duration,
             ):
                 pass
+            elif os.name == "nt" and not os.environ.get("DOCKER_HOST"):
+                logging.error(
+                    "OpenFork WSL Docker TCP endpoints are unavailable; "
+                    "not falling back to docker.from_env() on Windows because "
+                    "that can route production jobs to the wrong Docker daemon."
+                )
+                self.client = None
             else:
                 self.client = docker.from_env(timeout=DOCKER_API_TIMEOUT_SECS)
                 self.client.ping()
@@ -230,12 +243,7 @@ class DockerProdManager:
             candidates.append(docker_host)
 
         if os.name == "nt":
-            candidates.extend(
-                [
-                    "tcp://127.0.0.1:2375",
-                    "tcp://localhost:2375",
-                ]
-            )
+            candidates.extend(self._build_docker_host_candidates())
 
         for base_url in dict.fromkeys(filter(None, candidates)):
             try:
@@ -253,6 +261,15 @@ class DockerProdManager:
                 logging.debug(
                     f"Docker reconnect attempt via {base_url} failed: {reconnect_error}"
                 )
+
+        # On Windows, from_env() can route to Docker Desktop/npipe instead of the
+        # OpenFork WSL daemon. Keep retries pinned to the explicit WSL TCP
+        # endpoints unless the user deliberately set DOCKER_HOST.
+        if os.name == "nt" and not os.environ.get("DOCKER_HOST"):
+            logging.error(
+                "Failed to reconnect to OpenFork WSL Docker via explicit TCP endpoints."
+            )
+            return False
 
         try:
             logging.info("Attempting Docker reconnect via docker.from_env()...")
@@ -281,8 +298,13 @@ class DockerProdManager:
                 docker_host = base_url.replace("http://", "tcp://", 1)
                 if docker_host.startswith("tcp://"):
                     env["DOCKER_HOST"] = docker_host
+                elif os.name == "nt":
+                    env["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
+            elif os.name == "nt":
+                env["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
         except Exception:
-            pass
+            if os.name == "nt":
+                env["DOCKER_HOST"] = "tcp://127.0.0.1:2375"
         return env
 
     @staticmethod
@@ -664,6 +686,48 @@ class DockerProdManager:
                     pass
             time.sleep(0.5)
         return False
+
+    def _poll_conflicting_container_state(
+        self,
+        container_name: str,
+        container_id: Optional[str],
+        timeout: float = 180.0,
+    ) -> str:
+        """Wait for a Docker name-conflict ID to become inspectable.
+
+        On WSL2, very large GPU images can time out the Docker HTTP create call
+        while Docker is still preparing the container. During that window a
+        later create gets a 409 with a real container ID, but inspect can
+        briefly report NotFound. Poll both the conflict ID and the name before
+        deciding the slot is a zombie that needs cleanup.
+        """
+        deadline = time.monotonic() + timeout
+        last_state = "missing"
+
+        while time.monotonic() < deadline:
+            for target in (container_id, container_name):
+                if not target:
+                    continue
+                try:
+                    info = self.client.api.inspect_container(target)
+                    state = info.get("State", {}).get("Status") or "created"
+                    if state != last_state:
+                        logging.debug(
+                            f"Conflicting container '{container_name}' "
+                            f"({target[:12]}) is now state={state!r}."
+                        )
+                    if state in ("created", "running", "restarting", "exited", "dead"):
+                        return state
+                    last_state = state
+                except docker.errors.NotFound:
+                    last_state = "missing"
+                except Exception:
+                    # Docker may still be busy completing the original create.
+                    pass
+            time.sleep(5)
+
+        return last_state
+
 
     def _force_pull_image(self, image_name: str) -> None:
         """Pull an image unconditionally, bypassing the 'already present' check.
@@ -1187,10 +1251,10 @@ class DockerProdManager:
                 run_kwargs["environment"] = environment
             if volumes:
                 run_kwargs["volumes"] = volumes
-            max_attempts = 5
+            max_attempts = int(os.getenv("OPENFORK_DOCKER_START_MAX_ATTEMPTS", "8"))
             last_missing_conflict_id = None
             missing_conflict_count = 0
-            zombie_restart_attempted = False
+            zombie_restart_count = 0
             for attempt in range(1, max_attempts + 1):
                 try:
                     if pre_start_copies:
@@ -1253,6 +1317,23 @@ class DockerProdManager:
                                 except Exception:
                                     pass  # _conflict_state stays None (daemon busy)
 
+                            if _conflict_state == "missing" and _conflict_id:
+                                logging.info(
+                                    f"Container name '{container_name}' is reserved by "
+                                    f"{_conflict_id[:12]} but not inspectable yet; "
+                                    "polling up to 3 minutes before cleanup."
+                                )
+                                _conflict_state = self._poll_conflicting_container_state(
+                                    container_name,
+                                    _conflict_id,
+                                    timeout=float(
+                                        os.getenv(
+                                            "OPENFORK_DOCKER_CONFLICT_POLL_SECS",
+                                            "180",
+                                        )
+                                    ),
+                                )
+
                             if _conflict_state in ("running", "restarting"):
                                 logging.info(
                                     f"Container '{container_name}' is already running "
@@ -1267,17 +1348,14 @@ class DockerProdManager:
                                     last_missing_conflict_id = _conflict_id
                                     missing_conflict_count = 1
 
-                                if (
-                                    missing_conflict_count >= 2
-                                    and not zombie_restart_attempted
-                                ):
+                                if zombie_restart_count < 3:
                                     logging.warning(
                                         f"Container name '{container_name}' is still "
                                         f"reserved by invisible container "
-                                        f"{_conflict_id[:12]} after removal. "
+                                        f"{_conflict_id[:12]} after polling. "
                                         "Restarting Docker daemon before retrying."
                                     )
-                                    zombie_restart_attempted = True
+                                    zombie_restart_count += 1
                                     if not self._restart_docker_in_wsl():
                                         self._refresh_client_connection()
                                     try:
