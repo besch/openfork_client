@@ -83,6 +83,7 @@ from .image.flux_kontext import (
 )
 from .image.anima import AnimaTextToImageProcessor
 from .image.ernie_image import ErnieImageProcessor
+from .image.pid import PiDImageUpscaleProcessor
 
 # Text processors
 from .llm.llm import LLMJobProcessor
@@ -141,6 +142,7 @@ __all__ = [
     "FluxKontextT2IProcessor",
     "AnimaTextToImageProcessor",
     "ErnieImageProcessor",
+    "PiDImageUpscaleProcessor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
     "PrismAudioJobProcessor",

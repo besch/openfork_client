@@ -128,6 +128,8 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "ltx-video": 100,  # LTX v1
         "ltxvideo": 100,
         "diffrhythm": 100,
+        "pid-zimage": 80,
+        "pid": 80,
         "zimage": 120,
         "qwen": 120,
         "svi-12gb": 140,

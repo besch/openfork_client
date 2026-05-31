@@ -1,0 +1,112 @@
+# syntax=docker/dockerfile:1.4
+# NVIDIA PiD image upscaler (16GB) - Flux/Z-Image-compatible from-clean path
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DEFAULT_TIMEOUT=120
+ENV HF_HOME=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ENV PYTHONPATH=/app/PiD
+
+ENV PID_REPO_DIR=/app/PiD
+ENV PID_BACKBONE=zimage
+ENV PID_CKPT_TYPE=2k
+ENV PID_DEFAULT_PROMPT="high quality detailed image"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv python3-dev \
+    curl git wget libgl1 libglib2.0-0 ffmpeg ca-certificates \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && python -m pip install --no-cache-dir --upgrade pip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+RUN mkdir -p /tmp/pip-cache \
+    && for attempt in 1 2 3; do \
+        PIP_NO_CACHE_DIR=0 python -m pip install \
+            --cache-dir /tmp/pip-cache \
+            --retries 10 \
+            --timeout 120 \
+            torch==2.10.0 torchvision==0.25.0 \
+            --extra-index-url https://download.pytorch.org/whl/cu128 \
+        && break; \
+        status=$?; \
+        echo "Torch install failed on attempt ${attempt}, retrying..."; \
+        if [ "$attempt" -eq 3 ]; then exit "$status"; fi; \
+        sleep 15; \
+    done \
+    && rm -rf /tmp/pip-cache
+
+RUN python -m pip install --no-cache-dir \
+        "diffusers>=0.37.0" \
+        transformers \
+        safetensors \
+        sentencepiece \
+        numpy \
+        pandas \
+        Pillow \
+        imageio \
+        opencv-python-headless \
+        einops \
+        hydra-core \
+        omegaconf \
+        pyyaml \
+        attrs \
+        attr \
+        loguru \
+        termcolor \
+        fvcore \
+        iopath \
+        wandb \
+        packaging \
+        boto3 \
+        botocore \
+        huggingface_hub \
+        fastapi \
+        "uvicorn[standard]" \
+        python-multipart \
+        requests
+
+ARG PID_REPO=https://github.com/nv-tlabs/PiD.git
+ARG PID_REF=6bca5fb737eb118a9096dc3389c85c45a94fa279
+RUN git init /app/PiD \
+    && cd /app/PiD \
+    && git remote add origin "$PID_REPO" \
+    && git fetch --depth 1 origin "$PID_REF" \
+    && git checkout FETCH_HEAD \
+    && python -m pip install --no-cache-dir -e .
+
+RUN mkdir -p /app/input /app/output /app/models
+
+# PiD code is Apache-2.0. The hosted checkpoint bundle has separate model terms.
+ARG HF_TOKEN=""
+RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 HF_TOKEN="$HF_TOKEN" python - <<'PY'
+import os
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    "nvidia/PiD",
+    local_dir="/app/PiD",
+    token=os.environ.get("HF_TOKEN") or None,
+    allow_patterns=[
+        "checkpoints/ae.safetensors",
+        "checkpoints/PiD_res2k_sr4x_official_flux_distill_4step/*",
+    ],
+)
+print("PiD Flux/Z-Image-compatible checkpoints downloaded")
+PY
+
+COPY pid_image_api.py /app/PiD/pid_image_api.py
+
+WORKDIR /app/PiD
+
+CMD ["python", "pid_image_api.py"]

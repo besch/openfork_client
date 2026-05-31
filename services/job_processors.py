@@ -79,6 +79,7 @@ from services.processors import (
     Vista4DVideoToVideoProcessor,
     InSpatioWorldJobProcessor,
     ErnieImageProcessor,
+    PiDImageUpscaleProcessor,
 )
 
 __all__ = [
@@ -138,4 +139,5 @@ __all__ = [
     "Vista4DVideoToVideoProcessor",
     "InSpatioWorldJobProcessor",
     "ErnieImageProcessor",
+    "PiDImageUpscaleProcessor",
 ]

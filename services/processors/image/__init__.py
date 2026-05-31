@@ -4,6 +4,7 @@ from .text_to_image import TextToImageJobProcessor
 from .zimage import ZImageTextToImageProcessor, ZImageControlNetProcessor, ZImageInpaintProcessor
 from .qwen import QwenImageEditProcessor, QwenImageInpaintProcessor, QwenImageT2IProcessor
 from .flux_kontext import FluxKontextEditProcessor, FluxKontextT2IProcessor
+from .pid import PiDImageUpscaleProcessor
 
 __all__ = [
     "TextToImageJobProcessor",
@@ -15,5 +16,6 @@ __all__ = [
     "QwenImageT2IProcessor",
     "FluxKontextEditProcessor",
     "FluxKontextT2IProcessor",
+    "PiDImageUpscaleProcessor",
 ]
 
