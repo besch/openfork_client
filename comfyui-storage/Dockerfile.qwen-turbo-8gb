@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python packages - combined (includes huggingface-hub for downloads)
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir \
-        torch==2.7.1+cu128 torchvision torchaudio \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
         --extra-index-url https://download.pytorch.org/whl/cu128 \
     && python -m pip install --no-cache-dir \
         gitpython PyYAML opencv-python imageio-ffmpeg ninja gguf uv huggingface-hub[cli]

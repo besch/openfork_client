@@ -350,6 +350,90 @@ fi
       log "WARNING: Could not find comfyui-storage in DGN client. Skipping file sync."
   fi
 
+repair_torch_audio_stack() {
+  if "$PYTHON_EXE" - <<'PY' >/tmp/torch_stack_check.log 2>&1
+import torch
+import torchvision
+import torchaudio
+print(f"torch={torch.__version__} torchvision={torchvision.__version__} torchaudio={torchaudio.__version__}")
+PY
+  then
+    log "Torch stack OK: $(cat /tmp/torch_stack_check.log)"
+    return 0
+  fi
+
+  log "WARNING: Torch stack import failed; attempting version-matched repair."
+  sed 's/^/  /' /tmp/torch_stack_check.log || true
+
+  local torch_version
+  torch_version=$("$PYTHON_EXE" - <<'PY' 2>/dev/null || true
+import torch
+print(torch.__version__)
+PY
+)
+  torch_version="${torch_version%%$'\n'*}"
+
+  local index_url=""
+  local torch_pkg=""
+  local vision_pkg=""
+  local audio_pkg=""
+
+  case "$torch_version" in
+    2.8.0+cu128*)
+      index_url="https://download.pytorch.org/whl/cu128"
+      torch_pkg="torch==2.8.0+cu128"
+      vision_pkg="torchvision==0.23.0+cu128"
+      audio_pkg="torchaudio==2.8.0+cu128"
+      ;;
+    2.7.1+cu128*)
+      index_url="https://download.pytorch.org/whl/cu128"
+      torch_pkg="torch==2.7.1+cu128"
+      vision_pkg="torchvision==0.22.1+cu128"
+      audio_pkg="torchaudio==2.7.1+cu128"
+      ;;
+    2.7.0+cu128*)
+      index_url="https://download.pytorch.org/whl/cu128"
+      torch_pkg="torch==2.7.0+cu128"
+      vision_pkg="torchvision==0.22.0+cu128"
+      audio_pkg="torchaudio==2.7.0+cu128"
+      ;;
+    2.4.0*)
+      index_url="https://download.pytorch.org/whl/cu124"
+      torch_pkg="torch==2.4.0"
+      vision_pkg="torchvision==0.19.0"
+      audio_pkg="torchaudio==2.4.0"
+      ;;
+  esac
+
+  if [ -z "$torch_pkg" ]; then
+    log "WARNING: No known torch repair mapping for version '${torch_version}'. Continuing without repair."
+    return 0
+  fi
+
+  log "Repairing torch stack to ${torch_pkg}, ${vision_pkg}, ${audio_pkg}"
+  "$PYTHON_EXE" -m pip install --quiet --no-cache-dir --force-reinstall \
+    --index-url "$index_url" \
+    "$torch_pkg" "$vision_pkg" "$audio_pkg" || {
+      log "WARNING: Torch stack repair failed."
+      return 0
+    }
+
+  if "$PYTHON_EXE" - <<'PY' >/tmp/torch_stack_check.log 2>&1
+import torch
+import torchvision
+import torchaudio
+print(f"torch={torch.__version__} torchvision={torchvision.__version__} torchaudio={torchaudio.__version__}")
+PY
+  then
+    log "Torch stack repaired: $(cat /tmp/torch_stack_check.log)"
+  else
+    log "WARNING: Torch stack still fails after repair."
+    sed 's/^/  /' /tmp/torch_stack_check.log || true
+  fi
+}
+
+repair_torch_audio_stack
+
   # Start ComfyUI
 
 # Fix VHS h264-mp4.json: force full PC color range to prevent washed-out colors
