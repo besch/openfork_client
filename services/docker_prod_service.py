@@ -21,7 +21,7 @@ from .docker_utils import (
     copy_file_to_container_api,
 )
 
-DOCKER_API_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_API_TIMEOUT_SECS", "900"))
+DOCKER_API_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_API_TIMEOUT_SECS", "120"))
 DOCKER_CLI_PULL_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_CLI_PULL_TIMEOUT_SECS", "7200"))
 
 
