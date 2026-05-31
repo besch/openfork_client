@@ -221,15 +221,10 @@ def _generate_audiox(
 
             negative_conditioning = None
             if negative_prompt:
-                negative_conditioning = [
-                    {
-                        "video_prompt": video_prompt,
-                        "text_prompt": negative_prompt,
-                        "audio_prompt": audio_tensor.unsqueeze(0),
-                        "seconds_start": 0,
-                        "seconds_total": model_duration,
-                    }
-                ]
+                logger.info(
+                    "AudioX explicit negative conditioning is disabled because "
+                    "the upstream model expects null conditioning for CFG shape alignment."
+                )
 
             with torch.inference_mode():
                 audio = generate_diffusion_cond(
