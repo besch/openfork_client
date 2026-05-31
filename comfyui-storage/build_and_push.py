@@ -85,7 +85,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig( "Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True, ),
     # ImageConfig( "Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-turbo-8gb:latest", build=True, push=True, direct_push=True, ),
     ImageConfig( "Dockerfile.turbodiffusion", "beschiak/openfork-turbodiffusion:latest", build=True, push=True, direct_push=True, ),
-    ImageConfig("Dockerfile.pid-zimage-upscaler-16gb", "beschiak/openfork-pid-zimage-upscaler-16gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.pid-zimage-upscaler-16gb", "beschiak/openfork-pid-zimage-upscaler-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-8gb", "beschiak/openfork-flux-kontext-dev-8gb:latest", build=True, push=False),
     # ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True),

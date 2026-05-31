@@ -70,27 +70,37 @@ WORKDIR /opt/TurboDiffusion/checkpoints
 RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
     --mount=type=secret,id=hf_token,required=false \
     if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
-    cp "$(hf download Wan-AI/Wan2.1-T2V-1.3B Wan2.1_VAE.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" Wan2.1_VAE.pth
+    cp "$(hf download Wan-AI/Wan2.1-T2V-1.3B Wan2.1_VAE.pth \
+        --cache-dir /root/.cache/turbodiffusion-checkpoints \
+        --quiet)" Wan2.1_VAE.pth
 
 RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
     --mount=type=secret,id=hf_token,required=false \
     if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
-    cp "$(hf download Wan-AI/Wan2.1-T2V-1.3B models_t5_umt5-xxl-enc-bf16.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" models_t5_umt5-xxl-enc-bf16.pth
+    cp "$(hf download Wan-AI/Wan2.1-T2V-1.3B models_t5_umt5-xxl-enc-bf16.pth \
+        --cache-dir /root/.cache/turbodiffusion-checkpoints \
+        --quiet)" models_t5_umt5-xxl-enc-bf16.pth
 
 RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
     --mount=type=secret,id=hf_token,required=false \
     if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
-    cp "$(hf download TurboDiffusion/TurboWan2.1-T2V-1.3B-480P TurboWan2.1-T2V-1.3B-480P-quant.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" TurboWan2.1-T2V-1.3B-480P-quant.pth
+    cp "$(hf download TurboDiffusion/TurboWan2.1-T2V-1.3B-480P TurboWan2.1-T2V-1.3B-480P-quant.pth \
+        --cache-dir /root/.cache/turbodiffusion-checkpoints \
+        --quiet)" TurboWan2.1-T2V-1.3B-480P-quant.pth
 
 RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
     --mount=type=secret,id=hf_token,required=false \
     if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
-    cp "$(hf download TurboDiffusion/TurboWan2.2-I2V-A14B-720P TurboWan2.2-I2V-A14B-high-720P-quant.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" TurboWan2.2-I2V-A14B-high-720P-quant.pth
+    cp "$(hf download TurboDiffusion/TurboWan2.2-I2V-A14B-720P TurboWan2.2-I2V-A14B-high-720P-quant.pth \
+        --cache-dir /root/.cache/turbodiffusion-checkpoints \
+        --quiet)" TurboWan2.2-I2V-A14B-high-720P-quant.pth
 
 RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
     --mount=type=secret,id=hf_token,required=false \
     if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
-    cp "$(hf download TurboDiffusion/TurboWan2.2-I2V-A14B-720P TurboWan2.2-I2V-A14B-low-720P-quant.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" TurboWan2.2-I2V-A14B-low-720P-quant.pth
+    cp "$(hf download TurboDiffusion/TurboWan2.2-I2V-A14B-720P TurboWan2.2-I2V-A14B-low-720P-quant.pth \
+        --cache-dir /root/.cache/turbodiffusion-checkpoints \
+        --quiet)" TurboWan2.2-I2V-A14B-low-720P-quant.pth
 
 # Copy the API server script
 COPY turbodiffusion_api_server.py /opt/TurboDiffusion/api_server.py
