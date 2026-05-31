@@ -11,7 +11,7 @@ LABEL description="HeartMuLa Music Generation API Server (16GB Optimized)"
 LABEL version="2.0.0-16gb"
 LABEL cuda_version="12.4"
 LABEL pytorch_version="2.4.0"
-LABEL min_compute_capability="5.0"
+LABEL min_compute_capability="8.0"
 
 # Environment variables
 ENV DEBIAN_FRONTEND=noninteractive \
