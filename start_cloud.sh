@@ -1237,12 +1237,6 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       # Use --lowvram to allow CPU offloading when needed
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.5 --use-pytorch-cross-attention"
       ;;
-    *hunyuan*)
-      log "Applying Hunyuan optimizations (16GB+)"
-      # Hunyuan is very heavy (especially FP16 T2V).
-      # Disable smart memory to force aggressive unloading.
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-split-cross-attention --cache-none"
-      ;;
     *anima*)
       log "Applying Anima optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0"

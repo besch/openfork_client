@@ -540,8 +540,8 @@ class DockerCachePolicyTests(unittest.TestCase):
 
     def test_evicts_prefetched_untouched_image_before_used_images(self):
         docker_manager = FakeDockerManager(
-            service_types=["wan22", "foley", "hunyuan"],
-            cached_service_types=["wan22", "foley", "hunyuan"],
+            service_types=["wan22", "foley", "ltx23"],
+            cached_service_types=["wan22", "foley", "ltx23"],
         )
         orchestrator_service = Mock()
         manager = DockerDownloadManager(
@@ -551,7 +551,7 @@ class DockerCachePolicyTests(unittest.TestCase):
         )
 
         manager._last_job_times["foley"] = 100.0
-        manager._last_job_times["hunyuan"] = 200.0
+        manager._last_job_times["ltx23"] = 200.0
 
         evicted = manager._evict_lru_image()
 
@@ -562,19 +562,19 @@ class DockerCachePolicyTests(unittest.TestCase):
         )
         _, kwargs = orchestrator_service.report_cached_images.call_args
         self.assertEqual(kwargs["provider_id"], "provider-1")
-        self.assertEqual(kwargs["cached_images"], ["foley", "hunyuan"])
+        self.assertEqual(kwargs["cached_images"], ["foley", "ltx23"])
         self.assertEqual(kwargs["mode"], "replace")
 
     def test_evicts_oldest_used_image_when_all_cached_images_were_used(self):
         docker_manager = FakeDockerManager(
-            service_types=["wan22", "foley", "hunyuan"],
-            cached_service_types=["wan22", "foley", "hunyuan"],
+            service_types=["wan22", "foley", "ltx23"],
+            cached_service_types=["wan22", "foley", "ltx23"],
         )
         manager = DockerDownloadManager(docker_manager)
 
         manager._last_job_times["wan22"] = 300.0
         manager._last_job_times["foley"] = 100.0
-        manager._last_job_times["hunyuan"] = 200.0
+        manager._last_job_times["ltx23"] = 200.0
 
         evicted = manager._evict_lru_image()
 
@@ -586,8 +586,8 @@ class DockerCachePolicyTests(unittest.TestCase):
 
     def test_idle_cleanup_evicts_multiple_stale_images_per_pass(self):
         docker_manager = FakeDockerManager(
-            service_types=["wan22", "foley", "hunyuan"],
-            cached_service_types=["wan22", "foley", "hunyuan"],
+            service_types=["wan22", "foley", "ltx23"],
+            cached_service_types=["wan22", "foley", "ltx23"],
         )
         manager = DockerDownloadManager(
             docker_manager,
@@ -599,7 +599,7 @@ class DockerCachePolicyTests(unittest.TestCase):
         recent = time.time()
         manager._last_cache_activity_times["wan22"] = old
         manager._last_cache_activity_times["foley"] = old
-        manager._last_cache_activity_times["hunyuan"] = recent
+        manager._last_cache_activity_times["ltx23"] = recent
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -615,7 +615,7 @@ class DockerCachePolicyTests(unittest.TestCase):
             docker_manager.client.images.present,
         )
         self.assertIn(
-            docker_manager.get_image_name("hunyuan"),
+            docker_manager.get_image_name("ltx23"),
             docker_manager.client.images.present,
         )
 
@@ -695,8 +695,8 @@ class DockerCachePolicyTests(unittest.TestCase):
 
     def test_download_state_is_emitted_before_image_eviction(self):
         docker_manager = PullRecordingDockerManager(
-            service_types=["wan22", "foley", "hunyuan", "stream-diffvsr-upscaler"],
-            cached_service_types=["wan22", "foley", "hunyuan"],
+            service_types=["wan22", "foley", "ltx23", "stream-diffvsr-upscaler"],
+            cached_service_types=["wan22", "foley", "ltx23"],
         )
         docker_manager.services_config["stream-diffvsr-upscaler"] = {
             "disk_required_gb": 0.001,
@@ -1143,7 +1143,7 @@ class PrefetchPolicyTests(unittest.TestCase):
         orchestrator_service.get_prefetch_suggestions.return_value = [
             "wan22",
             "foley",
-            "hunyuan",
+            "ltx23",
         ]
         client = SimpleNamespace(
             orchestrator_service=orchestrator_service,
@@ -1318,7 +1318,7 @@ class RealtimeNotificationFilterTests(unittest.TestCase):
         self.assertFalse(
             watcher._should_wake_for_notification(
                 {
-                    "service_type": "hunyuan-video-24gb",
+                    "service_type": "ltx23-video-24gb",
                     "accept_policy": "all",
                     "monetize_job": False,
                 }

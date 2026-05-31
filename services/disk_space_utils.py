@@ -138,12 +138,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "svi-24gb": 150,
         "wan22-8gb": 160,
         "wan22": 160,  # Default WAN22
-        "hunyuan-video-16gb": 160,
-        "hunyuan-16gb": 160,
         "turbodiffusion": 160,
-        "hunyuan-video-24gb": 180,
-        "hunyuan-24gb": 180,
-        "hunyuan": 180,  # Default Hunyuan
         "ltx23-wan2gp-8gb": 160,
         "ltx23-wan2gp": 170,
         "ltx2-8gb": 180,
