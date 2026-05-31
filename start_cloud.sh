@@ -487,7 +487,7 @@ prefer_host_libcuda() {
 
 prefer_host_libcuda
 
-PYTORCH_NVIDIA_LIBRARY_PATHS=$("$PYTHON_EXE" -c "import site; p=site.getsitepackages()[0]; print(':'.join([p + '/nvidia/nvjitlink/lib', p + '/nvidia/cusparse/lib', p + '/nvidia/cublas/lib', p + '/nvidia/cuda_runtime/lib']))" 2>/dev/null || true)
+PYTORCH_NVIDIA_LIBRARY_PATHS=$("$PYTHON_EXE" -c "import site; p=site.getsitepackages()[0]; print(':'.join([p + '/torch/lib', p + '/nvidia/nvjitlink/lib', p + '/nvidia/cusparse/lib', p + '/nvidia/cublas/lib', p + '/nvidia/cuda_runtime/lib']))" 2>/dev/null || true)
 export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:${PYTORCH_NVIDIA_LIBRARY_PATHS}:${LD_LIBRARY_PATH:-}"
 log "Updated LD_LIBRARY_PATH for PyTorch compatibility: $LD_LIBRARY_PATH"
 

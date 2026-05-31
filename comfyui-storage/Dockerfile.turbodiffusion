@@ -6,7 +6,7 @@ FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=$CUDA_HOME/bin:$PATH
-ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.11/dist-packages/torch/lib:$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 ENV PIP_NO_CACHE_DIR=1
 ENV PYTHONPATH=/opt/TurboDiffusion:/opt/TurboDiffusion/turbodiffusion
 
