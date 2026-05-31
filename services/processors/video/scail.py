@@ -229,7 +229,7 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
             "sliding_window_size": 81,
             "sliding_window_overlap": 1,
             "sliding_window_color_correction_strength": 1,
-            "seed": int(inputs.get("seed", _DEFAULT_SEED)),
+            "seed": self.normalize_seed(inputs.get("seed", _DEFAULT_SEED)),
         }
 
     def process(self):

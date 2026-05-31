@@ -110,10 +110,7 @@ def normalize_vista4d_camera_mode(value) -> str:
 
 
 def normalize_seed(value) -> int:
-    try:
-        return int(_DEFAULT_SEED if value is None else value)
-    except (TypeError, ValueError):
-        return _DEFAULT_SEED
+    return Wan2GPProcessor.normalize_seed(value, _DEFAULT_SEED)
 
 
 class Vista4DVideoToVideoProcessor(Wan2GPProcessor):

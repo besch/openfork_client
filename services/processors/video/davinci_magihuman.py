@@ -193,7 +193,7 @@ class DaVinciMagiHumanBaseProcessor(Wan2GPProcessor):
             "sliding_window_size": 101,
             "sliding_window_overlap": 1,
             "sliding_window_discard_last_frames": 0,
-            "seed": int(inputs.get("seed", _DEFAULT_SEED)),
+            "seed": self.normalize_seed(inputs.get("seed", _DEFAULT_SEED)),
         }
 
     def _run_magihuman_i2v(self) -> None:

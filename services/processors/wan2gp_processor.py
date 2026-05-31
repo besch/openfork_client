@@ -33,6 +33,7 @@ from utils.media_utils import generate_thumbnail, get_video_duration
 WAN2GP_HTTP_URL = os.environ.get("WAN2GP_HTTP_URL", "http://127.0.0.1:8188")
 WAN2GP_READY_TIMEOUT = int(os.environ.get("WAN2GP_READY_TIMEOUT", "1800"))  # 30 min
 WAN2GP_LOG_PATH = os.environ.get("WAN2GP_LOG_PATH", "/tmp/wan2gp_server.log")
+WAN2GP_MAX_SEED = 2**32 - 1
 
 # Aspect ratio → "WIDTHxHEIGHT" strings required by Wan2GP
 _ASPECT_RESOLUTIONS = {
@@ -110,6 +111,15 @@ class Wan2GPProcessor(BaseJobProcessor):
             vram_tier, aspect_ratio, tier, resolution,
         )
         return resolution
+
+    @staticmethod
+    def normalize_seed(value, default: int = 0) -> int:
+        """Wan2GP accepts unsigned 32-bit seeds only."""
+        try:
+            seed = int(default if value is None else value)
+        except (TypeError, ValueError):
+            seed = int(default)
+        return seed % (WAN2GP_MAX_SEED + 1)
 
     def _wait_for_server(self) -> bool:
         """Poll /health until the Wan2GP server responds or timeout is reached."""

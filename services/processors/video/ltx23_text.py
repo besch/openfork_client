@@ -50,6 +50,7 @@ class LTX23TextToVideoWan2GPProcessor(Wan2GPProcessor):
             "guidance_scale": inputs.get("cfg_scale", _DEFAULT_CFG),
             "video_length": video_length,
             "force_fps": _FPS,
+            "seed": self.normalize_seed(inputs.get("seed")),
         }
 
         files = self._run_task(settings)
