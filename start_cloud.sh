@@ -1371,15 +1371,55 @@ fi
 # Start TurboDiffusion REST API (skip if DiagDistill already claimed port 8000)
 if [ "$START_DIAGDISTILL" != "true" ] && [ -f "/opt/TurboDiffusion/api_server.py" ]; then
   log "Found TurboDiffusion API script. Starting..."
-  TURBO_RUNTIME_REPAIR=()
-  for pkg in loguru iopath prompt_toolkit rich; do
-    if ! "$PYTHON_EXE" -c "import ${pkg}" 2>/dev/null; then
-      TURBO_RUNTIME_REPAIR+=("$pkg")
-    fi
-  done
-  if [ "${#TURBO_RUNTIME_REPAIR[@]}" -gt 0 ]; then
-    log "TurboDiffusion dependencies missing (${TURBO_RUNTIME_REPAIR[*]}). Installing runtime repair..."
-    "$PYTHON_EXE" -m pip install --quiet --no-cache-dir "${TURBO_RUNTIME_REPAIR[@]}" || \
+  if ! "$PYTHON_EXE" - <<'PY' >/tmp/turbodiffusion_dependency_check.log 2>&1
+import importlib
+
+modules = [
+    "loguru",
+    "pandas",
+    "yaml",
+    "omegaconf",
+    "attr",
+    "fvcore",
+    "ftfy",
+    "regex",
+    "transformers",
+    "pynvml",
+    "accelerate",
+    "diffusers",
+    "sentencepiece",
+    "cv2",
+    "av",
+    "scipy",
+    "skimage",
+    "lmdb",
+    "tensorboard",
+    "lpips",
+    "matplotlib",
+    "tqdm",
+    "requests",
+    "iopath",
+    "prompt_toolkit",
+    "rich",
+]
+
+missing = []
+for module in modules:
+    try:
+        importlib.import_module(module)
+    except Exception:
+        missing.append(module)
+
+if missing:
+    raise SystemExit("missing " + ", ".join(missing))
+PY
+  then
+    log "TurboDiffusion runtime dependencies missing; installing repair set."
+    sed 's/^/  /' /tmp/turbodiffusion_dependency_check.log || true
+    "$PYTHON_EXE" -m pip install --quiet --no-cache-dir \
+      loguru pandas pyyaml omegaconf attrs fvcore ftfy regex transformers nvidia-ml-py \
+      accelerate diffusers sentencepiece opencv-python av scipy scikit-image lmdb tensorboard \
+      lpips matplotlib tqdm requests iopath prompt-toolkit rich || \
       log "WARNING: Failed to install one or more TurboDiffusion runtime dependencies; inference may fail."
   fi
   (cd /opt/TurboDiffusion && "$PYTHON_EXE" api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
