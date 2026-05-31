@@ -47,8 +47,13 @@ RUN git clone --depth=1 https://github.com/thu-ml/TurboDiffusion.git \
 
 WORKDIR /opt/TurboDiffusion
 
-# Build turbo_diffusion_ops CUDA extension
-RUN MAX_JOBS=2 python -m pip install --no-cache-dir -e . --no-build-isolation || echo "turbo_diffusion_ops build skipped"
+# Build and verify the turbo_diffusion_ops CUDA extension. Generation fails
+# immediately without this module, so the image must not publish if it cannot
+# compile.
+RUN MAX_JOBS=2 python -m pip install --no-cache-dir -e . --no-build-isolation \
+    && python - <<'PY'
+import turbo_diffusion_ops  # noqa: F401
+PY
 
 # Install SpargeAttn (skip on failure)
 RUN python -m pip install --no-cache-dir git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation || echo "SpargeAttn skipped"

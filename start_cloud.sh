@@ -1454,6 +1454,7 @@ modules = [
     "iopath",
     "prompt_toolkit",
     "rich",
+    "turbo_diffusion_ops",
 ]
 
 missing = []
@@ -1475,8 +1476,30 @@ PY
       lpips matplotlib tqdm requests iopath prompt-toolkit rich || \
       log "WARNING: Failed to install one or more TurboDiffusion runtime dependencies; inference may fail."
   fi
-  (cd /opt/TurboDiffusion && "$PYTHON_EXE" api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
-  wait_for_url "TurboDiffusion API" "http://127.0.0.1:8000/health" 120 "/tmp/turbodiffusion_api.log"
+  if ! "$PYTHON_EXE" - <<'PY' >/tmp/turbodiffusion_ops_check.log 2>&1
+import turbo_diffusion_ops  # noqa: F401
+PY
+  then
+    log "TurboDiffusion CUDA extension is missing; attempting runtime rebuild."
+    sed 's/^/  /' /tmp/turbodiffusion_ops_check.log || true
+    (cd /opt/TurboDiffusion && MAX_JOBS=2 "$PYTHON_EXE" -m pip install --no-cache-dir -e . --no-build-isolation) || \
+      log "WARNING: TurboDiffusion CUDA extension rebuild command failed."
+  fi
+  if ! "$PYTHON_EXE" - <<'PY' >/tmp/turbodiffusion_ops_check_after.log 2>&1
+import turbo_diffusion_ops  # noqa: F401
+PY
+  then
+    log "ERROR: TurboDiffusion CUDA extension is still unavailable; refusing to start the API."
+    sed 's/^/  /' /tmp/turbodiffusion_ops_check_after.log || true
+    case ",${SELECTED_WORKFLOWS:-}," in
+      *,turbodiffusion-image-to-video,*|*,turbodiffusion-text-to-video,*)
+        exit 78
+        ;;
+    esac
+  else
+    (cd /opt/TurboDiffusion && "$PYTHON_EXE" api_server.py > /tmp/turbodiffusion_api.log 2>&1) &
+    wait_for_url "TurboDiffusion API" "http://127.0.0.1:8000/health" 120 "/tmp/turbodiffusion_api.log"
+  fi
 fi
 
 # daVinci-MagiHuman is served by the Wan2GP block above. The legacy REST/FP8

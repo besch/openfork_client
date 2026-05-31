@@ -34,6 +34,7 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
     
     # Default audio duration limits per VRAM tier (in seconds)
     # These can be overridden by max_audio_duration_seconds in workflow config
+    DEFAULT_MIN_DURATION = 10        # HeartMuLa API rejects shorter requests
     DEFAULT_MAX_DURATION_16GB = 60   # 60s max for 16GB (memory constrained)
     DEFAULT_MAX_DURATION_24GB = 180  # 3 min max for 24GB
     DEFAULT_MAX_DURATION = 95        # ~1.5 min default
@@ -48,7 +49,20 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
             "max_audio_duration_seconds", 
             self.DEFAULT_MAX_DURATION
         )
-        logging.info(f"HeartMuLa max audio duration: {self.max_audio_duration_seconds}s")
+        self.min_audio_duration_seconds = workflow_config.get(
+            "min_audio_duration_seconds",
+            workflow_config.get("min_duration_seconds", self.DEFAULT_MIN_DURATION),
+        )
+        self.min_audio_duration_seconds = max(0, float(self.min_audio_duration_seconds))
+        self.max_audio_duration_seconds = max(
+            float(self.max_audio_duration_seconds),
+            self.min_audio_duration_seconds,
+        )
+        logging.info(
+            "HeartMuLa audio duration limits: min=%ss max=%ss",
+            self.min_audio_duration_seconds,
+            self.max_audio_duration_seconds,
+        )
 
         estimated_minutes = workflow_config.get("estimated_duration_minutes") or 15
         default_generation_wait = max(
@@ -253,13 +267,32 @@ class HeartMuLaCLIJobProcessor(BaseJobProcessor):
             # Calculate requested duration with VRAM-aware limits
             # Check 'duration' first, then 'duration_seconds' (standard in generationParams)
             requested_duration = params.get("duration", params.get("duration_seconds", self.DEFAULT_MAX_DURATION))
+            try:
+                requested_duration = float(requested_duration)
+            except (TypeError, ValueError):
+                logging.warning(
+                    "Invalid HeartMuLa duration %r; using default %ss",
+                    requested_duration,
+                    self.DEFAULT_MAX_DURATION,
+                )
+                requested_duration = float(self.DEFAULT_MAX_DURATION)
             
             # Enforce workflow-configured max duration to prevent OOM
-            actual_duration = min(requested_duration, self.max_audio_duration_seconds)
+            actual_duration = min(
+                max(requested_duration, self.min_audio_duration_seconds),
+                self.max_audio_duration_seconds,
+            )
             if actual_duration < requested_duration:
                 logging.warning(
                     f"Requested duration {requested_duration}s exceeds max {self.max_audio_duration_seconds}s "
                     f"for this VRAM tier. Capping to {actual_duration}s to prevent OOM."
+                )
+            elif actual_duration > requested_duration:
+                logging.warning(
+                    "Requested duration %ss is below HeartMuLa minimum %ss. Raising to %ss.",
+                    requested_duration,
+                    self.min_audio_duration_seconds,
+                    actual_duration,
                 )
             
             payload = {
