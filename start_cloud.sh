@@ -327,6 +327,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/diagnose_heartmula.sh" ] && cp -v "$DGN_SOURCE_DIR/diagnose_heartmula.sh" /app/ && chmod +x /app/diagnose_heartmula.sh
           [ -f "$DGN_SOURCE_DIR/diffrhythm_api.py" ] && cp -v "$DGN_SOURCE_DIR/diffrhythm_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/audiox_api.py" ] && cp -v "$DGN_SOURCE_DIR/audiox_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/mmaudio_api.py" ] && cp -v "$DGN_SOURCE_DIR/mmaudio_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/dramabox_api.py" ] && cp -v "$DGN_SOURCE_DIR/dramabox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
@@ -510,6 +511,7 @@ START_SPARKVSR="false"
 START_INSPATIO="false"
 START_ERNIE_IMAGE="false"
 START_PRISMAUDIO="false"
+START_MMAUDIO="false"
 ENABLE_4BIT="false"
 
 TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
@@ -554,6 +556,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       else
           SERVICE_TYPE="prismaudio-8gb"
           log "Auto-selected PRiSM Audio 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
+  elif [ -f "/app/mmaudio_api.py" ]; then
+      log "Auto-mode: Detected MMAudio image. Selecting MMAudio service."
+      START_MMAUDIO="true"
+      if [ "$TOTAL_VRAM_MB" -gt 14000 ]; then
+          SERVICE_TYPE="mmaudio-16gb"
+          log "Auto-selected MMAudio 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="mmaudio-8gb"
+          log "Auto-selected MMAudio 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
   elif [ -f "/app/dramabox_api.py" ]; then
       log "Auto-mode: Detected DramaBox image. Selecting DramaBox service."
@@ -685,6 +697,7 @@ else
   if [[ "$SERVICE_TYPE" == *"audiox"* ]]; then START_AUDIOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"prismaudio"* ]]; then START_PRISMAUDIO="true"; fi
+  if [[ "$SERVICE_TYPE" == *"mmaudio"* ]]; then START_MMAUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"scenema-audio"* ]]; then START_SCENEMA_AUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"dramabox"* ]]; then START_DRAMABOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
@@ -771,6 +784,11 @@ fi
 
 if [ "$START_PRISMAUDIO" = "true" ]; then
   log "PRiSM Audio selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_MMAUDIO" = "true" ]; then
+  log "MMAudio selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
 fi
 
@@ -1274,6 +1292,13 @@ if [ "$START_PRISMAUDIO" = "true" ] && [ -f "/app/prismaudio_api.py" ]; then
     (cd /app && HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" "$PYTHON_EXE" prismaudio_api.py > /tmp/prismaudio_api.log 2>&1) &
   fi
   wait_for_url "PRiSM Audio API" "http://127.0.0.1:8000/health" 900 "/tmp/prismaudio_api.log"
+fi
+
+# Start MMAudio REST API
+if [ "$START_MMAUDIO" = "true" ] && [ -f "/app/mmaudio_api.py" ]; then
+  log "Found MMAudio API script. Starting..."
+  (cd /app && HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" "$PYTHON_EXE" mmaudio_api.py > /tmp/mmaudio_api.log 2>&1) &
+  wait_for_url "MMAudio API" "http://127.0.0.1:8000/health" 900 "/tmp/mmaudio_api.log"
 fi
 
 # Start Scenema Audio REST API
