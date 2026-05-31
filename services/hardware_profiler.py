@@ -278,7 +278,9 @@ def _default_min_compute_capability(service_config: dict) -> Optional[float]:
     if service_config.get("min_compute_capability") is not None:
         return _parse_float(service_config.get("min_compute_capability"))
     category = service_config.get("category")
-    if category in ("video", "image"):
+    if category == "video":
+        return 8.0
+    if category == "image":
         return 7.5
     if category in ("audio", "utils"):
         return 6.0
