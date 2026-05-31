@@ -111,15 +111,18 @@ def _model_window_seconds() -> float:
 
 
 def _conditioning_window_seconds() -> float:
-    model_window = _model_window_seconds()
-    requested_window = max(1.0, float(AUDIOX_CONDITIONING_SECONDS))
-    if abs(requested_window - model_window) > 0.1:
+    # The upstream AudioX interface uses a fixed 10-second video/audio prompt
+    # tensor while passing sample_size / sample_rate as diffusion metadata.
+    # The CLIP conditioner has a hardcoded 50-frame positional embedding at
+    # 5fps, so do not stretch the visual/audio prompt tensors to model_window.
+    requested_window = max(1.0, min(10.0, float(AUDIOX_CONDITIONING_SECONDS)))
+    if abs(float(AUDIOX_CONDITIONING_SECONDS) - requested_window) > 0.1:
         logger.info(
-            "AudioX conditioning window %.2fs aligned to model window %.2fs",
+            "AudioX conditioning window %.2fs clamped to %.2fs",
+            float(AUDIOX_CONDITIONING_SECONDS),
             requested_window,
-            model_window,
         )
-    return model_window
+    return requested_window
 
 
 def _conditioning_tensor_dtype() -> torch.dtype:
@@ -212,7 +215,7 @@ def _generate_audiox(
                     "text_prompt": prompt or "",
                     "audio_prompt": audio_tensor.unsqueeze(0),
                     "seconds_start": 0,
-                    "seconds_total": conditioning_duration,
+                    "seconds_total": model_duration,
                 }
             ]
 
@@ -220,7 +223,7 @@ def _generate_audiox(
             if negative_prompt:
                 negative_conditioning = [
                     {
-                        "video_prompt": video_prompt,
+                        "video_prompt": [video_tensor.unsqueeze(0)],
                         "text_prompt": negative_prompt,
                         "audio_prompt": audio_tensor.unsqueeze(0),
                         "seconds_start": 0,
