@@ -8,6 +8,7 @@ comfyui-storage/heartmula_api.py
 comfyui-storage/inspatio_api.py
 comfyui-storage/lavasr_api.py
 comfyui-storage/mmaudio_api.py
+comfyui-storage/pid_image_api.py
 comfyui-storage/prismaudio_api.py
 comfyui-storage/qwen3_tts_api.py
 comfyui-storage/setup_ckpts_symlinks.py
@@ -59,6 +60,7 @@ services/processors/image/__init__.py
 services/processors/image/anima.py
 services/processors/image/ernie_image.py
 services/processors/image/flux_kontext.py
+services/processors/image/pid.py
 services/processors/image/qwen.py
 services/processors/image/qwen_turbo.py
 services/processors/image/text_to_image.py
