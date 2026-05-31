@@ -512,6 +512,7 @@ START_INSPATIO="false"
 START_ERNIE_IMAGE="false"
 START_PRISMAUDIO="false"
 START_MMAUDIO="false"
+START_ACESTEP="false"
 ENABLE_4BIT="false"
 
 TOTAL_VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
@@ -542,6 +543,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       else
           SERVICE_TYPE="audiox-16gb"
           log "Auto-selected AudioX 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
+  elif [ -d "/app/acestep_repo" ] || command -v acestep-api >/dev/null 2>&1; then
+      log "Auto-mode: Detected ACE-Step image. Selecting ACE-Step service."
+      START_ACESTEP="true"
+      if [ "$TOTAL_VRAM_MB" -gt 14000 ]; then
+          SERVICE_TYPE="acestep-16gb"
+          log "Auto-selected ACE-Step 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="acestep-8gb"
+          log "Auto-selected ACE-Step 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
   elif [ -f "/app/qwen3_tts_api.py" ]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
@@ -698,6 +709,7 @@ else
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"prismaudio"* ]]; then START_PRISMAUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"mmaudio"* ]]; then START_MMAUDIO="true"; fi
+  if [[ "$SERVICE_TYPE" == *"acestep"* ]]; then START_ACESTEP="true"; fi
   if [[ "$SERVICE_TYPE" == *"scenema-audio"* ]]; then START_SCENEMA_AUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"dramabox"* ]]; then START_DRAMABOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"diagdistill"* ]]; then START_DIAGDISTILL="true"; fi
@@ -789,6 +801,11 @@ fi
 
 if [ "$START_MMAUDIO" = "true" ]; then
   log "MMAudio selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_ACESTEP" = "true" ]; then
+  log "ACE-Step selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
 fi
 
@@ -1297,8 +1314,19 @@ fi
 # Start MMAudio REST API
 if [ "$START_MMAUDIO" = "true" ] && [ -f "/app/mmaudio_api.py" ]; then
   log "Found MMAudio API script. Starting..."
-  (cd /app && HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}" "$PYTHON_EXE" mmaudio_api.py > /tmp/mmaudio_api.log 2>&1) &
+  (cd /app && HF_HUB_OFFLINE="${MMAUDIO_HF_HUB_OFFLINE:-0}" "$PYTHON_EXE" mmaudio_api.py > /tmp/mmaudio_api.log 2>&1) &
   wait_for_url "MMAudio API" "http://127.0.0.1:8000/health" 900 "/tmp/mmaudio_api.log"
+fi
+
+# Start ACE-Step REST API
+if [ "$START_ACESTEP" = "true" ]; then
+  log "Starting ACE-Step API service..."
+  if [ -d "/app/acestep_repo" ]; then
+    (cd /app/acestep_repo && HF_HUB_OFFLINE="${ACESTEP_HF_HUB_OFFLINE:-1}" uv run acestep-api > /tmp/acestep_api.log 2>&1) &
+  else
+    (HF_HUB_OFFLINE="${ACESTEP_HF_HUB_OFFLINE:-1}" uv run acestep-api > /tmp/acestep_api.log 2>&1) &
+  fi
+  wait_for_url "ACE-Step API" "http://127.0.0.1:8000/health" 900 "/tmp/acestep_api.log"
 fi
 
 # Start Scenema Audio REST API
