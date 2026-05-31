@@ -1152,6 +1152,10 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying FLUX Kontext 24GB GGUF optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.5 --use-pytorch-cross-attention --preview-method none"
       ;;
+    qwen|qwen-8gb|qwen-turbo-8gb)
+      log "Applying Qwen Image VRAM optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
+      ;;
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
