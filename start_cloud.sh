@@ -334,6 +334,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
           [ -f "$DGN_SOURCE_DIR/sparkvsr_api.py" ] && cp -v "$DGN_SOURCE_DIR/sparkvsr_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/ernie_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/ernie_image_api.py" /app/
+          [ -d "/app/PiD" ] && [ -f "$DGN_SOURCE_DIR/pid_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/pid_image_api.py" /app/PiD/
       fi
       
       # 2. TurboDiffusion (runs in /opt/TurboDiffusion)
@@ -510,6 +511,7 @@ START_COMFYUI="true"
 START_SPARKVSR="false"
 START_INSPATIO="false"
 START_ERNIE_IMAGE="false"
+START_PID_IMAGE="false"
 START_PRISMAUDIO="false"
 START_MMAUDIO="false"
 START_ACESTEP="false"
@@ -671,6 +673,10 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       else
           log "Auto-selected DreamID-Omni 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+   elif [ -f "/app/PiD/pid_image_api.py" ] && [ -d "/app/PiD/pid" ]; then
+        log "Auto-mode: Detected PiD image upscaler. Selecting PiD Z-Image service."
+        START_PID_IMAGE="true"
+        SERVICE_TYPE="pid-zimage-upscaler-16gb"
    elif [ -f "/app/sparkvsr_api.py" ] || [ -f "/opt/SparkVSR/sparkvsr_api.py" ]; then
         log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
         START_SPARKVSR="true"
@@ -716,6 +722,7 @@ else
   if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
+  if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video, daVinci-MagiHuman, SCAIL, and Vista4D services.
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
@@ -779,6 +786,11 @@ fi
 
 if [ "$START_ERNIE_IMAGE" = "true" ]; then
   log "ERNIE-Image selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_PID_IMAGE" = "true" ]; then
+  log "PiD image upscaler selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
 fi
 
@@ -1640,6 +1652,75 @@ if [ "$START_ERNIE_IMAGE" = "true" ]; then
     wait_for_url "ERNIE-Image API" "http://127.0.0.1:8000/health" 600 "/tmp/ernie_image_api.log"
   else
     log "ERROR: ERNIE-Image API not found at /app/ernie_image_api.py"
+  fi
+fi
+
+# Start PiD image upscale REST API
+if [ "$START_PID_IMAGE" = "true" ]; then
+  log "Starting PiD image upscale API service..."
+  PID_API=""
+  PID_CD=""
+  if [ -f "/app/PiD/pid_image_api.py" ]; then
+    PID_API="/app/PiD/pid_image_api.py"
+    PID_CD="/app/PiD"
+  elif [ -f "/app/pid_image_api.py" ]; then
+    PID_API="/app/pid_image_api.py"
+    PID_CD="/app"
+  fi
+
+  if [ -n "$PID_API" ]; then
+    export PID_REPO_DIR="${PID_REPO_DIR:-/app/PiD}"
+    export PID_BACKBONE="${PID_BACKBONE:-zimage}"
+    export PID_CKPT_TYPE="${PID_CKPT_TYPE:-2k}"
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+
+    if [ ! -d "${PID_REPO_DIR}/checkpoints/PiD_res2k_sr4x_official_flux_distill_4step" ]; then
+      log "WARNING: PiD 2k Flux/Z-Image checkpoint directory was not found under ${PID_REPO_DIR}/checkpoints."
+    fi
+
+    PORT8000_BOUND=false
+    if command -v netstat &> /dev/null; then
+      if netstat -tln | grep -q ":8000 "; then PORT8000_BOUND=true; fi
+    elif command -v ss &> /dev/null; then
+      if ss -tln | grep -q ":8000 "; then PORT8000_BOUND=true; fi
+    fi
+
+    if [ "$PORT8000_BOUND" = "true" ]; then
+      log "Port 8000 already bound — PiD API is already starting. Skipping redundant launch."
+    else
+      log "Found PiD API at $PID_API. Starting..."
+      (cd "$PID_CD" && "$PYTHON_EXE" "$PID_API" > /tmp/pid_image_api.log 2>&1) &
+    fi
+
+    wait_for_url "PiD image API" "http://127.0.0.1:8000/health" 120 "/tmp/pid_image_api.log"
+
+    PID_WAITED=0
+    PID_MAX_WAIT=900
+    while [ "$PID_WAITED" -lt "$PID_MAX_WAIT" ]; do
+      PID_HEALTH=$(curl -fsS "http://127.0.0.1:8000/health" 2>/dev/null || true)
+      if echo "$PID_HEALTH" | grep -Eq '"model_loaded"[[:space:]]*:[[:space:]]*true'; then
+        log "PiD image API model is loaded."
+        break
+      fi
+      if echo "$PID_HEALTH" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"error"'; then
+        log "ERROR: PiD image API reported a model load error: $PID_HEALTH"
+        [ -f "/tmp/pid_image_api.log" ] && tail -n 80 /tmp/pid_image_api.log | sed 's/^/  [pid] /'
+        exit 1
+      fi
+      [ $((PID_WAITED % 60)) -eq 0 ] && log "PiD model still loading... (${PID_WAITED}/${PID_MAX_WAIT}s)"
+      sleep 10
+      PID_WAITED=$((PID_WAITED + 10))
+    done
+
+    if [ "$PID_WAITED" -ge "$PID_MAX_WAIT" ]; then
+      log "ERROR: PiD image API model did not load within ${PID_MAX_WAIT}s."
+      [ -f "/tmp/pid_image_api.log" ] && tail -n 80 /tmp/pid_image_api.log | sed 's/^/  [pid] /'
+      exit 1
+    fi
+  else
+    log "ERROR: PiD API not found at /app/PiD/pid_image_api.py or /app/pid_image_api.py"
+    exit 1
   fi
 fi
 

@@ -84,8 +84,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig( "Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True, ),
     # ImageConfig( "Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True, ),
     # ImageConfig( "Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-turbo-8gb:latest", build=True, push=True, direct_push=True, ),
-    # ImageConfig("Dockerfile.pid-zimage-upscaler-16gb", "beschiak/openfork-pid-zimage-upscaler-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig( "Dockerfile.turbodiffusion", "beschiak/openfork-turbodiffusion:latest", build=True, push=True, direct_push=True, ),
+    ImageConfig("Dockerfile.pid-zimage-upscaler-16gb", "beschiak/openfork-pid-zimage-upscaler-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-8gb", "beschiak/openfork-flux-kontext-dev-8gb:latest", build=True, push=False),
     # ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True),
@@ -131,6 +131,19 @@ def _dockerfile_declares_hf_secret(dockerfile: str) -> bool:
         with open(dockerfile, "r", encoding="utf-8") as handle:
             return any(
                 "--mount=type=secret" in line and "id=hf_token" in line
+                for line in handle
+            )
+    except OSError:
+        return False
+
+
+def _dockerfile_requires_hf_secret(dockerfile: str) -> bool:
+    try:
+        with open(dockerfile, "r", encoding="utf-8") as handle:
+            return any(
+                "--mount=type=secret" in line
+                and "id=hf_token" in line
+                and "required=false" not in line
                 for line in handle
             )
     except OSError:
@@ -196,13 +209,14 @@ def build_image(
 
     uses_hf_secret = _dockerfile_declares_hf_secret(dockerfile)
     if uses_hf_secret:
-        if not hf_token:
+        if hf_token:
+            command.extend(["--secret", "id=hf_token,env=HF_TOKEN"])
+        elif _dockerfile_requires_hf_secret(dockerfile):
             print(
                 f"❌ {dockerfile} requires HF_TOKEN as a BuildKit secret, "
                 "but no token was provided."
             )
             return False
-        command.extend(["--secret", "id=hf_token,env=HF_TOKEN"])
     elif _dockerfile_declares_hf_arg(dockerfile):
         command.extend(["--build-arg", "HF_TOKEN"])
 
@@ -212,6 +226,9 @@ def build_image(
     if build_args:
         for key, value in build_args.items():
             command.extend(["--build-arg", f"{key}={value}"])
+
+    if direct_push or uses_hf_secret:
+        command.extend(["--progress", os.environ.get("DOCKER_BUILD_PROGRESS", "plain")])
 
     command.extend(["-f", dockerfile])
 

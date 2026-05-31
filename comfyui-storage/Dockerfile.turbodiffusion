@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # TurboDiffusion Docker Image - OPTIMIZED
 # NOTE: Keeping devel for flash-attn and turbo_diffusion_ops CUDA compilation
 
@@ -16,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-venv python3.11-distutils python3.11-dev \
-    curl git wget ffmpeg libgl1-mesa-glx libgl1-mesa-dri \
+    curl git ffmpeg libgl1-mesa-glx libgl1-mesa-dri \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && apt-get clean \
@@ -33,6 +34,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         pandas pyyaml omegaconf attrs fvcore ftfy regex transformers nvidia-ml-py \
         accelerate diffusers sentencepiece opencv-python av iopath prompt-toolkit rich \
         scipy scikit-image lmdb tensorboard lpips matplotlib tqdm requests \
+        "huggingface-hub>=0.26.0" \
         fastapi uvicorn python-multipart aiofiles
 
 # Install flash-attn (skip on failure)
@@ -58,17 +60,37 @@ PY
 # Install SpargeAttn (skip on failure)
 RUN python -m pip install --no-cache-dir git+https://github.com/thu-ml/SpargeAttn.git --no-build-isolation || echo "SpargeAttn skipped"
 
-# Create directories and download models (combined)
-RUN mkdir -p checkpoints outputs inputs \
-    && cd checkpoints \
-    && wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/Wan2.1_VAE.pth" \
-    && wget -q "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B/resolve/main/models_t5_umt5-xxl-enc-bf16.pth" \
-    && wget -q -O TurboWan2.1-T2V-1.3B-480P-quant.pth \
-        "https://huggingface.co/TurboDiffusion/TurboWan2.1-T2V-1.3B-480P/resolve/main/TurboWan2.1-T2V-1.3B-480P-quant.pth" \
-    && wget -q -O TurboWan2.2-I2V-A14B-high-720P-quant.pth \
-        "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-high-720P-quant.pth" \
-    && wget -q -O TurboWan2.2-I2V-A14B-low-720P-quant.pth \
-        "https://huggingface.co/TurboDiffusion/TurboWan2.2-I2V-A14B-720P/resolve/main/TurboWan2.2-I2V-A14B-low-720P-quant.pth"
+# Create runtime directories before downloading checkpoints.
+RUN mkdir -p checkpoints outputs inputs
+
+WORKDIR /opt/TurboDiffusion/checkpoints
+
+# Download checkpoints as separate cached layers. The cache mount lets an
+# interrupted BuildKit download resume on the next build attempt.
+RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
+    --mount=type=secret,id=hf_token,required=false \
+    if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
+    cp "$(hf download Wan-AI/Wan2.1-T2V-1.3B Wan2.1_VAE.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" Wan2.1_VAE.pth
+
+RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
+    --mount=type=secret,id=hf_token,required=false \
+    if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
+    cp "$(hf download Wan-AI/Wan2.1-T2V-1.3B models_t5_umt5-xxl-enc-bf16.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" models_t5_umt5-xxl-enc-bf16.pth
+
+RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
+    --mount=type=secret,id=hf_token,required=false \
+    if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
+    cp "$(hf download TurboDiffusion/TurboWan2.1-T2V-1.3B-480P TurboWan2.1-T2V-1.3B-480P-quant.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" TurboWan2.1-T2V-1.3B-480P-quant.pth
+
+RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
+    --mount=type=secret,id=hf_token,required=false \
+    if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
+    cp "$(hf download TurboDiffusion/TurboWan2.2-I2V-A14B-720P TurboWan2.2-I2V-A14B-high-720P-quant.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" TurboWan2.2-I2V-A14B-high-720P-quant.pth
+
+RUN --mount=type=cache,target=/root/.cache/turbodiffusion-checkpoints \
+    --mount=type=secret,id=hf_token,required=false \
+    if [ -s /run/secrets/hf_token ]; then export HF_TOKEN="$(cat /run/secrets/hf_token)"; fi; \
+    cp "$(hf download TurboDiffusion/TurboWan2.2-I2V-A14B-720P TurboWan2.2-I2V-A14B-low-720P-quant.pth --cache-dir /root/.cache/turbodiffusion-checkpoints)" TurboWan2.2-I2V-A14B-low-720P-quant.pth
 
 # Copy the API server script
 COPY turbodiffusion_api_server.py /opt/TurboDiffusion/api_server.py
