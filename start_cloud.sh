@@ -927,8 +927,8 @@ if [ "$START_WAN2GP" = "true" ]; then
     fi
 
     # Wan2GP images use PyTorch cu128 wheels and quantized model files.
-    # Minimum requirement is CC >= 7.5 — the floor for the PyTorch 2.7 cu128 wheel
-    # (sm_75 = T4/RTX 20xx, sm_80 = A100, sm_86 = RTX 30xx/A10G, sm_89 = RTX 40xx, sm_90 = H100).
+    # PyTorch can load on CC >= 7.5, but public Wan2GP workers require CC >= 8.0
+    # (sm_80 = A100, sm_86 = RTX 30xx/A10G, sm_89 = RTX 40xx, sm_90 = H100).
     # Blackwell GPUs (SM 12.0) are forward-compatible via PTX JIT in the cu128 wheel.
     # Use Python (which has the actual PyTorch build info) rather than a raw CC check.
     WAN2GP_GPU_CHECK=$("$PYTHON_EXE" -c "
@@ -943,8 +943,10 @@ try:
     # NOTE: We intentionally do NOT check get_arch_list() here.
     # cu128 wheels use PTX intermediate code for forward-compat architectures,
     # so an SM may not appear in the SASS arch list yet still be fully compatible.
-    # Hard minimum is CC 7.5 (PyTorch cu128 wheel floor).
-    if major < 7 or (major == 7 and minor < 5):
+    # Public Wan2GP video workers need Ampere-class throughput or better.
+    # PyTorch cu128 can load on Turing (SM 7.5), but these hosts are too slow
+    # for production network video and may hang before DGN registration.
+    if major < 8:
         print('BELOW_MIN:{}.{}'.format(major, minor))
     else:
         print('OK:{}.{}:{}'.format(major, minor, gpu_name))
@@ -961,8 +963,8 @@ except Exception as e:
             ;;
         BELOW_MIN:*)
             _cc="${WAN2GP_GPU_CHECK#BELOW_MIN:}"
-            log "ERROR: Wan2GP requires compute capability 7.5+ (detected: ${_cc})."
-            log "Supported GPUs: T4 (CC 7.5), A100 (CC 8.0), RTX 30xx/A10G (CC 8.6), RTX 40xx/L40S (CC 8.9), H100 (CC 9.0)."
+            log "ERROR: Wan2GP public video workers require compute capability 8.0+ (detected: ${_cc})."
+            log "Supported production GPUs: A100 (CC 8.0), RTX 30xx/A10G (CC 8.6), RTX 40xx/L40S (CC 8.9), H100 (CC 9.0), Blackwell (CC 12.0)."
             exit 1
             ;;
         NO_CUDA)
