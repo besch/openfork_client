@@ -23,6 +23,9 @@ from .docker_utils import (
 
 DOCKER_API_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_API_TIMEOUT_SECS", "120"))
 DOCKER_CLI_PULL_TIMEOUT_SECS = int(os.getenv("OPENFORK_DOCKER_CLI_PULL_TIMEOUT_SECS", "7200"))
+DOCKER_LARGE_IMAGE_START_TIMEOUT_SECS = int(
+    os.getenv("OPENFORK_DOCKER_LARGE_IMAGE_START_TIMEOUT_SECS", "600")
+)
 
 
 class DockerProdManager:
@@ -843,6 +846,63 @@ class DockerProdManager:
         port = config.get("port", 8188)  # Default to ComfyUI port
         return {f"{port}/tcp": ("127.0.0.1", port)}
 
+    def get_start_api_timeout(self, service_type: str) -> int:
+        """Return the Docker API timeout to use while creating a service container.
+
+        Large GPU images can need several minutes for containerd/overlayfs to
+        finish the first create/start call. If the SDK times out while Docker is
+        still creating the container, Docker keeps the name slot reserved and
+        the next retry sees a 409 name conflict.
+        """
+        config = self.services_config.get(service_type, {})
+        timeout = DOCKER_API_TIMEOUT_SECS
+
+        disk_required_gb = config.get("disk_required_gb")
+        if (
+            isinstance(disk_required_gb, (int, float))
+            and disk_required_gb >= 100
+        ):
+            timeout = max(timeout, DOCKER_LARGE_IMAGE_START_TIMEOUT_SECS)
+
+        configured_timeout = config.get("docker_start_timeout_seconds")
+        if configured_timeout is not None:
+            try:
+                timeout = max(timeout, int(configured_timeout))
+            except (TypeError, ValueError):
+                logging.warning(
+                    "Ignoring invalid docker_start_timeout_seconds=%r for service '%s'.",
+                    configured_timeout,
+                    service_type,
+                )
+
+        return max(timeout, DOCKER_API_TIMEOUT_SECS)
+
+    def _set_api_timeout(self, timeout: int) -> Optional[int]:
+        api_client = getattr(self.client, "api", None)
+        if api_client is None or not hasattr(api_client, "timeout"):
+            return None
+
+        previous_timeout = getattr(api_client, "timeout", None)
+        try:
+            if timeout and (
+                previous_timeout is None or int(timeout) > int(previous_timeout)
+            ):
+                api_client.timeout = int(timeout)
+        except Exception:
+            logging.debug("Could not adjust Docker API timeout for container start.")
+        return previous_timeout
+
+    def _restore_api_timeout(self, previous_timeout: Optional[int]) -> None:
+        if previous_timeout is None:
+            return
+        api_client = getattr(self.client, "api", None)
+        if api_client is None or not hasattr(api_client, "timeout"):
+            return
+        try:
+            api_client.timeout = previous_timeout
+        except Exception:
+            logging.debug("Could not restore Docker API timeout after container start.")
+
     def get_image_name(self, service_type: str) -> str:
         image = self.docker_image_map.get(service_type)
         if not image:
@@ -1252,17 +1312,28 @@ class DockerProdManager:
             if volumes:
                 run_kwargs["volumes"] = volumes
             max_attempts = int(os.getenv("OPENFORK_DOCKER_START_MAX_ATTEMPTS", "8"))
+            start_api_timeout = self.get_start_api_timeout(service_type)
             last_missing_conflict_id = None
             missing_conflict_count = 0
             zombie_restart_count = 0
-            for attempt in range(1, max_attempts + 1):
+            extra_final_conflict_retry_used = False
+            attempt = 0
+            while attempt < max_attempts:
+                attempt += 1
                 try:
+                    previous_api_timeout = self._set_api_timeout(start_api_timeout)
                     if pre_start_copies:
-                        self._create_copy_and_start_container(
-                            run_kwargs, pre_start_copies, shutdown_event
-                        )
+                        try:
+                            self._create_copy_and_start_container(
+                                run_kwargs, pre_start_copies, shutdown_event
+                            )
+                        finally:
+                            self._restore_api_timeout(previous_api_timeout)
                     else:
-                        self.client.containers.run(**run_kwargs)
+                        try:
+                            self.client.containers.run(**run_kwargs)
+                        finally:
+                            self._restore_api_timeout(previous_api_timeout)
                     logging.info(f"Container '{container_name}' started successfully.")
                     return
                 except Exception as e:
@@ -1271,10 +1342,31 @@ class DockerProdManager:
                         and getattr(e, "status_code", None) == 409
                     )
                     is_layer_error = self._is_layer_extraction_error(e)
-
-                    if attempt < max_attempts and (
+                    recoverable_start_error = (
                         self._is_transient_transport_error(e) or is_409 or is_layer_error
-                    ):
+                    )
+
+                    if recoverable_start_error and attempt >= max_attempts:
+                        if is_409 and not extra_final_conflict_retry_used:
+                            extra_final_conflict_retry_used = True
+                            max_attempts += 1
+                            logging.warning(
+                                "Docker returned a container-name conflict on the "
+                                "final configured start attempt for '%s'. Extending "
+                                "startup by one recovery attempt after cleanup.",
+                                container_name,
+                            )
+                        else:
+                            logging.error(
+                                "Docker start for '%s' exhausted %s attempt(s); "
+                                "last recoverable error was: %s",
+                                container_name,
+                                max_attempts,
+                                e,
+                            )
+                            raise
+
+                    if recoverable_start_error:
                         if is_layer_error:
                             logging.warning(
                                 f"Layer extraction error creating '{container_name}' "
