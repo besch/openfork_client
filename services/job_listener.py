@@ -1735,12 +1735,12 @@ class JobListener:
                                     and not self._uses_global_download_gate(_job_policy)
                                 ):
                                     logging.info(
-                                        "Earlier private job %s requires missing Docker image '%s'. "
-                                        "Deferring later cached jobs so the image download can start.",
+                                        "Private job %s requires missing Docker image '%s'. "
+                                        "Continuing scan for cached jobs before starting downloads.",
                                         peeked_job.get("id"),
                                         service_type,
                                     )
-                                    break
+                                    continue
 
                                 if image_available:
                                     # Image is ready - reserve and process this job
@@ -2713,10 +2713,19 @@ exec python main.py \
                 # so a lingering monitor thread cannot misreport the clean removal
                 # as a container crash.
                 self._stop_container_monitor()
-                logging.info(
-                    f"Ensuring container for service '{self.client.active_service_type}' is stopped."
+                active_service_type = self.client.active_service_type
+                service_config = self.client.services_config.get(
+                    active_service_type, {}
                 )
-                docker_manager.stop_container(
-                    service_type=self.client.active_service_type
-                )
+                if service_config.get("backend") == "local":
+                    logging.info(
+                        "Service '%s' uses local backend; no Docker container "
+                        "needs shutdown.",
+                        active_service_type,
+                    )
+                else:
+                    logging.info(
+                        f"Ensuring container for service '{active_service_type}' is stopped."
+                    )
+                    docker_manager.stop_container(service_type=active_service_type)
                 self.client.active_service_type = None

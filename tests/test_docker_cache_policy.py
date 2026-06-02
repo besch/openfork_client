@@ -1263,6 +1263,128 @@ class PrefetchPolicyTests(unittest.TestCase):
             listener._should_download_missing_image("wan22", "mine", set())
         )
 
+    def test_auto_mode_cached_private_job_preempts_missing_private_download(self):
+        shutdown_event = threading.Event()
+
+        class Orchestrator:
+            def __init__(self):
+                self.get_next_job_calls = []
+                self.peek_available_jobs_calls = []
+
+            def peek_available_jobs(self, **kwargs):
+                self.peek_available_jobs_calls.append(kwargs)
+                return [
+                    {"id": "music-job", "workflow_type": "music-wf"},
+                    {"id": "image-job", "workflow_type": "image-wf"},
+                ]
+
+            def get_next_job(self, **kwargs):
+                self.get_next_job_calls.append(kwargs)
+                if kwargs.get("job_id") == "image-job":
+                    return {"id": "image-job", "workflow_type": "image-wf"}
+                return None
+
+            def get_prefetch_suggestions(self, *args, **kwargs):
+                return []
+
+            def update_provider_status(self, *args, **kwargs):
+                pass
+
+        class MixedAvailabilityDownloadManager:
+            def __init__(self):
+                self._active_downloads = {"music-svc"}
+                self._download_queue = []
+                self.job_active_calls = []
+                self.started = []
+
+            def _sync_cached_images_with_server(self):
+                pass
+
+            def is_post_download_hold_active(self):
+                return False
+
+            def set_job_active(self, active):
+                self.job_active_calls.append(active)
+
+            def get_image_availability(self, service_type):
+                if service_type == "image-svc":
+                    return ImageAvailability.AVAILABLE
+                return ImageAvailability.MISSING
+
+            def get_download_status(self, service_type):
+                return None
+
+            def is_downloading(self, service_type):
+                return service_type in self._active_downloads
+
+            def is_queued(self, service_type):
+                return service_type in self._download_queue
+
+            def start_background_download(self, service_type, accept_policy=None):
+                self.started.append((service_type, accept_policy))
+                return True
+
+            def start_next_queued_download(self, reason="idle"):
+                shutdown_event.set()
+                return False
+
+            def check_and_evict_for_pressure(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+        orchestrator_service = Orchestrator()
+        download_manager = MixedAvailabilityDownloadManager()
+        workflow_to_service = {
+            "music-wf": "music-svc",
+            "image-wf": "image-svc",
+        }
+        client = SimpleNamespace(
+            orchestrator_service=orchestrator_service,
+            download_manager=download_manager,
+            compaction_pending=False,
+            monetize_mode=False,
+            process_own_jobs=True,
+            community_mode="none",
+            allowed_ids=[],
+            processing_lock=threading.Lock(),
+            job_wakeup_event=threading.Event(),
+            services_config={
+                "music-svc": {"backend": "local"},
+                "image-svc": {"backend": "local"},
+            },
+            processor_map={"music-wf": object(), "image-wf": object()},
+            active_service_type=None,
+            current_job=None,
+            active_container_crash_event=None,
+            get_service_type_for_workflow=lambda workflow_type: workflow_to_service[
+                workflow_type
+            ],
+        )
+        listener = JobListener(
+            client, provider_id="provider-1", shutdown_event=shutdown_event
+        )
+        processed_jobs = []
+        listener._emit_job_event = lambda *args, **kwargs: None
+
+        def process_job(job):
+            processed_jobs.append(job["id"])
+            shutdown_event.set()
+            return True
+
+        listener._process_job_safely = process_job
+
+        listener.listen_for_jobs_auto()
+
+        self.assertEqual(
+            [call.get("job_id") for call in orchestrator_service.get_next_job_calls],
+            ["image-job"],
+        )
+        self.assertEqual(processed_jobs, ["image-job"])
+        self.assertEqual(download_manager.started, [])
+        self.assertIn(True, download_manager.job_active_calls)
+
     def test_download_gate_fails_open_when_server_unavailable(self):
         orchestrator_service = Mock()
         orchestrator_service.get_prefetch_suggestions.return_value = None
