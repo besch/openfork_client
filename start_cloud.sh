@@ -1188,6 +1188,30 @@ except Exception as e:
         SCAIL_TEXT_ENCODER_INT8="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
         SCAIL_POSE_MODEL="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.safetensors"
         SCAIL_POSE_META="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.meta.json"
+        SCAIL_SCRIBBLE="$WAN2GP_ROOT/ckpts/scribble/netG_A_latest.pth"
+        SCAIL_FLOW="$WAN2GP_ROOT/ckpts/flow/raft-things.pth"
+        SCAIL_DEPTH="$WAN2GP_ROOT/ckpts/depth/depth_anything_v2_vitl.pth"
+        SCAIL_DEPTH_VITB="$WAN2GP_ROOT/ckpts/depth/depth_anything_v2_vitb.pth"
+        SCAIL_WAV2VEC_CONFIG="$WAN2GP_ROOT/ckpts/wav2vec/config.json"
+        SCAIL_WAV2VEC_FEATURES="$WAN2GP_ROOT/ckpts/wav2vec/feature_extractor_config.json"
+        SCAIL_WAV2VEC_MODEL="$WAN2GP_ROOT/ckpts/wav2vec/model.safetensors"
+        SCAIL_WAV2VEC_PREPROCESSOR="$WAN2GP_ROOT/ckpts/wav2vec/preprocessor_config.json"
+        SCAIL_WAV2VEC_SPECIAL_TOKENS="$WAN2GP_ROOT/ckpts/wav2vec/special_tokens_map.json"
+        SCAIL_WAV2VEC_TOKENIZER="$WAN2GP_ROOT/ckpts/wav2vec/tokenizer_config.json"
+        SCAIL_WAV2VEC_VOCAB="$WAN2GP_ROOT/ckpts/wav2vec/vocab.json"
+        SCAIL_CHINESE_WAV2VEC_CONFIG="$WAN2GP_ROOT/ckpts/chinese-wav2vec2-base/config.json"
+        SCAIL_CHINESE_WAV2VEC_MODEL="$WAN2GP_ROOT/ckpts/chinese-wav2vec2-base/pytorch_model.bin"
+        SCAIL_CHINESE_WAV2VEC_PREPROCESSOR="$WAN2GP_ROOT/ckpts/chinese-wav2vec2-base/preprocessor_config.json"
+        SCAIL_ROFORMER_MODEL="$WAN2GP_ROOT/ckpts/roformer/model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+        SCAIL_ROFORMER_CONFIG="$WAN2GP_ROOT/ckpts/roformer/model_bs_roformer_ep_317_sdr_12.9755.yaml"
+        SCAIL_ROFORMER_CHECKS="$WAN2GP_ROOT/ckpts/roformer/download_checks.json"
+        SCAIL_PYANNOTE_WESPEAKER="$WAN2GP_ROOT/ckpts/pyannote/pyannote_model_wespeaker-voxceleb-resnet34-LM.bin"
+        SCAIL_PYANNOTE_SEGMENTATION="$WAN2GP_ROOT/ckpts/pyannote/pytorch_model_segmentation-3.0.bin"
+        SCAIL_DET_ALIGN="$WAN2GP_ROOT/ckpts/det_align/detface.pt"
+        SCAIL_MASK_SAM="$WAN2GP_ROOT/ckpts/mask/sam_vit_h_4b8939_fp16.safetensors"
+        SCAIL_MASK_MATANYONE="$WAN2GP_ROOT/ckpts/mask/matanyone.safetensors"
+        SCAIL_MASK_CONFIG="$WAN2GP_ROOT/ckpts/mask/config.json"
+        SCAIL_RIFE="$WAN2GP_ROOT/ckpts/rife4.26.pkl"
         if [[ "$SERVICE_TYPE" == *"16gb"* ]]; then
             SCAIL_EXPECTED_IMAGE="beschiak/openfork-scail-wan2gp-16gb:latest"
         else
@@ -1206,7 +1230,7 @@ except Exception as e:
             WAN2GP_CHECK_FAILED=1
         fi
 
-        for required_file in "$SCAIL_VAE" "$SCAIL_POSE_MODEL" "$SCAIL_POSE_META"; do
+        for required_file in "$SCAIL_VAE" "$SCAIL_POSE_MODEL" "$SCAIL_POSE_META" "$SCAIL_SCRIBBLE" "$SCAIL_FLOW" "$SCAIL_DEPTH" "$SCAIL_DEPTH_VITB" "$SCAIL_WAV2VEC_CONFIG" "$SCAIL_WAV2VEC_FEATURES" "$SCAIL_WAV2VEC_MODEL" "$SCAIL_WAV2VEC_PREPROCESSOR" "$SCAIL_WAV2VEC_SPECIAL_TOKENS" "$SCAIL_WAV2VEC_TOKENIZER" "$SCAIL_WAV2VEC_VOCAB" "$SCAIL_CHINESE_WAV2VEC_CONFIG" "$SCAIL_CHINESE_WAV2VEC_MODEL" "$SCAIL_CHINESE_WAV2VEC_PREPROCESSOR" "$SCAIL_ROFORMER_MODEL" "$SCAIL_ROFORMER_CONFIG" "$SCAIL_ROFORMER_CHECKS" "$SCAIL_PYANNOTE_WESPEAKER" "$SCAIL_PYANNOTE_SEGMENTATION" "$SCAIL_DET_ALIGN" "$SCAIL_MASK_SAM" "$SCAIL_MASK_MATANYONE" "$SCAIL_MASK_CONFIG" "$SCAIL_RIFE"; do
             if [ ! -f "$required_file" ]; then
                 log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
                 log "Expected image for this service: $SCAIL_EXPECTED_IMAGE"
