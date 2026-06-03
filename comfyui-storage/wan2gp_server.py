@@ -42,6 +42,12 @@ os.makedirs(WAN2GP_OUTPUT, exist_ok=True)
 if WAN2GP_ROOT not in sys.path:
     sys.path.insert(0, WAN2GP_ROOT)
 
+_gen_lock = threading.Lock()
+_generation_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="wan2gp-generate",
+)
+
 
 def _prefer_host_libcuda() -> None:
     """Avoid NVIDIA forward-compat libcuda on GeForce cloud hosts."""
@@ -89,14 +95,22 @@ def _wan2gp_cli_args() -> tuple[str, ...]:
 
 # ── Wan2GP session init (blocking — server starts only after model is loaded) ─
 logging.info("Initialising Wan2GP session (this may take several minutes)...")
-from shared.api import init  # noqa: E402
 
-_session = init(
-    root=Path(WAN2GP_ROOT),
-    output_dir=Path(WAN2GP_OUTPUT),
-    cli_args=_wan2gp_cli_args(),
-    console_output=True,
-)
+
+def _init_session_sync():
+    from shared.api import init
+
+    return init(
+        root=Path(WAN2GP_ROOT),
+        output_dir=Path(WAN2GP_OUTPUT),
+        cli_args=_wan2gp_cli_args(),
+        console_output=True,
+    )
+
+
+# Taichi/SCAIL binds thread-local runtime state. Initialise Wan2GP on the same
+# dedicated worker thread that will run every generation request.
+_session = _generation_executor.submit(_init_session_sync).result()
 logging.info("Wan2GP session ready.")
 
 # Verify HDR IC-LoRA is present (if built into the image)
@@ -106,12 +120,6 @@ if not os.path.isfile(os.path.normpath(_HDR_LORA_PATH)):
         "Rebuild the image to include Lightricks/LTX-2.3-22b-IC-LoRA-HDR.",
         _HDR_LORA_PATH,
     )
-
-_gen_lock = threading.Lock()
-_generation_executor = concurrent.futures.ThreadPoolExecutor(
-    max_workers=1,
-    thread_name_prefix="wan2gp-generate",
-)
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
