@@ -83,6 +83,7 @@ services/processors/video/upscaler.py
 services/processors/video/vista4d.py
 services/processors/video/wan22_image.py
 services/processors/video/wan22_text.py
+services/processors/video/wan22_wan2gp.py
 services/processors/wan2gp_processor.py
 services/realtime_job_watcher.py
 start_cloud.sh
