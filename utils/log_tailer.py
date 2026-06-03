@@ -11,6 +11,7 @@ def get_headless_log_paths(service_type: str):
         or "scail" in normalized
         or "vista4d" in normalized
         or "ltx23" in normalized
+        or "wan22-wan2gp" in normalized
     ):
         return ["/tmp/wan2gp_server.log"]
     return ["/tmp/comfyui.log"]

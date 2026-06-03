@@ -84,7 +84,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig( "Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True, ),
     # ImageConfig( "Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True, ),
     # ImageConfig( "Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-turbo-8gb:latest", build=True, push=True, direct_push=True, ),
-    ImageConfig( "Dockerfile.turbodiffusion", "beschiak/openfork-turbodiffusion:latest", build=True, push=True, direct_push=True, ),
+    # ImageConfig( "Dockerfile.turbodiffusion", "beschiak/openfork-turbodiffusion:latest", build=True, push=True, direct_push=True, ),
     # ImageConfig("Dockerfile.pid-zimage-upscaler-16gb", "beschiak/openfork-pid-zimage-upscaler-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-8gb", "beschiak/openfork-flux-kontext-dev-8gb:latest", build=True, push=False),
     # ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True),
@@ -93,6 +93,11 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.dramabox", "beschiak/openfork-dramabox-24gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.stable.audio", "beschiak/openfork-stable-audio-3-sfx:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-8gb", "beschiak/openfork-wan22-wan2gp-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-10gb", "beschiak/openfork-wan22-wan2gp-10gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-16gb", "beschiak/openfork-wan22-wan2gp-16gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4

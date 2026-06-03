@@ -1894,7 +1894,48 @@ class JobListener:
                                                 lowered_service_type = (
                                                     actual_service_type.lower()
                                                 )
-                                                if "davinci" in lowered_service_type:
+                                                if "wan22-wan2gp" in lowered_service_type:
+                                                    if "8gb" in lowered_service_type:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4.5 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.30 "
+                                                            "--vram-safety-coefficient 0.55"
+                                                        )
+                                                    elif "10gb" in lowered_service_type:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4.5 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.35 "
+                                                            "--vram-safety-coefficient 0.60"
+                                                        )
+                                                    elif "12gb" in lowered_service_type:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4.5 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.35 "
+                                                            "--vram-safety-coefficient 0.65"
+                                                        )
+                                                    elif "24gb" in lowered_service_type:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.55 "
+                                                            "--vram-safety-coefficient 0.80"
+                                                        )
+                                                    else:
+                                                        wan2gp_env[
+                                                            "WAN2GP_CLI_ARGS"
+                                                        ] = (
+                                                            "--profile 4.5 --attention sdpa "
+                                                            "--perc-reserved-mem-max 0.45 "
+                                                            "--vram-safety-coefficient 0.70"
+                                                        )
+                                                elif "davinci" in lowered_service_type:
                                                     if "16gb" in lowered_service_type:
                                                         wan2gp_env[
                                                             "WAN2GP_CLI_ARGS"

@@ -616,7 +616,36 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       LTX23_Q4_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
       LTX23_Q6_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q6_K_light.gguf"
       LTX23_Q8_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q8_0_light.gguf"
-      if [ -f "$VISTA4D_TRANSFORMER_BF16" ] || [ -f "$VISTA4D_TRANSFORMER_INT8" ]; then
+      WAN22_T2V_HIGH_MBF16="/opt/wan2gp/ckpts/wan2.2_text2video_14B_high_mbf16.safetensors"
+      WAN22_T2V_LOW_MBF16="/opt/wan2gp/ckpts/wan2.2_text2video_14B_low_mbf16.safetensors"
+      WAN22_I2V_HIGH_MBF16="/opt/wan2gp/ckpts/wan2.2_image2video_14B_high_mbf16.safetensors"
+      WAN22_I2V_LOW_MBF16="/opt/wan2gp/ckpts/wan2.2_image2video_14B_low_mbf16.safetensors"
+      WAN22_T2V_HIGH_MBF16_INT8="/opt/wan2gp/ckpts/wan2.2_text2video_14B_high_quanto_mbf16_int8.safetensors"
+      WAN22_T2V_LOW_MBF16_INT8="/opt/wan2gp/ckpts/wan2.2_text2video_14B_low_quanto_mbf16_int8.safetensors"
+      WAN22_I2V_HIGH_MBF16_INT8="/opt/wan2gp/ckpts/wan2.2_image2video_14B_high_quanto_mbf16_int8.safetensors"
+      WAN22_I2V_LOW_MBF16_INT8="/opt/wan2gp/ckpts/wan2.2_image2video_14B_low_quanto_mbf16_int8.safetensors"
+      WAN22_T2V_HIGH_MFP16_INT8="/opt/wan2gp/ckpts/wan2.2_text2video_14B_high_quanto_mfp16_int8.safetensors"
+      WAN22_T2V_LOW_MFP16_INT8="/opt/wan2gp/ckpts/wan2.2_text2video_14B_low_quanto_mfp16_int8.safetensors"
+      WAN22_I2V_HIGH_MFP16_INT8="/opt/wan2gp/ckpts/wan2.2_image2video_14B_high_quanto_mfp16_int8.safetensors"
+      WAN22_I2V_LOW_MFP16_INT8="/opt/wan2gp/ckpts/wan2.2_image2video_14B_low_quanto_mfp16_int8.safetensors"
+      if { [ -f "$WAN22_T2V_HIGH_MFP16_INT8" ] && [ -f "$WAN22_T2V_LOW_MFP16_INT8" ]; } || { [ -f "$WAN22_I2V_HIGH_MFP16_INT8" ] && [ -f "$WAN22_I2V_LOW_MFP16_INT8" ]; }; then
+          if [ "$TOTAL_VRAM_MB" -lt 9000 ]; then
+              SERVICE_TYPE="wan22-wan2gp-8gb"
+              log "Auto-selected WAN 2.2 Wan2GP 8GB tier (quanto mfp16 int8 image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+          elif [ "$TOTAL_VRAM_MB" -lt 12000 ]; then
+              SERVICE_TYPE="wan22-wan2gp-10gb"
+              log "Auto-selected WAN 2.2 Wan2GP 10GB tier (quanto mfp16 int8 image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+          else
+              SERVICE_TYPE="wan22-wan2gp-12gb"
+              log "Auto-selected WAN 2.2 Wan2GP 12GB tier (quanto mfp16 int8 image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+          fi
+      elif { [ -f "$WAN22_T2V_HIGH_MBF16_INT8" ] && [ -f "$WAN22_T2V_LOW_MBF16_INT8" ]; } || { [ -f "$WAN22_I2V_HIGH_MBF16_INT8" ] && [ -f "$WAN22_I2V_LOW_MBF16_INT8" ]; }; then
+          SERVICE_TYPE="wan22-wan2gp-16gb"
+          log "Auto-selected WAN 2.2 Wan2GP 16GB tier (quanto mbf16 int8 image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif { [ -f "$WAN22_T2V_HIGH_MBF16" ] && [ -f "$WAN22_T2V_LOW_MBF16" ]; } || { [ -f "$WAN22_I2V_HIGH_MBF16" ] && [ -f "$WAN22_I2V_LOW_MBF16" ]; }; then
+          SERVICE_TYPE="wan22-wan2gp-24gb"
+          log "Auto-selected WAN 2.2 Wan2GP 24GB tier (mbf16 image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ -f "$VISTA4D_TRANSFORMER_BF16" ] || [ -f "$VISTA4D_TRANSFORMER_INT8" ]; then
           SERVICE_TYPE="vista4d-wan2gp-24gb"
           log "Auto-selected Vista4D Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       elif [ -f "$SCAIL_TRANSFORMER_BF16" ] || [ -f "$SCAIL_TRANSFORMER_INT8" ] || [ -f "$SCAIL_TRANSFORMER_FP16_INT8" ]; then
@@ -738,8 +767,8 @@ else
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
-  # Wan2GP backend for LTX-2.3 Audio-Video, daVinci-MagiHuman, SCAIL, and Vista4D services.
-  if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
+  # Wan2GP backend for LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL, and Vista4D services.
+  if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"wan22-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
       START_WAN2GP="true"
       log "Wan2GP service requested for ${SERVICE_TYPE}."
   fi
@@ -920,13 +949,25 @@ if [[ "${SERVICE_TYPE:-}" == *"zimage-full-"* ]]; then
   fi
 fi
 
-# Wan2GP backend (LTX-2.3 Audio-Video, daVinci-MagiHuman, SCAIL, and Vista4D)
+# Wan2GP backend (LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL, and Vista4D)
 if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
 
-    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] && [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp"* ]]; then
+        if [[ "${SERVICE_TYPE:-}" == *"8gb"* ]]; then
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.30 --vram-safety-coefficient 0.55}"
+        elif [[ "${SERVICE_TYPE:-}" == *"10gb"* ]]; then
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.35 --vram-safety-coefficient 0.60}"
+        elif [[ "${SERVICE_TYPE:-}" == *"12gb"* ]]; then
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.35 --vram-safety-coefficient 0.65}"
+        elif [[ "${SERVICE_TYPE:-}" == *"24gb"* ]]; then
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4 --attention sdpa --perc-reserved-mem-max 0.55 --vram-safety-coefficient 0.80}"
+        else
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
+        fi
+    elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]] && [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
         export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.35 --vram-safety-coefficient 0.60}"
     elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
         export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
@@ -1064,6 +1105,49 @@ except Exception as e:
             log "Use beschiak/openfork-ltx23-wan2gp-original:latest for the 16GB and 24GB tiers."
             log "Use beschiak/openfork-ltx23-wan2gp:latest for the 32GB tier."
             log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
+    fi
+
+    if [[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp"* ]]; then
+        if [[ "$SERVICE_TYPE" == *"8gb"* ]]; then
+            WAN22_TRANSFORMER_VARIANT="quanto_mfp16_int8"
+            WAN22_EXPECTED_IMAGE="beschiak/openfork-wan22-wan2gp-8gb:latest"
+        elif [[ "$SERVICE_TYPE" == *"10gb"* ]]; then
+            WAN22_TRANSFORMER_VARIANT="quanto_mfp16_int8"
+            WAN22_EXPECTED_IMAGE="beschiak/openfork-wan22-wan2gp-10gb:latest"
+        elif [[ "$SERVICE_TYPE" == *"12gb"* ]]; then
+            WAN22_TRANSFORMER_VARIANT="quanto_mfp16_int8"
+            WAN22_EXPECTED_IMAGE="beschiak/openfork-wan22-wan2gp-12gb:latest"
+        elif [[ "$SERVICE_TYPE" == *"24gb"* ]]; then
+            WAN22_TRANSFORMER_VARIANT="mbf16"
+            WAN22_EXPECTED_IMAGE="beschiak/openfork-wan22-wan2gp-24gb:latest"
+        else
+            WAN22_TRANSFORMER_VARIANT="quanto_mbf16_int8"
+            WAN22_EXPECTED_IMAGE="beschiak/openfork-wan22-wan2gp-16gb:latest"
+        fi
+
+        WAN22_T2V_HIGH_TRANSFORMER="$WAN2GP_ROOT/ckpts/wan2.2_text2video_14B_high_${WAN22_TRANSFORMER_VARIANT}.safetensors"
+        WAN22_T2V_LOW_TRANSFORMER="$WAN2GP_ROOT/ckpts/wan2.2_text2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors"
+        WAN22_I2V_HIGH_TRANSFORMER="$WAN2GP_ROOT/ckpts/wan2.2_image2video_14B_high_${WAN22_TRANSFORMER_VARIANT}.safetensors"
+        WAN22_I2V_LOW_TRANSFORMER="$WAN2GP_ROOT/ckpts/wan2.2_image2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors"
+        WAN22_VAE="$WAN2GP_ROOT/ckpts/Wan2.2_VAE.safetensors"
+        WAN22_TEXT_ENCODER="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
+        WAN22_TEXT_ENCODER_INT8="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
+        WAN22_TOKENIZER_MODEL="$WAN2GP_ROOT/ckpts/umt5-xxl/spiece.model"
+        WAN22_TOKENIZER_CONFIG="$WAN2GP_ROOT/ckpts/umt5-xxl/tokenizer_config.json"
+
+        for required_file in "$WAN22_T2V_HIGH_TRANSFORMER" "$WAN22_T2V_LOW_TRANSFORMER" "$WAN22_I2V_HIGH_TRANSFORMER" "$WAN22_I2V_LOW_TRANSFORMER" "$WAN22_VAE" "$WAN22_TOKENIZER_MODEL" "$WAN22_TOKENIZER_CONFIG"; do
+            if [ ! -f "$required_file" ]; then
+                log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
+                log "Expected image for this service: $WAN22_EXPECTED_IMAGE"
+                WAN2GP_CHECK_FAILED=1
+            fi
+        done
+
+        if [ ! -f "$WAN22_TEXT_ENCODER" ] && [ ! -f "$WAN22_TEXT_ENCODER_INT8" ]; then
+            log "ERROR: $SERVICE_TYPE requires a UMT5 text encoder, but this image does not contain one."
+            log "Expected image for this service: $WAN22_EXPECTED_IMAGE"
             WAN2GP_CHECK_FAILED=1
         fi
     fi

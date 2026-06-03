@@ -48,6 +48,7 @@ class DaVinciMagiHumanWan2GPTests(unittest.TestCase):
             "scail-wan2gp-24gb",
             "vista4d-wan2gp-24gb",
             "ltx23-video-12gb",
+            "wan22-wan2gp-12gb",
         ):
             with self.subTest(service_type=service_type):
                 self.assertEqual(
