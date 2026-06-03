@@ -47,6 +47,7 @@ class SCAILWan2GPTests(unittest.TestCase):
 
     def test_scail_workflows_are_registered_in_processor_map(self):
         client = DGNClient.__new__(DGNClient)
+        client.services_config = {}
         client.config = {
             "scail-image-to-video-16gb": {
                 "processor": "SCAILImageToVideoProcessor",
@@ -69,6 +70,7 @@ class SCAILWan2GPTests(unittest.TestCase):
 
     def test_processable_services_excludes_workflows_without_processors(self):
         client = DGNClient.__new__(DGNClient)
+        client.services_config = {}
         client.config = {
             "scail-image-to-video-24gb": {
                 "service_name": "scail-wan2gp-24gb",

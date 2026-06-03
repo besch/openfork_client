@@ -205,6 +205,15 @@ wait_for_url() {
   return 1
 }
 
+verify_wan2gp_stable_thread_wrapper() {
+  local server_file="$1"
+  [ -f "$server_file" ] || return 1
+
+  grep -q "_generation_executor" "$server_file" &&
+    grep -q "run_in_executor" "$server_file" &&
+    grep -q "_generate_sync" "$server_file"
+}
+
 # Ensure pip is installed for the given Python executable
 install_pip() {
   local py_exe="$1"
@@ -345,6 +354,11 @@ fi
       # 3. Wan2GP HTTP server (runs in /opt/wan2gp)
       if [ -d "/opt/wan2gp" ] && [ -f "$DGN_SOURCE_DIR/wan2gp_server.py" ]; then
           cp -v "$DGN_SOURCE_DIR/wan2gp_server.py" /opt/wan2gp/
+          if verify_wan2gp_stable_thread_wrapper "/opt/wan2gp/wan2gp_server.py"; then
+              log "Wan2GP stable single-generation-thread wrapper is installed."
+          else
+              log "WARNING: Synced wan2gp_server.py does not contain the stable single-generation-thread wrapper."
+          fi
       fi
 
       log "✓ Dynamic file sync complete"
@@ -1162,6 +1176,15 @@ except Exception as e:
     # The DGN client processor polls /health and waits up to 30 min for it.
     WAN2GP_SERVER="/opt/wan2gp/wan2gp_server.py"
     WAN2GP_LOG_FILE="/tmp/wan2gp_server.log"
+    if verify_wan2gp_stable_thread_wrapper "$WAN2GP_SERVER"; then
+        log "Verified Wan2GP stable single-generation-thread wrapper."
+    elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+        log "ERROR: SCAIL requires the stable single-generation-thread Wan2GP wrapper."
+        log "ERROR: $WAN2GP_SERVER is stale; update OPENFORK_CLIENT_SCRIPT_REF or rebuild the SCAIL image/client source before accepting SCAIL jobs."
+        exit 1
+    else
+        log "WARNING: Wan2GP stable single-generation-thread wrapper was not detected; continuing for non-SCAIL service ${SERVICE_TYPE:-auto}."
+    fi
     if [ -f "$WAN2GP_SERVER" ]; then
         log "Starting Wan2GP HTTP server in background (logging to ${WAN2GP_LOG_FILE})..."
         : > "$WAN2GP_LOG_FILE"

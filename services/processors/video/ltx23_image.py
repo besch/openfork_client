@@ -81,7 +81,7 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
                 not self.is_cancelled()
                 and not self.infrastructure_interrupted
             ):
-                self._fail_job(f"Wan2GP produced no output for job {self.job_id}")
+                self._fail_job(self._wan2gp_no_output_message("LTX-2.3/Wan2GP"))
             return
 
         result = self._handle_video_output(files[0])

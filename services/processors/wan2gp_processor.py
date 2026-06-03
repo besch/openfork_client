@@ -93,6 +93,7 @@ class Wan2GPProcessor(BaseJobProcessor):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.infrastructure_interrupted = False
+        self.last_wan2gp_error: Optional[str] = None
 
     @staticmethod
     def aspect_to_resolution(aspect_ratio: str, vram_tier: str = "") -> str:
@@ -213,9 +214,44 @@ class Wan2GPProcessor(BaseJobProcessor):
         )
         return any(marker in text for marker in oom_markers)
 
+    @staticmethod
+    def _format_wan2gp_error(detail) -> str:
+        if isinstance(detail, dict):
+            nested = detail.get("detail", detail)
+            if isinstance(nested, dict):
+                errors = nested.get("errors")
+                if isinstance(errors, list) and errors:
+                    return "; ".join(str(error) for error in errors[:3])
+                for key in ("error", "message"):
+                    value = nested.get(key)
+                    if value:
+                        return str(value)
+            return str(detail)
+
+        return str(detail).strip()
+
+    def _wan2gp_no_output_message(self, service_name: str = "Wan2GP") -> str:
+        if self.last_wan2gp_error:
+            if "FieldsBuilder finalized" in self.last_wan2gp_error:
+                return (
+                    f"{service_name} failed for job {self.job_id}: Taichi "
+                    "FieldsBuilder finalized. Restart or update the worker so "
+                    "the stable single-generation-thread Wan2GP wrapper is active, "
+                    "then retry."
+                )
+            return (
+                f"{service_name} produced no output for job {self.job_id}: "
+                f"{self.last_wan2gp_error}"
+            )
+
+        return f"Wan2GP produced no output for job {self.job_id}"
+
     def _run_task(self, settings: dict) -> List[str]:
         """Submit a generation task and return local paths to the output files."""
+        self.last_wan2gp_error = None
+
         if not self._wait_for_server():
+            self.last_wan2gp_error = "Wan2GP server did not become ready."
             return []
 
         # Serialize any PIL Images to data-URIs so they survive JSON transport
@@ -267,6 +303,7 @@ class Wan2GPProcessor(BaseJobProcessor):
             recovered = self._recover_output_after_clean_exit()
             if recovered:
                 return recovered
+            self.last_wan2gp_error = str(error_holder[0])
             logging.error(
                 f"Wan2GP generate request failed for job {self.job_id}: {error_holder[0]}"
             )
@@ -286,6 +323,7 @@ class Wan2GPProcessor(BaseJobProcessor):
                     f"Wan2GP CUDA out of memory for job {self.job_id}: {detail}"
                 )
 
+            self.last_wan2gp_error = self._format_wan2gp_error(detail)
             logging.error(
                 f"Wan2GP server returned error for job {self.job_id}: {detail}"
             )
@@ -293,6 +331,7 @@ class Wan2GPProcessor(BaseJobProcessor):
 
         basenames = resp.json().get("files", [])
         if not basenames:
+            self.last_wan2gp_error = "Wan2GP returned no output files."
             logging.error(f"Wan2GP returned no output files for job {self.job_id}")
             return self._recover_output_after_clean_exit()
 
@@ -343,6 +382,12 @@ class Wan2GPProcessor(BaseJobProcessor):
                 logging.error(
                     f"Failed to write output file for job {self.job_id}: {e}"
                 )
+
+        if basenames and not local_paths:
+            self.last_wan2gp_error = (
+                "Wan2GP generated files, but the client could not download or "
+                "write any output."
+            )
 
         return local_paths
 
