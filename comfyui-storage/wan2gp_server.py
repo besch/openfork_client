@@ -9,6 +9,8 @@ Endpoints:
 """
 
 import base64
+import asyncio
+import concurrent.futures
 import io
 import logging
 import os
@@ -106,6 +108,10 @@ if not os.path.isfile(os.path.normpath(_HDR_LORA_PATH)):
     )
 
 _gen_lock = threading.Lock()
+_generation_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="wan2gp-generate",
+)
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -121,11 +127,27 @@ def health():
 
 
 @app.post("/generate")
-def generate(req: GenerateRequest):
-    """Run a Wan2GP generation task synchronously."""
+async def generate(req: GenerateRequest):
+    """Run a Wan2GP generation task on one stable worker thread."""
+    loop = asyncio.get_running_loop()
+    basenames = await loop.run_in_executor(
+        _generation_executor,
+        _generate_sync,
+        dict(req.settings),
+    )
+    return {"files": basenames}
+
+
+def _generate_sync(raw_settings: Dict[str, Any]) -> list[str]:
+    """Run Wan2GP on the same thread for every request.
+
+    SCAIL/Taichi keeps thread-local process state after the first generation.
+    FastAPI runs sync routes on an arbitrary threadpool worker, which let the
+    first SCAIL job succeed and the next one fail with Taichi main-thread errors.
+    """
     from PIL import Image
 
-    settings = dict(req.settings)
+    settings = dict(raw_settings)
 
     # Decode PIL Image fields encoded as data-URIs by the client
     for key in ("image_start", "image_end"):
@@ -156,8 +178,7 @@ def generate(req: GenerateRequest):
         ]
         raise HTTPException(status_code=500, detail={"errors": errors})
 
-    basenames = [Path(str(f)).name for f in result.generated_files]
-    return {"files": basenames}
+    return [Path(str(f)).name for f in result.generated_files]
 
 
 @app.get("/output/{filename}")
