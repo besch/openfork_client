@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -104,6 +104,10 @@ PUSH_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 1200  # 20 minutes
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _format_command_for_log(command: List[str]) -> str:
     redacted = []
     redact_next = False
@@ -181,6 +185,59 @@ def run_command(command: List[str], description: str, extra_env: dict = None) ->
     except Exception as e:
         print(f"❌ {description} - ERROR: {e}")
         return False
+
+
+def cleanup_after_image(
+    tag: str,
+    remove_image: bool = True,
+    prune_build_cache: bool = False,
+    trim_disk: bool = False,
+) -> None:
+    """
+    Best-effort cleanup for large sequential image builds.
+
+    This intentionally does not fail the whole build if cleanup cannot remove a
+    layer or trim the filesystem. A failed push keeps the local image for retry.
+    """
+    print(f"\n{'=' * 60}")
+    print(f"Cleanup after {tag}")
+    print("=" * 60)
+
+    if remove_image:
+        run_command(
+            ["docker", "image", "rm", "--force", tag],
+            f"Removing local image {tag}",
+        )
+    else:
+        print("Skipping local image removal; direct push did not export a local tag.")
+
+    run_command(
+        ["docker", "image", "prune", "--force"],
+        "Pruning dangling Docker images",
+    )
+
+    if prune_build_cache:
+        run_command(
+            ["docker", "builder", "prune", "--force", "--all"],
+            "Pruning Docker build cache",
+        )
+
+    if trim_disk:
+        trim_script = (
+            "sync && "
+            "if command -v fstrim >/dev/null 2>&1; then "
+            "if [ \"$(id -u)\" -eq 0 ]; then "
+            "fstrim -av; "
+            "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then "
+            "sudo fstrim -av; "
+            "else "
+            "echo 'sudo is not available without a password; skipping fstrim.'; "
+            "fi; "
+            "else "
+            "echo 'fstrim is not installed; skipping filesystem trim.'; "
+            "fi"
+        )
+        run_command(["bash", "-lc", trim_script], "Trimming free WSL disk blocks")
 
 
 def build_image(
@@ -287,6 +344,9 @@ def build_and_push_image(
     fresh_clone: bool = False,
     force_direct_push: bool = False,
     explicit_actions: bool = False,
+    cleanup_after_success: bool = False,
+    prune_build_cache_after_success: bool = False,
+    trim_after_success: bool = False,
 ) -> str:
     """
     Build and push a single image based on its configuration and global flags.
@@ -346,6 +406,13 @@ def build_and_push_image(
         print(
             f"\n🎉 {config.tag} was pushed to the registry during build (direct_push mode)."
         )
+        if cleanup_after_success:
+            cleanup_after_image(
+                config.tag,
+                remove_image=False,
+                prune_build_cache=prune_build_cache_after_success,
+                trim_disk=trim_after_success,
+            )
         return "success"
 
     if should_push:
@@ -356,7 +423,49 @@ def build_and_push_image(
     else:
         print(f"⏭️ Skipping push for {config.tag}")
 
-    return "success" if should_build or should_push else "skipped"
+    result = "success" if should_build or should_push else "skipped"
+    if cleanup_after_success and result == "success":
+        cleanup_after_image(
+            config.tag,
+            remove_image=should_build,
+            prune_build_cache=prune_build_cache_after_success,
+            trim_disk=trim_after_success,
+        )
+
+    return result
+
+
+def select_images(
+    images: List[ImageConfig],
+    image_indexes: List[int] = None,
+    image_filters: List[str] = None,
+) -> List[Tuple[int, ImageConfig]]:
+    selected = list(enumerate(images))
+
+    if image_indexes:
+        valid_indexes = set(range(len(images)))
+        invalid = [index for index in image_indexes if index not in valid_indexes]
+        if invalid:
+            raise ValueError(
+                f"Invalid image index {invalid[0]}; valid range is 0-{len(images) - 1}."
+            )
+        requested = set(image_indexes)
+        selected = [(index, config) for index, config in selected if index in requested]
+
+    if image_filters:
+        selected = [
+            (index, config)
+            for index, config in selected
+            if any(
+                needle == config.dockerfile
+                or needle == config.tag
+                or needle in config.dockerfile
+                or needle in config.tag
+                for needle in image_filters
+            )
+        ]
+
+    return selected
 
 
 def parse_delay(delay_str: str) -> int:
@@ -449,13 +558,80 @@ def main():
         ),
     )
     parser.add_argument(
+        "--cleanup-after-each",
+        action="store_true",
+        default=_env_flag("OPENFORK_CLEANUP_AFTER_EACH"),
+        help=(
+            "After each successful image, remove the local tag and prune dangling "
+            "Docker images. Use this for large sequential push builds when you do "
+            "not need to keep the image locally."
+        ),
+    )
+    parser.add_argument(
+        "--prune-build-cache-after-each",
+        action="store_true",
+        default=_env_flag("OPENFORK_PRUNE_BUILD_CACHE_AFTER_EACH"),
+        help=(
+            "With --cleanup-after-each, also run 'docker builder prune --all'. "
+            "This frees more disk but makes later builds slower."
+        ),
+    )
+    parser.add_argument(
+        "--trim-after-each",
+        action="store_true",
+        default=_env_flag("OPENFORK_TRIM_AFTER_EACH"),
+        help=(
+            "With --cleanup-after-each, run sync/fstrim after Docker cleanup. "
+            "On a sparse WSL VHDX this lets Windows reclaim free blocks."
+        ),
+    )
+    parser.add_argument(
+        "--image-index",
+        type=int,
+        action="append",
+        help="Only process a zero-based image index from IMAGES. Can be repeated.",
+    )
+    parser.add_argument(
+        "--image",
+        action="append",
+        help=(
+            "Only process images whose Dockerfile or tag matches this value "
+            "or contains it. Can be repeated."
+        ),
+    )
+    parser.add_argument(
+        "--list-image-indexes",
+        action="store_true",
+        help="Print selected image indexes and exit. Used by wrapper scripts.",
+    )
+    parser.add_argument(
         "actions",
         nargs="*",
-        choices=("build", "push"),
         help="Optional action aliases. Example: build push",
     )
 
     args = parser.parse_args()
+    invalid_actions = [
+        action for action in args.actions if action not in {"build", "push"}
+    ]
+    if invalid_actions:
+        parser.error(
+            f"invalid action '{invalid_actions[0]}' (choose from 'build', 'push')"
+        )
+
+    try:
+        selected_images = select_images(IMAGES, args.image_index, args.image)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    if args.list_image_indexes:
+        print(" ".join(str(index) for index, _config in selected_images))
+        sys.exit(0)
+
+    if not selected_images:
+        print("❌ No images matched the requested filters.")
+        sys.exit(1)
+
     if "build" in args.actions:
         args.build = True
     if "push" in args.actions:
@@ -487,9 +663,19 @@ def main():
             print(f"❌ Error parsing delay: {e}")
             sys.exit(1)
 
-    print(f"Images to process: {len(IMAGES)}")
+    print(f"Images to process: {len(selected_images)}")
     print(f"Push attempts: {PUSH_ATTEMPTS} (1 initial + 1 retry)")
     print(f"Retry delay: {RETRY_DELAY_SECONDS} seconds")
+    if args.cleanup_after_each:
+        print("Cleanup after each success: enabled")
+        print(
+            "Build cache prune after each success: "
+            f"{'enabled' if args.prune_build_cache_after_each else 'disabled'}"
+        )
+        print(
+            "Filesystem trim after each success: "
+            f"{'enabled' if args.trim_after_each else 'disabled'}"
+        )
 
     hf_token = args.hf_token or os.environ.get("HF_TOKEN")
 
@@ -498,7 +684,7 @@ def main():
     build_failed = []
     push_failed = []
 
-    for config in IMAGES:
+    for _index, config in selected_images:
         result = build_and_push_image(
             config,
             hf_token,
@@ -508,6 +694,9 @@ def main():
             getattr(args, "fresh_clone", False),
             force_direct_push=getattr(args, "direct_push", False),
             explicit_actions=explicit_actions,
+            cleanup_after_success=args.cleanup_after_each,
+            prune_build_cache_after_success=args.prune_build_cache_after_each,
+            trim_after_success=args.trim_after_each,
         )
         if result == "success":
             successful.append(config.tag)
