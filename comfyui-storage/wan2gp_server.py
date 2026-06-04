@@ -83,6 +83,43 @@ def _prefer_host_libcuda() -> None:
 _prefer_host_libcuda()
 
 
+def _ensure_libcuda_linker_name() -> None:
+    """Expose libcuda.so for Triton/native builds in WSL GPU containers."""
+    try:
+        output = subprocess.check_output(
+            ["ldconfig", "-p"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        logging.debug("Could not query ldconfig for libcuda: %s", exc)
+        return
+
+    driver_path = None
+    for line in output.splitlines():
+        if "libcuda.so.1" in line and "=>" in line:
+            driver_path = Path(line.split("=>", 1)[1].strip())
+            break
+
+    if not driver_path:
+        return
+
+    linker_path = driver_path.with_name("libcuda.so")
+    if linker_path.exists():
+        return
+
+    try:
+        os.symlink(driver_path.name, linker_path)
+        logging.info("Created libcuda linker symlink at %s.", linker_path)
+    except FileExistsError:
+        return
+    except Exception as exc:
+        logging.warning("Could not create libcuda linker symlink: %s", exc)
+
+
+_ensure_libcuda_linker_name()
+
+
 def _log_huggingface_lookups() -> None:
     """Log offline Hugging Face file lookups so missing baked files are visible."""
     try:
@@ -138,6 +175,35 @@ def _has_wan22_transformer_variant(variant: str) -> bool:
     return all((ckpt_dir / name).is_file() for name in required)
 
 
+def _patch_wan22_vae_selection() -> None:
+    """Make upstream Wan2GP use the baked Wan 2.2 VAE for Wan 2.2 14B models."""
+    target = Path(WAN2GP_ROOT) / "models" / "wan" / "any2video.py"
+    old = (
+        '        elif model_def.get("wan_5B_class", False):\n'
+        "            self.vae_stride = (4, 16, 16)\n"
+        '            vae_checkpoint = "Wan2.2_VAE.safetensors"\n'
+        "            vae = Wan2_2_VAE\n"
+    )
+    new = (
+        '        elif model_def.get("wan_5B_class", False) or base_model_type in ["t2v_2_2", "i2v_2_2"]:\n'
+        '            if model_def.get("wan_5B_class", False):\n'
+        "                self.vae_stride = (4, 16, 16)\n"
+        '            vae_checkpoint = "Wan2.2_VAE.safetensors"\n'
+        "            vae = Wan2_2_VAE\n"
+    )
+    try:
+        text = target.read_text(encoding="utf-8")
+        if new in text:
+            return
+        if old not in text:
+            logging.warning("Could not find Wan2GP VAE selection block to patch.")
+            return
+        target.write_text(text.replace(old, new), encoding="utf-8")
+        logging.info("Patched Wan2GP Wan 2.2 VAE selection.")
+    except Exception as exc:
+        logging.warning("Could not patch Wan2GP Wan 2.2 VAE selection: %s", exc)
+
+
 def _wan2gp_cli_args() -> tuple[str, ...]:
     raw_args = os.environ.get("WAN2GP_CLI_ARGS", "").strip()
     if not raw_args:
@@ -173,6 +239,7 @@ def _wan2gp_cli_args() -> tuple[str, ...]:
 
 # ── Wan2GP session init (blocking — server starts only after model is loaded) ─
 logging.info("Initialising Wan2GP session (this may take several minutes)...")
+_patch_wan22_vae_selection()
 
 
 def _init_session_sync():
