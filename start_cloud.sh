@@ -205,6 +205,53 @@ wait_for_url() {
   return 1
 }
 
+ffmpeg_supports_fps_mode() {
+  command -v ffmpeg >/dev/null 2>&1 &&
+    ffmpeg -hide_banner -h full 2>/dev/null | grep -q -- "-fps_mode"
+}
+
+install_static_ffmpeg_71() {
+  local tmp_dir="/tmp/openfork-ffmpeg-71"
+  rm -rf "$tmp_dir"
+  mkdir -p "$tmp_dir"
+
+  log "Installing static FFmpeg 7.1 for Wan2GP video decode compatibility..."
+  if ! curl -fSL --retry 3 --retry-delay 5 \
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz" \
+    -o "$tmp_dir/ffmpeg.tar.xz"; then
+    log "ERROR: Failed to download static FFmpeg 7.1."
+    return 1
+  fi
+
+  if ! tar -xJf "$tmp_dir/ffmpeg.tar.xz" -C "$tmp_dir"; then
+    log "ERROR: Failed to extract static FFmpeg 7.1."
+    return 1
+  fi
+
+  local bin_dir
+  bin_dir="$(find "$tmp_dir" -type d -path "*/bin" | head -n 1)"
+  if [ -z "$bin_dir" ] || [ ! -x "$bin_dir/ffmpeg" ]; then
+    log "ERROR: Static FFmpeg archive did not contain an executable ffmpeg."
+    return 1
+  fi
+
+  cp -f "$bin_dir/ffmpeg" /usr/local/bin/ffmpeg
+  cp -f "$bin_dir/ffprobe" /usr/local/bin/ffprobe
+  chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
+  hash -r
+  log "Static FFmpeg installed: $(ffmpeg -version 2>&1 | head -1)"
+}
+
+ensure_ffmpeg_fps_mode_support() {
+  if ffmpeg_supports_fps_mode; then
+    log "FFmpeg supports -fps_mode: $(ffmpeg -version 2>&1 | head -1)"
+    return 0
+  fi
+
+  log "WARNING: Current FFmpeg does not support -fps_mode, which Wan2GP uses for video-guide decode."
+  install_static_ffmpeg_71 && ffmpeg_supports_fps_mode
+}
+
 verify_wan2gp_stable_thread_wrapper() {
   local server_file="$1"
   [ -f "$server_file" ] || return 1
@@ -954,6 +1001,14 @@ if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
+
+    if ! ensure_ffmpeg_fps_mode_support; then
+        if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
+            log "ERROR: $SERVICE_TYPE requires FFmpeg with -fps_mode support for driving/source video decode."
+            exit 1
+        fi
+        log "WARNING: Continuing with FFmpeg that may not support Wan2GP video-guide decode."
+    fi
 
     if [[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp"* ]]; then
         if [[ "${SERVICE_TYPE:-}" == *"8gb"* ]]; then

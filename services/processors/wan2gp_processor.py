@@ -232,6 +232,13 @@ class Wan2GPProcessor(BaseJobProcessor):
 
     def _wan2gp_no_output_message(self, service_name: str = "Wan2GP") -> str:
         if self.last_wan2gp_error:
+            if "fps_mode" in self.last_wan2gp_error and "ffmpeg" in self.last_wan2gp_error.lower():
+                return (
+                    f"{service_name} failed for job {self.job_id}: FFmpeg is "
+                    "too old for Wan2GP video-guide decode (`-fps_mode` is "
+                    "unsupported). Update or restart the worker with FFmpeg 7.1+ "
+                    "before retrying."
+                )
             if "FieldsBuilder finalized" in self.last_wan2gp_error:
                 return (
                     f"{service_name} failed for job {self.job_id}: Taichi "
