@@ -83,6 +83,50 @@ def _prefer_host_libcuda() -> None:
 _prefer_host_libcuda()
 
 
+def _log_huggingface_lookups() -> None:
+    """Log offline Hugging Face file lookups so missing baked files are visible."""
+    try:
+        import huggingface_hub
+    except Exception as exc:
+        logging.debug("Could not install Hugging Face lookup logging: %s", exc)
+        return
+
+    original_hf_hub_download = getattr(huggingface_hub, "hf_hub_download", None)
+    if callable(original_hf_hub_download):
+
+        def _hf_hub_download_with_logging(*args, **kwargs):
+            repo_id = kwargs.get("repo_id") or (args[0] if args else None)
+            filename = kwargs.get("filename") or (args[1] if len(args) > 1 else None)
+            logging.info(
+                "HF lookup: hf_hub_download repo=%r filename=%r subfolder=%r local_dir=%r",
+                repo_id,
+                filename,
+                kwargs.get("subfolder"),
+                kwargs.get("local_dir"),
+            )
+            return original_hf_hub_download(*args, **kwargs)
+
+        huggingface_hub.hf_hub_download = _hf_hub_download_with_logging
+
+    original_snapshot_download = getattr(huggingface_hub, "snapshot_download", None)
+    if callable(original_snapshot_download):
+
+        def _snapshot_download_with_logging(*args, **kwargs):
+            repo_id = kwargs.get("repo_id") or (args[0] if args else None)
+            logging.info(
+                "HF lookup: snapshot_download repo=%r allow_patterns=%r local_dir=%r",
+                repo_id,
+                kwargs.get("allow_patterns"),
+                kwargs.get("local_dir"),
+            )
+            return original_snapshot_download(*args, **kwargs)
+
+        huggingface_hub.snapshot_download = _snapshot_download_with_logging
+
+
+_log_huggingface_lookups()
+
+
 def _has_wan22_transformer_variant(variant: str) -> bool:
     ckpt_dir = Path(WAN2GP_ROOT) / "ckpts"
     required = (
@@ -181,6 +225,32 @@ def _skip_eager_shared_asset_downloads() -> None:
 
         wgp.query_core_shared_model_files = _empty_download_def
         wgp.query_matanyone_download_def = _empty_download_def
+        patched_handlers = set()
+        for handler in getattr(wgp, "model_types_handlers", {}).values():
+            if handler in patched_handlers or not hasattr(handler, "query_model_files"):
+                continue
+            patched_handlers.add(handler)
+            original_query_model_files = handler.query_model_files
+
+            def _query_model_files(
+                compute_list,
+                base_model_type,
+                model_def=None,
+                _original_query_model_files=original_query_model_files,
+            ):
+                if str(base_model_type or "") in {"t2v_2_2", "i2v_2_2"}:
+                    logging.info(
+                        "Skipping Wan2GP Wan 2.2 family helper-asset downloads for %s.",
+                        base_model_type,
+                    )
+                    return []
+                return _original_query_model_files(
+                    compute_list,
+                    base_model_type,
+                    model_def,
+                )
+
+            handler.query_model_files = staticmethod(_query_model_files)
         logging.info("Skipping Wan2GP eager shared helper-asset downloads.")
     except Exception as exc:
         logging.warning(
