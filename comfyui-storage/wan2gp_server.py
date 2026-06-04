@@ -11,6 +11,7 @@ Endpoints:
 import base64
 import asyncio
 import concurrent.futures
+import faulthandler
 import io
 import logging
 import os
@@ -18,6 +19,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import traceback
 from pathlib import Path
 from typing import Any, Dict
 
@@ -31,6 +33,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+faulthandler.enable(all_threads=True)
 
 WAN2GP_ROOT = os.environ.get("WAN2GP_ROOT", "/opt/wan2gp")
 WAN2GP_OUTPUT = os.environ.get("WAN2GP_OUTPUT", "/opt/wan2gp/outputs")
@@ -80,17 +83,48 @@ def _prefer_host_libcuda() -> None:
 _prefer_host_libcuda()
 
 
+def _has_wan22_transformer_variant(variant: str) -> bool:
+    ckpt_dir = Path(WAN2GP_ROOT) / "ckpts"
+    required = (
+        f"wan2.2_text2video_14B_high_{variant}.safetensors",
+        f"wan2.2_text2video_14B_low_{variant}.safetensors",
+        f"wan2.2_image2video_14B_high_{variant}.safetensors",
+        f"wan2.2_image2video_14B_low_{variant}.safetensors",
+    )
+    return all((ckpt_dir / name).is_file() for name in required)
+
+
 def _wan2gp_cli_args() -> tuple[str, ...]:
     raw_args = os.environ.get("WAN2GP_CLI_ARGS", "").strip()
     if not raw_args:
+        parsed: tuple[str, ...] = ()
+    else:
+        try:
+            parsed = tuple(shlex.split(raw_args))
+        except ValueError as exc:
+            logging.warning("Ignoring invalid WAN2GP_CLI_ARGS=%r: %s", raw_args, exc)
+            parsed = ()
+
+    has_dtype_flag = any(arg in {"--fp16", "--bf16"} for arg in parsed)
+    if (
+        not has_dtype_flag
+        and _has_wan22_transformer_variant("quanto_mfp16_int8")
+        and not _has_wan22_transformer_variant("quanto_mbf16_int8")
+    ):
+        parsed = (*parsed, "--fp16")
+        logging.info(
+            "Added --fp16 because the local Wan 2.2 transformers are mfp16."
+        )
+
+    if not parsed:
         return ()
+
     try:
-        parsed = tuple(shlex.split(raw_args))
         logging.info("Using Wan2GP CLI args: %s", " ".join(parsed))
         return parsed
-    except ValueError as exc:
-        logging.warning("Ignoring invalid WAN2GP_CLI_ARGS=%r: %s", raw_args, exc)
-        return ()
+    except Exception as exc:
+        logging.warning("Ignoring Wan2GP CLI args %r: %s", parsed, exc)
+    return ()
 
 
 # ── Wan2GP session init (blocking — server starts only after model is loaded) ─
@@ -100,18 +134,62 @@ logging.info("Initialising Wan2GP session (this may take several minutes)...")
 def _init_session_sync():
     from shared.api import init
 
-    return init(
-        root=Path(WAN2GP_ROOT),
-        output_dir=Path(WAN2GP_OUTPUT),
-        cli_args=_wan2gp_cli_args(),
-        console_output=True,
-    )
+    try:
+        return init(
+            root=Path(WAN2GP_ROOT),
+            output_dir=Path(WAN2GP_OUTPUT),
+            cli_args=_wan2gp_cli_args(),
+            console_output=True,
+        )
+    except BaseException:
+        logging.error(
+            "Wan2GP session initialization failed:\n%s",
+            traceback.format_exc(),
+        )
+        raise
 
 
 # Taichi/SCAIL binds thread-local runtime state. Initialise Wan2GP on the same
 # dedicated worker thread that will run every generation request.
 _session = _generation_executor.submit(_init_session_sync).result()
 logging.info("Wan2GP session ready.")
+
+
+def _empty_download_def(*_args, **_kwargs) -> dict[str, Any]:
+    return {
+        "repoId": "",
+        "sourceFolderList": [],
+        "fileList": [],
+        "targetFolderList": [],
+    }
+
+
+def _skip_eager_shared_asset_downloads() -> None:
+    """Skip WanGP helper-asset downloads that are not needed for basic T2V/I2V.
+
+    WanGP calls query_core_shared_model_files() before loading every main model.
+    The OpenFork Wan2GP image is intentionally offline at runtime and bakes the
+    Wan 2.2 transformer/VAE/T5 files only; the eager helper bundle includes
+    pose/depth/audio assets that basic T2V/I2V does not use.
+    """
+    enabled = os.environ.get("WAN2GP_SKIP_EAGER_SHARED_DOWNLOADS", "1").strip().lower()
+    if enabled in {"0", "false", "no", "off"}:
+        return
+
+    try:
+        import wgp
+
+        wgp.query_core_shared_model_files = _empty_download_def
+        wgp.query_matanyone_download_def = _empty_download_def
+        logging.info("Skipping Wan2GP eager shared helper-asset downloads.")
+    except Exception as exc:
+        logging.warning(
+            "Could not disable Wan2GP eager shared helper-asset downloads: %s",
+            exc,
+        )
+
+
+_skip_eager_shared_asset_downloads()
 
 # Verify HDR IC-LoRA is present (if built into the image)
 if not os.path.isfile(os.path.normpath(_HDR_LORA_PATH)):
