@@ -347,7 +347,7 @@ class OrchestratorService:
             if job_id:
                 params["jobId"] = job_id
 
-            if accept_policy == 'mine':
+            if accept_policy == 'mine' and not self.use_api_key:
                 user_id = self._get_user_id_from_token()
                 if not user_id:
                     logging.error("Could not get user ID for 'own' policy. Aborting job fetch.")
@@ -411,7 +411,7 @@ class OrchestratorService:
                 "limit": limit,
             }
 
-            if accept_policy == 'mine':
+            if accept_policy == 'mine' and not self.use_api_key:
                 user_id = self._get_user_id_from_token()
                 if not user_id:
                     logging.error("Could not get user ID for 'own' policy. Aborting job peek.")

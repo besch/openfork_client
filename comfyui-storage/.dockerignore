@@ -1,0 +1,4 @@
+.codex-assets
+.git
+__pycache__
+*.pyc

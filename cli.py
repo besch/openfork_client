@@ -292,9 +292,9 @@ def setup_client(args):
         registration_services = [args.service]
         logging.info(f"Headless mode: restricting supported_services to [{args.service}] (Docker image only has this service)")
         
-        # Headless clients exist to provide network capacity, not for personal use.
-        # Monetize headless clients are a separate paid-job pool and must not be
-        # rewritten into the public credit pool.
+        # Headless clients can be public capacity, paid monetize workers, or a
+        # user's own cloud-rented DGN client. Preserve explicit private/trusted
+        # routing so wallet-guarded agents can safely target a user's own worker.
         if client.monetize_mode:
             if client.community_mode != 'none' or client.process_own_jobs:
                 logging.warning(
@@ -305,13 +305,13 @@ def setup_client(args):
             client.process_own_jobs = False
             client.allowed_ids = []
         elif client.community_mode != 'all' or client.process_own_jobs:
-            logging.warning(
-                f"Headless mode: overriding routing config to community_mode='all', "
-                f"process_own_jobs=False (headless clients serve public network only)"
+            logging.info(
+                "Headless mode: preserving explicit routing config "
+                "community_mode=%r, process_own_jobs=%s, allowed_ids=%s",
+                client.community_mode,
+                client.process_own_jobs,
+                len(client.allowed_ids or []),
             )
-            client.community_mode = 'all'
-            client.process_own_jobs = False
-            client.allowed_ids = []  # Clear any user-specific filtering
         
         # TIER 0 routing ensured by reporting cached image
         if args.service not in cached_images:
