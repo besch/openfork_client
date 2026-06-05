@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # OpenFork - WAN 2.2 on Wan2GP (8GB experimental)
 #
 # Provides:
@@ -6,7 +7,7 @@
 #   - WAN 2.2 VAE and int8 UMT5 text encoder support files
 #
 # Build:
-#   docker build \
+#   DOCKER_BUILDKIT=1 docker build --progress=plain \
 #     -t beschiak/openfork-wan22-wan2gp-8gb:latest \
 #     -f Dockerfile.wan22-wan2gp-8gb .
 
