@@ -86,6 +86,7 @@ services/processors/video/wan22_text.py
 services/processors/video/wan22_wan2gp.py
 services/processors/wan2gp_processor.py
 services/realtime_job_watcher.py
+services/wan2gp_runtime.py
 start_cloud.sh
 utils/comfyui_workflow_utils.py
 utils/log_tailer.py
