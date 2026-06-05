@@ -166,13 +166,17 @@ _log_huggingface_lookups()
 
 def _has_wan22_transformer_variant(variant: str) -> bool:
     ckpt_dir = Path(WAN2GP_ROOT) / "ckpts"
-    required = (
-        f"wan2.2_text2video_14B_high_{variant}.safetensors",
-        f"wan2.2_text2video_14B_low_{variant}.safetensors",
-        f"wan2.2_image2video_14B_high_{variant}.safetensors",
-        f"wan2.2_image2video_14B_low_{variant}.safetensors",
+    model_pairs = (
+        (
+            f"wan2.2_text2video_14B_high_{variant}.safetensors",
+            f"wan2.2_text2video_14B_low_{variant}.safetensors",
+        ),
+        (
+            f"wan2.2_image2video_14B_high_{variant}.safetensors",
+            f"wan2.2_image2video_14B_low_{variant}.safetensors",
+        ),
     )
-    return all((ckpt_dir / name).is_file() for name in required)
+    return any(all((ckpt_dir / name).is_file() for name in pair) for pair in model_pairs)
 
 
 def _patch_wan22_vae_selection() -> None:

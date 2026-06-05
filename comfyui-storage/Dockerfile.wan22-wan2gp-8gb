@@ -2,8 +2,8 @@
 #
 # Provides:
 #   - Wan2GP at /opt/wan2gp
-#   - WAN 2.2 T2V/I2V 14B high/low quanto mfp16 int8 transformers
-#   - WAN 2.2 VAE and UMT5 text encoder support files
+#   - WAN 2.2 T2V 14B high/low quanto mfp16 int8 transformers
+#   - WAN 2.2 VAE and int8 UMT5 text encoder support files
 #
 # Build:
 #   docker build \
@@ -61,24 +61,23 @@ RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs /opt/wan2gp/input
 
 RUN pip3 install -q "huggingface_hub[cli]"
 
-RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+RUN --mount=type=cache,target=/opt/wan2gp/ckpts/.cache \
+    if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
     huggingface-cli download DeepBeepMeep/Wan2.2 \
         "wan2.2_text2video_14B_high_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
         "wan2.2_text2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
-        "wan2.2_image2video_14B_high_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
-        "wan2.2_image2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
         Wan2.2_VAE.safetensors \
         --local-dir /opt/wan2gp/ckpts \
         ${HF_TOKEN_ARG} \
     || { echo "ERROR: WAN 2.2 transformer/VAE download failed."; exit 1; }
 
-RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+RUN --mount=type=cache,target=/opt/wan2gp/ckpts/.cache \
+    if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
     huggingface-cli download DeepBeepMeep/Wan2.1 \
         umt5-xxl/special_tokens_map.json \
         umt5-xxl/spiece.model \
         umt5-xxl/tokenizer.json \
         umt5-xxl/tokenizer_config.json \
-        umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors \
         umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors \
         --local-dir /opt/wan2gp/ckpts \
         ${HF_TOKEN_ARG} \
@@ -88,7 +87,7 @@ RUN pip3 install fastapi "uvicorn[standard]"
 
 COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
 
-RUN python3 -c "import os; root='/opt/wan2gp/ckpts'; variant=os.environ['WAN22_TRANSFORMER_VARIANT']; required=[f'wan2.2_text2video_14B_high_{variant}.safetensors',f'wan2.2_text2video_14B_low_{variant}.safetensors',f'wan2.2_image2video_14B_high_{variant}.safetensors',f'wan2.2_image2video_14B_low_{variant}.safetensors','Wan2.2_VAE.safetensors','umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors','umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors']; missing=[p for p in required if not os.path.isfile(os.path.join(root,p))]; assert not missing, missing; print('WAN 2.2 Wan2GP 8GB files: OK')"
+RUN python3 -c "import os; root='/opt/wan2gp/ckpts'; variant=os.environ['WAN22_TRANSFORMER_VARIANT']; required=[f'wan2.2_text2video_14B_high_{variant}.safetensors',f'wan2.2_text2video_14B_low_{variant}.safetensors','Wan2.2_VAE.safetensors','umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors','umt5-xxl/special_tokens_map.json','umt5-xxl/spiece.model','umt5-xxl/tokenizer.json','umt5-xxl/tokenizer_config.json']; missing=[p for p in required if not os.path.isfile(os.path.join(root,p))]; assert not missing, missing; print('WAN 2.2 Wan2GP 8GB T2V files: OK')"
 
 WORKDIR /opt/wan2gp
 
