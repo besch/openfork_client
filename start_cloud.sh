@@ -1205,13 +1205,14 @@ except Exception as e:
         WAN22_T2V_LOW_TRANSFORMER="$WAN2GP_ROOT/ckpts/wan2.2_text2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors"
         WAN22_I2V_HIGH_TRANSFORMER="$WAN2GP_ROOT/ckpts/wan2.2_image2video_14B_high_${WAN22_TRANSFORMER_VARIANT}.safetensors"
         WAN22_I2V_LOW_TRANSFORMER="$WAN2GP_ROOT/ckpts/wan2.2_image2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors"
-        WAN22_VAE="$WAN2GP_ROOT/ckpts/Wan2.2_VAE.safetensors"
+        WAN22_VAE_21="$WAN2GP_ROOT/ckpts/Wan2.1_VAE.safetensors"
+        WAN22_VAE_22="$WAN2GP_ROOT/ckpts/Wan2.2_VAE.safetensors"
         WAN22_TEXT_ENCODER="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
         WAN22_TEXT_ENCODER_INT8="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
         WAN22_TOKENIZER_MODEL="$WAN2GP_ROOT/ckpts/umt5-xxl/spiece.model"
         WAN22_TOKENIZER_CONFIG="$WAN2GP_ROOT/ckpts/umt5-xxl/tokenizer_config.json"
 
-        for required_file in "$WAN22_T2V_HIGH_TRANSFORMER" "$WAN22_T2V_LOW_TRANSFORMER" "$WAN22_I2V_HIGH_TRANSFORMER" "$WAN22_I2V_LOW_TRANSFORMER" "$WAN22_VAE" "$WAN22_TOKENIZER_MODEL" "$WAN22_TOKENIZER_CONFIG"; do
+        for required_file in "$WAN22_T2V_HIGH_TRANSFORMER" "$WAN22_T2V_LOW_TRANSFORMER" "$WAN22_I2V_HIGH_TRANSFORMER" "$WAN22_I2V_LOW_TRANSFORMER" "$WAN22_VAE_21" "$WAN22_VAE_22" "$WAN22_TOKENIZER_MODEL" "$WAN22_TOKENIZER_CONFIG"; do
             if [ ! -f "$required_file" ]; then
                 log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
                 log "Expected image for this service: $WAN22_EXPECTED_IMAGE"

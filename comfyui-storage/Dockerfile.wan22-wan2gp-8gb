@@ -4,7 +4,7 @@
 # Provides:
 #   - Wan2GP at /opt/wan2gp
 #   - WAN 2.2 T2V 14B high/low quanto mfp16 int8 transformers
-#   - WAN 2.2 VAE and int8 UMT5 text encoder support files
+#   - WAN 2.1/WAN 2.2 VAEs and int8 UMT5 text encoder support files
 #
 # Build:
 #   DOCKER_BUILDKIT=1 docker build --progress=plain \
@@ -83,7 +83,7 @@ RUN --mount=type=cache,target=/opt/wan2gp/ckpts/.cache \
         umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors \
         --local-dir /opt/wan2gp/ckpts \
         ${HF_TOKEN_ARG} \
-    || { echo "ERROR: WAN 2.2 UMT5 support file download failed."; exit 1; }
+    || { echo "ERROR: WAN 2.1 VAE/UMT5 support file download failed."; exit 1; }
 
 RUN pip3 install fastapi "uvicorn[standard]"
 

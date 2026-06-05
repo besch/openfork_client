@@ -93,11 +93,11 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.stable.audio", "beschiak/openfork-stable-audio-3-sfx:latest", build=True, push=True),
     # ImageConfig("Dockerfile.scail-wan2gp-16gb", "beschiak/openfork-scail-wan2gp-16gb:latest", build=True, push=True),
     ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.wan22-wan2gp-8gb", "beschiak/openfork-wan22-wan2gp-8gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.wan22-wan2gp-10gb", "beschiak/openfork-wan22-wan2gp-10gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.wan22-wan2gp-16gb", "beschiak/openfork-wan22-wan2gp-16gb:latest", build=True, push=True),
-    # ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-8gb", "beschiak/openfork-wan22-wan2gp-8gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-10gb", "beschiak/openfork-wan22-wan2gp-10gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-16gb", "beschiak/openfork-wan22-wan2gp-16gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
 ]
 
 PUSH_ATTEMPTS = 4
