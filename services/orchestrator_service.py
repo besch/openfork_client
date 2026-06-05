@@ -777,6 +777,10 @@ class OrchestratorService:
         if not bucket or not storage_path:
             return None
 
+        if isinstance(storage_path, str) and storage_path.startswith(("http://", "https://")):
+            logging.info("Downloading storage asset from signed URL.")
+            return self.download_asset_by_url(storage_path, download_dir)
+
         supabase_url = os.environ.get("SUPABASE_URL", SUPABASE_URL).rstrip("/")
         encoded_path = "/".join(
             quote(part, safe="")
