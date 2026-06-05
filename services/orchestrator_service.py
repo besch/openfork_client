@@ -1056,7 +1056,10 @@ class OrchestratorService:
             payload = {"status": status}
             metadata_payload = dict(completion_metadata) if completion_metadata else None
 
-            if status == "failed":
+            if status == "completed":
+                metadata_payload = metadata_payload or {}
+                metadata_payload["provider_logs_tail"] = get_recent_logs_tail(100)
+            elif status == "failed":
                 metadata_payload = metadata_payload or {}
                 metadata_payload.setdefault("provider_logs_tail", get_recent_logs_tail(100))
 

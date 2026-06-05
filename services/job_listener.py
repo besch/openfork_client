@@ -14,6 +14,10 @@ from config import (
 from services.docker_manager import docker_manager
 from services.container_monitor import ContainerMonitor
 from services.docker_download_manager import ImageAvailability, POST_DOWNLOAD_SETTLE_SECS
+from services.wan2gp_runtime import (
+    build_wan2gp_environment,
+    get_wan2gp_pre_start_copies,
+)
 from exceptions import AuthError, InfrastructureError, ProviderError
 
 
@@ -1874,123 +1878,14 @@ class JobListener:
                                                     actual_service_type,
                                                 )
                                             elif is_wan2gp:
-                                                # LTX/Wan2GP images are expected to contain
-                                                # their model files. If a dependency tries to
-                                                # fetch from Hugging Face at runtime, fail
-                                                # visibly instead of silently re-downloading on
-                                                # every container start.
-                                                wan2gp_env = {
-                                                    "HF_HUB_OFFLINE": "1",
-                                                    "TRANSFORMERS_OFFLINE": "1",
-                                                    "HF_HUB_DISABLE_TELEMETRY": "1",
-                                                    "CUDA_MODULE_LOADING": "LAZY",
-                                                    "PYTORCH_CUDA_ALLOC_CONF": (
-                                                        "expandable_segments:True,"
-                                                        "max_split_size_mb:128"
-                                                    ),
-                                                    "MALLOC_ARENA_MAX": "2",
-                                                }
-
-                                                lowered_service_type = (
-                                                    actual_service_type.lower()
+                                                wan2gp_env = build_wan2gp_environment(
+                                                    actual_service_type
                                                 )
-                                                if "wan22-wan2gp" in lowered_service_type:
-                                                    if "8gb" in lowered_service_type:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4.5 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.30 "
-                                                            "--vram-safety-coefficient 0.55"
-                                                        )
-                                                    elif "10gb" in lowered_service_type:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4.5 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.35 "
-                                                            "--vram-safety-coefficient 0.60"
-                                                        )
-                                                    elif "12gb" in lowered_service_type:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4.5 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.35 "
-                                                            "--vram-safety-coefficient 0.65"
-                                                        )
-                                                    elif "24gb" in lowered_service_type:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.55 "
-                                                            "--vram-safety-coefficient 0.80"
-                                                        )
-                                                    else:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4.5 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.45 "
-                                                            "--vram-safety-coefficient 0.70"
-                                                        )
-                                                elif "davinci" in lowered_service_type:
-                                                    if "16gb" in lowered_service_type:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4.5 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.45 "
-                                                            "--vram-safety-coefficient 0.7"
-                                                        )
-                                                    elif "32gb" in lowered_service_type:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.55 "
-                                                            "--vram-safety-coefficient 0.80"
-                                                        )
-                                                    else:
-                                                        wan2gp_env[
-                                                            "WAN2GP_CLI_ARGS"
-                                                        ] = (
-                                                            "--profile 4.5 --attention sdpa "
-                                                            "--perc-reserved-mem-max 0.45 "
-                                                            "--vram-safety-coefficient 0.70"
-                                                        )
-                                                elif "8gb" in lowered_service_type:
-                                                    # WanGP's documented low-memory path:
-                                                    # profile 4/4.5 + sdpa + low reserved RAM.
-                                                    wan2gp_env["WAN2GP_CLI_ARGS"] = (
-                                                        "--profile 4.5 --attention sdpa "
-                                                        "--perc-reserved-mem-max 0.45"
+                                                pre_start_copies = (
+                                                    get_wan2gp_pre_start_copies(
+                                                        self.client.root_dir
                                                     )
-                                                else:
-                                                    wan2gp_env["WAN2GP_CLI_ARGS"] = (
-                                                        "--profile 4 --attention sdpa"
-                                                    )
-
-                                                import os as _os
-
-                                                server_src = _os.path.join(
-                                                    self.client.root_dir,
-                                                    "comfyui-storage",
-                                                    "wan2gp_server.py",
                                                 )
-                                                pre_start_copies = []
-                                                if _os.path.isfile(server_src):
-                                                    pre_start_copies.append(
-                                                        (
-                                                            server_src,
-                                                            "/opt/wan2gp/wan2gp_server.py",
-                                                        )
-                                                    )
-                                                else:
-                                                    logging.warning(
-                                                        f"wan2gp_server.py not found at {server_src}; using baked-in version."
-                                                    )
 
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,

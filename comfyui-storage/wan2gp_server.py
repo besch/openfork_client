@@ -214,7 +214,12 @@ def _has_wan22_transformer_variant(variant: str) -> bool:
 
 
 def _patch_wan22_vae_selection() -> None:
-    """Make upstream Wan2GP use the baked Wan 2.2 VAE for Wan 2.2 14B models."""
+    """Make upstream Wan2GP use the baked Wan 2.2 VAE for 48-channel Wan models.
+
+    Wan 2.2 T2V 14B keeps a 16-channel transformer input and must use the
+    Wan2.1 VAE. The Wan2.2 VAE has 48 latent channels and only matches the
+    newer 48-channel families.
+    """
     target = Path(WAN2GP_ROOT) / "models" / "wan" / "any2video.py"
     old = (
         '        elif model_def.get("wan_5B_class", False):\n'
@@ -222,8 +227,15 @@ def _patch_wan22_vae_selection() -> None:
         '            vae_checkpoint = "Wan2.2_VAE.safetensors"\n'
         "            vae = Wan2_2_VAE\n"
     )
-    new = (
+    broad = (
         '        elif model_def.get("wan_5B_class", False) or base_model_type in ["t2v_2_2", "i2v_2_2"]:\n'
+        '            if model_def.get("wan_5B_class", False):\n'
+        "                self.vae_stride = (4, 16, 16)\n"
+        '            vae_checkpoint = "Wan2.2_VAE.safetensors"\n'
+        "            vae = Wan2_2_VAE\n"
+    )
+    new = (
+        '        elif model_def.get("wan_5B_class", False) or base_model_type in ["ti2v_2_2"]:\n'
         '            if model_def.get("wan_5B_class", False):\n'
         "                self.vae_stride = (4, 16, 16)\n"
         '            vae_checkpoint = "Wan2.2_VAE.safetensors"\n'
@@ -232,6 +244,10 @@ def _patch_wan22_vae_selection() -> None:
     try:
         text = target.read_text(encoding="utf-8")
         if new in text:
+            return
+        if broad in text:
+            target.write_text(text.replace(broad, new), encoding="utf-8")
+            logging.info("Repaired Wan2GP Wan 2.2 VAE selection.")
             return
         if old not in text:
             logging.warning("Could not find Wan2GP VAE selection block to patch.")

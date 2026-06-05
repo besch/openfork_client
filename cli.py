@@ -514,40 +514,6 @@ def main():
     if not args.dgn_api_key and not (args.access_token and args.refresh_token):
         parser.error('Either --dgn-api-key OR both --access-token and --refresh-token are required')
 
-    if args.service != 'auto':
-        # In headless mode (running inside cloud container), don't manage Docker
-        # - container is already running with ComfyUI
-        from config import HEADLESS_MODE
-        from services.docker_manager import docker_manager
-        if not HEADLESS_MODE:
-            docker_manager.run_container(service_type=args.service)
-            # Start log streaming for dedicated service
-            log_thread = threading.Thread(
-                target=docker_manager.stream_logs,
-                args=(args.service, SHUTDOWN_EVENT),
-                daemon=True
-            )
-            log_thread.start()
-        else:
-            # Start log tailers for headless mode. Wan2GP backends do not write
-            # to the ComfyUI log, so choose the backend log for this service.
-            from utils.log_tailer import LogTailer, get_headless_log_paths
-
-            log_paths = get_headless_log_paths(args.service)
-            logging.info(
-                "Headless mode detected - skipping Docker management. "
-                "Backend should be running at 127.0.0.1:8188; tailing %s",
-                ", ".join(log_paths),
-            )
-            for log_path in log_paths:
-                tailer = LogTailer(log_path, service_type=args.service)
-                log_thread = threading.Thread(
-                    target=tailer.tail,
-                    args=(SHUTDOWN_EVENT,),
-                    daemon=True
-                )
-                log_thread.start()
-    
     shutdown_thread = threading.Thread(target=start_shutdown_server, daemon=True)
     shutdown_thread.start()
 
@@ -555,6 +521,61 @@ def main():
     provider_id = None
     try:
         client, provider_id = setup_client(args)
+
+        if args.service != 'auto':
+            # Dedicated services need the live /api/config image map loaded by
+            # setup_client() before Docker can resolve the service image.
+            from config import HEADLESS_MODE
+            from services.docker_manager import docker_manager
+
+            if not HEADLESS_MODE:
+                service_config = getattr(client, "services_config", {}).get(
+                    args.service, {}
+                )
+                if service_config.get("backend") == "wan2gp":
+                    from services.wan2gp_runtime import (
+                        build_wan2gp_environment,
+                        get_wan2gp_pre_start_copies,
+                    )
+
+                    docker_manager.run_container(
+                        service_type=args.service,
+                        command=["python3", "/opt/wan2gp/wan2gp_server.py"],
+                        environment=build_wan2gp_environment(args.service),
+                        pre_start_copies=get_wan2gp_pre_start_copies(client.root_dir),
+                        shutdown_event=SHUTDOWN_EVENT,
+                    )
+                    logging.info(
+                        "Started wan2gp_server.py as the Wan2GP container main process."
+                    )
+                else:
+                    docker_manager.run_container(service_type=args.service)
+                # Start log streaming for dedicated service
+                log_thread = threading.Thread(
+                    target=docker_manager.stream_logs,
+                    args=(args.service, SHUTDOWN_EVENT),
+                    daemon=True
+                )
+                log_thread.start()
+            else:
+                # Start log tailers for headless mode. Wan2GP backends do not write
+                # to the ComfyUI log, so choose the backend log for this service.
+                from utils.log_tailer import LogTailer, get_headless_log_paths
+
+                log_paths = get_headless_log_paths(args.service)
+                logging.info(
+                    "Headless mode detected - skipping Docker management. "
+                    "Backend should be running at 127.0.0.1:8188; tailing %s",
+                    ", ".join(log_paths),
+                )
+                for log_path in log_paths:
+                    tailer = LogTailer(log_path, service_type=args.service)
+                    log_thread = threading.Thread(
+                        target=tailer.tail,
+                        args=(SHUTDOWN_EVENT,),
+                        daemon=True
+                    )
+                    log_thread.start()
 
         # Start the IPC listener thread only when using OAuth tokens (Electron mode)
         # In headless API key mode, there's no parent process to listen to

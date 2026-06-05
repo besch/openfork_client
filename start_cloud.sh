@@ -1031,7 +1031,7 @@ if [ "$START_WAN2GP" = "true" ]; then
 
     if [[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp"* ]]; then
         if [[ "${SERVICE_TYPE:-}" == *"8gb"* ]]; then
-            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.30 --vram-safety-coefficient 0.55}"
+            export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 5 --attention sdpa --preload 0 --perc-reserved-mem-max 0.20 --vram-safety-coefficient 0.35}"
         elif [[ "${SERVICE_TYPE:-}" == *"10gb"* ]]; then
             export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.35 --vram-safety-coefficient 0.60}"
         elif [[ "${SERVICE_TYPE:-}" == *"12gb"* ]]; then

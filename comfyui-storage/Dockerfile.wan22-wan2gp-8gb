@@ -24,7 +24,7 @@ ENV CUDA_MODULE_LOADING=LAZY
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.8
 ENV MALLOC_ARENA_MAX=2
 ENV WAN22_TRANSFORMER_VARIANT=quanto_mfp16_int8
-ENV WAN2GP_CLI_ARGS="--profile 4.5 --attention sdpa --perc-reserved-mem-max 0.30 --vram-safety-coefficient 0.55"
+ENV WAN2GP_CLI_ARGS="--profile 5 --attention sdpa --preload 0 --perc-reserved-mem-max 0.20 --vram-safety-coefficient 0.35"
 
 RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list \
     && apt-get update \
@@ -75,6 +75,7 @@ RUN --mount=type=cache,target=/opt/wan2gp/ckpts/.cache \
 RUN --mount=type=cache,target=/opt/wan2gp/ckpts/.cache \
     if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
     huggingface-cli download DeepBeepMeep/Wan2.1 \
+        Wan2.1_VAE.safetensors \
         umt5-xxl/special_tokens_map.json \
         umt5-xxl/spiece.model \
         umt5-xxl/tokenizer.json \
@@ -88,7 +89,7 @@ RUN pip3 install fastapi "uvicorn[standard]"
 
 COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
 
-RUN python3 -c "import os; root='/opt/wan2gp/ckpts'; variant=os.environ['WAN22_TRANSFORMER_VARIANT']; required=[f'wan2.2_text2video_14B_high_{variant}.safetensors',f'wan2.2_text2video_14B_low_{variant}.safetensors','Wan2.2_VAE.safetensors','umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors','umt5-xxl/special_tokens_map.json','umt5-xxl/spiece.model','umt5-xxl/tokenizer.json','umt5-xxl/tokenizer_config.json']; missing=[p for p in required if not os.path.isfile(os.path.join(root,p))]; assert not missing, missing; print('WAN 2.2 Wan2GP 8GB T2V files: OK')"
+RUN python3 -c "import os; root='/opt/wan2gp/ckpts'; variant=os.environ['WAN22_TRANSFORMER_VARIANT']; required=[f'wan2.2_text2video_14B_high_{variant}.safetensors',f'wan2.2_text2video_14B_low_{variant}.safetensors','Wan2.1_VAE.safetensors','Wan2.2_VAE.safetensors','umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors','umt5-xxl/special_tokens_map.json','umt5-xxl/spiece.model','umt5-xxl/tokenizer.json','umt5-xxl/tokenizer_config.json']; missing=[p for p in required if not os.path.isfile(os.path.join(root,p))]; assert not missing, missing; print('WAN 2.2 Wan2GP 8GB T2V files: OK')"
 
 WORKDIR /opt/wan2gp
 
