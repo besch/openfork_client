@@ -17,11 +17,12 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import uvicorn
@@ -35,6 +36,13 @@ faulthandler.enable(all_threads=True)
 
 WAN2GP_ROOT = os.environ.get("WAN2GP_ROOT", "/opt/wan2gp")
 WAN2GP_OUTPUT = os.environ.get("WAN2GP_OUTPUT", "/opt/wan2gp/outputs")
+WAN2GP_EXIT_AFTER_JOB = os.environ.get("WAN2GP_EXIT_AFTER_JOB", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+WAN2GP_EXIT_DELAY_SECONDS = float(os.environ.get("WAN2GP_EXIT_DELAY_SECONDS", "1"))
 
 _HDR_LORA_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-0.9.safetensors")
 _HDR_SCENE_EMB_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors")
@@ -44,6 +52,38 @@ if WAN2GP_ROOT not in sys.path:
     sys.path.insert(0, WAN2GP_ROOT)
 
 _gen_lock = threading.Lock()
+_exit_lock = threading.Lock()
+_exit_scheduled = False
+
+
+def _schedule_process_exit(reason: str) -> None:
+    """Ask the start_cloud supervisor for a fresh process after this job."""
+    if not WAN2GP_EXIT_AFTER_JOB:
+        return
+
+    global _exit_scheduled
+    with _exit_lock:
+        if _exit_scheduled:
+            return
+        _exit_scheduled = True
+
+    delay = max(WAN2GP_EXIT_DELAY_SECONDS, 0.0)
+    logging.info(
+        "Scheduling Wan2GP process recycle in %.1fs after %s.",
+        delay,
+        reason,
+    )
+
+    def _exit_after_delay() -> None:
+        time.sleep(delay)
+        logging.info("Exiting Wan2GP process so the supervisor can restart it.")
+        os._exit(0)
+
+    threading.Thread(
+        target=_exit_after_delay,
+        name="wan2gp-process-recycle",
+        daemon=True,
+    ).start()
 
 
 def _prefer_host_libcuda() -> None:
@@ -400,20 +440,29 @@ def _generate_sync(raw_settings: Dict[str, Any]) -> list[str]:
         errors = [
             f"{e.stage}: {e.message}" for e in (result.errors if result else [])
         ]
+        _schedule_process_exit("failed generation")
         raise HTTPException(status_code=500, detail={"errors": errors})
 
     return [Path(str(f)).name for f in result.generated_files]
 
 
 @app.get("/output/{filename}")
-def download_output(filename: str):
+def download_output(filename: str, background_tasks: BackgroundTasks):
     """Serve a generated output file."""
     safe_name = Path(filename).name  # strip any path traversal
     file_path = os.path.join(WAN2GP_OUTPUT, safe_name)
     if not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail="File not found")
+    if WAN2GP_EXIT_AFTER_JOB:
+        background_tasks.add_task(
+            _schedule_process_exit,
+            f"serving generated output {safe_name}",
+        )
     return FileResponse(
-        file_path, media_type="application/octet-stream", filename=safe_name
+        file_path,
+        media_type="application/octet-stream",
+        filename=safe_name,
+        background=background_tasks,
     )
 
 

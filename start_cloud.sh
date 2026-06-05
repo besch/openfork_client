@@ -258,8 +258,26 @@ verify_wan2gp_stable_thread_wrapper() {
 
   grep -q "_session = _init_session_sync()" "$server_file" &&
     grep -q "process main thread" "$server_file" &&
+    grep -q "WAN2GP_EXIT_AFTER_JOB" "$server_file" &&
+    grep -q "_schedule_process_exit" "$server_file" &&
     grep -q "_generate_sync" "$server_file" &&
     ! grep -q "run_in_executor" "$server_file"
+}
+
+start_wan2gp_server_supervisor() {
+  local server_file="$1"
+  local root_dir="$2"
+  local log_file="$3"
+  local restart_delay="${WAN2GP_RESTART_DELAY_SECONDS:-2}"
+  local rc
+
+  while true; do
+    log "Wan2GP supervisor launching HTTP server..."
+    rc=0
+    (cd "$root_dir" && "$PYTHON_EXE" "$server_file" >> "$log_file" 2>&1) || rc=$?
+    log "Wan2GP HTTP server exited with status ${rc}; restarting in ${restart_delay}s..."
+    sleep "$restart_delay"
+  done
 }
 
 # Ensure pip is installed for the given Python executable
@@ -403,9 +421,9 @@ fi
       if [ -d "/opt/wan2gp" ] && [ -f "$DGN_SOURCE_DIR/wan2gp_server.py" ]; then
           cp -v "$DGN_SOURCE_DIR/wan2gp_server.py" /opt/wan2gp/
           if verify_wan2gp_stable_thread_wrapper "/opt/wan2gp/wan2gp_server.py"; then
-              log "Wan2GP stable main-thread wrapper is installed."
+              log "Wan2GP stable main-thread recycle wrapper is installed."
           else
-              log "WARNING: Synced wan2gp_server.py does not contain the stable main-thread wrapper."
+              log "WARNING: Synced wan2gp_server.py does not contain the stable main-thread recycle wrapper."
           fi
       fi
 
@@ -1340,19 +1358,23 @@ except Exception as e:
     # The DGN client processor polls /health and waits up to 30 min for it.
     WAN2GP_SERVER="/opt/wan2gp/wan2gp_server.py"
     WAN2GP_LOG_FILE="/tmp/wan2gp_server.log"
+    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+        export WAN2GP_EXIT_AFTER_JOB="${WAN2GP_EXIT_AFTER_JOB:-1}"
+        export WAN2GP_EXIT_DELAY_SECONDS="${WAN2GP_EXIT_DELAY_SECONDS:-1}"
+    fi
     if verify_wan2gp_stable_thread_wrapper "$WAN2GP_SERVER"; then
-        log "Verified Wan2GP stable main-thread wrapper."
+        log "Verified Wan2GP stable main-thread recycle wrapper."
     elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
-        log "ERROR: SCAIL requires the stable main-thread Wan2GP wrapper."
+        log "ERROR: SCAIL requires the stable main-thread recycle Wan2GP wrapper."
         log "ERROR: $WAN2GP_SERVER is stale; update OPENFORK_CLIENT_SCRIPT_REF or rebuild the SCAIL image/client source before accepting SCAIL jobs."
         exit 1
     else
-        log "WARNING: Wan2GP stable main-thread wrapper was not detected; continuing for non-SCAIL service ${SERVICE_TYPE:-auto}."
+        log "WARNING: Wan2GP stable main-thread recycle wrapper was not detected; continuing for non-SCAIL service ${SERVICE_TYPE:-auto}."
     fi
     if [ -f "$WAN2GP_SERVER" ]; then
-        log "Starting Wan2GP HTTP server in background (logging to ${WAN2GP_LOG_FILE})..."
+        log "Starting Wan2GP HTTP server supervisor (logging to ${WAN2GP_LOG_FILE})..."
         : > "$WAN2GP_LOG_FILE"
-        (cd "$WAN2GP_ROOT" && "$PYTHON_EXE" "$WAN2GP_SERVER" > "$WAN2GP_LOG_FILE" 2>&1) &
+        start_wan2gp_server_supervisor "$WAN2GP_SERVER" "$WAN2GP_ROOT" "$WAN2GP_LOG_FILE" &
         WAN2GP_SERVER_PID=$!
         WAN2GP_STARTUP_TIMEOUT="${WAN2GP_STARTUP_TIMEOUT:-1800}"
         if ! wait_for_url "Wan2GP" "http://127.0.0.1:8188/health" "$WAN2GP_STARTUP_TIMEOUT" "$WAN2GP_LOG_FILE"; then

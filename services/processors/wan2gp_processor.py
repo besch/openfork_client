@@ -243,7 +243,7 @@ class Wan2GPProcessor(BaseJobProcessor):
                 return (
                     f"{service_name} failed for job {self.job_id}: Taichi "
                     "FieldsBuilder finalized. Restart or update the worker so "
-                    "the stable main-thread Wan2GP wrapper is active, "
+                    "the stable main-thread recycle Wan2GP wrapper is active, "
                     "then retry."
                 )
             return (
