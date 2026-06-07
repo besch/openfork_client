@@ -761,6 +761,39 @@ class StopResetBehaviorTests(unittest.TestCase):
         self.assertIn("--disable-pinned-memory", args)
         self.assertNotIn("--disable-dynamic-vram", args)
 
+    def test_wan22_8gb_runtime_config_keeps_vae_on_gpu(self):
+        args, env = JobListener._wan22_runtime_config("wan22")
+
+        self.assertIn("--lowvram", args)
+        self.assertIn("--fp16-vae", args)
+        self.assertIn("--disable-cuda-malloc", args)
+        self.assertNotIn("--cpu-vae", args)
+        self.assertNotIn("--normalvram", args)
+        self.assertEqual(args[args.index("--reserve-vram") + 1], "0.5")
+        self.assertEqual(env["CUDA_MODULE_LOADING"], "LAZY")
+
+    def test_wan22_16gb_runtime_config_matches_live_fixed_path(self):
+        args, _env = JobListener._wan22_runtime_config("wan22-16gb")
+
+        self.assertIn("--lowvram", args)
+        self.assertIn("--fp16-vae", args)
+        self.assertIn("--disable-cuda-malloc", args)
+        self.assertIn("--disable-pinned-memory", args)
+        self.assertNotIn("--cpu-vae", args)
+        self.assertNotIn("--normalvram", args)
+        self.assertEqual(args[args.index("--reserve-vram") + 1], "0.75")
+
+    def test_wan22_24gb_runtime_config_avoids_lowvram_by_default(self):
+        args, _env = JobListener._wan22_runtime_config("wan22-24gb")
+
+        self.assertIn("--normalvram", args)
+        self.assertIn("--fp16-vae", args)
+        self.assertNotIn("--lowvram", args)
+        self.assertNotIn("--cpu-vae", args)
+        self.assertNotIn("--disable-cuda-malloc", args)
+        self.assertNotIn("--disable-pinned-memory", args)
+        self.assertEqual(args[args.index("--reserve-vram") + 1], "1.0")
+
     def test_comfyui_wait_for_ready_aborts_on_container_crash_event(self):
         shutdown_event = threading.Event()
         abort_event = threading.Event()

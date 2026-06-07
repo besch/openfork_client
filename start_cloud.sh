@@ -63,6 +63,8 @@ if [ -z "$DGN_API_KEY" ] && [ -f "/etc/dgn-api-key" ]; then
 fi
 
 LOG_FILE="/tmp/dgn_init.log"
+RESOURCE_LOG_FILE="/tmp/dgn_resource_usage.log"
+RESOURCE_MONITOR_INTERVAL_SECONDS="${RESOURCE_MONITOR_INTERVAL_SECONDS:-30}"
 LOG_STREAM_INTERVAL=60  # Seconds between log uploads (longer for runtime)
 LAST_LOG_POSITION=0
 ORCHESTRATOR_URL="${DGN_ORCHESTRATOR_URL:-https://openfork.video}"
@@ -75,6 +77,61 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 # Log with timestamp
 log() {
   echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+}
+
+log_resource_snapshot() {
+  local label="${1:-snapshot}"
+  {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] resource_snapshot label=$label service=${SERVICE_TYPE:-unknown}"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      echo "gpu_csv: timestamp,name,memory.used_mib,memory.total_mib,utilization.gpu_pct,utilization.memory_pct,power.draw_w"
+      nvidia-smi --query-gpu=timestamp,name,memory.used,memory.total,utilization.gpu,utilization.memory,power.draw --format=csv,noheader,nounits 2>&1 || true
+      echo "gpu_processes:"
+      nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits 2>&1 || true
+    else
+      echo "gpu_csv: nvidia-smi unavailable"
+    fi
+
+    if command -v free >/dev/null 2>&1; then
+      echo "memory_mib:"
+      free -m 2>&1 || true
+    fi
+
+    echo "cpu_mem_processes:"
+    ps -eo pid,ppid,pcpu,pmem,rss,vsz,etime,args --sort=-pcpu 2>/dev/null | \
+      grep -E 'PID|python.*(main.py|cli.py|wan2gp_server.py)|ComfyUI|wan2gp|server.py' | \
+      grep -v grep | \
+      head -n 20 || true
+    echo
+  } >> "$RESOURCE_LOG_FILE"
+}
+
+start_resource_monitor() {
+  if [ "${ENABLE_RESOURCE_MONITOR:-true}" != "true" ]; then
+    log "Resource monitor disabled by ENABLE_RESOURCE_MONITOR=$ENABLE_RESOURCE_MONITOR"
+    return
+  fi
+
+  if [ -n "${RESOURCE_MONITOR_PID:-}" ] && kill -0 "$RESOURCE_MONITOR_PID" 2>/dev/null; then
+    return
+  fi
+
+  log "Resource monitor writing snapshots to $RESOURCE_LOG_FILE every ${RESOURCE_MONITOR_INTERVAL_SECONDS}s"
+  log_resource_snapshot "startup"
+  (
+    while true; do
+      sleep "$RESOURCE_MONITOR_INTERVAL_SECONDS"
+      log_resource_snapshot "interval"
+    done
+  ) &
+  RESOURCE_MONITOR_PID=$!
+}
+
+stop_resource_monitor() {
+  if [ -n "${RESOURCE_MONITOR_PID:-}" ]; then
+    kill "$RESOURCE_MONITOR_PID" 2>/dev/null || true
+    wait "$RESOURCE_MONITOR_PID" 2>/dev/null || true
+  fi
 }
 
 # Stream logs to webhook (for SAVE_LOGS mode)
@@ -151,6 +208,7 @@ send_final_logs() {
 
 # Cleanup on exit
 cleanup() {
+  stop_resource_monitor
   stop_log_streamer
   send_final_logs
 }
@@ -1194,7 +1252,7 @@ except Exception as e:
             WAN22_TRANSFORMER_VARIANT="quanto_mfp16_int8"
             WAN22_EXPECTED_IMAGE="beschiak/openfork-wan22-wan2gp-12gb:latest"
         elif [[ "$SERVICE_TYPE" == *"24gb"* ]]; then
-            WAN22_TRANSFORMER_VARIANT="mbf16"
+            WAN22_TRANSFORMER_VARIANT="quanto_mbf16_int8"
             WAN22_EXPECTED_IMAGE="beschiak/openfork-wan22-wan2gp-24gb:latest"
         else
             WAN22_TRANSFORMER_VARIANT="quanto_mbf16_int8"
@@ -1432,9 +1490,21 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying Qwen Image VRAM optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
       ;;
-    wan22|wan22-*|*wan22*)
-      log "Applying WAN 2.2 VRAM optimizations for ComfyUI"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 1.25 --cache-none --preview-method none --use-split-cross-attention --disable-async-offload --disable-pinned-memory"
+    wan22|wan22-8gb)
+      log "Applying WAN 2.2 8GB Q4 ComfyUI optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 0.5 --cache-none --preview-method none --use-split-cross-attention --disable-async-offload --disable-cuda-malloc --disable-pinned-memory"
+      ;;
+    wan22-16gb)
+      log "Applying WAN 2.2 16GB Q6 ComfyUI optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 0.75 --cache-none --preview-method none --use-split-cross-attention --disable-async-offload --disable-cuda-malloc --disable-pinned-memory"
+      ;;
+    wan22-24gb)
+      log "Applying WAN 2.2 24GB Q8 ComfyUI optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --normalvram --fp16-vae --reserve-vram 1.0 --cache-none --preview-method none --use-split-cross-attention"
+      ;;
+    *wan22*)
+      log "Applying WAN 2.2 fallback ComfyUI optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 0.75 --cache-none --preview-method none --use-split-cross-attention --disable-async-offload --disable-cuda-malloc --disable-pinned-memory"
       ;;
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
@@ -2047,6 +2117,8 @@ chmod +x /opt/dgn-client/.restart-config
 if [ -n "$DGN_API_KEY" ]; then
     echo "$DGN_API_KEY" > /etc/dgn-api-key
 fi
+
+start_resource_monitor
 
 log "Starting DGN client..."
 cd /opt/dgn-client

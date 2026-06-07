@@ -279,6 +279,15 @@ def _wan2gp_cli_args() -> tuple[str, ...]:
         logging.info(
             "Added --fp16 because the local Wan 2.2 transformers are mfp16."
         )
+    elif (
+        not has_dtype_flag
+        and _has_wan22_transformer_variant("mbf16")
+        and not _has_wan22_transformer_variant("quanto_mbf16_int8")
+    ):
+        parsed = (*parsed, "--bf16")
+        logging.info(
+            "Added --bf16 because the local Wan 2.2 transformers are mbf16."
+        )
 
     if not parsed:
         return ()

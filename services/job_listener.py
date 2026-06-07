@@ -171,6 +171,59 @@ class JobListener:
 
         return args, env
 
+    @staticmethod
+    def _wan22_runtime_config(service_type: str):
+        """Return ComfyUI launch args/env tuned for WAN 2.2 GGUF tiers."""
+        lowered_service = (service_type or "").lower()
+        args = [
+            "--listen",
+            "--port",
+            "8188",
+            "--cache-none",
+            "--preview-method",
+            "none",
+            "--fp16-vae",
+            "--use-split-cross-attention",
+        ]
+        env = {
+            "CUDA_MODULE_LOADING": "LAZY",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True,max_split_size_mb:128",
+            "MALLOC_ARENA_MAX": "2",
+        }
+
+        if lowered_service in {"wan22", "wan22-8gb"} or "8gb" in lowered_service:
+            args.extend(
+                [
+                    "--lowvram",
+                    "--reserve-vram",
+                    "0.5",
+                    "--disable-async-offload",
+                    "--disable-cuda-malloc",
+                    "--disable-pinned-memory",
+                ]
+            )
+        elif "24gb" in lowered_service:
+            args.extend(
+                [
+                    "--normalvram",
+                    "--reserve-vram",
+                    "1.0",
+                ]
+            )
+        else:
+            args.extend(
+                [
+                    "--lowvram",
+                    "--reserve-vram",
+                    "0.75",
+                    "--disable-async-offload",
+                    "--disable-cuda-malloc",
+                    "--disable-pinned-memory",
+                ]
+            )
+
+        return args, env
+
     def _job_has_terminal_status(self, job_id: Optional[str]) -> bool:
         """Check whether a job has already reached a terminal status."""
         return self._get_terminal_job_status(job_id) is not None
@@ -2089,14 +2142,11 @@ exec python main.py \
                                                     "Started Z-Image ComfyUI container with ComfyUI-Manager offline."
                                                 )
                                             elif actual_service_type.startswith("wan22"):
-                                                wan22_env = {
-                                                    "CUDA_MODULE_LOADING": "LAZY",
-                                                    "PYTORCH_CUDA_ALLOC_CONF": (
-                                                        "expandable_segments:True,"
-                                                        "max_split_size_mb:128"
-                                                    ),
-                                                    "MALLOC_ARENA_MAX": "2",
-                                                }
+                                                wan22_args, wan22_env = (
+                                                    self._wan22_runtime_config(
+                                                        actual_service_type
+                                                    )
+                                                )
                                                 wan22_bootstrap = r"""
 set -e
 cd /opt/ComfyUI
@@ -2126,17 +2176,7 @@ else:
 config_path.write_text(config, encoding="utf-8")
 print("Configured ComfyUI-Manager network_mode=offline for WAN runtime.")
 PY
-exec python main.py \
-  --listen \
-  --lowvram \
-  --cpu-vae \
-  --reserve-vram 1.25 \
-  --cache-none \
-  --preview-method none \
-  --use-split-cross-attention \
-  --disable-async-offload \
-  --disable-cuda-malloc \
-  --disable-pinned-memory
+exec python main.py "$@"
 """
                                                 docker_manager.run_container(
                                                     service_type=actual_service_type,
@@ -2144,12 +2184,15 @@ exec python main.py \
                                                         "bash",
                                                         "-lc",
                                                         wan22_bootstrap,
+                                                        "openfork-wan22",
+                                                        *wan22_args,
                                                     ],
                                                     environment=wan22_env,
                                                     force_restart=not keep_container_warm,
                                                 )
                                                 logging.info(
-                                                    "Started WAN ComfyUI container with ComfyUI-Manager offline."
+                                                    "Started WAN ComfyUI container with tier-specific flags: %s",
+                                                    " ".join(wan22_args),
                                                 )
                                             elif is_ollama:
                                                 docker_manager.run_container(
