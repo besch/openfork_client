@@ -83,16 +83,14 @@ class WAN22Wan2GPTests(unittest.TestCase):
             ImageToVideoFromLastFrameWan2GPProcessor,
         )
 
-    def test_registry_entries_keep_8gb_16gb_and_24gb_wan22_wan2gp_enabled(self):
+    def test_registry_entries_keep_all_wan22_wan2gp_tiers_enabled(self):
         registry_path = Path(__file__).resolve().parents[2] / "website" / "services.json"
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
 
-        disabled_service_names = {
-            "wan22-wan2gp-10gb",
-            "wan22-wan2gp-12gb",
-        }
         enabled_service_names = {
             "wan22-wan2gp-8gb",
+            "wan22-wan2gp-10gb",
+            "wan22-wan2gp-12gb",
             "wan22-wan2gp-16gb",
             "wan22-wan2gp-24gb",
         }
@@ -102,7 +100,7 @@ class WAN22Wan2GPTests(unittest.TestCase):
             if workflow_id.startswith("wan22-wan2gp-")
         }
 
-        self.assertTrue((disabled_service_names | enabled_service_names).issubset(registry["services"]))
+        self.assertTrue(enabled_service_names.issubset(registry["services"]))
         self.assertEqual(
             {
                 "wan22-wan2gp-text-to-video-8gb",
@@ -122,14 +120,6 @@ class WAN22Wan2GPTests(unittest.TestCase):
             workflow_names,
         )
 
-        for service_name in disabled_service_names:
-            with self.subTest(service_name=service_name):
-                self.assertEqual(
-                    bool(registry["services"][service_name].get("disabled")),
-                    True,
-                )
-                self.assertEqual(registry["services"][service_name]["backend"], "wan2gp")
-
         for service_name in enabled_service_names:
             with self.subTest(service_name=service_name):
                 self.assertEqual(
@@ -141,20 +131,25 @@ class WAN22Wan2GPTests(unittest.TestCase):
         for workflow_id, workflow in registry["workflows"].items():
             if workflow_id.startswith("wan22-wan2gp-"):
                 with self.subTest(workflow_id=workflow_id):
-                    expected_disabled = not any(
-                        tier in workflow_id for tier in ("8gb", "16gb", "24gb")
-                    )
                     self.assertEqual(
                         bool(workflow.get("disabled")),
-                        expected_disabled,
+                        False,
                     )
 
     def test_runtime_args_match_wan22_model_variants(self):
         low_vram_args = build_wan2gp_environment("wan22-wan2gp-8gb")["WAN2GP_CLI_ARGS"]
+        ten_vram_args = build_wan2gp_environment("wan22-wan2gp-10gb")["WAN2GP_CLI_ARGS"]
+        twelve_vram_args = build_wan2gp_environment("wan22-wan2gp-12gb")["WAN2GP_CLI_ARGS"]
         high_vram_args = build_wan2gp_environment("wan22-wan2gp-24gb")["WAN2GP_CLI_ARGS"]
 
         self.assertIn("--preload 0", low_vram_args)
         self.assertNotIn("--bf16", low_vram_args)
+        self.assertIn("--profile 4.5", ten_vram_args)
+        self.assertIn("--vram-safety-coefficient 0.60", ten_vram_args)
+        self.assertNotIn("--bf16", ten_vram_args)
+        self.assertIn("--profile 4.5", twelve_vram_args)
+        self.assertIn("--vram-safety-coefficient 0.65", twelve_vram_args)
+        self.assertNotIn("--bf16", twelve_vram_args)
         self.assertIn("--profile 4", high_vram_args)
         self.assertNotIn("--bf16", high_vram_args)
 

@@ -61,16 +61,42 @@ RUN mkdir -p /opt/wan2gp/ckpts /opt/wan2gp/outputs /opt/wan2gp/input
 
 RUN pip3 install -q "huggingface_hub[cli]"
 
+# Keep very large model files in separate Docker layers. Vast hosts repeatedly
+# failed to pull the previous single ~56GB transformer layer from Docker Hub.
 RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
     huggingface-cli download DeepBeepMeep/Wan2.2 \
         "wan2.2_text2video_14B_high_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
+        --local-dir /opt/wan2gp/ckpts \
+        ${HF_TOKEN_ARG} \
+    || { echo "ERROR: WAN 2.2 text2video high transformer download failed."; exit 1; }
+
+RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+    huggingface-cli download DeepBeepMeep/Wan2.2 \
         "wan2.2_text2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
+        --local-dir /opt/wan2gp/ckpts \
+        ${HF_TOKEN_ARG} \
+    || { echo "ERROR: WAN 2.2 text2video low transformer download failed."; exit 1; }
+
+RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+    huggingface-cli download DeepBeepMeep/Wan2.2 \
         "wan2.2_image2video_14B_high_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
+        --local-dir /opt/wan2gp/ckpts \
+        ${HF_TOKEN_ARG} \
+    || { echo "ERROR: WAN 2.2 image2video high transformer download failed."; exit 1; }
+
+RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+    huggingface-cli download DeepBeepMeep/Wan2.2 \
         "wan2.2_image2video_14B_low_${WAN22_TRANSFORMER_VARIANT}.safetensors" \
+        --local-dir /opt/wan2gp/ckpts \
+        ${HF_TOKEN_ARG} \
+    || { echo "ERROR: WAN 2.2 image2video low transformer download failed."; exit 1; }
+
+RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+    huggingface-cli download DeepBeepMeep/Wan2.2 \
         Wan2.2_VAE.safetensors \
         --local-dir /opt/wan2gp/ckpts \
         ${HF_TOKEN_ARG} \
-    || { echo "ERROR: WAN 2.2 transformer/VAE download failed."; exit 1; }
+    || { echo "ERROR: WAN 2.2 VAE download failed."; exit 1; }
 
 RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
     huggingface-cli download DeepBeepMeep/Wan2.1 \
@@ -79,11 +105,23 @@ RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TO
         umt5-xxl/spiece.model \
         umt5-xxl/tokenizer.json \
         umt5-xxl/tokenizer_config.json \
+        --local-dir /opt/wan2gp/ckpts \
+        ${HF_TOKEN_ARG} \
+    || { echo "ERROR: WAN 2.1 VAE/UMT5 tokenizer support file download failed."; exit 1; }
+
+RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+    huggingface-cli download DeepBeepMeep/Wan2.1 \
         umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors \
+        --local-dir /opt/wan2gp/ckpts \
+        ${HF_TOKEN_ARG} \
+    || { echo "ERROR: WAN 2.1 UMT5 bf16 encoder download failed."; exit 1; }
+
+RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TOKEN_ARG=""; fi; \
+    huggingface-cli download DeepBeepMeep/Wan2.1 \
         umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors \
         --local-dir /opt/wan2gp/ckpts \
         ${HF_TOKEN_ARG} \
-    || { echo "ERROR: WAN 2.1 VAE/UMT5 support file download failed."; exit 1; }
+    || { echo "ERROR: WAN 2.1 UMT5 int8 encoder download failed."; exit 1; }
 
 RUN pip3 install fastapi "uvicorn[standard]"
 
