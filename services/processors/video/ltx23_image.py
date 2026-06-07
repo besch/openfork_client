@@ -18,6 +18,7 @@ from services.processors.video.ltx23_common import (
     clamp_ltx23_steps,
     get_ltx23_model_type,
 )
+from services.processors.video.last_frame import materialize_last_frame_start_image
 from utils.comfyui_workflow_utils import materialize_start_image
 
 _DEFAULT_CFG = 3.0
@@ -102,6 +103,10 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
 
     def _resolve_start_image(self, inputs: dict) -> Optional[str]:
         """Return a local file path for the start image, trying multiple sources."""
+        last_frame_path = materialize_last_frame_start_image(self, inputs)
+        if last_frame_path:
+            return last_frame_path
+
         # 1. Signed URL from inputs
         url = inputs.get("start_image_url")
         if url:

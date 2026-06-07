@@ -18,6 +18,7 @@ from config import DEV_MODE, SUPABASE_URL
 from services.docker_manager import docker_manager
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
+from services.processors.video.last_frame import materialize_last_frame_start_image
 from utils.comfyui_workflow_utils import (
     inject_dreamid_omni_workflow,
     materialize_start_image,
@@ -57,6 +58,10 @@ class DreamIDOmniImageToVideoProcessor(ComfyUIProcessor, VideoOutputHandler):
         )
 
     def _resolve_reference_image(self, inputs: dict) -> Optional[str]:
+        last_frame_path = materialize_last_frame_start_image(self, inputs)
+        if last_frame_path:
+            return last_frame_path
+
         start_image_url = inputs.get("start_image_url")
         if start_image_url:
             path = self.orchestrator_service.download_asset_by_url(

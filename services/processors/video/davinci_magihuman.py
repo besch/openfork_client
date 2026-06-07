@@ -17,6 +17,7 @@ from PIL import Image
 
 from config import DEV_MODE, SUPABASE_URL
 from services.processors.wan2gp_processor import Wan2GPProcessor
+from services.processors.video.last_frame import materialize_last_frame_start_image
 from utils.comfyui_workflow_utils import materialize_start_image
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,10 @@ class DaVinciMagiHumanBaseProcessor(Wan2GPProcessor):
 
     def _resolve_reference_image(self, inputs: dict) -> Optional[str]:
         """Return a local path for the required start/reference image."""
+        last_frame_path = materialize_last_frame_start_image(self, inputs)
+        if last_frame_path:
+            return last_frame_path
+
         url = inputs.get("start_image_url")
         if url:
             path = self.orchestrator_service.download_asset_by_url(url, self.input_dir)

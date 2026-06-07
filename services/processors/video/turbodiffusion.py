@@ -22,6 +22,7 @@ from services.processors.rest_recovery import (
     recover_output_from_clean_container_exit,
 )
 from services.orchestrator_service import TokenExpiredError
+from services.processors.video.last_frame import materialize_last_frame_start_image
 from utils.comfyui_workflow_utils import materialize_start_image
 from utils.media_utils import get_video_duration
 from config import SUPABASE_URL, THUMBNAIL_WIDTH
@@ -229,10 +230,14 @@ class TurboDiffusionI2VJobProcessor(TurboDiffusionBaseProcessor):
 
         # Materialize start image
         inputs = self.job.get("inputs", {})
+        last_frame_path = materialize_last_frame_start_image(self, inputs)
+        if last_frame_path:
+            start_image_filename = os.path.basename(last_frame_path)
+        else:
+            start_image_filename = None
         start_image_url = inputs.get("start_image_url")
-        start_image_filename = None
 
-        if start_image_url:
+        if not start_image_filename and start_image_url:
             logging.info(f"Downloading start image from signed URL: {start_image_url}")
             downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.input_dir)
             if downloaded_path:
