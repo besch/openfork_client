@@ -1432,6 +1432,10 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying Qwen Image VRAM optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
       ;;
+    wan22|wan22-*|*wan22*)
+      log "Applying WAN 2.2 VRAM optimizations for ComfyUI"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 1.25 --cache-none --preview-method none --use-split-cross-attention --disable-async-offload --disable-pinned-memory"
+      ;;
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"

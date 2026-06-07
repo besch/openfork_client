@@ -10,6 +10,7 @@ from services.docker_manager import docker_manager
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
 from utils.comfyui_workflow_utils import (
+    get_dimensions,
     inject_prompt_and_image_into_workflow,
     materialize_start_image,
 )
@@ -146,7 +147,26 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
             return
 
         inputs = self.job.get("inputs", {})
-        input_video_url = inputs.get("input_video_url")
+        input_video_url = inputs.get("input_video_url") or self.job.get("input_video_url")
+        if not input_video_url:
+            input_video_url = inputs.get("start_image_url")
+            if input_video_url:
+                logging.info("Using start_image_url as source video URL for last-frame continuation.")
+        if not input_video_url:
+            input_storage_path = (
+                inputs.get("input_storage_path")
+                or inputs.get("start_image")
+                or self.job.get("input_storage_path")
+            )
+            if input_storage_path:
+                bucket = self.job.get("bucket", "projects_public")
+                supabase_url = os.environ.get(
+                    "SUPABASE_URL",
+                    self.client.config.get("SUPABASE_URL", SUPABASE_URL),
+                )
+                if supabase_url:
+                    input_video_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{input_storage_path}"
+                    logging.info("Using input storage path as source video URL for last-frame continuation.")
         if not input_video_url:
             self._fail_job(f"Job {self.job_id} missing 'input_video_url' in inputs.")
             return
@@ -158,8 +178,21 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
 
         start_image_filename = f"{self.job_id}_last_frame.jpg"
         start_image_full_path = os.path.join(self.input_dir, start_image_filename)
+        aspect_ratio = inputs.get("aspect_ratio", "16:9")
+        cfg_scale = inputs.get("cfg_scale")
+        steps = inputs.get("steps")
+        flow_shift = inputs.get("flow_shift")
+        sampler = inputs.get("sampler")
+        scheduler = inputs.get("scheduler")
+        seed = inputs.get("seed")
+        vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
+        target_dimensions = get_dimensions(aspect_ratio, vram_tier=vram_tier)
 
-        if not extract_last_frame(video_path, start_image_full_path):
+        if not extract_last_frame(
+            video_path,
+            start_image_full_path,
+            target_dimensions=target_dimensions,
+        ):
             self._fail_job(f"Failed to extract last frame for job {self.job_id}.")
             return
 
@@ -182,19 +215,11 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
             self._fail_job(f"Failed to copy start image to container for job {self.job_id}: {e}")
             return
 
-        aspect_ratio = inputs.get("aspect_ratio", "16:9")
-        cfg_scale = inputs.get("cfg_scale")
-        steps = inputs.get("steps")
-        flow_shift = inputs.get("flow_shift")
-        sampler = inputs.get("sampler")
-        scheduler = inputs.get("scheduler")
-        vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
-
         wf_ready = inject_prompt_and_image_into_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps,
             flow_shift=flow_shift, sampler=sampler, scheduler=scheduler,
-            vram_tier=vram_tier
+            seed=seed, vram_tier=vram_tier
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)

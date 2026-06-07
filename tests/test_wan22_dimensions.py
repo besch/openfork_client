@@ -11,7 +11,7 @@ class WAN22DimensionTests(unittest.TestCase):
     def test_8gb_tier_uses_smaller_16_by_9_resolution(self):
         self.assertEqual(
             get_dimensions("16:9", vram_tier="wan22-image-to-video-8gb"),
-            (512, 288),
+            (320, 176),
         )
 
     def test_default_tier_keeps_existing_16_by_9_resolution(self):
@@ -43,8 +43,8 @@ class WAN22DimensionTests(unittest.TestCase):
             vram_tier="wan22-image-to-video-8gb",
         )
 
-        self.assertEqual((graph["9"]["inputs"]["width"], graph["9"]["inputs"]["height"]), (512, 288))
-        self.assertEqual((graph["10"]["inputs"]["width"], graph["10"]["inputs"]["height"]), (512, 288))
+        self.assertEqual((graph["9"]["inputs"]["width"], graph["9"]["inputs"]["height"]), (320, 176))
+        self.assertEqual((graph["10"]["inputs"]["width"], graph["10"]["inputs"]["height"]), (320, 176))
 
     def test_text_to_video_injects_8gb_dimensions(self):
         workflow = {
@@ -67,7 +67,7 @@ class WAN22DimensionTests(unittest.TestCase):
             vram_tier="wan22-text-to-video-8gb",
         )
 
-        self.assertEqual((graph["9"]["inputs"]["width"], graph["9"]["inputs"]["height"]), (512, 288))
+        self.assertEqual((graph["9"]["inputs"]["width"], graph["9"]["inputs"]["height"]), (320, 176))
 
 
 if __name__ == "__main__":

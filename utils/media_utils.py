@@ -1,7 +1,7 @@
 
 import subprocess
 import logging
-from typing import Union
+from typing import Optional, Tuple, Union
 import os
 import json
 from services.docker_utils import get_subprocess_hidden_kwargs
@@ -335,7 +335,27 @@ def get_video_dimensions(video_path: str) -> tuple:
         logging.error(f"Failed to get video dimensions for {video_path}: {e}")
         raise RuntimeError(f"Failed to get video dimensions: {e}")
 
-def extract_last_frame(video_path: str, output_image_path: str, timeout: int = 60) -> bool:
+def _last_frame_filter_args(target_dimensions: Optional[Tuple[int, int]]) -> list[str]:
+    if not target_dimensions:
+        return []
+
+    width, height = target_dimensions
+    if width <= 0 or height <= 0:
+        return []
+
+    scale_filter = (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},setsar=1"
+    )
+    return ["-vf", scale_filter]
+
+
+def extract_last_frame(
+    video_path: str,
+    output_image_path: str,
+    timeout: int = 60,
+    target_dimensions: Optional[Tuple[int, int]] = None,
+) -> bool:
     """
     Extracts the last frame from a video file using ffmpeg.
 
@@ -347,6 +367,7 @@ def extract_last_frame(video_path: str, output_image_path: str, timeout: int = 6
         video_path (str): Path to the input video file.
         output_image_path (str): Path to save the output image file.
         timeout (int): Timeout in seconds for the ffmpeg command.
+        target_dimensions: Optional (width, height) to resize/crop the frame to.
 
     Returns:
         bool: True if the frame was extracted successfully, False otherwise.
@@ -367,6 +388,7 @@ def extract_last_frame(video_path: str, output_image_path: str, timeout: int = 6
                 '-nostdin',
                 '-ss', str(seek_position),
                 '-i', video_path,
+                *_last_frame_filter_args(target_dimensions),
                 '-frames:v', '1',
                 '-q:v', '2', # High quality
                 output_image_path
@@ -383,6 +405,7 @@ def extract_last_frame(video_path: str, output_image_path: str, timeout: int = 6
             '-nostdin',
             '-sseof', '-0.1',
             '-i', video_path,
+            *_last_frame_filter_args(target_dimensions),
             '-frames:v', '1',
             '-q:v', '2',
             output_image_path

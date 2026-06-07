@@ -82,7 +82,7 @@ class WAN22Wan2GPTests(unittest.TestCase):
             ImageToVideoFromLastFrameWan2GPProcessor,
         )
 
-    def test_registry_entries_keep_only_8gb_canary_enabled(self):
+    def test_registry_entries_keep_wan22_wan2gp_disabled(self):
         registry_path = Path(__file__).resolve().parents[2] / "website" / "services.json"
         registry = json.loads(registry_path.read_text(encoding="utf-8"))
 
@@ -123,7 +123,7 @@ class WAN22Wan2GPTests(unittest.TestCase):
             with self.subTest(service_name=service_name):
                 self.assertEqual(
                     bool(registry["services"][service_name].get("disabled")),
-                    service_name != "wan22-wan2gp-8gb",
+                    True,
                 )
                 self.assertEqual(registry["services"][service_name]["backend"], "wan2gp")
 
@@ -132,7 +132,7 @@ class WAN22Wan2GPTests(unittest.TestCase):
                 with self.subTest(workflow_id=workflow_id):
                     self.assertEqual(
                         bool(workflow.get("disabled")),
-                        not workflow_id.endswith("-8gb"),
+                        True,
                     )
 
 
