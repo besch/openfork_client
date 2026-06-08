@@ -42,10 +42,10 @@ RUN python -m pip install --no-cache-dir \
 
 RUN mkdir -p /app/input /app/output /app/models
 
-RUN huggingface-cli download SWivid/F5-TTS F5TTS_v1_Base/model_1250000.safetensors \
+RUN hf download SWivid/F5-TTS F5TTS_v1_Base/model_1250000.safetensors \
     --cache-dir /app/models \
     --local-dir-use-symlinks False \
-    && huggingface-cli download charactr/vocos-mel-24khz config.yaml pytorch_model.bin \
+    && hf download charactr/vocos-mel-24khz config.yaml pytorch_model.bin \
     --cache-dir /app/models \
     --local-dir-use-symlinks False
 

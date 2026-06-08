@@ -34,6 +34,8 @@ ENVIRONMENT VARIABLES:
     ACCEPT_POLICY         Job acceptance policy: all, mine, users, project, monetize (default: all)
     SAVE_LOGS             Set to "true" to stream logs to webhook
     BUILD_JOB_ID          Build job ID for log association (uses provider ID if not set)
+    OPENFORK_ALLOW_DISABLED_SERVICE_TEST
+                          Set to "1" only for admin smoke tests of disabled services
 
 EXAMPLES:
   # Basic startup
@@ -2144,6 +2146,11 @@ DGN_CLIENT_ARGS=(
   --root-dir /opt/dgn-client
   --data-dir /data
 )
+
+if [ "${OPENFORK_ALLOW_DISABLED_SERVICE_TEST:-0}" = "1" ] || [ "${OPENFORK_ALLOW_DISABLED_SERVICE_TEST:-false}" = "true" ]; then
+  log "Disabled-service smoke-test override enabled for ${SERVICE_TYPE:-auto}."
+  DGN_CLIENT_ARGS+=(--allow-disabled-service-test)
+fi
 
 case "$ACCEPT_POLICY" in
   monetize)

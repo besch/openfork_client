@@ -227,6 +227,59 @@ class DGNClient:
         service_config = self.services_config.get(service_name, {})
         return bool(service_config.get("disabled"))
 
+    def allow_disabled_service_for_local_test(self, service_name: str) -> bool:
+        """Temporarily enable a disabled service for an explicit local smoke test.
+
+        This does not update the remote DGN config. It only affects this client
+        process after a named service was requested with the local test flag.
+        """
+        service_config = self.services_config.get(service_name)
+        if not service_config:
+            logging.warning(
+                "Disabled-service test override requested for unknown service '%s'.",
+                service_name,
+            )
+            return False
+
+        touched = False
+        enabled_workflows = []
+
+        if service_config.get("disabled"):
+            service_config["disabled"] = False
+            touched = True
+
+        for workflow_type, workflow_config in self.config.items():
+            if workflow_config.get("service_name") != service_name:
+                continue
+            if workflow_config.get("disabled"):
+                workflow_config["disabled"] = False
+                touched = True
+            enabled_workflows.append(workflow_type)
+
+        self.processor_map = self._build_processor_map()
+        self.processable_services = self._build_processable_services()
+
+        if can_run_service(
+            service_config,
+            self.available_vram,
+            self.hardware_profile,
+        ):
+            self.compatible_services.add(service_name)
+
+        if docker_manager:
+            docker_manager.set_docker_image_map(self.docker_image_map)
+            docker_manager.set_services_config(self.services_config)
+
+        logging.warning(
+            "Local disabled-service test override active for '%s'%s. "
+            "This affects only the current DGN client process.",
+            service_name,
+            f" (workflows: {', '.join(enabled_workflows)})"
+            if enabled_workflows
+            else "",
+        )
+        return touched
+
     def load_config(self):
         """Loads the configuration from the orchestrator."""
         try:

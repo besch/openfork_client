@@ -214,6 +214,14 @@ def setup_client(args):
 
     client.load_config() # Fetch config from orchestrator
 
+    allow_disabled_service_test = (
+        getattr(args, "allow_disabled_service_test", False)
+        or os.environ.get("OPENFORK_ALLOW_DISABLED_SERVICE_TEST", "").lower()
+        in ("1", "true", "yes", "on")
+    )
+    if args.service != "auto" and allow_disabled_service_test:
+        client.allow_disabled_service_for_local_test(args.service)
+
     # Filter compatible_services based on SELECTED_WORKFLOWS env var
     # This allows cloud deployments to specify which workflows this client should handle
     selected_workflows_env = os.environ.get("SELECTED_WORKFLOWS", "").strip()
@@ -486,6 +494,7 @@ def main():
     # This argument is used solely for process identification by the cleanup logic
     parser.add_argument('--process-marker', type=str, help='Unique marker for process identification')
     parser.add_argument('--monetize-mode', action='store_true', default=False, help='Enable monetize mode: poll only for paid monetize jobs and emit MONETIZE_JOB_COMPLETE events.')
+    parser.add_argument('--allow-disabled-service-test', action='store_true', default=False, help='Local admin smoke-test override for an explicitly named disabled service.')
     args = parser.parse_args()
 
     # Validate authentication - need either API key OR OAuth tokens.
