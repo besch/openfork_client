@@ -44,10 +44,8 @@ RUN mkdir -p /app/input /app/output /app/models
 
 RUN hf download SWivid/F5-TTS F5TTS_v1_Base/model_1250000.safetensors \
     --cache-dir /app/models \
-    --local-dir-use-symlinks False \
     && hf download charactr/vocos-mel-24khz config.yaml pytorch_model.bin \
-    --cache-dir /app/models \
-    --local-dir-use-symlinks False
+    --cache-dir /app/models
 
 ENV F5_TTS_MODEL=F5TTS_v1_Base
 ENV F5_MODEL_CACHE_DIR=/app/models
