@@ -49,7 +49,6 @@ services/processors/audio/chatterbox.py
 services/processors/audio/diffrhythm_cli.py
 services/processors/audio/dramabox.py
 services/processors/audio/f5_tts.py
-services/processors/audio/wavtts.py
 services/processors/audio/foley.py
 services/processors/audio/heartmula_cli.py
 services/processors/audio/lavasr.py
@@ -59,6 +58,7 @@ services/processors/audio/qwen3_tts.py
 services/processors/audio/scenema_audio.py
 services/processors/audio/stable_audio.py
 services/processors/audio/vibevoice.py
+services/processors/audio/wavtts.py
 services/processors/base.py
 services/processors/comfyui_processor.py
 services/processors/image/__init__.py
@@ -107,7 +107,6 @@ workflows/chatterbox-voice-clone.api.json
 workflows/diagdistill-t2v.api.json
 workflows/dreamid-omni-image-to-video-24gb.api.json
 workflows/f5-tts.api.json
-workflows/ideogram4.api.json
 workflows/flux-kontext-dev-12gb-image-edit.api.json
 workflows/flux-kontext-dev-12gb-text-to-image.api.json
 workflows/flux-kontext-dev-16gb-image-edit.api.json
@@ -118,6 +117,7 @@ workflows/flux-kontext-dev-8gb-image-edit.api.json
 workflows/flux-kontext-dev-8gb-text-to-image.api.json
 workflows/flux-text-to-image.api.json
 workflows/hunyuan-video-foley.api.json
+workflows/ideogram4.api.json
 workflows/ltxv2-uncensored-workspace.json
 workflows/qwen-image-edit-8gb-turbo_api.json
 workflows/qwen-image-edit-8gb.api.json
@@ -130,7 +130,6 @@ workflows/qwen-image-t2i-8gb.api.json
 workflows/qwen-image-t2i.api.json
 workflows/qwen.api.json
 workflows/qwen3-tts.api.json
-workflows/wavtts.api.json
 workflows/stable-audio-open.api.json
 workflows/stream-diffvsr-video-upscale.api.json
 workflows/svi-film-i2v-12gb.api.json
@@ -149,6 +148,7 @@ workflows/wan22-image-to-video.api.json
 workflows/wan22-text-to-video-16gb.api.json
 workflows/wan22-text-to-video-24gb.api.json
 workflows/wan22-text-to-video.api.json
+workflows/wavtts.api.json
 workflows/zimage-full-16gb-inpaint.api.json
 workflows/zimage-full-16gb-text-to-image.api.json
 workflows/zimage-full-24gb-inpaint.api.json
