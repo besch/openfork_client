@@ -61,6 +61,7 @@ class OrchestratorService:
         self._auth_failed_permanently = False
         self._active_job_id: Optional[str] = None
         self._active_execution_token: Optional[str] = None
+        self._uploaded_storage_info: Dict[str, Dict[str, str]] = {}
         self._latency_samples_ms = deque(maxlen=20)
         self._latency_lock = threading.Lock()
         self._upgrade_required_emitted = False
@@ -879,11 +880,22 @@ class OrchestratorService:
                     # empty body, which upload-finalize correctly rejects as
                     # object_empty. Reopen the file and use a fresh signed URL for
                     # each attempt instead.
+                    upload_headers: Dict[str, str] = {
+                        'Content-Type': content_type,
+                    }
+                    returned_headers = upload_info.get('headers')
+                    if isinstance(returned_headers, dict):
+                        for header_name, header_value in returned_headers.items():
+                            if isinstance(header_name, str) and isinstance(header_value, str):
+                                upload_headers[header_name] = header_value
+                    if upload_info.get('cacheControl') and isinstance(upload_info.get('cacheControl'), str):
+                        upload_headers.setdefault('Cache-Control', upload_info['cacheControl'])
+
                     response = self._session.request(
                         'put',
                         upload_url,
                         data=f,
-                        headers={'Content-Type': content_type},
+                        headers=upload_headers,
                         timeout=TimeoutConfig.API_REQUEST_TIMEOUT,
                     )
                     self._record_latency_sample(response)
@@ -906,8 +918,15 @@ class OrchestratorService:
                 # a bug in our pipeline or a tampered upload — neither should
                 # advance to job completion. A transient empty-object rejection can
                 # happen after a network timeout, so retry with a fresh storage path.
-                finalize_ok = self._finalize_upload(job_id, storage_path)
+                finalize_ok = self._finalize_upload(job_id, storage_path, upload_info)
                 if finalize_ok:
+                    storage_info: Dict[str, str] = {}
+                    if isinstance(upload_info.get('bucket'), str):
+                        storage_info['bucket'] = upload_info['bucket']
+                    if isinstance(upload_info.get('storageProvider'), str):
+                        storage_info['storage_provider'] = upload_info['storageProvider']
+                    if storage_info:
+                        self._uploaded_storage_info[storage_path] = storage_info
                     return storage_path
 
                 logging.error(
@@ -945,7 +964,7 @@ class OrchestratorService:
             )
         return None
 
-    def _finalize_upload(self, job_id: str, storage_path: str) -> bool:
+    def _finalize_upload(self, job_id: str, storage_path: str, upload_info: Optional[Dict[str, Any]] = None) -> bool:
         """Ask the orchestrator to magic-byte-verify a freshly uploaded object.
 
         Returns True on success or transport failure (we fail open on
@@ -959,6 +978,11 @@ class OrchestratorService:
                 "jobId": job_id,
                 "storagePath": storage_path,
             }
+            if upload_info:
+                if isinstance(upload_info.get('bucket'), str):
+                    payload["bucket"] = upload_info["bucket"]
+                if isinstance(upload_info.get('storageProvider'), str):
+                    payload["storageProvider"] = upload_info["storageProvider"]
             execution_token = self.get_active_execution_token(job_id)
             if execution_token:
                 payload["executionToken"] = execution_token
@@ -1070,8 +1094,14 @@ class OrchestratorService:
                 payload["execution_token"] = token
             if storage_path:
                 payload["storage_path"] = storage_path
+                storage_info = self._uploaded_storage_info.get(storage_path)
+                if storage_info and storage_info.get("bucket"):
+                    payload["bucket"] = storage_info["bucket"]
             if thumbnail_storage_path:
                 payload["thumbnail_storage_path"] = thumbnail_storage_path
+                storage_info = self._uploaded_storage_info.get(thumbnail_storage_path)
+                if storage_info and storage_info.get("bucket") and "bucket" not in payload:
+                    payload["bucket"] = storage_info["bucket"]
             if duration_seconds:
                 payload["duration_seconds"] = duration_seconds
             if metadata_payload is not None:
