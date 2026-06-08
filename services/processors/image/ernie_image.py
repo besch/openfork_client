@@ -222,7 +222,8 @@ class ErnieImageProcessor(BaseJobProcessor, ImageOutputHandler):
         try:
             is_8gb_tier = bool(self.workflow_type and "8gb" in self.workflow_type)
             is_16gb_tier = bool(self.workflow_type and "16gb" in self.workflow_type)
-            is_constrained_tier = is_8gb_tier or is_16gb_tier
+            is_24gb_tier = bool(self.workflow_type and "24gb" in self.workflow_type)
+            is_pe_unstable_tier = is_8gb_tier or is_16gb_tier or is_24gb_tier
             seed = inputs.get("seed")
             width, height = self._resolve_dimensions(inputs.get("aspect_ratio"))
             steps = inputs.get("steps")
@@ -254,14 +255,14 @@ class ErnieImageProcessor(BaseJobProcessor, ImageOutputHandler):
             if seed is not None:
                 payload["seed"] = int(seed)
 
-            # Constrained tiers: always disable PE regardless of job input. The
-            # Mistral3 prompt enhancer consumes several GiB of VRAM during text
-            # encoding and is the first thing to fall over on 8GB/16GB cards.
-            if is_constrained_tier:
+            # PE is disabled for DGN image jobs until ERNIE's prompt enhancer is
+            # stable across tiers. The 2026-06-08 24GB cloud benchmark failed
+            # with CUDA OOM and CPU/CUDA tensor-device mismatch while PE was on.
+            if is_pe_unstable_tier:
                 if inputs.get("use_pe"):
                     logging.warning(
-                        "%s tier: overriding use_pe=True to False (insufficient VRAM)",
-                        "8GB" if is_8gb_tier else "16GB",
+                        "%s tier: overriding use_pe=True to False (ERNIE PE compatibility)",
+                        "8GB" if is_8gb_tier else "16GB" if is_16gb_tier else "24GB",
                     )
                 payload["use_pe"] = False
             elif inputs.get("use_pe") is not None:

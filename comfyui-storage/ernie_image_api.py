@@ -99,6 +99,15 @@ def _is_oom_error(exc: Exception) -> bool:
     return isinstance(exc, torch.cuda.OutOfMemoryError) or "out of memory" in str(exc).lower()
 
 
+def _is_prompt_enhancer_retryable_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return _is_oom_error(exc) or (
+        "expected all tensors to be on the same device" in message
+        and "cpu" in message
+        and "cuda" in message
+    )
+
+
 def _log_cuda_memory(context: str) -> None:
     if not torch.cuda.is_available():
         return
@@ -456,16 +465,20 @@ def run_generation(job_id: str, request: GenerateRequest) -> None:
         try:
             result = _invoke_pipeline(use_pe)
         except Exception as exc:
-            if _is_oom_error(exc) and use_pe:
+            if _is_prompt_enhancer_retryable_error(exc) and use_pe:
                 logger.warning(
-                    "ERNIE-Image job %s hit CUDA OOM with use_pe=True. "
-                    "Retrying once with use_pe=False.",
+                    "ERNIE-Image job %s hit a prompt-enhancer compatibility error "
+                    "with use_pe=True (%s). Retrying once with use_pe=False.",
                     job_id,
+                    exc,
                 )
                 jobs[job_id]["warning"] = (
-                    "Prompt enhancer disabled after CUDA OOM; retried automatically."
+                    "Prompt enhancer disabled after a compatibility error; retried automatically."
                 )
-                _cleanup_cuda(f"job {job_id} after OOM retry trigger", synchronize=True)
+                _cleanup_cuda(
+                    f"job {job_id} after prompt-enhancer retry trigger",
+                    synchronize=True,
+                )
                 use_pe = False
                 result = _invoke_pipeline(use_pe)
             else:

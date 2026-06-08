@@ -1978,9 +1978,13 @@ if [ "$START_ERNIE_IMAGE" = "true" ]; then
       export ERNIE_ENABLE_VAE_TILING="true"
     else
       export ERNIE_DTYPE="bf16"
-      export ERNIE_USE_PE="true"
+      # 2026-06-08 paid image benchmark: ERNIE 24GB on RTX 3090 failed with
+      # CUDA OOM and CPU/CUDA tensor-device mismatch while prompt enhancer was
+      # enabled. Keep the 24GB cloud default in the same compatibility envelope
+      # as lower tiers until a fresh smoke test proves PE stable again.
+      export ERNIE_USE_PE="${ERNIE_USE_PE:-false}"
       export ERNIE_ENABLE_CPU_OFFLOAD="false"
-      export ERNIE_ENABLE_ATTENTION_SLICING="false"
+      export ERNIE_ENABLE_ATTENTION_SLICING="${ERNIE_ENABLE_ATTENTION_SLICING:-true}"
       export ERNIE_ENABLE_VAE_TILING="true"
     fi
     log "ERNIE-Image config: model=$ERNIE_MODEL_ID dtype=$ERNIE_DTYPE steps=$ERNIE_DEFAULT_STEPS use_pe=${ERNIE_USE_PE:-true} cpu_offload=${ERNIE_ENABLE_CPU_OFFLOAD:-false}"

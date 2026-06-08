@@ -2537,9 +2537,13 @@ exec python main.py "$@"
 
                         if not found_processable_job and not compaction_requested:
                             if available_jobs:
-                                # Count how many were actually ready vs downloading
+                                # Count how many were actually ready vs blocked
+                                # on Docker image availability.
                                 ready_count = 0
+                                queued_count = 0
                                 downloading_count = 0
+                                missing_count = 0
+                                failed_count = 0
                                 unknown_count = 0
                                 for pj in available_jobs:
                                     st = self._get_service_type_for_job(pj)
@@ -2553,24 +2557,82 @@ exec python main.py "$@"
                                     elif availability == ImageAvailability.UNKNOWN:
                                         unknown_count += 1
                                     else:
-                                        downloading_count += 1
+                                        status = (
+                                            download_manager.get_download_status(st)
+                                            if download_manager
+                                            else None
+                                        )
+                                        status_value = getattr(status, "value", None)
+                                        if (
+                                            download_manager
+                                            and download_manager.is_downloading(st)
+                                        ) or status_value == "downloading":
+                                            downloading_count += 1
+                                        elif (
+                                            download_manager
+                                            and download_manager.is_queued(st)
+                                        ) or status_value == "pending":
+                                            queued_count += 1
+                                        elif status_value in (
+                                            "failed",
+                                            "permanently_failed",
+                                        ):
+                                            failed_count += 1
+                                        else:
+                                            missing_count += 1
 
                                 if ready_count > 0:
                                     logging.info(
                                         f"{ready_count} jobs were ready but reservation failed. Provider may be busy in DB or jobs were taken. Waiting..."
                                     )
-                                elif unknown_count > 0 and downloading_count > 0:
+                                elif (
+                                    unknown_count > 0
+                                    and (
+                                        downloading_count > 0
+                                        or queued_count > 0
+                                        or missing_count > 0
+                                        or failed_count > 0
+                                    )
+                                ):
+                                    blocked_parts = []
+                                    if downloading_count:
+                                        blocked_parts.append(
+                                            f"{downloading_count} downloading"
+                                        )
+                                    if queued_count:
+                                        blocked_parts.append(f"{queued_count} queued")
+                                    if missing_count:
+                                        blocked_parts.append(f"{missing_count} missing")
+                                    if failed_count:
+                                        blocked_parts.append(f"{failed_count} failed")
                                     logging.info(
-                                        f"{downloading_count} jobs still need image downloads, and "
-                                        f"{unknown_count} could not be checked because Docker was temporarily unavailable. Waiting..."
+                                        f"{len(available_jobs)} available jobs are blocked on Docker image availability "
+                                        f"({', '.join(blocked_parts)}; {unknown_count} unknown). Waiting..."
                                     )
                                 elif unknown_count > 0:
                                     logging.info(
                                         f"{unknown_count} jobs could not be checked because Docker was temporarily unavailable. Waiting..."
                                     )
                                 else:
+                                    blocked_parts = []
+                                    if downloading_count:
+                                        blocked_parts.append(
+                                            f"{downloading_count} downloading"
+                                        )
+                                    if queued_count:
+                                        blocked_parts.append(f"{queued_count} queued")
+                                    if missing_count:
+                                        blocked_parts.append(f"{missing_count} missing")
+                                    if failed_count:
+                                        blocked_parts.append(f"{failed_count} failed")
+                                    blocked_summary = (
+                                        ", ".join(blocked_parts)
+                                        if blocked_parts
+                                        else "image unavailable"
+                                    )
                                     logging.info(
-                                        f"All {len(available_jobs)} available jobs require images that are still downloading. Waiting..."
+                                        f"All {len(available_jobs)} available jobs are blocked on Docker images "
+                                        f"({blocked_summary}). Waiting..."
                                     )
                             else:
                                 logging.info("No new jobs found in this check.")

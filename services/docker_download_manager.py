@@ -1479,6 +1479,13 @@ class DockerDownloadManager:
                     return False
 
                 if not self._claim_download_slot(service_type, accept_policy):
+                    self._download_status.pop(service_type, None)
+                    self._emit_download_state(service_type, image_name, "cancelled")
+                    logging.info(
+                        "Skipping background download for %s; server-side coverage is "
+                        "already sufficient.",
+                        service_type,
+                    )
                     return False
 
                 self._active_downloads.add(service_type)
