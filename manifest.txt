@@ -4,7 +4,9 @@ comfyui-storage/build_and_push.py
 comfyui-storage/diffrhythm_api.py
 comfyui-storage/dramabox_api.py
 comfyui-storage/ernie_image_api.py
+comfyui-storage/f5_tts_api.py
 comfyui-storage/heartmula_api.py
+comfyui-storage/ideogram4_api.py
 comfyui-storage/inspatio_api.py
 comfyui-storage/lavasr_api.py
 comfyui-storage/mmaudio_api.py
@@ -19,6 +21,7 @@ comfyui-storage/temp_handler.py
 comfyui-storage/turbodiffusion_api_server.py
 comfyui-storage/verify_wan2gp.py
 comfyui-storage/wan2gp_server.py
+comfyui-storage/wavtts_api.py
 config.py
 dgn_client.py
 exceptions.py
@@ -45,6 +48,8 @@ services/processors/audio/audiox.py
 services/processors/audio/chatterbox.py
 services/processors/audio/diffrhythm_cli.py
 services/processors/audio/dramabox.py
+services/processors/audio/f5_tts.py
+services/processors/audio/wavtts.py
 services/processors/audio/foley.py
 services/processors/audio/heartmula_cli.py
 services/processors/audio/lavasr.py
@@ -60,6 +65,7 @@ services/processors/image/__init__.py
 services/processors/image/anima.py
 services/processors/image/ernie_image.py
 services/processors/image/flux_kontext.py
+services/processors/image/ideogram4.py
 services/processors/image/pid.py
 services/processors/image/qwen.py
 services/processors/image/qwen_turbo.py
@@ -100,6 +106,8 @@ workflows/chatterbox-tts.api.json
 workflows/chatterbox-voice-clone.api.json
 workflows/diagdistill-t2v.api.json
 workflows/dreamid-omni-image-to-video-24gb.api.json
+workflows/f5-tts.api.json
+workflows/ideogram4.api.json
 workflows/flux-kontext-dev-12gb-image-edit.api.json
 workflows/flux-kontext-dev-12gb-text-to-image.api.json
 workflows/flux-kontext-dev-16gb-image-edit.api.json
@@ -122,6 +130,7 @@ workflows/qwen-image-t2i-8gb.api.json
 workflows/qwen-image-t2i.api.json
 workflows/qwen.api.json
 workflows/qwen3-tts.api.json
+workflows/wavtts.api.json
 workflows/stable-audio-open.api.json
 workflows/stream-diffvsr-video-upscale.api.json
 workflows/svi-film-i2v-12gb.api.json

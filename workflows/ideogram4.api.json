@@ -1,0 +1,23 @@
+{
+  "version": "1.0",
+  "backend": "rest",
+  "service": "ideogram4",
+  "endpoints": {
+    "health": "/health",
+    "generate": "/generate",
+    "status": "/status/{job_id}",
+    "output": "/output/{job_id}"
+  },
+  "inputs": {
+    "prompt": "string",
+    "width": "integer",
+    "height": "integer",
+    "aspect_ratio": "string",
+    "sampler_preset": "string",
+    "seed": "integer",
+    "use_magic_prompt": "boolean"
+  },
+  "outputs": {
+    "image": "png"
+  }
+}

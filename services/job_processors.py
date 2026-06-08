@@ -61,6 +61,10 @@ from services.processors import (
     Qwen3TTSJobProcessor,
     Qwen3VoiceDesignJobProcessor,
     Qwen3VoiceCloneJobProcessor,
+    F5TTSJobProcessor,
+    F5VoiceCloneJobProcessor,
+    WavTTSJobProcessor,
+    WavTTSVoiceCloneJobProcessor,
     ScenemaAudioTTSProcessor,
     ScenemaAudioVoiceCloneProcessor,
     DramaboxTTSProcessor,
@@ -80,6 +84,7 @@ from services.processors import (
     Vista4DVideoToVideoProcessor,
     InSpatioWorldJobProcessor,
     ErnieImageProcessor,
+    Ideogram4ImageProcessor,
     PiDImageUpscaleProcessor,
 )
 
@@ -122,6 +127,10 @@ __all__ = [
     "Qwen3TTSJobProcessor",
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
+    "F5TTSJobProcessor",
+    "F5VoiceCloneJobProcessor",
+    "WavTTSJobProcessor",
+    "WavTTSVoiceCloneJobProcessor",
     "ScenemaAudioTTSProcessor",
     "ScenemaAudioVoiceCloneProcessor",
     "DramaboxTTSProcessor",
@@ -141,5 +150,6 @@ __all__ = [
     "Vista4DVideoToVideoProcessor",
     "InSpatioWorldJobProcessor",
     "ErnieImageProcessor",
+    "Ideogram4ImageProcessor",
     "PiDImageUpscaleProcessor",
 ]

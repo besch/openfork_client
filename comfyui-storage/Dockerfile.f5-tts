@@ -1,0 +1,59 @@
+# syntax=docker/dockerfile:1.4
+# F5-TTS Docker Image - 8GB VRAM target
+# Supports: default-reference TTS and zero-shot voice cloning
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV HF_HOME=/app/models
+ENV HUGGINGFACE_HUB_CACHE=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV TORCH_HOME=/app/models
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-dev \
+    curl git wget ffmpeg libsndfile1 sox build-essential \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.4.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124
+
+ARG F5_TTS_REF=main
+RUN python -m pip install --no-cache-dir \
+    "git+https://github.com/SWivid/F5-TTS.git@${F5_TTS_REF}" \
+    fastapi \
+    uvicorn[standard] \
+    python-multipart \
+    requests \
+    soundfile \
+    "huggingface_hub[cli]>=0.20.0"
+
+RUN mkdir -p /app/input /app/output /app/models
+
+RUN huggingface-cli download SWivid/F5-TTS F5TTS_v1_Base/model_1250000.safetensors \
+    --cache-dir /app/models \
+    --local-dir-use-symlinks False \
+    && huggingface-cli download charactr/vocos-mel-24khz config.yaml pytorch_model.bin \
+    --cache-dir /app/models \
+    --local-dir-use-symlinks False
+
+ENV F5_TTS_MODEL=F5TTS_v1_Base
+ENV F5_MODEL_CACHE_DIR=/app/models
+
+COPY f5_tts_api.py /app/f5_tts_api.py
+
+EXPOSE 8000
+
+CMD ["python", "/app/f5_tts_api.py"]

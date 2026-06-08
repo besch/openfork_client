@@ -7,6 +7,8 @@ from .vibevoice import VibeVoiceJobProcessor, VibeVoiceMultiCloneJobProcessor
 from .diffrhythm_cli import DiffRhythmCLIJobProcessor
 from .chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProcessor
 from .qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
+from .f5_tts import F5TTSJobProcessor, F5VoiceCloneJobProcessor
+from .wavtts import WavTTSJobProcessor, WavTTSVoiceCloneJobProcessor
 from .scenema_audio import ScenemaAudioTTSProcessor, ScenemaAudioVoiceCloneProcessor
 from .dramabox import DramaboxTTSProcessor, DramaboxVoiceCloneProcessor
 from .mmaudio import MMAudioJobProcessor
@@ -24,6 +26,10 @@ __all__ = [
     "Qwen3TTSJobProcessor",
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
+    "F5TTSJobProcessor",
+    "F5VoiceCloneJobProcessor",
+    "WavTTSJobProcessor",
+    "WavTTSVoiceCloneJobProcessor",
     "ScenemaAudioTTSProcessor",
     "ScenemaAudioVoiceCloneProcessor",
     "DramaboxTTSProcessor",

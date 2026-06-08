@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "backend": "rest",
+  "service": "wavtts",
+  "endpoints": {
+    "health": "/health",
+    "generate": "/generate",
+    "voice_clone": "/generate/voice-clone",
+    "status": "/status/{job_id}",
+    "download": "/download/{job_id}"
+  },
+  "inputs": {
+    "text": "string",
+    "ref_audio": "file",
+    "ref_text": "string",
+    "speed": "number",
+    "seed": "integer",
+    "nfe_step": "integer",
+    "cfg_strength": "number",
+    "shift": "number"
+  },
+  "outputs": {
+    "audio": "wav"
+  }
+}

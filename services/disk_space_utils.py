@@ -117,10 +117,14 @@ def estimate_image_size_bytes(image_name: str) -> int:
     # Map of service patterns to estimated sizes (in GB)
     # These are conservative estimates based on services.json disk_required_gb
     size_map = {
+        "llm-gemma4-12b": 35,
         "llm": 20,
         "mmaudio": 60,
         "vibevoice": 80,
         "chatterbox": 80,
+        "f5-tts": 45,
+        "wavtts": 60,
+        "ideogram4": 120,
         "stream-diffvsr": 80,
         "audiox": 120,
         "stable-audio": 40,

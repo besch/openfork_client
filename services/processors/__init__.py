@@ -54,6 +54,8 @@ from .audio.qwen3_tts import (
     Qwen3VoiceDesignJobProcessor,
     Qwen3VoiceCloneJobProcessor,
 )
+from .audio.f5_tts import F5TTSJobProcessor, F5VoiceCloneJobProcessor
+from .audio.wavtts import WavTTSJobProcessor, WavTTSVoiceCloneJobProcessor
 from .audio.scenema_audio import (
     ScenemaAudioTTSProcessor,
     ScenemaAudioVoiceCloneProcessor,
@@ -86,6 +88,7 @@ from .image.flux_kontext import (
 )
 from .image.anima import AnimaTextToImageProcessor
 from .image.ernie_image import ErnieImageProcessor
+from .image.ideogram4 import Ideogram4ImageProcessor
 from .image.pid import PiDImageUpscaleProcessor
 
 # Text processors
@@ -135,6 +138,10 @@ __all__ = [
     "Qwen3TTSJobProcessor",
     "Qwen3VoiceDesignJobProcessor",
     "Qwen3VoiceCloneJobProcessor",
+    "F5TTSJobProcessor",
+    "F5VoiceCloneJobProcessor",
+    "WavTTSJobProcessor",
+    "WavTTSVoiceCloneJobProcessor",
     "ScenemaAudioTTSProcessor",
     "ScenemaAudioVoiceCloneProcessor",
     "DramaboxTTSProcessor",
@@ -146,6 +153,7 @@ __all__ = [
     "FluxKontextT2IProcessor",
     "AnimaTextToImageProcessor",
     "ErnieImageProcessor",
+    "Ideogram4ImageProcessor",
     "PiDImageUpscaleProcessor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",

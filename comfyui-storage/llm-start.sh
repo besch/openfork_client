@@ -26,6 +26,14 @@ while ! curl -s http://127.0.0.1:11434/api/tags > /dev/null; do
 done
 echo "Ollama is ready!"
 
+export OPENFORK_LLM_MODEL="${OPENFORK_LLM_MODEL:-qwen3:4b}"
+
+echo "Selected LLM model: ${OPENFORK_LLM_MODEL}"
+if ! ollama list 2>/dev/null | awk 'NR > 1 { print $1 }' | grep -qx "$OPENFORK_LLM_MODEL"; then
+  echo "Model ${OPENFORK_LLM_MODEL} not present locally; pulling..."
+  ollama pull "$OPENFORK_LLM_MODEL"
+fi
+
 # Setup directories
 mkdir -p /data/.cache /data/input
 

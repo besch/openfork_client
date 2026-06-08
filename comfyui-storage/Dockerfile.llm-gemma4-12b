@@ -1,0 +1,43 @@
+FROM ollama/ollama:latest
+
+# LLM Docker Image - Gemma 4 12B
+
+# Install Python and dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv curl bash \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install DGN client dependencies
+RUN pip3 install --no-cache-dir --break-system-packages \
+    requests python-dotenv websocket-client py-cpuinfo GPUtil psutil \
+    httpx supabase websockets ffmpeg-python tenacity docker
+
+# Set persistence paths
+ENV OLLAMA_MODELS=/root/.ollama
+ARG OPENFORK_LLM_MODEL=gemma4:12b
+ENV OPENFORK_LLM_MODEL=${OPENFORK_LLM_MODEL}
+
+# Pre-pull the model during build so it is baked into the image.
+RUN /bin/sh -c "ollama serve & pid=\$! && \
+    sleep 5 && \
+    echo \"Pulling ${OPENFORK_LLM_MODEL}...\" && ollama pull \"${OPENFORK_LLM_MODEL}\" && \
+    kill \$pid"
+
+# Bake DGN client into image
+RUN mkdir -p /opt/dgn-client /data/.cache /data/input
+WORKDIR /opt/dgn-client
+
+# Download and install DGN client during build
+RUN curl -sL https://raw.githubusercontent.com/besch/openfork_client/main/bootstrap.sh -o bootstrap.sh \
+    && bash bootstrap.sh \
+    && rm -f bootstrap.sh manifest.txt
+
+# Create marker file
+RUN echo "$(date -Iseconds)" > /opt/dgn-client/.installed
+
+# Copy startup script
+COPY llm-start.sh /start.sh
+RUN chmod +x /start.sh
+
+ENTRYPOINT ["/start.sh"]

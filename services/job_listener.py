@@ -1,5 +1,6 @@
 import logging
 import json
+import os
 import random
 import threading
 import time
@@ -549,7 +550,11 @@ class JobListener:
             return True
 
         inputs = job.get("inputs") or {}
-        model_name = inputs.get("model", "qwen3:4b")
+        default_model = os.getenv(
+            "OPENFORK_LLM_MODEL",
+            os.getenv("OPENFORK_LLM_BASE_MODEL", "qwen3:4b"),
+        )
+        model_name = inputs.get("model") or default_model
         if not self._is_safe_ollama_model_name(model_name):
             logging.warning(
                 "Skipping Ollama warmup for unsafe model name %r; processor will "

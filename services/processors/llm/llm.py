@@ -939,8 +939,13 @@ class LLMJobProcessor(BaseJobProcessor):
             return
 
         inputs = self.job.get("inputs", {})
-        # Default to the best quality model that still fits the 4GB LLM service.
-        model_name = inputs.get("model", "qwen3:4b")
+        # Default comes from the worker startup script, which selects Qwen3 4B
+        # for lower VRAM and Gemma 4 12B for 16GB+ clients.
+        default_model = os.getenv(
+            "OPENFORK_LLM_MODEL",
+            os.getenv("OPENFORK_LLM_BASE_MODEL", "qwen3:4b"),
+        )
+        model_name = inputs.get("model") or default_model
             
         system_prompt = inputs.get("system_prompt", "You are a helpful assistant.")
         temperature = inputs.get("temperature", 0.7)

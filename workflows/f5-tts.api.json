@@ -1,0 +1,50 @@
+{
+  "api_type": "rest",
+  "base_url": "http://localhost:8000",
+  "endpoints": {
+    "generate": {
+      "method": "POST",
+      "path": "/generate",
+      "params": {
+        "text": "string",
+        "ref_audio_path": "optional",
+        "ref_text": "optional",
+        "speed": 1.0,
+        "seed": "optional",
+        "nfe_step": 32,
+        "cfg_strength": 2.0,
+        "remove_silence": false
+      }
+    },
+    "voice_clone": {
+      "method": "POST",
+      "path": "/generate/voice-clone-path",
+      "params": {
+        "text": "string",
+        "ref_audio_path": "string",
+        "ref_text": "optional",
+        "speed": 1.0,
+        "seed": "optional",
+        "nfe_step": 32,
+        "cfg_strength": 2.0,
+        "remove_silence": false
+      }
+    },
+    "status": {
+      "method": "GET",
+      "path": "/status/{job_id}"
+    },
+    "download": {
+      "method": "GET",
+      "path": "/download/{job_id}"
+    }
+  },
+  "model": "F5TTS_v1_Base",
+  "modes": ["tts", "voice_clone"],
+  "defaults": {
+    "speed": 1.0,
+    "nfe_step": 32,
+    "cfg_strength": 2.0,
+    "remove_silence": false
+  }
+}

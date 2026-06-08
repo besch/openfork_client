@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1.4
+# WavTTS Docker Image - 8GB VRAM target
+# Supports: default-reference TTS and zero-shot voice cloning
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV HF_HOME=/app/models
+ENV HUGGINGFACE_HUB_CACHE=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV TORCH_HOME=/app/models
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 python3.10-venv python3.10-dev \
+    curl git wget ffmpeg libsndfile1 sox build-essential \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10 \
+    && ln -sf /usr/bin/python3.10 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+ARG WAVTTS_REF=main
+RUN git clone --depth 1 --branch "${WAVTTS_REF}" https://github.com/cwx-worst-one/WavTTS.git /opt/WavTTS \
+    && cd /opt/WavTTS \
+    && python -m pip install --no-cache-dir -e . \
+    && python -m pip install --no-cache-dir \
+        fastapi \
+        uvicorn[standard] \
+        python-multipart \
+        requests \
+        "huggingface_hub[cli]>=0.20.0"
+
+RUN mkdir -p /app/input /app/output /app/models
+
+RUN huggingface-cli download worstchan/WavTTS \
+    --cache-dir /app/models \
+    --local-dir-use-symlinks False
+
+ENV WAVTTS_MODEL=WavTTS
+ENV WAVTTS_REPO_DIR=/opt/WavTTS
+ENV WAVTTS_DEFAULT_REF_AUDIO=/opt/WavTTS/src/wavtts/infer/examples/basic_ref_en.wav
+
+COPY wavtts_api.py /app/wavtts_api.py
+
+EXPOSE 8000
+
+CMD ["python", "/app/wavtts_api.py"]

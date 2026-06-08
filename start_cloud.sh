@@ -462,6 +462,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/audiox_api.py" ] && cp -v "$DGN_SOURCE_DIR/audiox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/mmaudio_api.py" ] && cp -v "$DGN_SOURCE_DIR/mmaudio_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/f5_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/f5_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/dramabox_api.py" ] && cp -v "$DGN_SOURCE_DIR/dramabox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
@@ -641,6 +642,8 @@ START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
 START_AUDIOX="false"
 START_QWEN3TTS="false"
+START_F5TTS="false"
+START_WAVTTS="false"
 START_SCENEMA_AUDIO="false"
 START_DRAMABOX="false"
 START_DIAGDISTILL="false"
@@ -649,6 +652,7 @@ START_COMFYUI="true"
 START_SPARKVSR="false"
 START_INSPATIO="false"
 START_ERNIE_IMAGE="false"
+START_IDEOGRAM4="false"
 START_PID_IMAGE="false"
 START_PRISMAUDIO="false"
 START_MMAUDIO="false"
@@ -698,6 +702,14 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
       START_QWEN3TTS="true"
       SERVICE_TYPE="qwen3-tts"
+  elif [ -f "/app/f5_tts_api.py" ]; then
+      log "Auto-mode: Detected F5-TTS image. Selecting F5-TTS service."
+      START_F5TTS="true"
+      SERVICE_TYPE="f5-tts"
+  elif [ -f "/app/wavtts_api.py" ]; then
+      log "Auto-mode: Detected WavTTS image. Selecting WavTTS service."
+      START_WAVTTS="true"
+      SERVICE_TYPE="wavtts"
   elif [ -f "/app/prismaudio_api.py" ]; then
       log "Auto-mode: Detected PRiSM Audio image. Selecting PRiSM Audio service."
       START_PRISMAUDIO="true"
@@ -871,6 +883,16 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ernie-image-8gb"
           log "Auto-selected ERNIE-Image 8GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/app/ideogram4_api.py" ]; then
+      log "Auto-mode: Detected Ideogram 4 image. Selecting Ideogram 4 service."
+      START_IDEOGRAM4="true"
+      if [ "${IDEOGRAM_QUANTIZATION:-}" = "fp8" ] || [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+          SERVICE_TYPE="ideogram4-24gb"
+          log "Auto-selected Ideogram 4 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      else
+          SERVICE_TYPE="ideogram4-16gb"
+          log "Auto-selected Ideogram 4 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -880,6 +902,8 @@ else
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"audiox"* ]]; then START_AUDIOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
+  if [[ "$SERVICE_TYPE" == *"f5-tts"* ]]; then START_F5TTS="true"; fi
+  if [[ "$SERVICE_TYPE" == *"wavtts"* ]]; then START_WAVTTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"prismaudio"* ]]; then START_PRISMAUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"mmaudio"* ]]; then START_MMAUDIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"acestep"* ]]; then START_ACESTEP="true"; fi
@@ -889,6 +913,7 @@ else
   if [[ "$SERVICE_TYPE" == *"sparkvsr"* ]]; then START_SPARKVSR="true"; fi
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
+  if [[ "$SERVICE_TYPE" == *"ideogram4"* ]]; then START_IDEOGRAM4="true"; fi
   if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL, and Vista4D services.
@@ -971,6 +996,21 @@ if [ "$START_QWEN3TTS" = "true" ]; then
       export QWEN_MODEL_SIZE="0.6B"
       log "Selecting Qwen3-TTS 0.6B model for 8GB VRAM (Capacity: ${TOTAL_VRAM_MB}MB)"
   fi
+fi
+
+if [ "$START_F5TTS" = "true" ]; then
+  log "F5-TTS selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_WAVTTS" = "true" ]; then
+  log "WavTTS selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_IDEOGRAM4" = "true" ]; then
+  log "Ideogram 4 selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
 fi
 
 if [ "$START_PRISMAUDIO" = "true" ]; then
@@ -1590,6 +1630,20 @@ if [ "$START_QWEN3TTS" = "true" ] && [ -f "/app/qwen3_tts_api.py" ]; then
   wait_for_url "Qwen3-TTS API" "http://127.0.0.1:8000/health" 300 "/tmp/qwen3_tts_api.log"
 fi
 
+# Start F5-TTS REST API
+if [ "$START_F5TTS" = "true" ] && [ -f "/app/f5_tts_api.py" ]; then
+  log "Found F5-TTS API script. Starting..."
+  (cd /app && "$PYTHON_EXE" f5_tts_api.py > /tmp/f5_tts_api.log 2>&1) &
+  wait_for_url "F5-TTS API" "http://127.0.0.1:8000/health" 300 "/tmp/f5_tts_api.log"
+fi
+
+# Start WavTTS REST API
+if [ "$START_WAVTTS" = "true" ] && [ -f "/app/wavtts_api.py" ]; then
+  log "Found WavTTS API script. Starting..."
+  (cd /app && "$PYTHON_EXE" wavtts_api.py > /tmp/wavtts_api.log 2>&1) &
+  wait_for_url "WavTTS API" "http://127.0.0.1:8000/health" 300 "/tmp/wavtts_api.log"
+fi
+
 # Start PRiSM Audio REST API
 if [ "$START_PRISMAUDIO" = "true" ] && [ -f "/app/prismaudio_api.py" ]; then
   log "Found PRiSM Audio API script. Starting..."
@@ -1932,6 +1986,25 @@ if [ "$START_ERNIE_IMAGE" = "true" ]; then
     wait_for_url "ERNIE-Image API" "http://127.0.0.1:8000/health" 600 "/tmp/ernie_image_api.log"
   else
     log "ERROR: ERNIE-Image API not found at /app/ernie_image_api.py"
+  fi
+fi
+
+# Start Ideogram 4 REST API
+if [ "$START_IDEOGRAM4" = "true" ]; then
+  log "Starting Ideogram 4 API service..."
+  if [ -f "/app/ideogram4_api.py" ]; then
+    if [[ "${SERVICE_TYPE:-}" == *"24gb"* ]]; then
+      export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-fp8}"
+    else
+      export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-nf4}"
+    fi
+    export IDEOGRAM_SAMPLER_PRESET="${IDEOGRAM_SAMPLER_PRESET:-V4_QUALITY_48}"
+    export IDEOGRAM_USE_MAGIC_PROMPT="${IDEOGRAM_USE_MAGIC_PROMPT:-0}"
+    log "Ideogram 4 config: quantization=$IDEOGRAM_QUANTIZATION preset=$IDEOGRAM_SAMPLER_PRESET magic_prompt=$IDEOGRAM_USE_MAGIC_PROMPT"
+    (cd /app && "$PYTHON_EXE" ideogram4_api.py > /tmp/ideogram4_api.log 2>&1) &
+    wait_for_url "Ideogram 4 API" "http://127.0.0.1:8000/health" 900 "/tmp/ideogram4_api.log"
+  else
+    log "ERROR: Ideogram 4 API not found at /app/ideogram4_api.py"
   fi
 fi
 
