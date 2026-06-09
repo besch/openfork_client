@@ -67,6 +67,24 @@ def _configure_stdio_encoding() -> None:
 
 _configure_stdio_encoding()
 
+
+def _default_data_dir(root_dir: str) -> str:
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return os.path.join(appdata, "openfork_client")
+
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return os.path.join(xdg_data_home, "openfork_client")
+
+    home_dir = os.path.expanduser("~")
+    if home_dir and home_dir != "~":
+        return os.path.join(home_dir, ".openfork_client")
+
+    return os.path.join(root_dir, ".openfork_client")
+
+
 # Force reset logging to ensure our config takes effect regardless of module import order
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)
@@ -197,12 +215,14 @@ def setup_client(args):
         logging.warning(f"Could not connect to orchestrator URL {determined_orchestrator_url}: {e}.")
 
     root_dir = args.root_dir if args.root_dir else os.getcwd()
+    data_dir = args.data_dir if args.data_dir else _default_data_dir(root_dir)
     logging.info(f"Using root directory: {root_dir}")
+    logging.info(f"Using data directory: {data_dir}")
 
     client = DGNClient(
         orchestrator_url=determined_orchestrator_url,
         root_dir=root_dir,
-        data_dir=args.data_dir,
+        data_dir=data_dir,
         access_token=args.access_token,
         refresh_token=args.refresh_token,
         dgn_api_key=args.dgn_api_key,
