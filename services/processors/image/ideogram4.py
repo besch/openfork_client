@@ -5,10 +5,11 @@ Communicates with the Ideogram 4 REST API (FastAPI server on port 8000) for
 text-to-image generation.
 """
 
+import json
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -201,19 +202,21 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
             seed = inputs.get("seed")
             width, height = self._resolve_dimensions(inputs.get("aspect_ratio"))
             sampler_preset = self._resolve_sampler_preset(inputs)
+            prompt, structured_prompt = self._resolve_prompt(inputs)
             payload = {
-                "prompt": self.positive_prompt,
+                "prompt": prompt,
                 "width": width,
                 "height": height,
                 "sampler_preset": sampler_preset,
-                "warn_on_caption_issues": True,
+                "warn_on_caption_issues": not structured_prompt,
             }
             logging.info(
-                "Submitting Ideogram 4 generation size=%sx%s preset=%s tier=%s",
+                "Submitting Ideogram 4 generation size=%sx%s preset=%s tier=%s structured=%s",
                 width,
                 height,
                 sampler_preset,
                 self._service_type() or "unknown",
+                structured_prompt,
             )
             if seed is not None:
                 payload["seed"] = int(seed)
@@ -234,6 +237,144 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
         except requests.exceptions.RequestException as exc:
             logging.error("Ideogram 4 generate request error: %s", exc)
             return None
+
+    def _resolve_prompt(self, inputs: dict) -> tuple[str, bool]:
+        structured_prompt = (
+            inputs.get("ideogram_json_prompt")
+            or inputs.get("ideogram_structured_prompt")
+            or inputs.get("json_prompt")
+        )
+        if structured_prompt:
+            if isinstance(structured_prompt, str):
+                return structured_prompt, True
+            return json.dumps(structured_prompt, separators=(",", ":")), True
+
+        layers = inputs.get("ideogram_layers") or inputs.get("ideogramLayers")
+        if isinstance(layers, list) and layers:
+            return self._build_structured_prompt(inputs, layers), True
+
+        return self.positive_prompt, False
+
+    def _build_structured_prompt(
+        self, inputs: dict, layers: list[dict[str, Any]]
+    ) -> str:
+        elements = []
+        for index, layer in enumerate(layers):
+            if not isinstance(layer, dict):
+                continue
+            element = self._convert_layer(layer, index)
+            if element:
+                elements.append(element)
+
+        if not elements:
+            return self.positive_prompt
+
+        prompt = {
+            "high_level_description": self.positive_prompt,
+            "style_description": {
+                "aesthetics": inputs.get("ideogram_aesthetics")
+                or inputs.get("style")
+                or "polished, coherent, production-ready",
+                "lighting": inputs.get("ideogram_lighting")
+                or "balanced cinematic lighting",
+                "medium": inputs.get("ideogram_medium") or "digital image",
+                "art_style": inputs.get("ideogram_art_style")
+                or inputs.get("style")
+                or "clean contemporary visual design",
+            },
+            "compositional_deconstruction": {
+                "background": inputs.get("ideogram_background")
+                or "A coherent background that supports the listed foreground layers.",
+                "elements": elements,
+            },
+        }
+        palette = self._normalize_palette(
+            inputs.get("ideogram_color_palette") or inputs.get("color_palette")
+        )
+        if palette:
+            prompt["style_description"]["color_palette"] = palette
+        return json.dumps(prompt, separators=(",", ":"))
+
+    def _convert_layer(
+        self, layer: dict[str, Any], index: int
+    ) -> Optional[dict[str, Any]]:
+        bbox = self._layer_bbox(layer)
+        if not bbox:
+            return None
+
+        layer_type = str(layer.get("type") or layer.get("layer_type") or "obj").lower()
+        text = str(layer.get("text") or "").strip()
+        desc = str(
+            layer.get("desc")
+            or layer.get("description")
+            or (f'readable text "{text}"' if text else f"visual element {index + 1}")
+        ).strip()
+
+        element: dict[str, Any] = {
+            "type": "text" if layer_type == "text" else "obj",
+            "bbox": bbox,
+            "desc": desc,
+        }
+        if text:
+            element["text"] = text
+        palette = self._normalize_palette(layer.get("palette"))
+        if palette:
+            element["color_palette"] = palette
+        return element
+
+    def _layer_bbox(self, layer: dict[str, Any]) -> Optional[list[int]]:
+        bbox = layer.get("bbox")
+        if isinstance(bbox, list) and len(bbox) == 4:
+            values = [self._coerce_float(value) for value in bbox]
+            if all(value is not None for value in values):
+                nums = [value for value in values if value is not None]
+                if max(nums) <= 1:
+                    nums = [value * 1000 for value in nums]
+                return self._normalize_bbox(nums)
+
+        coords = [
+            self._coerce_float(layer.get("x")),
+            self._coerce_float(layer.get("y")),
+            self._coerce_float(layer.get("w") or layer.get("width")),
+            self._coerce_float(layer.get("h") or layer.get("height")),
+        ]
+        if any(value is None for value in coords):
+            return None
+
+        x, y, w, h = [value for value in coords if value is not None]
+        if max(x, y, w, h) <= 1:
+            x, y, w, h = x * 1000, y * 1000, w * 1000, h * 1000
+        return self._normalize_bbox([y, x, y + h, x + w])
+
+    @staticmethod
+    def _normalize_bbox(values: list[float]) -> list[int]:
+        y_min, x_min, y_max, x_max = [
+            max(0, min(1000, int(round(value)))) for value in values
+        ]
+        if y_max <= y_min:
+            y_max = min(1000, y_min + 1)
+        if x_max <= x_min:
+            x_max = min(1000, x_min + 1)
+        return [y_min, x_min, y_max, x_max]
+
+    @staticmethod
+    def _coerce_float(value: Any) -> Optional[float]:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _normalize_palette(value: Any) -> list[str]:
+        if isinstance(value, str):
+            raw_values = [item.strip() for item in value.split(",")]
+        elif isinstance(value, list):
+            raw_values = [str(item).strip() for item in value]
+        else:
+            return []
+        return [item for item in raw_values if item][:12]
 
     def _poll_for_completion(self, api_job_id: str) -> dict:
         return poll_rest_job_with_clean_exit(
