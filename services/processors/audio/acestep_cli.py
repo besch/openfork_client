@@ -45,10 +45,14 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
         self.session.trust_env = False
 
         workflow_config = client.config.get(self.workflow_type, {})
-        self.max_audio_duration_seconds = workflow_config.get(
+        configured_max_duration = workflow_config.get(
             "max_audio_duration_seconds",
             self.DEFAULT_MAX_DURATION
         )
+        try:
+            self.max_audio_duration_seconds = float(configured_max_duration)
+        except (TypeError, ValueError):
+            self.max_audio_duration_seconds = float(self.DEFAULT_MAX_DURATION)
 
     def process(self):
         """Main processing method."""
@@ -217,8 +221,16 @@ class AceStepCLIJobProcessor(BaseJobProcessor):
             use_random_seed = seed in (None, "", -1, "-1")
 
             service_type = self.client.get_service_type_for_workflow(self.workflow_type)
-            service_max_duration = 12 if service_type == "acestep-8gb" else self.max_audio_duration_seconds
+            service_max_duration = self.max_audio_duration_seconds
             actual_duration = min(requested_duration, service_max_duration)
+            if actual_duration < requested_duration:
+                logging.warning(
+                    "Requested ACE-Step duration %ss exceeds max %ss for workflow %s. Capping to %ss.",
+                    requested_duration,
+                    service_max_duration,
+                    self.workflow_type,
+                    actual_duration,
+                )
             default_model_by_service = {
                 "acestep-8gb": "acestep-v15-turbo",
                 "acestep-16gb": "acestep-v15-xl-turbo",
