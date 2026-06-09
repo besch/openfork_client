@@ -128,7 +128,7 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
                 except OSError:
                     pass
 
-    def _wait_for_api(self, timeout: int = 420) -> bool:
+    def _wait_for_api(self, timeout: int = 1800) -> bool:
         start_time = time.monotonic()
         last_log = -31
         logging.info(
@@ -316,4 +316,5 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
             "2:3": (608, 912),
         }
         ratios = low_vram_ratios if self._is_16gb_tier() else standard_ratios
-        return ratios.get(aspect_ratio, (768, 768) if self._is_16gb_tier() else (1024, 1024))
+        fallback = (768, 768) if self._is_16gb_tier() else (1024, 1024)
+        return ratios.get(aspect_ratio, fallback)
