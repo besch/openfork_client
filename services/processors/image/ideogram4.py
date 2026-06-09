@@ -17,6 +17,7 @@ from services.orchestrator_service import TokenExpiredError
 from services.processors.base import BaseJobProcessor
 from services.processors.output_handlers import ImageOutputHandler
 from services.processors.rest_recovery import (
+    get_processor_service_type,
     poll_rest_job_with_clean_exit,
     recover_output_from_clean_container_exit,
 )
@@ -26,7 +27,13 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
     API_HOST = "127.0.0.1"
     API_PORT = 8000
     POLL_INTERVAL = 3
-    API_WAIT_TIMEOUT = int(os.environ.get("IDEOGRAM4_API_WAIT_TIMEOUT", "420"))
+    API_WAIT_TIMEOUT = int(os.environ.get("IDEOGRAM4_API_WAIT_TIMEOUT", "1800"))
+    DEFAULT_SAMPLER_PRESET = os.environ.get(
+        "IDEOGRAM4_DEFAULT_SAMPLER_PRESET", "V4_QUALITY_48"
+    )
+    LOW_VRAM_SAMPLER_PRESET = os.environ.get(
+        "IDEOGRAM4_16GB_SAMPLER_PRESET", "V4_DEFAULT_20"
+    )
     MAX_WAIT_TIME = int(
         os.environ.get(
             "IDEOGRAM4_GENERATION_TIMEOUT",
@@ -190,13 +197,21 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
         try:
             seed = inputs.get("seed")
             width, height = self._resolve_dimensions(inputs.get("aspect_ratio"))
+            sampler_preset = inputs.get("sampler_preset") or self._default_sampler_preset()
             payload = {
                 "prompt": self.positive_prompt,
                 "width": width,
                 "height": height,
-                "sampler_preset": inputs.get("sampler_preset") or "V4_QUALITY_48",
+                "sampler_preset": sampler_preset,
                 "warn_on_caption_issues": True,
             }
+            logging.info(
+                "Submitting Ideogram 4 generation size=%sx%s preset=%s tier=%s",
+                width,
+                height,
+                sampler_preset,
+                self._service_type() or "unknown",
+            )
             if seed is not None:
                 payload["seed"] = int(seed)
             if inputs.get("use_magic_prompt") is not None:
@@ -265,8 +280,24 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
                 prefer_name=api_job_id,
             )
 
+    def _service_type(self) -> str:
+        service_type = get_processor_service_type(self)
+        if service_type:
+            return service_type
+        return getattr(self.client, "active_service_type", "") or ""
+
+    def _is_16gb_tier(self) -> bool:
+        workflow_type = (self.workflow_type or "").lower()
+        service_type = self._service_type().lower()
+        return "16gb" in f"{workflow_type} {service_type}"
+
+    def _default_sampler_preset(self) -> str:
+        if self._is_16gb_tier():
+            return self.LOW_VRAM_SAMPLER_PRESET
+        return self.DEFAULT_SAMPLER_PRESET
+
     def _resolve_dimensions(self, aspect_ratio: Optional[str]) -> tuple[int, int]:
-        ratios = {
+        standard_ratios = {
             "1:1": (1024, 1024),
             "16:9": (1344, 768),
             "9:16": (768, 1344),
@@ -275,4 +306,14 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
             "3:2": (1216, 816),
             "2:3": (816, 1216),
         }
-        return ratios.get(aspect_ratio, (1024, 1024))
+        low_vram_ratios = {
+            "1:1": (768, 768),
+            "16:9": (1024, 576),
+            "9:16": (576, 1024),
+            "4:3": (896, 672),
+            "3:4": (672, 896),
+            "3:2": (912, 608),
+            "2:3": (608, 912),
+        }
+        ratios = low_vram_ratios if self._is_16gb_tier() else standard_ratios
+        return ratios.get(aspect_ratio, (768, 768) if self._is_16gb_tier() else (1024, 1024))

@@ -99,6 +99,39 @@ def _resolve_seed(seed: Optional[int]) -> int:
     return int(time.time_ns() % (2**31 - 1))
 
 
+def _gpu_memory_snapshot() -> Optional[str]:
+    if not torch.cuda.is_available():
+        return None
+
+    try:
+        device = torch.cuda.current_device()
+        free, total = torch.cuda.mem_get_info(device)
+        allocated = torch.cuda.memory_allocated(device)
+        reserved = torch.cuda.memory_reserved(device)
+        gib = 1024**3
+        return (
+            f"gpu={torch.cuda.get_device_name(device)} "
+            f"free={free / gib:.2f}GiB total={total / gib:.2f}GiB "
+            f"allocated={allocated / gib:.2f}GiB reserved={reserved / gib:.2f}GiB"
+        )
+    except Exception as exc:
+        logger.debug("Could not read CUDA memory stats: %s", exc)
+        return None
+
+
+def _clear_cuda_cache(reason: str):
+    if not torch.cuda.is_available():
+        return
+
+    try:
+        torch.cuda.empty_cache()
+        snapshot = _gpu_memory_snapshot()
+        if snapshot:
+            logger.info("Cleared CUDA cache %s; %s", reason, snapshot)
+    except Exception as exc:
+        logger.debug("Could not clear CUDA cache %s: %s", reason, exc)
+
+
 def _load_model():
     global pipe, model_loading, model_error
 
@@ -126,11 +159,16 @@ def _load_model():
                 device=device,
                 dtype=torch.bfloat16,
             )
-            logger.info("Ideogram 4 model loaded")
+            snapshot = _gpu_memory_snapshot()
+            if snapshot:
+                logger.info("Ideogram 4 model loaded; %s", snapshot)
+            else:
+                logger.info("Ideogram 4 model loaded")
             return pipe
         except Exception as exc:
             model_error = str(exc)
             logger.error("Failed to load Ideogram 4 model: %s", exc, exc_info=True)
+            _clear_cuda_cache("after model load failure")
             raise
         finally:
             model_loading = False
@@ -191,17 +229,22 @@ def _run_generation(job_id: str, request: GenerateRequest) -> tuple[str, int]:
         seed,
         use_magic_prompt,
     )
-    images = model(
-        prompt,
-        height=height,
-        width=width,
-        num_steps=preset.num_steps,
-        guidance_schedule=preset.guidance_schedule,
-        mu=preset.mu,
-        std=preset.std,
-        seed=seed,
-        raise_on_caption_issues=not request.warn_on_caption_issues,
-    )
+    snapshot = _gpu_memory_snapshot()
+    if snapshot:
+        logger.info("Ideogram 4 job %s pre-generation memory: %s", job_id, snapshot)
+
+    with torch.inference_mode():
+        images = model(
+            prompt,
+            height=height,
+            width=width,
+            num_steps=preset.num_steps,
+            guidance_schedule=preset.guidance_schedule,
+            mu=preset.mu,
+            std=preset.std,
+            seed=seed,
+            raise_on_caption_issues=not request.warn_on_caption_issues,
+        )
     if not images:
         raise RuntimeError("Ideogram 4 returned no images")
 
@@ -231,6 +274,8 @@ async def _process_generation_job(job_id: str, request: GenerateRequest):
         logger.error("Ideogram 4 job %s failed: %s", job_id, exc, exc_info=True)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(exc)
+    finally:
+        _clear_cuda_cache(f"after job {job_id}")
 
 
 @app.on_event("startup")

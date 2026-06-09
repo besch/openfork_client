@@ -265,6 +265,53 @@ wait_for_url() {
   return 1
 }
 
+wait_for_model_loaded() {
+  local name="$1"
+  local url="$2"
+  local max_wait="${3:-900}"
+  local log_file="$4"
+  local waited=0
+  local health=""
+
+  log "Waiting for $name model to finish loading at $url..."
+  while [ $waited -lt $max_wait ]; do
+    health=$(curl -fsS "$url" 2>/dev/null || true)
+
+    if echo "$health" | grep -Eq '"model_loaded"[[:space:]]*:[[:space:]]*true'; then
+      log "$name model is loaded."
+      return 0
+    fi
+
+    if echo "$health" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"error"'; then
+      log "ERROR: $name model reported an error: $health"
+      if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+        log "Last 30 lines of $log_file:"
+        tail -n 30 "$log_file" | sed 's/^/    /' || true
+      fi
+      return 1
+    fi
+
+    if [ $((waited % 30)) -eq 0 ]; then
+      if [ -n "$health" ]; then
+        log "  $name model still loading ($waited/$max_wait seconds): $health"
+      else
+        log "  $name health endpoint not reachable yet ($waited/$max_wait seconds)"
+      fi
+      if [ "$waited" -gt 0 ] && [ -n "$log_file" ] && [ -f "$log_file" ]; then
+        log "  Last 15 lines of $log_file:"
+        tail -n 15 "$log_file" | sed 's/^/    /' || true
+      fi
+    fi
+
+    sleep 5
+    waited=$((waited + 5))
+  done
+
+  log "ERROR: $name model did not finish loading within $max_wait seconds."
+  [ -n "$log_file" ] && log "Check $log_file for errors."
+  return 1
+}
+
 ffmpeg_supports_fps_mode() {
   command -v ffmpeg >/dev/null 2>&1 &&
     ffmpeg -hide_banner -h full 2>/dev/null | grep -q -- "-fps_mode"
@@ -2001,16 +2048,27 @@ if [ "$START_IDEOGRAM4" = "true" ]; then
   if [ -f "/app/ideogram4_api.py" ]; then
     if [[ "${SERVICE_TYPE:-}" == *"24gb"* ]]; then
       export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-fp8}"
+      export IDEOGRAM_SAMPLER_PRESET="${IDEOGRAM_SAMPLER_PRESET:-V4_QUALITY_48}"
     else
       export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-nf4}"
+      export IDEOGRAM_SAMPLER_PRESET="${IDEOGRAM_SAMPLER_PRESET:-V4_DEFAULT_20}"
     fi
-    export IDEOGRAM_SAMPLER_PRESET="${IDEOGRAM_SAMPLER_PRESET:-V4_QUALITY_48}"
     export IDEOGRAM_USE_MAGIC_PROMPT="${IDEOGRAM_USE_MAGIC_PROMPT:-0}"
-    log "Ideogram 4 config: quantization=$IDEOGRAM_QUANTIZATION preset=$IDEOGRAM_SAMPLER_PRESET magic_prompt=$IDEOGRAM_USE_MAGIC_PROMPT"
+    export IDEOGRAM_MODEL_LOAD_TIMEOUT="${IDEOGRAM_MODEL_LOAD_TIMEOUT:-1800}"
+    export IDEOGRAM4_API_WAIT_TIMEOUT="${IDEOGRAM4_API_WAIT_TIMEOUT:-1800}"
+    log "Ideogram 4 config: quantization=$IDEOGRAM_QUANTIZATION preset=$IDEOGRAM_SAMPLER_PRESET magic_prompt=$IDEOGRAM_USE_MAGIC_PROMPT model_load_timeout=$IDEOGRAM_MODEL_LOAD_TIMEOUT"
     (cd /app && "$PYTHON_EXE" ideogram4_api.py > /tmp/ideogram4_api.log 2>&1) &
-    wait_for_url "Ideogram 4 API" "http://127.0.0.1:8000/health" 900 "/tmp/ideogram4_api.log"
+    if ! wait_for_url "Ideogram 4 API" "http://127.0.0.1:8000/health" 900 "/tmp/ideogram4_api.log"; then
+      log "ERROR: Ideogram 4 API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "Ideogram 4" "http://127.0.0.1:8000/health" "$IDEOGRAM_MODEL_LOAD_TIMEOUT" "/tmp/ideogram4_api.log"; then
+      log "ERROR: Ideogram 4 model did not become ready; not starting the DGN client."
+      exit 1
+    fi
   else
     log "ERROR: Ideogram 4 API not found at /app/ideogram4_api.py"
+    exit 1
   fi
 fi
 
