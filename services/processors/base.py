@@ -7,6 +7,8 @@ Abstract base class for all job processors in the DGN client.
 import os
 import json
 import logging
+import posixpath
+import shutil
 import threading
 from abc import ABC, abstractmethod
 from typing import Union, Dict, Any, Optional
@@ -16,8 +18,18 @@ from exceptions import WorkflowError
 _ALLOWED_CONTAINER_CLEANUP_PREFIXES = (
     "/opt/ComfyUI/input/",
     "/opt/ComfyUI/output/",
+    "/opt/wan2gp/outputs/",
+    "/opt/TurboDiffusion/outputs/",
     "/app/output/",
+    "/data/inspatio_tasks/",
     "/tmp/",
+)
+
+_JOB_SCOPED_CONTAINER_CLEANUP_DIRS = (
+    "/opt/ComfyUI/input",
+    "/opt/ComfyUI/output",
+    "/app/output",
+    "/tmp",
 )
 
 
@@ -166,13 +178,26 @@ class BaseJobProcessor(ABC):
         self,
         path: Optional[str],
         label: str = "container temporary file",
+        recursive: bool = False,
     ) -> None:
         if not path:
             return
 
-        normalized = path.replace("\\", "/")
-        if not normalized.startswith(_ALLOWED_CONTAINER_CLEANUP_PREFIXES):
+        normalized = posixpath.normpath(path.replace("\\", "/"))
+        allowed_prefix = next(
+            (
+                prefix
+                for prefix in _ALLOWED_CONTAINER_CLEANUP_PREFIXES
+                if normalized.startswith(prefix)
+            ),
+            None,
+        )
+        if not allowed_prefix:
             logging.debug("Skipping cleanup for unexpected container path: %s", path)
+            return
+
+        if recursive and normalized.rstrip("/") == allowed_prefix.rstrip("/"):
+            logging.debug("Skipping recursive cleanup for broad container path: %s", path)
             return
 
         try:
@@ -183,7 +208,14 @@ class BaseJobProcessor(ABC):
             return
 
         if HEADLESS_MODE:
-            self._cleanup_local_file(normalized, label)
+            if recursive and os.path.isdir(normalized) and not os.path.islink(normalized):
+                try:
+                    shutil.rmtree(normalized)
+                    logging.info("Cleaned up %s: %s", label, normalized)
+                except OSError as exc:
+                    logging.debug("Could not clean up %s %s: %s", label, normalized, exc)
+            else:
+                self._cleanup_local_file(normalized, label)
             return
 
         active_service_type = getattr(self.client, "active_service_type", None)
@@ -193,7 +225,7 @@ class BaseJobProcessor(ABC):
         try:
             result = docker_manager.exec_in_container(
                 active_service_type,
-                ["rm", "-f", "--", normalized],
+                ["rm", "-rf" if recursive else "-f", "--", normalized],
             )
             if result is None:
                 logging.debug(
@@ -239,6 +271,93 @@ class BaseJobProcessor(ABC):
                     exc,
                 )
 
+    def _cleanup_job_scoped_files_in_local_dir(
+        self,
+        directory: str,
+        prefixes: tuple[str, ...],
+        *,
+        max_depth: int = 2,
+    ) -> None:
+        if not directory or not os.path.isdir(directory):
+            return
+
+        root_depth = directory.rstrip(os.sep).count(os.sep)
+        try:
+            for root, dirs, files in os.walk(directory):
+                depth = root.rstrip(os.sep).count(os.sep) - root_depth
+                if depth >= max_depth:
+                    dirs[:] = []
+                for filename in files:
+                    if filename.startswith(prefixes):
+                        self._cleanup_local_file(os.path.join(root, filename))
+        except OSError as exc:
+            logging.debug(
+                "Could not scan %s for job-scoped container cleanup: %s",
+                directory,
+                exc,
+            )
+
+    def _cleanup_job_scoped_container_files(self) -> None:
+        job_id = self.job_id
+        if not job_id:
+            return
+
+        prefixes = (f"{job_id}_", f"{job_id}.", f"{job_id}-", f"start_{job_id}")
+
+        try:
+            from config import HEADLESS_MODE
+            from services.docker_manager import docker_manager
+        except Exception as exc:
+            logging.debug("Could not import container cleanup helpers: %s", exc)
+            return
+
+        if HEADLESS_MODE:
+            for directory in _JOB_SCOPED_CONTAINER_CLEANUP_DIRS:
+                self._cleanup_job_scoped_files_in_local_dir(directory, prefixes)
+            return
+
+        active_service_type = getattr(self.client, "active_service_type", None)
+        if not active_service_type or not docker_manager:
+            return
+
+        for directory in _JOB_SCOPED_CONTAINER_CLEANUP_DIRS:
+            for prefix in prefixes:
+                try:
+                    result = docker_manager.exec_in_container(
+                        active_service_type,
+                        [
+                            "find",
+                            directory,
+                            "-maxdepth",
+                            "2",
+                            "-type",
+                            "f",
+                            "-name",
+                            f"{prefix}*",
+                            "-delete",
+                        ],
+                    )
+                    if result is None:
+                        return
+                    exit_code = getattr(result, "exit_code", None)
+                    if exit_code is None:
+                        exit_code = getattr(result, "returncode", None)
+                    if exit_code not in (None, 0):
+                        logging.debug(
+                            "Job-scoped container cleanup for %s/%s exited with %s: %s",
+                            directory,
+                            prefix,
+                            exit_code,
+                            getattr(result, "output", ""),
+                        )
+                except Exception as exc:
+                    logging.debug(
+                        "Could not clean job-scoped files in %s for prefix %s: %s",
+                        directory,
+                        prefix,
+                        exc,
+                    )
+
     def close(self) -> None:
         """Release any resources held by this processor (e.g. HTTP sessions)."""
         if hasattr(self, "session") and self.session is not None:
@@ -246,6 +365,7 @@ class BaseJobProcessor(ABC):
                 self.session.close()
             except Exception:
                 pass
+        self._cleanup_job_scoped_container_files()
         self._cleanup_job_scoped_temp_files()
 
     @abstractmethod

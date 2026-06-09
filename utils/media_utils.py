@@ -74,7 +74,7 @@ def get_video_duration(file_path: str) -> float:
         return 0.0
 
 def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = THUMBNAIL_WIDTH) -> bool:
-    """Generates a thumbnail for a video file with specified width (default 512px)."""
+    """Generates a thumbnail for a video file with the configured width."""
     command = [
         "ffmpeg",
         "-y",

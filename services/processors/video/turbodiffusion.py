@@ -143,6 +143,11 @@ class TurboDiffusionBaseProcessor(BaseJobProcessor, VideoOutputHandler):
             self._fail_job(f"Error finalizing job: {e}")
         finally:
             self._cleanup_remote_job(remote_job_id)
+            self._cleanup_container_file(
+                f"/opt/TurboDiffusion/outputs/{remote_job_id}",
+                "TurboDiffusion remote output",
+                recursive=True,
+            )
             if os.path.exists(local_path):
                 try:
                     os.remove(local_path)

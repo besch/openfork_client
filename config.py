@@ -27,7 +27,9 @@ os.chdir(ROOT_DIR)
 
 CACHE_DIR = os.path.join(ROOT_DIR, '.cache')
 DEV_MODE = False
-THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "512"))
+# Timeline and asset-list thumbnails render small; 384 keeps them crisp while
+# reducing storage and bandwidth versus the previous 512px default.
+THUMBNAIL_WIDTH = int(os.getenv("THUMBNAIL_WIDTH", "384"))
 MAX_INPUT_ASSET_BYTES = int(
     os.getenv("MAX_INPUT_ASSET_BYTES", "536870912")
 )

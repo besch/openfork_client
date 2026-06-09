@@ -71,6 +71,8 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
         use_tae = bool(job_inputs.get("use_tae", False))
 
         output_path = None
+        task_id = None
+        cleanup_task_dir = False
 
         try:
             if not self._wait_for_api():
@@ -93,10 +95,12 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
 
             result = self._poll_for_completion(task_id)
             if result.get("status") != "completed":
+                cleanup_task_dir = result.get("status") == "failed"
                 self._fail_job(
                     f"Generation failed: {result.get('error', 'Unknown error')}"
                 )
                 return
+            cleanup_task_dir = True
 
             output_path = self._download_output(task_id)
             if not output_path:
@@ -155,6 +159,12 @@ class InSpatioWorldJobProcessor(BaseJobProcessor, VideoOutputHandler):
                     os.remove(output_path)
                 except OSError:
                     pass
+            if cleanup_task_dir and task_id:
+                self._cleanup_container_file(
+                    f"/data/inspatio_tasks/{task_id}",
+                    "InSpatio-World task output",
+                    recursive=True,
+                )
 
     def _wait_for_api(self, timeout: int = 600) -> bool:
         start = time.monotonic()

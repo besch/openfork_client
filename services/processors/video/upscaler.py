@@ -132,6 +132,10 @@ class VideoUpscalerJobProcessor(ComfyUIProcessor, VideoOutputHandler):
                         os.remove(thumbnail_local_path)
 
                 duration = get_video_duration(temp_host_path)
+                self._cleanup_container_file(
+                    self._output_source_path(output_video_filename, subfolder),
+                    "ComfyUI upscaler video output",
+                )
                 completion_metadata = self.job.get("completion_metadata") or {}
                 completion_metadata["upscale_model"] = upscale_model
 
@@ -146,6 +150,10 @@ class VideoUpscalerJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             else:
                 self._fail_job(f"Video upscaler job {self.job_id} completed, but video upload failed.")
         finally:
+            self._cleanup_container_file(
+                container_input_path,
+                "ComfyUI upscaler input video",
+            )
             if os.path.exists(temp_host_path):
                 logging.info(f"Cleaning up temporary file: {temp_host_path}")
                 os.remove(temp_host_path)

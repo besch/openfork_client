@@ -271,6 +271,10 @@ class SparkVSRUpscalerJobProcessor(BaseJobProcessor, VideoOutputHandler):
             logging.info(f"[SparkVSR] Job {self.job_id} completed successfully")
 
         finally:
+            self._cleanup_container_file(
+                f"/app/output/{task_id}_out.mp4",
+                "SparkVSR video output",
+            )
             if os.path.exists(output_path):
                 logging.info(f"Cleaning up temporary file: {output_path}")
                 os.remove(output_path)

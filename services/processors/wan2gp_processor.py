@@ -366,7 +366,10 @@ class Wan2GPProcessor(BaseJobProcessor):
             suffix = Path(name).suffix or ".mp4"
             os.makedirs(self.cache_dir, exist_ok=True)
             tmp = tempfile.NamedTemporaryFile(
-                delete=False, suffix=suffix, dir=self.cache_dir
+                delete=False,
+                prefix=f"{self.job_id}_",
+                suffix=suffix,
+                dir=self.cache_dir,
             )
             try:
                 bytes_written = 0
@@ -382,6 +385,10 @@ class Wan2GPProcessor(BaseJobProcessor):
                     bytes_written / (1024 * 1024),
                     elapsed,
                     (bytes_written / (1024 * 1024)) / elapsed,
+                )
+                self._cleanup_container_file(
+                    f"/opt/wan2gp/outputs/{Path(name).name}",
+                    "Wan2GP video output",
                 )
             except Exception as e:
                 tmp.close()
@@ -407,6 +414,7 @@ class Wan2GPProcessor(BaseJobProcessor):
         try:
             with tempfile.NamedTemporaryFile(
                 delete=False,
+                prefix=f"{self.job_id}_recover_",
                 suffix=".mp4",
                 dir=self.cache_dir,
             ) as tmp:
@@ -437,6 +445,7 @@ class Wan2GPProcessor(BaseJobProcessor):
         try:
             with tempfile.NamedTemporaryFile(
                 delete=False,
+                prefix=f"{self.job_id}_recover_",
                 suffix=suffix,
                 dir=self.cache_dir,
             ) as tmp:
@@ -449,6 +458,11 @@ class Wan2GPProcessor(BaseJobProcessor):
                 extensions=(".mp4", ".mov", ".webm", ".mkv"),
                 prefer_name=Path(name).stem,
             )
+            if recovered:
+                self._cleanup_container_file(
+                    f"/opt/wan2gp/outputs/{Path(name).name}",
+                    "Wan2GP recovered video output",
+                )
             return recovered
         finally:
             if tmp_path and os.path.exists(tmp_path) and os.path.getsize(tmp_path) == 0:
