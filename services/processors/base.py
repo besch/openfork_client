@@ -13,6 +13,13 @@ from typing import Union, Dict, Any, Optional
 
 from exceptions import WorkflowError
 
+_ALLOWED_CONTAINER_CLEANUP_PREFIXES = (
+    "/opt/ComfyUI/input/",
+    "/opt/ComfyUI/output/",
+    "/app/output/",
+    "/tmp/",
+)
+
 
 class BaseJobProcessor(ABC):
     """Base class for all job processors.
@@ -145,6 +152,93 @@ class BaseJobProcessor(ABC):
             completion_metadata={"error": message},
         )
 
+    def _cleanup_local_file(self, path: Optional[str], label: str = "temporary file") -> None:
+        if not path:
+            return
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+                logging.info("Cleaned up %s: %s", label, path)
+        except OSError as exc:
+            logging.debug("Could not clean up %s %s: %s", label, path, exc)
+
+    def _cleanup_container_file(
+        self,
+        path: Optional[str],
+        label: str = "container temporary file",
+    ) -> None:
+        if not path:
+            return
+
+        normalized = path.replace("\\", "/")
+        if not normalized.startswith(_ALLOWED_CONTAINER_CLEANUP_PREFIXES):
+            logging.debug("Skipping cleanup for unexpected container path: %s", path)
+            return
+
+        try:
+            from config import HEADLESS_MODE
+            from services.docker_manager import docker_manager
+        except Exception as exc:
+            logging.debug("Could not import cleanup helpers for %s: %s", path, exc)
+            return
+
+        if HEADLESS_MODE:
+            self._cleanup_local_file(normalized, label)
+            return
+
+        active_service_type = getattr(self.client, "active_service_type", None)
+        if not active_service_type or not docker_manager:
+            return
+
+        try:
+            result = docker_manager.exec_in_container(
+                active_service_type,
+                ["rm", "-f", "--", normalized],
+            )
+            if result is None:
+                logging.debug(
+                    "Container cleanup skipped because service '%s' is no longer reachable: %s",
+                    active_service_type,
+                    normalized,
+                )
+                return
+            exit_code = getattr(result, "exit_code", None)
+            if exit_code is None:
+                exit_code = getattr(result, "returncode", None)
+            if exit_code not in (None, 0):
+                logging.debug(
+                    "Container cleanup for %s exited with %s: %s",
+                    normalized,
+                    exit_code,
+                    getattr(result, "output", ""),
+                )
+            else:
+                logging.info("Requested cleanup for %s: %s", label, normalized)
+        except Exception as exc:
+            logging.debug("Could not clean up %s %s: %s", label, normalized, exc)
+
+    def _cleanup_job_scoped_temp_files(self) -> None:
+        job_id = self.job_id
+        if not job_id:
+            return
+
+        prefixes = (f"{job_id}_", f"{job_id}.", f"{job_id}-", f"start_{job_id}")
+        for directory in (self.input_dir, self.cache_dir):
+            if not directory or not os.path.isdir(directory):
+                continue
+            try:
+                for entry in os.scandir(directory):
+                    if not entry.is_file():
+                        continue
+                    if entry.name.startswith(prefixes):
+                        self._cleanup_local_file(entry.path)
+            except OSError as exc:
+                logging.debug(
+                    "Could not scan %s for job-scoped temp cleanup: %s",
+                    directory,
+                    exc,
+                )
+
     def close(self) -> None:
         """Release any resources held by this processor (e.g. HTTP sessions)."""
         if hasattr(self, "session") and self.session is not None:
@@ -152,6 +246,7 @@ class BaseJobProcessor(ABC):
                 self.session.close()
             except Exception:
                 pass
+        self._cleanup_job_scoped_temp_files()
 
     @abstractmethod
     def process(self) -> None:

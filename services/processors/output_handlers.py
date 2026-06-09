@@ -26,6 +26,14 @@ from utils.media_utils import (
 class OutputHandlerMixin:
     """Base mixin providing common output handling utilities."""
 
+    def _output_source_path(self, filename: str, subfolder: str) -> str:
+        safe_filename = os.path.basename(filename)
+        return os.path.join(
+            "/opt/ComfyUI/output",
+            subfolder or "",
+            safe_filename,
+        ).replace("\\", "/")
+
     def _copy_file_from_container(self, filename: str, subfolder: str) -> Union[str, None]:
         """
         Copies a file from the ComfyUI output directory to a temporary location.
@@ -42,7 +50,7 @@ class OutputHandlerMixin:
         dest_on_host = os.path.join(self.cache_dir, temp_filename)
         
         # Build source path - same structure whether local or in container
-        source_path = os.path.join("/opt/ComfyUI/output", subfolder, safe_filename).replace("\\", "/")
+        source_path = self._output_source_path(safe_filename, subfolder)
 
         if HEADLESS_MODE:
             # Headless mode: files are directly on the local filesystem
@@ -130,6 +138,10 @@ class VideoOutputHandler(OutputHandlerMixin):
                     os.remove(thumbnail_local_path)
 
             duration = get_video_duration(temp_host_path)
+            self._cleanup_container_file(
+                self._output_source_path(video_filename, subfolder),
+                "ComfyUI video output",
+            )
 
             return video_storage_path, thumbnail_storage_path, duration
         finally:
@@ -181,6 +193,10 @@ class AudioOutputHandler(OutputHandlerMixin):
                 return None
 
             duration = get_audio_duration(temp_host_path)
+            self._cleanup_container_file(
+                self._output_source_path(audio_filename, subfolder),
+                "ComfyUI audio output",
+            )
             return audio_storage_path, duration
         finally:
             if os.path.exists(temp_host_path):
@@ -815,6 +831,10 @@ class ImageOutputHandler(OutputHandlerMixin):
                 self._fail_job(f"Image upload failed for job {self.job_id}.")
                 return None
 
+            self._cleanup_container_file(
+                self._output_source_path(image_filename, subfolder),
+                "ComfyUI image output",
+            )
             return image_storage_path
         finally:
             if os.path.exists(temp_host_path):

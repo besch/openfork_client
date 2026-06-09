@@ -35,14 +35,20 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         inputs = self.job.get("inputs", {})
         start_image_url = inputs.get("start_image_url")
         start_image_filename = None
+        start_image_owned = False
 
         if start_image_url:
             logging.info("Downloading start image from signed URL")
             downloaded_path = self.orchestrator_service.download_asset_by_url(start_image_url, self.input_dir)
             if downloaded_path:
                 start_image_filename = os.path.basename(downloaded_path)
+                start_image_owned = True
 
         if not start_image_filename:
+            start_image_owned = bool(
+                self.job.get("start_image_base64")
+                or inputs.get("start_image_base64")
+            )
             start_image_filename = materialize_start_image(self.job, self.input_dir)
         
         # If not materialized from base64, try downloading from storage path
@@ -68,6 +74,7 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
                     downloaded_path = self.orchestrator_service.download_asset_by_url(source_url, self.input_dir)
                     if downloaded_path:
                         start_image_filename = os.path.basename(downloaded_path)
+                        start_image_owned = True
                 else:
                     logging.warning("SUPABASE_URL not found in environment or config. Cannot download input image.")
 
@@ -76,9 +83,9 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             return
 
         start_image_full_path = os.path.join(self.input_dir, start_image_filename)
+        container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
 
         try:
-            container_input_path = f"/opt/ComfyUI/input/{start_image_filename}"
             if docker_manager:
                 docker_manager.copy_file_to_container(
                     service_type=self.client.active_service_type,
@@ -96,40 +103,45 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             self._fail_job(f"Failed to copy start image to container for job {self.job_id}: {e}")
             return
 
-        inputs = self.job.get("inputs", {})
-        aspect_ratio = inputs.get("aspect_ratio", "16:9")
-        cfg_scale = inputs.get("cfg_scale")
-        steps = inputs.get("steps")
-        flow_shift = inputs.get("flow_shift")
-        sampler = inputs.get("sampler")
-        scheduler = inputs.get("scheduler")
-        seed = inputs.get("seed")
-        vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
+        try:
+            inputs = self.job.get("inputs", {})
+            aspect_ratio = inputs.get("aspect_ratio", "16:9")
+            cfg_scale = inputs.get("cfg_scale")
+            steps = inputs.get("steps")
+            flow_shift = inputs.get("flow_shift")
+            sampler = inputs.get("sampler")
+            scheduler = inputs.get("scheduler")
+            seed = inputs.get("seed")
+            vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
 
-        wf_ready = inject_prompt_and_image_into_workflow(
-            workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
-            cfg_scale=cfg_scale, steps=steps,
-            flow_shift=flow_shift, sampler=sampler, scheduler=scheduler, seed=seed,
-            vram_tier=vram_tier
-        )
-        payload = {"prompt": wf_ready}
-        outputs = self._trigger_and_get_output(payload)
-        if not outputs:
-            return
+            wf_ready = inject_prompt_and_image_into_workflow(
+                workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
+                cfg_scale=cfg_scale, steps=steps,
+                flow_shift=flow_shift, sampler=sampler, scheduler=scheduler, seed=seed,
+                vram_tier=vram_tier
+            )
+            payload = {"prompt": wf_ready}
+            outputs = self._trigger_and_get_output(payload)
+            if not outputs:
+                return
 
-        result = self.handle_video_output(outputs)
-        if not result:
-            return
+            result = self.handle_video_output(outputs)
+            if not result:
+                return
 
-        video_storage_path, thumbnail_storage_path, duration = result
-        self.orchestrator_service.update_job_status(
-            self.job_id,
-            "completed",
-            storage_path=video_storage_path,
-            thumbnail_storage_path=thumbnail_storage_path,
-            duration_seconds=duration,
-            prompt=self.positive_prompt,
-        )
+            video_storage_path, thumbnail_storage_path, duration = result
+            self.orchestrator_service.update_job_status(
+                self.job_id,
+                "completed",
+                storage_path=video_storage_path,
+                thumbnail_storage_path=thumbnail_storage_path,
+                duration_seconds=duration,
+                prompt=self.positive_prompt,
+            )
+        finally:
+            if start_image_owned:
+                self._cleanup_local_file(start_image_full_path, "WAN22 start image")
+            self._cleanup_container_file(container_input_path, "WAN22 container start image")
 
 class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler):
     """Processor for creating video from the last frame of an input video."""

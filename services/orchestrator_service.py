@@ -681,6 +681,12 @@ class OrchestratorService:
         safe_stem = stem[:80]
         return f"{safe_stem}-{uuid.uuid4().hex[:8]}{ext}"
 
+    @staticmethod
+    def _safe_job_file_prefix(job_id: Optional[str]) -> str:
+        if not job_id:
+            return ""
+        return re.sub(r"[^A-Za-z0-9._-]", "_", job_id).strip("._-")
+
     def download_asset_by_url(
         self,
         asset_url: str,
@@ -713,6 +719,9 @@ class OrchestratorService:
                             )
 
                 file_name = self._build_safe_asset_filename(final_url, content_type)
+                job_prefix = self._safe_job_file_prefix(self._active_job_id)
+                if job_prefix:
+                    file_name = f"{job_prefix}_{file_name}"
                 file_path = os.path.join(download_dir, file_name)
 
                 downloaded_bytes = 0
