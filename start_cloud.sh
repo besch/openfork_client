@@ -952,7 +952,10 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   elif [ -f "/app/ideogram4_api.py" ]; then
       log "Auto-mode: Detected Ideogram 4 image. Selecting Ideogram 4 service."
       START_IDEOGRAM4="true"
-      if [ "${IDEOGRAM_QUANTIZATION:-}" = "fp8" ] || [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+      if [ "${IDEOGRAM_QUANTIZATION:-}" = "fp8" ] || [ "$TOTAL_VRAM_MB" -gt 30000 ]; then
+          SERVICE_TYPE="ideogram4-32gb"
+          log "Auto-selected Ideogram 4 32GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
           SERVICE_TYPE="ideogram4-24gb"
           log "Auto-selected Ideogram 4 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       else
@@ -2067,8 +2070,11 @@ if [ "$START_IDEOGRAM4" = "true" ]; then
     if [ -f "/app/services/processors/image/ideogram4.py" ]; then
       refresh_openfork_file "services/processors/image/ideogram4.py" "/app/services/processors/image/ideogram4.py" || true
     fi
-    if [[ "${SERVICE_TYPE:-}" == *"24gb"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"32gb"* ]] || [ "${IDEOGRAM_QUANTIZATION:-}" = "fp8" ]; then
       export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-fp8}"
+      export IDEOGRAM_SAMPLER_PRESET="${IDEOGRAM_SAMPLER_PRESET:-V4_QUALITY_48}"
+    elif [[ "${SERVICE_TYPE:-}" == *"24gb"* ]]; then
+      export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-nf4}"
       export IDEOGRAM_SAMPLER_PRESET="${IDEOGRAM_SAMPLER_PRESET:-V4_QUALITY_48}"
     else
       export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-nf4}"
