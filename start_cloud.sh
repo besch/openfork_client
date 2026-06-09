@@ -12,6 +12,23 @@ download_openfork_script() {
     "${OPENFORK_RAW_BASE}/${script_name}" -o "$dest"
 }
 
+refresh_openfork_file() {
+  local source_path="$1"
+  local dest="$2"
+  local temp_path="${dest}.openfork-refresh"
+
+  if download_openfork_script "$source_path" "$temp_path"; then
+    chmod --reference="$dest" "$temp_path" 2>/dev/null || true
+    mv "$temp_path" "$dest"
+    log "Refreshed $dest from ${OPENFORK_CLIENT_SCRIPT_REF}:${source_path}"
+    return 0
+  fi
+
+  rm -f "$temp_path"
+  log "WARNING: Could not refresh $dest from ${OPENFORK_CLIENT_SCRIPT_REF}:${source_path}; using image copy."
+  return 1
+}
+
 # --- Help ---
 show_help() {
   cat << EOF
@@ -2046,6 +2063,10 @@ fi
 if [ "$START_IDEOGRAM4" = "true" ]; then
   log "Starting Ideogram 4 API service..."
   if [ -f "/app/ideogram4_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/ideogram4_api.py" "/app/ideogram4_api.py" || true
+    if [ -f "/app/services/processors/image/ideogram4.py" ]; then
+      refresh_openfork_file "services/processors/image/ideogram4.py" "/app/services/processors/image/ideogram4.py" || true
+    fi
     if [[ "${SERVICE_TYPE:-}" == *"24gb"* ]]; then
       export IDEOGRAM_QUANTIZATION="${IDEOGRAM_QUANTIZATION:-fp8}"
       export IDEOGRAM_SAMPLER_PRESET="${IDEOGRAM_SAMPLER_PRESET:-V4_QUALITY_48}"
