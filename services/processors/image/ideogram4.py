@@ -34,6 +34,9 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
     LOW_VRAM_SAMPLER_PRESET = os.environ.get(
         "IDEOGRAM4_16GB_SAMPLER_PRESET", "V4_DEFAULT_20"
     )
+    LOW_VRAM_HARDWARE_MAX_MB = int(
+        os.environ.get("IDEOGRAM4_LOW_VRAM_HARDWARE_MAX_MB", "17000")
+    )
     MAX_WAIT_TIME = int(
         os.environ.get(
             "IDEOGRAM4_GENERATION_TIMEOUT",
@@ -197,7 +200,7 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
         try:
             seed = inputs.get("seed")
             width, height = self._resolve_dimensions(inputs.get("aspect_ratio"))
-            sampler_preset = inputs.get("sampler_preset") or self._default_sampler_preset()
+            sampler_preset = self._resolve_sampler_preset(inputs)
             payload = {
                 "prompt": self.positive_prompt,
                 "width": width,
@@ -295,6 +298,28 @@ class Ideogram4ImageProcessor(BaseJobProcessor, ImageOutputHandler):
         if self._is_16gb_tier():
             return self.LOW_VRAM_SAMPLER_PRESET
         return self.DEFAULT_SAMPLER_PRESET
+
+    def _is_low_vram_hardware(self) -> bool:
+        available_vram = getattr(self.client, "available_vram", None)
+        if not isinstance(available_vram, (int, float)):
+            return False
+        return int(available_vram) <= self.LOW_VRAM_HARDWARE_MAX_MB
+
+    def _resolve_sampler_preset(self, inputs: dict) -> str:
+        requested = inputs.get("sampler_preset")
+        if self._is_low_vram_hardware() and (
+            not requested or requested == self.DEFAULT_SAMPLER_PRESET
+        ):
+            if requested == self.DEFAULT_SAMPLER_PRESET:
+                logging.info(
+                    "Downgrading Ideogram 4 sampler from %s to %s on %sMB VRAM hardware",
+                    requested,
+                    self.LOW_VRAM_SAMPLER_PRESET,
+                    getattr(self.client, "available_vram", "unknown"),
+                )
+            return self.LOW_VRAM_SAMPLER_PRESET
+
+        return requested or self._default_sampler_preset()
 
     def _resolve_dimensions(self, aspect_ratio: Optional[str]) -> tuple[int, int]:
         standard_ratios = {
