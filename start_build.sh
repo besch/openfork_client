@@ -281,6 +281,15 @@ if [ -n "$HF_TOKEN" ]; then
   log "HuggingFace token provided"
 fi
 
+if [ "$(basename "$DOCKERFILE_NAME")" = "Dockerfile.ideogram4" ]; then
+  IDEOGRAM_BUILD_QUANTIZATION="nf4"
+  if [[ "${SERVICE_TYPE:-}" == *"32gb"* ]] || [[ "${DOCKER_TAG:-}" == *"32gb"* ]] || [[ "${DOCKER_TAG:-}" == *"fp8"* ]]; then
+    IDEOGRAM_BUILD_QUANTIZATION="fp8"
+  fi
+  BUILD_ARGS="$BUILD_ARGS --build-arg IDEOGRAM_QUANTIZATION=$IDEOGRAM_BUILD_QUANTIZATION"
+  log "Ideogram 4 build quantization: $IDEOGRAM_BUILD_QUANTIZATION"
+fi
+
 # Run build and capture output
 BUILD_OUTPUT="/tmp/docker_build.log"
 if docker build --no-cache $BUILD_ARGS -f "$DOCKERFILE_NAME" -t "$DOCKER_TAG" . 2>&1 | tee "$BUILD_OUTPUT"; then
