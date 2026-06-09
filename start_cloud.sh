@@ -2042,12 +2042,12 @@ if [ "$START_ERNIE_IMAGE" = "true" ]; then
       export ERNIE_ENABLE_VAE_TILING="true"
     else
       export ERNIE_DTYPE="bf16"
-      # 2026-06-08 paid image benchmark: ERNIE 24GB on RTX 3090 failed with
-      # CUDA OOM and CPU/CUDA tensor-device mismatch while prompt enhancer was
-      # enabled. Keep the 24GB cloud default in the same compatibility envelope
-      # as lower tiers until a fresh smoke test proves PE stable again.
+      # 2026-06-09 paid image smoke: full-GPU ERNIE 24GB on RTX 3090 filled
+      # ~23.5GiB and failed on a small extra allocation during inference. Keep
+      # prompt enhancement disabled and default to model CPU offload for real
+      # 24GB compatibility; this is slower, but avoids stranding paid jobs.
       export ERNIE_USE_PE="${ERNIE_USE_PE:-false}"
-      export ERNIE_ENABLE_CPU_OFFLOAD="false"
+      export ERNIE_ENABLE_CPU_OFFLOAD="${ERNIE_ENABLE_CPU_OFFLOAD:-true}"
       export ERNIE_ENABLE_ATTENTION_SLICING="${ERNIE_ENABLE_ATTENTION_SLICING:-true}"
       export ERNIE_ENABLE_VAE_TILING="true"
     fi
