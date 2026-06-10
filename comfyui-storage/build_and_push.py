@@ -29,6 +29,12 @@ class ImageConfig:
 
 # Define the images to build and push
 IMAGES: List[ImageConfig] = [
+    # Current production audio rebuilds:
+    # - Qwen3 8GB/16GB pick up the matched torch/torchvision/torchaudio stack.
+    # - Scenema picks up torchvision and the CUDA 12.8 torch stack.
+    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb-v1:latest", build=True, push=True, direct_push=True, build_args={"MODEL_SIZE": "0.6B"}),
+    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb-v1:latest", build=True, push=True, direct_push=True, build_args={"MODEL_SIZE": "1.7B"}),
+    ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-image-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.heartmula-16gb", "beschiak/openfork-heartmula-16gb:latest", build=True, push=True),
@@ -104,7 +110,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.wavtts", "beschiak/openfork-wavtts-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ideogram4", "beschiak/openfork-ideogram4-16gb:latest", build=True, push=True, build_args={"IDEOGRAM_QUANTIZATION": "nf4"} ),
     # ImageConfig("Dockerfile.ideogram4", "beschiak/openfork-ideogram4-24gb:latest", build=True, push=True, build_args={"IDEOGRAM_QUANTIZATION": "fp8"} ),
-    ImageConfig("Dockerfile.f5-tts", "beschiak/openfork-f5-tts-8gb:latest", build=True, push=True),
+    # ImageConfig("Dockerfile.f5-tts", "beschiak/openfork-f5-tts-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-10gb", "beschiak/openfork-wan22-wan2gp-10gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
