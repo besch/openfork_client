@@ -53,6 +53,8 @@ ENVIRONMENT VARIABLES:
     BUILD_JOB_ID          Build job ID for log association (uses provider ID if not set)
     OPENFORK_ALLOW_DISABLED_SERVICE_TEST
                           Set to "1" only for admin smoke tests of disabled services
+    HF_TOKEN / HUGGINGFACE_TOKEN
+                          Hugging Face token for gated model downloads
 
 EXAMPLES:
   # Basic startup
@@ -97,6 +99,22 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 log() {
   echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"
 }
+
+normalize_huggingface_token_env() {
+  local token="${HF_TOKEN:-${HUGGINGFACE_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_HUB_TOKEN:-}}}}"
+  if [ -z "$token" ]; then
+    log "Hugging Face token: not configured"
+    return
+  fi
+
+  export HF_TOKEN="$token"
+  export HUGGINGFACE_TOKEN="$token"
+  export HUGGING_FACE_HUB_TOKEN="$token"
+  export HUGGINGFACE_HUB_TOKEN="$token"
+  log "Hugging Face token: configured"
+}
+
+normalize_huggingface_token_env
 
 log_resource_snapshot() {
   local label="${1:-snapshot}"
