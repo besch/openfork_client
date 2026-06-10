@@ -2212,12 +2212,6 @@ exec python main.py "$@"
                                                         "OLLAMA_NUM_PARALLEL": "1",
                                                         "OLLAMA_ORIGINS": "*",
                                                     },
-                                                    volumes={
-                                                        "openfork-ollama-models": {
-                                                            "bind": "/root/.ollama",
-                                                            "mode": "rw",
-                                                        },
-                                                    },
                                                     force_restart=not keep_container_warm,
                                                 )
                                                 logging.info(

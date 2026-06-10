@@ -115,6 +115,11 @@ def _copy_qwen_output_from_container(
         local_path,
         container_output_path="/app/output",
         extensions=(".wav",),
+        # Qwen3-TTS can finish the model job, close the HTTP server, and leave
+        # the wav in /app/output while the container is still inspectable. Since
+        # the desktop client runs this service as one-job-per-container, copying
+        # the newest wav is safe and avoids marking a completed generation failed.
+        require_clean_exit=False,
     )
 
 
