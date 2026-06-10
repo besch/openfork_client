@@ -9,6 +9,7 @@ import base64
 import html
 import logging
 import os
+import re
 import time
 from typing import Dict, Optional
 
@@ -66,6 +67,39 @@ def _as_int(value, default: int) -> int:
 def _looks_like_speak_xml(prompt: str) -> bool:
     stripped = prompt.strip()
     return stripped.startswith("<speak") and stripped.endswith("</speak>")
+
+
+def _infer_gender(value: Optional[str], *hints: str) -> str:
+    raw_value = (value or "").strip().lower()
+    if raw_value in {"male", "female"}:
+        return raw_value
+
+    hint_text = " ".join(hint for hint in hints if hint).lower()
+    if re.search(r"\b(female|woman|girl|she|her)\b", hint_text):
+        return "female"
+    if re.search(r"\b(male|man|boy|he|him)\b", hint_text):
+        return "male"
+
+    return "female"
+
+
+def _ensure_speak_gender(prompt_xml: str, inputs: Dict) -> str:
+    stripped = prompt_xml.strip()
+    if re.search(r"<speak\b[^>]*\bgender=", stripped, flags=re.IGNORECASE):
+        return stripped
+
+    gender = _infer_gender(
+        _input_alias(inputs, "scenema_gender", "gender"),
+        str(_input_alias(inputs, "scenema_voice", "voice", default="")),
+        stripped,
+    )
+    return re.sub(
+        r"<speak\b",
+        f'<speak gender="{gender}"',
+        stripped,
+        count=1,
+        flags=re.IGNORECASE,
+    )
 
 
 class ScenemaAudioBaseProcessor(BaseJobProcessor):
@@ -212,19 +246,25 @@ class ScenemaAudioBaseProcessor(BaseJobProcessor):
 
     def _build_prompt_xml(self, text: str, inputs: Dict) -> str:
         if _looks_like_speak_xml(text):
-            return text.strip()
+            return _ensure_speak_gender(text, inputs)
 
-        voice = html.escape(
-            str(
-                _input_alias(
-                    inputs,
-                    "scenema_voice",
-                    "voice",
-                    default="Warm expressive narrator, natural breath and clear emotion.",
-                )
+        voice_text = str(
+            _input_alias(
+                inputs,
+                "scenema_voice",
+                "voice",
+                default="Warm expressive narrator, natural breath and clear emotion.",
+            )
+        )
+        gender = html.escape(
+            _infer_gender(
+                _input_alias(inputs, "scenema_gender", "gender"),
+                voice_text,
+                text,
             ),
             quote=True,
         )
+        voice = html.escape(voice_text, quote=True)
         scene = html.escape(
             str(_input_alias(inputs, "scenema_scene", "scene", default="Absolute silence.")),
             quote=True,
@@ -240,7 +280,7 @@ class ScenemaAudioBaseProcessor(BaseJobProcessor):
         line = html.escape(text.strip(), quote=False)
 
         return (
-            f'<speak voice="{voice}" scene="{scene}" language="{language}" shot="{shot}">'
+            f'<speak gender="{gender}" voice="{voice}" scene="{scene}" language="{language}" shot="{shot}">'
             f"{line}</speak>"
         )
 
