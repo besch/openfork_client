@@ -26,7 +26,7 @@ def get_dimensions(
     Using smaller dimensions suitable for GPUs with less VRAM.
     All dimensions are divisible by 16.
     """
-    if "8gb" in str(vram_tier).lower():
+    if _has_vram_marker(vram_tier, 8):
         if aspect_ratio == "16:9":
             return 320, 176
         elif aspect_ratio == "9:16":
@@ -42,6 +42,14 @@ def get_dimensions(
         else:
             return 320, 176
 
+    if _has_vram_marker(vram_tier, 16):
+        if aspect_ratio == "16:9":
+            return 896, 512
+
+    if _has_vram_marker(vram_tier, 24):
+        if aspect_ratio == "16:9":
+            return 1152, 640
+
     if aspect_ratio == "16:9":
         return 768, 432  # 432p
     elif aspect_ratio == "9:16":
@@ -56,6 +64,42 @@ def get_dimensions(
         return 896, 384
     else:
         return default_width, default_height
+
+
+def _has_vram_marker(vram_tier: object, gb: int) -> bool:
+    tier = str(vram_tier or "").lower().replace("_", "-")
+    return (
+        f"{gb}gb" in tier
+        or f"{gb}-gb" in tier
+        or f"comfyui-{gb}" in tier
+        or tier.endswith(f"-{gb}")
+        or tier == str(gb)
+    )
+
+
+def _coerce_dimension(value: object) -> Optional[int]:
+    try:
+        dimension = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if dimension <= 0:
+        return None
+    return max(16, int(round(dimension / 16)) * 16)
+
+
+def resolve_wan22_dimensions(
+    aspect_ratio: str,
+    vram_tier: str = "",
+    target_width: object = None,
+    target_height: object = None,
+) -> tuple[int, int]:
+    """Return WAN 2.2 dimensions, allowing explicit probe sizes above 8GB."""
+    width = _coerce_dimension(target_width)
+    height = _coerce_dimension(target_height)
+    if not _has_vram_marker(vram_tier, 8) and width is not None and height is not None:
+        return width, height
+    return get_dimensions(aspect_ratio, vram_tier=vram_tier)
+
 
 def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
     """
@@ -159,6 +203,8 @@ def inject_prompt_and_image_into_workflow(
     scheduler: Optional[str] = None,
     seed: Optional[int] = None,
     vram_tier: str = "",
+    target_width: object = None,
+    target_height: object = None,
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts and image filename.
@@ -166,6 +212,7 @@ def inject_prompt_and_image_into_workflow(
     Optionally injects cfg_scale and steps into KSampler nodes.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    is_8gb_tier = _has_vram_marker(vram_tier, 8)
 
     # Node 6 is the positive prompt and node 7 is the negative prompt in
     # current WAN image-to-video workflows. Keep the generic fallback for
@@ -190,17 +237,27 @@ def inject_prompt_and_image_into_workflow(
         elif node["class_type"] == "LoadImage":
             node["inputs"]["image"] = start_image_filename
         elif node["class_type"] == "WanImageToVideo":
-            width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
+            width, height = resolve_wan22_dimensions(
+                aspect_ratio,
+                vram_tier=vram_tier,
+                target_width=target_width,
+                target_height=target_height,
+            )
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
-            if "8gb" in str(vram_tier).lower():
+            if is_8gb_tier:
                 node["inputs"]["length"] = min(int(node["inputs"].get("length", 81)), 33)
         elif node["class_type"] == "ImageResizeKJv2":
-            width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
+            width, height = resolve_wan22_dimensions(
+                aspect_ratio,
+                vram_tier=vram_tier,
+                target_width=target_width,
+                target_height=target_height,
+            )
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
         elif node["class_type"] == "VHS_VideoCombine":
-            if "8gb" in str(vram_tier).lower():
+            if is_8gb_tier:
                 node["inputs"]["frame_rate"] = min(int(node["inputs"].get("frame_rate", 16)), 8)
             # Replace date token in filename_prefix
             prefix = node["inputs"].get("filename_prefix", "")
@@ -214,7 +271,7 @@ def inject_prompt_and_image_into_workflow(
         api_graph['57']['inputs']['noise_seed'] = actual_seed
 
     # Inject cfg and steps into KSampler nodes
-    if cfg_scale is not None or steps is not None or "8gb" in str(vram_tier).lower():
+    if cfg_scale is not None or steps is not None or is_8gb_tier:
         for node in api_graph.values():
             class_type = node.get("class_type", "")
             if "KSampler" in class_type and "inputs" in node:
@@ -222,7 +279,7 @@ def inject_prompt_and_image_into_workflow(
                     node["inputs"]["cfg"] = cfg_scale
                 if steps is not None and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = steps
-                if "8gb" in str(vram_tier).lower() and "steps" in node["inputs"]:
+                if is_8gb_tier and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = min(int(node["inputs"].get("steps", 6)), 4)
     
     # Inject flow_shift, sampler, and scheduler (V2)
@@ -251,6 +308,8 @@ def inject_prompt_into_text_to_video_workflow(
     scheduler: Optional[str] = None,
     seed: Optional[int] = None,
     vram_tier: str = "",
+    target_width: object = None,
+    target_height: object = None,
 ):
     """
     Loads a ComfyUI API-formatted workflow, injects prompts for text-to-video.
@@ -258,6 +317,7 @@ def inject_prompt_into_text_to_video_workflow(
     Optionally injects cfg_scale and steps into KSamplerAdvanced nodes.
     """
     api_graph = copy.deepcopy(workflow_api_data["prompt"])
+    is_8gb_tier = _has_vram_marker(vram_tier, 8)
 
     # Node 6 is positive, Node 7 is negative
     if '6' in api_graph and 'inputs' in api_graph['6'] and 'text' in api_graph['6']['inputs']:
@@ -273,10 +333,15 @@ def inject_prompt_into_text_to_video_workflow(
     # Inject dimensions into WanImageToVideo
     for node in api_graph.values():
         if node.get("class_type") == "WanImageToVideo":
-            width, height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
+            width, height = resolve_wan22_dimensions(
+                aspect_ratio,
+                vram_tier=vram_tier,
+                target_width=target_width,
+                target_height=target_height,
+            )
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
-            if "8gb" in str(vram_tier).lower():
+            if is_8gb_tier:
                 node["inputs"]["length"] = min(
                     int(node["inputs"].get("length", 81)),
                     33,
@@ -290,7 +355,7 @@ def inject_prompt_into_text_to_video_workflow(
         logging.warning("Could not find sampler node 57 to set seed")
 
     # Inject cfg and steps into KSamplerAdvanced nodes (57 and 58)
-    if cfg_scale is not None or steps is not None or "8gb" in str(vram_tier).lower():
+    if cfg_scale is not None or steps is not None or is_8gb_tier:
         for node_id in ['57', '58']:
             if node_id in api_graph and api_graph[node_id].get("class_type") == "KSamplerAdvanced":
                 if cfg_scale is not None:
@@ -299,7 +364,7 @@ def inject_prompt_into_text_to_video_workflow(
                 if steps is not None:
                     api_graph[node_id]['inputs']['steps'] = steps
                     logging.info(f"Injected steps={steps} into KSamplerAdvanced node {node_id}")
-                if "8gb" in str(vram_tier).lower() and "steps" in api_graph[node_id]["inputs"]:
+                if is_8gb_tier and "steps" in api_graph[node_id]["inputs"]:
                     api_graph[node_id]["inputs"]["steps"] = min(
                         int(api_graph[node_id]["inputs"].get("steps", 6)),
                         4,
@@ -313,7 +378,7 @@ def inject_prompt_into_text_to_video_workflow(
                     node["inputs"]["cfg"] = cfg_scale
                 if steps is not None and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = steps
-                if "8gb" in str(vram_tier).lower() and "steps" in node["inputs"]:
+                if is_8gb_tier and "steps" in node["inputs"]:
                     node["inputs"]["steps"] = min(
                         int(node["inputs"].get("steps", 6)),
                         4,
@@ -333,7 +398,7 @@ def inject_prompt_into_text_to_video_workflow(
     # Replace date token in filename_prefix for VHS_VideoCombine node
     for node in api_graph.values():
         if node.get("class_type") == "VHS_VideoCombine":
-            if "8gb" in str(vram_tier).lower():
+            if is_8gb_tier:
                 node["inputs"]["frame_rate"] = min(
                     int(node["inputs"].get("frame_rate", 16)),
                     8,

@@ -650,18 +650,19 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
         )
 
     def _get_dimensions(self, aspect_ratio):
-        """Calculate width and height based on aspect ratio."""
+        """Calculate 8GB-safe width and height based on aspect ratio."""
+        long_edge = 768
         ratio_map = {
-            "1:1": (1024, 1024),
-            "16:9": (1280, 720),
-            "9:16": (720, 1280),
-            "4:3": (1152, 864),
-            "3:4": (864, 1152),
-            "3:2": (1248, 832),
-            "2:3": (832, 1248),
-            "21:9": (1344, 576),
+            "1:1": (long_edge, long_edge),
+            "16:9": (long_edge, round(long_edge * 9 / 16)),
+            "9:16": (round(long_edge * 9 / 16), long_edge),
+            "4:3": (long_edge, round(long_edge * 3 / 4)),
+            "3:4": (round(long_edge * 3 / 4), long_edge),
+            "3:2": (long_edge, round(long_edge * 2 / 3)),
+            "2:3": (round(long_edge * 2 / 3), long_edge),
+            "21:9": (long_edge, round(long_edge * 9 / 21)),
         }
-        return ratio_map.get(aspect_ratio, (1024, 1024))
+        return ratio_map.get(aspect_ratio, (long_edge, long_edge))
 
     def _inject_t2i_workflow(self, workflow_data, prompt, width, height, seed=None):
         """Inject prompt and dimensions into the text-to-image workflow."""
