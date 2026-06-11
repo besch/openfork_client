@@ -19,6 +19,7 @@ from utils.media_utils import (
     find_image_in_output,
     generate_thumbnail,
     get_video_duration,
+    get_video_probe_metadata,
     get_audio_duration,
 )
 
@@ -105,6 +106,14 @@ class OutputHandlerMixin:
 class VideoOutputHandler(OutputHandlerMixin):
     """Mixin for handling video output: find, copy, thumbnail, upload, duration."""
 
+    def _video_completion_metadata(self) -> dict:
+        job = getattr(self, "job", {}) or {}
+        metadata = dict(job.get("completion_metadata") or {})
+        video_metadata = getattr(self, "last_video_output_metadata", None)
+        if isinstance(video_metadata, dict):
+            metadata.update(video_metadata)
+        return metadata
+
     def handle_video_output(self, outputs) -> Union[Tuple[str, str, float], None]:
         """
         Process video output from ComfyUI workflow.
@@ -130,14 +139,20 @@ class VideoOutputHandler(OutputHandlerMixin):
                 return None
 
             thumbnail_storage_path = None
+            thumbnail_generated = False
             thumbnail_local_path = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
 
             if generate_thumbnail(temp_host_path, thumbnail_local_path, width=THUMBNAIL_WIDTH):
+                thumbnail_generated = True
                 thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(thumbnail_local_path, self.job_id)
                 if os.path.exists(thumbnail_local_path):
                     os.remove(thumbnail_local_path)
 
             duration = get_video_duration(temp_host_path)
+            video_metadata = get_video_probe_metadata(temp_host_path, duration)
+            if thumbnail_generated and not thumbnail_storage_path:
+                video_metadata["thumbnail_upload_failed"] = True
+            self.last_video_output_metadata = video_metadata
             self._cleanup_container_file(
                 self._output_source_path(video_filename, subfolder),
                 "ComfyUI video output",

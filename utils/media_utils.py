@@ -335,6 +335,33 @@ def get_video_dimensions(video_path: str) -> tuple:
         logging.error(f"Failed to get video dimensions for {video_path}: {e}")
         raise RuntimeError(f"Failed to get video dimensions: {e}")
 
+def get_video_probe_metadata(video_path: str, duration_seconds: Optional[float] = None) -> dict:
+    """Return best-effort, provider-reported facts about a generated video file."""
+    metadata = {}
+
+    if duration_seconds is None:
+        duration_seconds = get_video_duration(video_path)
+    if duration_seconds and duration_seconds > 0:
+        metadata["actual_duration_seconds"] = round(float(duration_seconds), 3)
+
+    try:
+        width, height = get_video_dimensions(video_path)
+        if width > 0 and height > 0:
+            metadata["actual_width"] = int(width)
+            metadata["actual_height"] = int(height)
+            metadata["actual_resolution"] = f"{int(width)}x{int(height)}"
+    except Exception as e:
+        logging.warning(f"Could not probe video dimensions for {video_path}: {e}")
+
+    try:
+        fps = get_video_framerate(video_path)
+        if fps and fps > 0:
+            metadata["actual_fps"] = round(float(fps), 3)
+    except Exception as e:
+        logging.warning(f"Could not probe video framerate for {video_path}: {e}")
+
+    return metadata
+
 def _last_frame_filter_args(target_dimensions: Optional[Tuple[int, int]]) -> list[str]:
     if not target_dimensions:
         return []

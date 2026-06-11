@@ -28,7 +28,7 @@ from services.processors.rest_recovery import (
     clean_container_exit_detected,
     recover_output_from_clean_container_exit,
 )
-from utils.media_utils import generate_thumbnail, get_video_duration
+from utils.media_utils import generate_thumbnail, get_video_duration, get_video_probe_metadata
 
 WAN2GP_HTTP_URL = os.environ.get("WAN2GP_HTTP_URL", "http://127.0.0.1:8188")
 WAN2GP_READY_TIMEOUT = int(os.environ.get("WAN2GP_READY_TIMEOUT", "1800"))  # 30 min
@@ -489,8 +489,10 @@ class Wan2GPProcessor(BaseJobProcessor):
                 return None
 
             thumbnail_storage_path = None
+            thumbnail_generated = False
             thumb_local = os.path.join(self.cache_dir, f"{self.job_id}_thumb.jpg")
             if generate_thumbnail(file_path, thumb_local, width=THUMBNAIL_WIDTH):
+                thumbnail_generated = True
                 thumbnail_storage_path = self.orchestrator_service.upload_thumbnail(
                     thumb_local, self.job_id
                 )
@@ -498,6 +500,10 @@ class Wan2GPProcessor(BaseJobProcessor):
                     os.remove(thumb_local)
 
             duration = get_video_duration(file_path)
+            video_metadata = get_video_probe_metadata(file_path, duration)
+            if thumbnail_generated and not thumbnail_storage_path:
+                video_metadata["thumbnail_upload_failed"] = True
+            self.last_video_output_metadata = video_metadata
             return video_storage_path, thumbnail_storage_path, duration
 
         except Exception as e:
@@ -512,3 +518,10 @@ class Wan2GPProcessor(BaseJobProcessor):
                     os.remove(file_path)
                 except OSError:
                     pass
+
+    def _video_completion_metadata(self) -> dict:
+        metadata = dict(self.job.get("completion_metadata") or {})
+        video_metadata = getattr(self, "last_video_output_metadata", None)
+        if isinstance(video_metadata, dict):
+            metadata.update(video_metadata)
+        return metadata

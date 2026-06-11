@@ -217,6 +217,7 @@ class WAN22Wan2GPBaseProcessor(Wan2GPProcessor):
             storage_path=video_storage_path,
             thumbnail_storage_path=thumbnail_storage_path,
             duration_seconds=actual_duration,
+            completion_metadata=self._video_completion_metadata(),
             prompt=self.positive_prompt,
         )
 

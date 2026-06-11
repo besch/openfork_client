@@ -24,6 +24,37 @@ from utils.media_utils import get_audio_duration
 
 QWEN3_MAX_WAIT_TIME = int(os.environ.get("QWEN3_TTS_MAX_WAIT_TIME", "1800"))
 
+QWEN3_LANGUAGE_ALIASES = {
+    "auto": "Auto",
+    "cn": "Chinese",
+    "de": "German",
+    "deutsch": "German",
+    "en": "English",
+    "eng": "English",
+    "english": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "french": "French",
+    "german": "German",
+    "it": "Italian",
+    "italian": "Italian",
+    "ja": "Japanese",
+    "japanese": "Japanese",
+    "jp": "Japanese",
+    "ko": "Korean",
+    "korean": "Korean",
+    "kr": "Korean",
+    "mandarin": "Chinese",
+    "pt": "Portuguese",
+    "portuguese": "Portuguese",
+    "ru": "Russian",
+    "russian": "Russian",
+    "spanish": "Spanish",
+    "zh": "Chinese",
+    "zh_cn": "Chinese",
+    "zhcn": "Chinese",
+}
+
 
 def _input_alias(inputs: Dict, *keys: str, default=None):
     for key in keys:
@@ -31,6 +62,43 @@ def _input_alias(inputs: Dict, *keys: str, default=None):
         if value not in (None, ""):
             return value
     return default
+
+
+def _normalize_qwen3_language(language) -> str:
+    if not isinstance(language, str):
+        return "Auto"
+
+    value = language.strip()
+    if not value:
+        return "Auto"
+
+    supported = {
+        "Auto",
+        "Chinese",
+        "English",
+        "Japanese",
+        "Korean",
+        "German",
+        "French",
+        "Russian",
+        "Portuguese",
+        "Spanish",
+        "Italian",
+    }
+    if value in supported:
+        return value
+
+    key = (
+        value.lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+        .replace(".", "")
+    )
+    compact_key = key.replace("_", "")
+    return QWEN3_LANGUAGE_ALIASES.get(
+        key,
+        QWEN3_LANGUAGE_ALIASES.get(compact_key, "Auto"),
+    )
 
 
 def _as_url_list(value) -> list[str]:
@@ -218,7 +286,9 @@ class Qwen3TTSJobProcessor(BaseJobProcessor):
 
         inputs = self.job.get("inputs") or {}
         text = self.positive_prompt or inputs.get("text", "")
-        language = _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        language = _normalize_qwen3_language(
+            _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        )
         speaker = _input_alias(inputs, "speaker", "qwen3_speaker", default="vivian")
         instruct = inputs.get("instruct")
 
@@ -417,7 +487,9 @@ class Qwen3VoiceDesignJobProcessor(BaseJobProcessor):
 
         inputs = self.job.get("inputs") or {}
         text = self.positive_prompt or inputs.get("text", "")
-        language = _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        language = _normalize_qwen3_language(
+            _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        )
         voice_design_instruct = inputs.get("voice_design_instruct", "")
 
         if not text:
@@ -590,7 +662,9 @@ class Qwen3VoiceCloneJobProcessor(BaseJobProcessor):
 
         inputs = self.job.get("inputs") or {}
         text = self.positive_prompt or inputs.get("text", "")
-        language = _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        language = _normalize_qwen3_language(
+            _input_alias(inputs, "language", "qwen3_language", default="Auto")
+        )
         voice_clone_urls = _as_url_list(inputs.get("voice_clone_urls", []))
         voice_clone_storage_path = _input_alias(
             inputs,

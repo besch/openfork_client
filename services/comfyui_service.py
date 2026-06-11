@@ -13,7 +13,7 @@ from typing import Union, Dict, Any, Optional, List
 import requests
 
 from config import TimeoutConfig
-from exceptions import AuthError
+from exceptions import AuthError, InfrastructureError
 from services.orchestrator_service import TokenExpiredError
 
 REMOTE_WORKFLOW_STOP_STATUSES = ("cancelled", "deleted", "lease_lost")
@@ -32,6 +32,134 @@ class ComfyUIClient:
         if base.startswith("wss://"):
             return base.replace("wss://", "https://")
         return base.replace("ws://", "http://")
+
+    @staticmethod
+    def _is_infrastructure_history_text(text: str) -> bool:
+        lowered = text.lower()
+        markers = (
+            "cuda driver error: out of memory",
+            "cuda out of memory",
+            "out of memory",
+            "cannot allocate memory",
+            "torch.cuda.outofmemoryerror",
+            "cublas_status_alloc_failed",
+            "cudnn_status_alloc_failed",
+        )
+        return any(marker in lowered for marker in markers)
+
+    @classmethod
+    def _history_error_candidates(cls, payload: Any) -> List[str]:
+        candidates: List[str] = []
+
+        if isinstance(payload, str):
+            cleaned = " ".join(payload.split()).strip()
+            if cleaned:
+                candidates.append(cleaned)
+            return candidates
+
+        if isinstance(payload, (list, tuple)):
+            for item in payload:
+                candidates.extend(cls._history_error_candidates(item))
+            return candidates
+
+        if not isinstance(payload, dict):
+            return candidates
+
+        node_bits = []
+        node_id = payload.get("node_id") or payload.get("node")
+        node_type = payload.get("node_type")
+        if node_id is not None:
+            node_bits.append(f"node {node_id}")
+        if node_type:
+            node_bits.append(f"({node_type})")
+        node_prefix = " ".join(node_bits).strip()
+
+        exception_type = payload.get("exception_type")
+        main_message = (
+            payload.get("exception_message")
+            or payload.get("error")
+            or payload.get("message")
+            or payload.get("details")
+        )
+        if main_message:
+            message = str(main_message).strip()
+            if exception_type:
+                message = f"{exception_type}: {message}"
+            if node_prefix:
+                message = f"{node_prefix}: {message}"
+            candidates.append(message)
+
+        traceback_value = payload.get("traceback")
+        if isinstance(traceback_value, list):
+            joined_traceback = " ".join(
+                " ".join(str(line).split()).strip()
+                for line in traceback_value
+                if str(line).strip()
+            ).strip()
+            if joined_traceback:
+                candidates.append(joined_traceback)
+        elif isinstance(traceback_value, str):
+            cleaned_traceback = " ".join(traceback_value.split()).strip()
+            if cleaned_traceback:
+                candidates.append(cleaned_traceback)
+
+        errors = payload.get("errors")
+        if isinstance(errors, list):
+            for entry in errors:
+                candidates.extend(cls._history_error_candidates(entry))
+
+        skip_keys = {
+            "exception_message",
+            "exception_type",
+            "error",
+            "message",
+            "details",
+            "traceback",
+            "errors",
+            "outputs",
+            "prompt",
+            "executed",
+            "node_id",
+            "node",
+            "node_type",
+        }
+        for key, value in payload.items():
+            if key in skip_keys:
+                continue
+            if isinstance(value, (dict, list, tuple)):
+                candidates.extend(cls._history_error_candidates(value))
+
+        return candidates
+
+    @classmethod
+    def _extract_history_infrastructure_error(
+        cls,
+        prompt_history: Dict[str, Any],
+        job_id: str,
+    ) -> Optional[str]:
+        candidates: List[str] = []
+
+        status = prompt_history.get("status")
+        if isinstance(status, dict):
+            status_messages = status.get("messages")
+            if isinstance(status_messages, list):
+                for entry in status_messages[:20]:
+                    candidates.extend(cls._history_error_candidates(entry))
+
+            for key in ("error", "errors", "exception_message", "message", "details"):
+                if key in status:
+                    candidates.extend(cls._history_error_candidates(status.get(key)))
+
+        for key in ("error", "errors", "exception_message", "message", "details"):
+            if key in prompt_history:
+                candidates.extend(cls._history_error_candidates(prompt_history.get(key)))
+
+        for detail in candidates:
+            cleaned = " ".join(str(detail).split()).strip()
+            if cleaned and cls._is_infrastructure_history_text(cleaned):
+                return f"ComfyUI infrastructure error for job {job_id}: {cleaned}"
+
+        return None
 
     def wait_for_ready(
         self,
@@ -374,16 +502,36 @@ class ComfyUIClient:
                 logging.error(f"Error closing WebSocket connection: {e}")
             reader_thread.join(timeout=5)
 
-        logging.info(f"Exiting get_workflow_output for prompt_id {prompt_id} due to loop completion. Fetching history for outputs.")
-        history_outputs = self.fetch_history_outputs(prompt_id)
-        if history_outputs is not None:
-            return history_outputs
-        else:
-            logging.warning(f"Failed to fetch history outputs for prompt_id {prompt_id}. Returning accumulated outputs (which might be empty).")
-            return all_node_outputs
+        logging.info(
+            f"Exiting get_workflow_output for prompt_id {prompt_id} due to loop completion. "
+            "Fetching history for outputs."
+        )
+        prompt_history = self.fetch_history_record(prompt_id)
+        if prompt_history is not None:
+            infrastructure_error = self._extract_history_infrastructure_error(
+                prompt_history,
+                job_id,
+            )
+            if infrastructure_error:
+                logging.error(infrastructure_error)
+                raise InfrastructureError(infrastructure_error)
 
-    def fetch_history_outputs(self, prompt_id: str) -> Union[dict, None]:
-        """Fetches workflow outputs from ComfyUI's /history endpoint for a given prompt_id."""
+            if "outputs" in prompt_history:
+                logging.info(
+                    f"Successfully fetched outputs from history for prompt_id {prompt_id}."
+                )
+                return prompt_history["outputs"]
+
+            logging.warning(f"No 'outputs' found in history for prompt_id {prompt_id}.")
+
+        logging.warning(
+            f"Failed to fetch history outputs for prompt_id {prompt_id}. "
+            "Returning accumulated outputs (which might be empty)."
+        )
+        return all_node_outputs
+
+    def fetch_history_record(self, prompt_id: str) -> Union[dict, None]:
+        """Fetch the raw ComfyUI /history payload for a given prompt ID."""
         try:
             history_url = f"{self.http_base}/history?prompt_id={prompt_id}"
             logging.info(f"Fetching history from: {history_url}")
@@ -393,14 +541,9 @@ class ComfyUIClient:
                 history_data = json.loads(resp_body)
 
                 if prompt_id in history_data:
-                    prompt_history = history_data[prompt_id]
-                    if "outputs" in prompt_history:
-                        logging.info(f"Successfully fetched outputs from history for prompt_id {prompt_id}.")
-                        return prompt_history["outputs"]
-                    else:
-                        logging.warning(f"No 'outputs' found in history for prompt_id {prompt_id}.")
-                else:
-                    logging.warning(f"Prompt ID {prompt_id} not found in ComfyUI history.")
+                    return history_data[prompt_id]
+
+                logging.warning(f"Prompt ID {prompt_id} not found in ComfyUI history.")
         except urllib.error.HTTPError as e:
             try:
                 detail = e.read().decode("utf-8")
@@ -409,4 +552,15 @@ class ComfyUIClient:
             logging.error(f"ComfyUI /history returned HTTP {e.code}: {detail}")
         except Exception as e:
             logging.error(f"Failed to fetch history from ComfyUI: {e}")
-        return None # type: ignore
+        return None  # type: ignore
+
+    def fetch_history_outputs(self, prompt_id: str) -> Union[dict, None]:
+        """Fetch workflow outputs from ComfyUI's /history endpoint for a prompt ID."""
+        prompt_history = self.fetch_history_record(prompt_id)
+        if prompt_history is None:
+            return None
+        if "outputs" in prompt_history:
+            logging.info(f"Successfully fetched outputs from history for prompt_id {prompt_id}.")
+            return prompt_history["outputs"]
+        logging.warning(f"No 'outputs' found in history for prompt_id {prompt_id}.")
+        return None

@@ -57,6 +57,7 @@ class WAN22TextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             storage_path=video_storage_path,
             thumbnail_storage_path=thumbnail_storage_path,
             duration_seconds=duration,
+            completion_metadata=self._video_completion_metadata(),
             prompt=self.positive_prompt,
         )
         logging.info(f"WAN2 2.2 job {self.job_id} completed successfully")

@@ -138,6 +138,7 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
                 storage_path=video_storage_path,
                 thumbnail_storage_path=thumbnail_storage_path,
                 duration_seconds=duration,
+                completion_metadata=self._video_completion_metadata(),
                 prompt=self.positive_prompt,
             )
         finally:
@@ -258,6 +259,7 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
             storage_path=video_storage_path,
             thumbnail_storage_path=thumbnail_storage_path,
             duration_seconds=duration,
+            completion_metadata=self._video_completion_metadata(),
             prompt=self.positive_prompt,
         )
 

@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import sys
 import threading
 import unittest
@@ -867,6 +868,64 @@ class StopResetBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result, "interrupted")
         interrupt_mock.assert_called_once_with(quiet_if_unreachable=True)
+        fake_ws.close.assert_called_once()
+        fake_thread.start.assert_called_once()
+        fake_thread.join.assert_called_once_with(timeout=5)
+
+    def test_comfyui_output_wait_raises_infrastructure_error_when_history_reports_oom(self):
+        client = ComfyUIClient("ws://127.0.0.1:8188/ws?clientId={}")
+        orchestrator_service = Mock()
+        fake_ws = Mock()
+        fake_thread = Mock()
+        fake_queue = Mock()
+        fake_queue.get.side_effect = [
+            json.dumps(
+                {
+                    "type": "status",
+                    "data": {"status": {"exec_info": {"queue_remaining": 0}}},
+                }
+            )
+        ]
+
+        history_payload = {
+            "outputs": {},
+            "status": {
+                "status_str": "error",
+                "messages": [
+                    [
+                        "execution_error",
+                        {
+                            "node_id": "57",
+                            "node_type": "KSampler",
+                            "exception_type": "RuntimeError",
+                            "exception_message": "CUDA driver error: out of memory",
+                        },
+                    ]
+                ],
+            },
+        }
+
+        with patch("services.comfyui_service.websocket.WebSocket", return_value=fake_ws), patch(
+            "services.comfyui_service.threading.Thread",
+            return_value=fake_thread,
+        ), patch("services.comfyui_service.Queue", return_value=fake_queue), patch(
+            "services.comfyui_service.logging.info"
+        ), patch("services.comfyui_service.logging.warning"), patch(
+            "services.comfyui_service.logging.error"
+        ), patch("services.comfyui_service.logging.debug"), patch.object(
+            client,
+            "fetch_history_record",
+            return_value=history_payload,
+        ):
+            with self.assertRaises(InfrastructureError) as raised:
+                client.get_workflow_output(
+                    "prompt-oom",
+                    "job-oom",
+                    orchestrator_service,
+                    timeout_sec=60,
+                )
+
+        self.assertIn("out of memory", str(raised.exception).lower())
         fake_ws.close.assert_called_once()
         fake_thread.start.assert_called_once()
         fake_thread.join.assert_called_once_with(timeout=5)
