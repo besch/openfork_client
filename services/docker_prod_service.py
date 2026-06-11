@@ -29,24 +29,55 @@ DOCKER_LARGE_IMAGE_START_TIMEOUT_SECS = int(
 
 
 class DockerProdManager:
+    @staticmethod
+    def _allow_windows_docker_from_env() -> bool:
+        return os.environ.get("OPENFORK_ALLOW_WINDOWS_DOCKER_FROM_ENV") == "1"
+
+    @staticmethod
+    def _is_windows_openfork_docker_host(host: Optional[str]) -> bool:
+        if not host:
+            return False
+        normalized = host.lower().replace("http://", "tcp://", 1)
+        return normalized in {
+            "tcp://127.0.0.1:2375",
+            "tcp://localhost:2375",
+        }
+
     def _build_docker_host_candidates(self):
         allow_wsl_ip_fallback = (
             os.environ.get("OPENFORK_ALLOW_WSL_DOCKER_IP_FALLBACK") == "1"
         )
         wsl_ip = self._get_wsl_ip() if allow_wsl_ip_fallback else None
+        openfork_host = os.environ.get("OPENFORK_DOCKER_HOST")
         explicit_host = os.environ.get("DOCKER_HOST")
 
         candidates = []
-        if explicit_host:
-            candidates.append(explicit_host)
         if os.name == "nt":
             candidates.extend(
                 [
+                    openfork_host,
                     "tcp://127.0.0.1:2375",
                     "tcp://localhost:2375",
                     f"tcp://{wsl_ip}:2375" if wsl_ip else None,
                 ]
             )
+            if (
+                explicit_host
+                and explicit_host not in candidates
+                and self._allow_windows_docker_from_env()
+            ):
+                candidates.append(explicit_host)
+            elif (
+                explicit_host
+                and explicit_host not in candidates
+                and not self._is_windows_openfork_docker_host(explicit_host)
+            ):
+                logging.warning(
+                    "Ignoring inherited DOCKER_HOST on Windows; OpenFork "
+                    "production jobs are pinned to the OpenFork WSL Docker daemon."
+                )
+        elif explicit_host:
+            candidates.append(explicit_host)
 
         return list(dict.fromkeys([host for host in candidates if host]))
 
@@ -135,7 +166,7 @@ class DockerProdManager:
                 retry_duration=preferred_retry_duration,
             ):
                 pass
-            elif os.name == "nt" and not os.environ.get("DOCKER_HOST"):
+            elif os.name == "nt" and not self._allow_windows_docker_from_env():
                 logging.error(
                     "OpenFork WSL Docker TCP endpoints are unavailable; "
                     "not falling back to docker.from_env() on Windows because "
@@ -151,9 +182,7 @@ class DockerProdManager:
             # or the pipe isn't available. Try explicit fallback connections with retry.
             import sys
 
-            error_msg = (
-                f"docker.from_env() failed: {e}. Entering fallback retry loop..."
-            )
+            error_msg = f"Docker initialization failed: {e}. Entering fallback retry loop..."
             print(f"DEBUG: {error_msg}", file=sys.stderr, flush=True)
             logging.warning(error_msg)
 
@@ -277,15 +306,19 @@ class DockerProdManager:
         candidates = []
 
         current_base_url = getattr(getattr(self.client, "api", None), "base_url", None)
-        if current_base_url:
+        if current_base_url and (
+            os.name != "nt"
+            or self._allow_windows_docker_from_env()
+            or self._is_windows_openfork_docker_host(current_base_url)
+        ):
             candidates.append(current_base_url)
-
-        docker_host = os.environ.get("DOCKER_HOST")
-        if docker_host:
-            candidates.append(docker_host)
 
         if os.name == "nt":
             candidates.extend(self._build_docker_host_candidates())
+        else:
+            docker_host = os.environ.get("DOCKER_HOST")
+            if docker_host:
+                candidates.append(docker_host)
 
         for base_url in dict.fromkeys(filter(None, candidates)):
             try:
@@ -306,8 +339,8 @@ class DockerProdManager:
 
         # On Windows, from_env() can route to Docker Desktop/npipe instead of the
         # OpenFork WSL daemon. Keep retries pinned to the explicit WSL TCP
-        # endpoints unless the user deliberately set DOCKER_HOST.
-        if os.name == "nt" and not os.environ.get("DOCKER_HOST"):
+        # endpoints unless a developer deliberately opts into from_env().
+        if os.name == "nt" and not self._allow_windows_docker_from_env():
             logging.error(
                 "Failed to reconnect to OpenFork WSL Docker via explicit TCP endpoints."
             )

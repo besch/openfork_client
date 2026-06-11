@@ -5,10 +5,50 @@ from unittest.mock import Mock, patch
 
 import docker
 
+from services import docker_prod_service
 from services.docker_prod_service import DockerProdManager
 
 
 class DockerProdManagerStopContainerTests(unittest.TestCase):
+    def test_windows_host_candidates_ignore_inherited_docker_desktop_host(self):
+        manager = DockerProdManager.__new__(DockerProdManager)
+
+        with (
+            patch.object(docker_prod_service.os, "name", "nt"),
+            patch.dict(
+                "os.environ",
+                {"DOCKER_HOST": "npipe:////./pipe/dockerDesktopLinuxEngine"},
+                clear=True,
+            ),
+        ):
+            hosts = manager._build_docker_host_candidates()
+
+        self.assertEqual(hosts[0], "tcp://127.0.0.1:2375")
+        self.assertIn("tcp://localhost:2375", hosts)
+        self.assertNotIn("npipe:////./pipe/dockerDesktopLinuxEngine", hosts)
+
+    def test_windows_init_does_not_fallback_to_from_env_when_docker_host_is_inherited(self):
+        with (
+            patch.object(docker_prod_service.os, "name", "nt"),
+            patch.dict(
+                "os.environ",
+                {"DOCKER_HOST": "npipe:////./pipe/dockerDesktopLinuxEngine"},
+                clear=True,
+            ),
+            patch.object(
+                DockerProdManager, "_connect_to_docker_hosts", return_value=False
+            ),
+            patch(
+                "services.docker_prod_service.should_use_api_file_copy",
+                return_value=False,
+            ),
+            patch("services.docker_prod_service.docker.from_env") as from_env,
+        ):
+            manager = DockerProdManager()
+
+        from_env.assert_not_called()
+        self.assertIsNone(manager.client)
+
     def test_pull_decompression_error_is_transient(self):
         manager = DockerProdManager.__new__(DockerProdManager)
 
