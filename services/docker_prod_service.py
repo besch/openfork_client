@@ -200,6 +200,16 @@ class DockerProdManager:
         )
 
     def _is_transient_transport_error(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        pull_decompression_markers = (
+            "error -3 while decompressing data",
+            "incorrect header check",
+            "invalid stored block lengths",
+            "invalid distance too far back",
+        )
+        if any(marker in text for marker in pull_decompression_markers):
+            return True
+
         if isinstance(exc, docker.errors.APIError):
             if self._is_layer_extraction_error(exc):
                 return True
@@ -216,7 +226,6 @@ class DockerProdManager:
         ):
             return True
 
-        text = str(exc).lower()
         transient_markers = (
             "connection aborted",
             "actively refused",
@@ -232,6 +241,36 @@ class DockerProdManager:
             "incomplete read",
         )
         return any(marker in text for marker in transient_markers)
+
+    def _retry_pull_via_cli_after_transient_error(
+        self,
+        image_name: str,
+        platform: Optional[str],
+        error: Exception,
+        shutdown_event: threading.Event = None,
+    ) -> None:
+        logging.warning(
+            "Docker SDK pull failed for '%s' due to a recoverable Docker "
+            "transport/cache error: %s. Retrying via Docker CLI fallback.",
+            image_name,
+            error,
+        )
+        if not self._refresh_client_connection():
+            self._restart_docker_in_wsl(wait_timeout=120)
+        self._run_docker_cli_pull(
+            image_name,
+            platform,
+            shutdown_event=shutdown_event,
+        )
+        if not self._image_is_registered(image_name):
+            raise RuntimeError(
+                f"Docker CLI fallback completed for {image_name}, "
+                "but the image was not registered locally."
+            )
+        logging.info(
+            "Successfully pulled image via Docker CLI fallback: %s",
+            image_name,
+        )
 
     def _refresh_client_connection(self) -> bool:
         """Best-effort reconnect after transient Docker transport failures."""
@@ -1043,33 +1082,25 @@ class DockerProdManager:
                         flush=True,
                     )
                     raise OSError(disk_error_msg)
+                if self._is_transient_transport_error(e):
+                    self._retry_pull_via_cli_after_transient_error(
+                        image_name,
+                        pull_platform,
+                        e,
+                        shutdown_event=shutdown_event,
+                    )
+                    return
                 logging.error(f"Failed to pull image '{image_name}': {e}")
                 raise
             except Exception as e:
                 if shutdown_event and shutdown_event.is_set():
                     raise
                 if self._is_transient_transport_error(e):
-                    logging.warning(
-                        "Docker SDK pull failed for '%s' due to a transient "
-                        "transport error: %s. Retrying via Docker CLI fallback.",
-                        image_name,
-                        e,
-                    )
-                    if not self._refresh_client_connection():
-                        self._restart_docker_in_wsl(wait_timeout=120)
-                    self._run_docker_cli_pull(
+                    self._retry_pull_via_cli_after_transient_error(
                         image_name,
                         pull_platform,
+                        e,
                         shutdown_event=shutdown_event,
-                    )
-                    if not self._image_is_registered(image_name):
-                        raise RuntimeError(
-                            f"Docker CLI fallback completed for {image_name}, "
-                            "but the image was not registered locally."
-                        )
-                    logging.info(
-                        "Successfully pulled image via Docker CLI fallback: %s",
-                        image_name,
                     )
                     return
                 logging.error(f"Failed to pull image '{image_name}': {e}")

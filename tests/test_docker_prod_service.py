@@ -1,4 +1,5 @@
 import unittest
+import zlib
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -8,6 +9,43 @@ from services.docker_prod_service import DockerProdManager
 
 
 class DockerProdManagerStopContainerTests(unittest.TestCase):
+    def test_pull_decompression_error_is_transient(self):
+        manager = DockerProdManager.__new__(DockerProdManager)
+
+        self.assertTrue(
+            manager._is_transient_transport_error(
+                zlib.error("Error -3 while decompressing data: incorrect header check")
+            )
+        )
+
+    def test_pull_image_retries_decompression_error_with_cli_fallback(self):
+        manager = DockerProdManager.__new__(DockerProdManager)
+        manager.client = Mock()
+        manager.client.images.get.side_effect = [
+            docker.errors.ImageNotFound("missing"),
+            SimpleNamespace(tags=["beschiak/openfork-acestep-8gb:latest"]),
+        ]
+        manager._get_pull_platform = Mock(return_value="linux/amd64")
+        manager._refresh_client_connection = Mock(return_value=True)
+        manager._restart_docker_in_wsl = Mock()
+        manager._run_docker_cli_pull = Mock()
+
+        with patch(
+            "services.docker_progress_logger.stream_pull_with_progress",
+            side_effect=zlib.error(
+                "Error -3 while decompressing data: incorrect header check"
+            ),
+        ):
+            manager.pull_image("beschiak/openfork-acestep-8gb:latest")
+
+        manager._refresh_client_connection.assert_called_once()
+        manager._restart_docker_in_wsl.assert_not_called()
+        manager._run_docker_cli_pull.assert_called_once_with(
+            "beschiak/openfork-acestep-8gb:latest",
+            "linux/amd64",
+            shutdown_event=None,
+        )
+
     def test_stop_container_treats_removal_in_progress_as_benign(self):
         manager = DockerProdManager.__new__(DockerProdManager)
         manager.client = Mock()
