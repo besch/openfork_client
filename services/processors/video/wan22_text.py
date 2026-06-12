@@ -30,15 +30,13 @@ class WAN22TextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
         seed = inputs.get("seed")
-        target_width = inputs.get("target_width") or inputs.get("width")
-        target_height = inputs.get("target_height") or inputs.get("height")
         vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
 
         wf_ready = inject_prompt_into_text_to_video_workflow(
             workflow_data, self.positive_prompt, self.negative_prompt, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps, 
             flow_shift=flow_shift, sampler=sampler, scheduler=scheduler, seed=seed,
-            vram_tier=vram_tier, target_width=target_width, target_height=target_height
+            vram_tier=vram_tier
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -57,7 +55,6 @@ class WAN22TextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             storage_path=video_storage_path,
             thumbnail_storage_path=thumbnail_storage_path,
             duration_seconds=duration,
-            completion_metadata=self._video_completion_metadata(),
             prompt=self.positive_prompt,
         )
         logging.info(f"WAN2 2.2 job {self.job_id} completed successfully")
