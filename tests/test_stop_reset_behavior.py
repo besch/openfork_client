@@ -739,6 +739,90 @@ class StopResetBehaviorTests(unittest.TestCase):
         )
         orchestrator_service.clear_active_job.assert_called_once_with("job-cancelled")
 
+    def test_qwen_8gb_runtime_crash_is_non_retryable_after_prompt_start(self):
+        listener = JobListener(
+            SimpleNamespace(
+                orchestrator_service=Mock(),
+                get_service_type_for_workflow=Mock(return_value="qwen-8gb"),
+            ),
+            provider_id="provider-1",
+            shutdown_event=threading.Event(),
+        )
+
+        message = listener._get_non_retryable_container_crash_message(
+            {"workflow_type": "qwen-image-t2i-8gb"},
+            "\n".join(
+                [
+                    "got prompt",
+                    "model_type FLUX",
+                    "Requested to load QwenImage",
+                    "container exited unexpectedly with code 255",
+                ]
+            ),
+        )
+
+        self.assertIsNotNone(message)
+        self.assertIn("Qwen 8GB container exited", message)
+
+    def test_qwen_8gb_startup_crash_remains_retryable(self):
+        listener = JobListener(
+            SimpleNamespace(
+                orchestrator_service=Mock(),
+                get_service_type_for_workflow=Mock(return_value="qwen-8gb"),
+            ),
+            provider_id="provider-1",
+            shutdown_event=threading.Event(),
+        )
+
+        message = listener._get_non_retryable_container_crash_message(
+            {"workflow_type": "qwen-image-t2i-8gb"},
+            "ComfyUI failed to start before accepting a prompt",
+        )
+
+        self.assertIsNone(message)
+
+    def test_wan22_runtime_crash_is_non_retryable_after_prompt_start(self):
+        listener = JobListener(
+            SimpleNamespace(
+                orchestrator_service=Mock(),
+                get_service_type_for_workflow=Mock(return_value="wan22"),
+            ),
+            provider_id="provider-1",
+            shutdown_event=threading.Event(),
+        )
+
+        message = listener._get_non_retryable_container_crash_message(
+            {"workflow_type": "wan22-text-to-video-8gb"},
+            "\n".join(
+                [
+                    "got prompt",
+                    "Requested to load WanTEModel",
+                    "CLIP/text encoder model load device: cpu",
+                    "container exited unexpectedly with code 255",
+                ]
+            ),
+        )
+
+        self.assertIsNotNone(message)
+        self.assertIn("WAN22 8GB container exited", message)
+
+    def test_wan22_startup_crash_remains_retryable(self):
+        listener = JobListener(
+            SimpleNamespace(
+                orchestrator_service=Mock(),
+                get_service_type_for_workflow=Mock(return_value="wan22"),
+            ),
+            provider_id="provider-1",
+            shutdown_event=threading.Event(),
+        )
+
+        message = listener._get_non_retryable_container_crash_message(
+            {"workflow_type": "wan22-text-to-video-8gb"},
+            "ComfyUI failed to start before accepting a prompt",
+        )
+
+        self.assertIsNone(message)
+
     def test_flux_kontext_8gb_runtime_config_uses_conservative_memory_path(self):
         args, env = JobListener._flux_kontext_runtime_config(
             "flux-kontext-dev-8gb"

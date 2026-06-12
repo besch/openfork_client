@@ -8,10 +8,10 @@ class QwenImageT2IDimensionTests(unittest.TestCase):
         self.processor = QwenImageT2IProcessor.__new__(QwenImageT2IProcessor)
 
     def test_t2i_uses_8gb_safe_landscape_dimensions(self):
-        self.assertEqual(self.processor._get_dimensions("16:9"), (768, 432))
+        self.assertEqual(self.processor._get_dimensions("16:9"), (512, 288))
 
     def test_t2i_uses_8gb_safe_square_dimensions(self):
-        self.assertEqual(self.processor._get_dimensions("1:1"), (768, 768))
+        self.assertEqual(self.processor._get_dimensions("1:1"), (512, 512))
 
     def test_t2i_injects_safe_dimensions_into_empty_latent(self):
         workflow = {
@@ -38,12 +38,12 @@ class QwenImageT2IDimensionTests(unittest.TestCase):
         graph = self.processor._inject_t2i_workflow(
             workflow,
             "patched prompt",
-            768,
-            432,
+            512,
+            288,
             seed=123,
         )
 
-        self.assertEqual((graph["4"]["inputs"]["width"], graph["4"]["inputs"]["height"]), (768, 432))
+        self.assertEqual((graph["4"]["inputs"]["width"], graph["4"]["inputs"]["height"]), (512, 288))
         self.assertEqual(graph["5"]["inputs"]["text"], "patched prompt")
         self.assertEqual(graph["8"]["inputs"]["seed"], 123)
 
