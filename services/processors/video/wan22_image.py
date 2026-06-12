@@ -10,9 +10,9 @@ from services.docker_manager import docker_manager
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
 from utils.comfyui_workflow_utils import (
-    get_dimensions,
     inject_prompt_and_image_into_workflow,
     materialize_start_image,
+    resolve_wan22_dimensions,
 )
 from utils.media_utils import extract_last_frame
 from .wan22_common import normalize_classic_wan22_sampling
@@ -112,13 +112,15 @@ class WAN22ImageToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
             sampler = inputs.get("sampler")
             scheduler = inputs.get("scheduler")
             seed = inputs.get("seed")
+            target_width = inputs.get("target_width")
+            target_height = inputs.get("target_height")
             vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
 
             wf_ready = inject_prompt_and_image_into_workflow(
                 workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
                 cfg_scale=cfg_scale, steps=steps,
                 flow_shift=flow_shift, sampler=sampler, scheduler=scheduler, seed=seed,
-                vram_tier=vram_tier
+                vram_tier=vram_tier, target_width=target_width, target_height=target_height,
             )
             payload = {"prompt": wf_ready}
             outputs = self._trigger_and_get_output(payload)
@@ -196,8 +198,15 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
         seed = inputs.get("seed")
+        target_width = inputs.get("target_width")
+        target_height = inputs.get("target_height")
         vram_tier = str(inputs.get("model") or self.job.get("workflow_type") or "")
-        target_dimensions = get_dimensions(aspect_ratio, vram_tier=vram_tier)
+        target_dimensions = resolve_wan22_dimensions(
+            aspect_ratio,
+            vram_tier=vram_tier,
+            target_width=target_width,
+            target_height=target_height,
+        )
 
         if not extract_last_frame(
             video_path,
@@ -230,7 +239,7 @@ class ImageToVideoFromLastFrameJobProcessor(ComfyUIProcessor, VideoOutputHandler
             workflow_data, self.positive_prompt, self.negative_prompt, start_image_filename, aspect_ratio,
             cfg_scale=cfg_scale, steps=steps,
             flow_shift=flow_shift, sampler=sampler, scheduler=scheduler,
-            seed=seed, vram_tier=vram_tier
+            seed=seed, vram_tier=vram_tier, target_width=target_width, target_height=target_height,
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)

@@ -245,6 +245,7 @@ def inject_prompt_and_image_into_workflow(
             )
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
+            logging.info(f"Injected WAN22 I2V dimensions: {width}x{height}")
             if is_8gb_tier:
                 node["inputs"]["length"] = min(int(node["inputs"].get("length", 81)), 33)
         elif node["class_type"] == "ImageResizeKJv2":
@@ -256,6 +257,7 @@ def inject_prompt_and_image_into_workflow(
             )
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
+            logging.info(f"Injected WAN22 I2V resize dimensions: {width}x{height}")
         elif node["class_type"] == "VHS_VideoCombine":
             if is_8gb_tier:
                 node["inputs"]["frame_rate"] = min(int(node["inputs"].get("frame_rate", 16)), 8)
@@ -341,6 +343,7 @@ def inject_prompt_into_text_to_video_workflow(
             )
             node["inputs"]["width"] = width
             node["inputs"]["height"] = height
+            logging.info(f"Injected WAN22 T2V dimensions: {width}x{height}")
             if is_8gb_tier:
                 node["inputs"]["length"] = min(
                     int(node["inputs"].get("length", 81)),
