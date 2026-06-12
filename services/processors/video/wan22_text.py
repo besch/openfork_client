@@ -9,6 +9,7 @@ from config import DEV_MODE
 from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import VideoOutputHandler
 from utils.comfyui_workflow_utils import inject_prompt_into_text_to_video_workflow
+from .wan22_common import normalize_classic_wan22_sampling
 
 
 class WAN22TextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
@@ -24,8 +25,7 @@ class WAN22TextToVideoJobProcessor(ComfyUIProcessor, VideoOutputHandler):
 
         inputs = self.job.get("inputs", {})
         aspect_ratio = inputs.get("aspect_ratio", "16:9")
-        cfg_scale = inputs.get("cfg_scale")
-        steps = inputs.get("steps")
+        cfg_scale, steps = normalize_classic_wan22_sampling(inputs, self.job_id)
         flow_shift = inputs.get("flow_shift")
         sampler = inputs.get("sampler")
         scheduler = inputs.get("scheduler")
