@@ -1,8 +1,10 @@
 """
 daVinci-MagiHuman processors (Wan2GP backend).
 
-WanGP's Magi Human implementation is a talking-head model: it needs a start
-image and can then generate synchronized speech/audio from the text prompt.
+WanGP's Magi Human implementation is a realistic talking-head model: it needs
+a realistic portrait start image and can then generate synchronized
+speech/audio from the text prompt. It is not a general character animation path
+for cartoon, anime, mascot, alien, robot, or other stylized subjects.
 The supported production tiers use DeepBeepMeep/MagiHuman quanto int8
 checkpoints through the Wan2GP HTTP server on port 8188.
 """
