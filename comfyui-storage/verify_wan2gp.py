@@ -72,6 +72,11 @@ SHARED_RUNTIME_FILES = [
     f"{CKPTS}/rife4.26.pkl",
 ]
 
+HDR_REQUIRED_FILES = [
+    f"{CKPTS}/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors",
+    f"{CKPTS}/ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors",
+]
+
 REQUIRED_FILES = [
     *(f"{CKPTS}/{name}" for name in required_transformers()),
     *COMMON_REQUIRED_FILES,
@@ -80,6 +85,10 @@ REQUIRED_FILES = [
 VERIFY_SHARED_RUNTIME_FILES = env_flag("LTX23_VERIFY_SHARED_RUNTIME_FILES")
 if VERIFY_SHARED_RUNTIME_FILES:
     REQUIRED_FILES.extend(SHARED_RUNTIME_FILES)
+
+REQUIRE_HDR_FILES = env_flag("LTX23_REQUIRE_HDR")
+if REQUIRE_HDR_FILES:
+    REQUIRED_FILES.extend(HDR_REQUIRED_FILES)
 
 # Config file may vary by repo revision — match any *config*.json under ckpts/
 def find_config_json(root):
@@ -128,6 +137,10 @@ else:
         "Shared WanGP runtime file verification: skipped "
         "(set LTX23_VERIFY_SHARED_RUNTIME_FILES=1 to require it)"
     )
+print(
+    "HDR LoRA verification: "
+    + ("enabled" if REQUIRE_HDR_FILES else "skipped (set LTX23_REQUIRE_HDR=1 to require it)")
+)
 missing = [f for f in REQUIRED_FILES if not os.path.isfile(f)]
 if missing:
     for f in missing:

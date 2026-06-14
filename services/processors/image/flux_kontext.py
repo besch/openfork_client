@@ -33,7 +33,7 @@ class FluxKontextWorkflowMixin:
 
         if "8gb" in model_key:
             return 512
-        if "12gb" in model_key:
+        if "12gb" in model_key or "16gb" in model_key:
             return 896
         return 1024
 

@@ -23,6 +23,12 @@ _RUNTIME_LIMITS = {
         "steps_default": 8,
         "steps_max": 12,
     },
+    "24gb": {
+        "duration_default": 4.0,
+        "duration_max": 5.0,
+        "steps_default": 8,
+        "steps_max": 12,
+    },
     "32gb": {
         "duration_default": 7.0,
         "duration_max": 10.0,
@@ -50,10 +56,27 @@ def get_ltx23_model_type(service_type: str) -> str:
 
 def get_ltx23_runtime_limits(service_type: str) -> dict:
     service_type = (service_type or "").lower()
-    for tier in ("8gb", "12gb", "16gb", "32gb"):
+    for tier in ("8gb", "12gb", "16gb", "24gb", "32gb"):
         if tier in service_type:
             return dict(_RUNTIME_LIMITS[tier])
     return dict(_RUNTIME_LIMITS["default"])
+
+
+def should_use_ltx23_hdr(inputs: dict, service_type: str) -> bool:
+    """Enable the baked HDR IC-LoRA for 24GB LTX unless explicitly disabled."""
+    if "hdr" in inputs:
+        value = inputs.get("hdr")
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off"}
+        return bool(value)
+    return "24gb" in (service_type or "").lower()
+
+
+def ltx23_lora_weight(inputs: dict) -> float:
+    try:
+        return float(inputs.get("lora_weight", 0.9))
+    except (TypeError, ValueError):
+        return 0.9
 
 
 def clamp_ltx23_duration(requested_duration, service_type: str) -> float:

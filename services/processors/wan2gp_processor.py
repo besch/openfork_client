@@ -56,6 +56,16 @@ _ASPECT_RESOLUTIONS_16GB = {
     "2:1": "768x384",
 }
 
+_ASPECT_RESOLUTIONS_24GB = {
+    "16:9": "960x544",
+    "9:16": "544x960",
+    "1:1": "832x832",
+    "4:3": "896x672",
+    "3:4": "672x896",
+    "21:9": "960x416",
+    "2:1": "960x480",
+}
+
 _ASPECT_RESOLUTIONS_12GB = {
     "16:9": "544x304",
     "9:16": "304x544",
@@ -105,6 +115,8 @@ class Wan2GPProcessor(BaseJobProcessor):
             tier, resolution = "12gb", _ASPECT_RESOLUTIONS_12GB.get(aspect_ratio, "544x304")
         elif "16gb" in vram_tier:
             tier, resolution = "16gb", _ASPECT_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
+        elif "24gb" in vram_tier:
+            tier, resolution = "24gb", _ASPECT_RESOLUTIONS_24GB.get(aspect_ratio, "960x544")
         else:
             tier, resolution = "default(24+gb)", _ASPECT_RESOLUTIONS.get(aspect_ratio, "1280x720")
         logging.info(

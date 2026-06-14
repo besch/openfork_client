@@ -48,7 +48,7 @@ def get_dimensions(
 
     if _has_vram_marker(vram_tier, 24):
         if aspect_ratio == "16:9":
-            return 1152, 640
+            return 960, 544
 
     if aspect_ratio == "16:9":
         return 768, 432  # 432p

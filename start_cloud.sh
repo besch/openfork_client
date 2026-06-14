@@ -422,6 +422,51 @@ start_wan2gp_server_supervisor() {
   done
 }
 
+ensure_swap_space() {
+  local target_gb="${1:-0}"
+  [ "$target_gb" -gt 0 ] 2>/dev/null || return 0
+  command -v swapon >/dev/null 2>&1 || {
+    log "WARNING: swapon not available; cannot create swap for Wan2GP."
+    return 0
+  }
+
+  local current_gb
+  current_gb=$(free -g | awk '/Swap/ {print $2}')
+  current_gb="${current_gb:-0}"
+  if [ "$current_gb" -ge "$target_gb" ] 2>/dev/null; then
+    log "Swap already sufficient for Wan2GP: ${current_gb}GB >= ${target_gb}GB"
+    return 0
+  fi
+
+  local swap_file="${WAN2GP_SWAP_FILE:-/swapfile}"
+  if [ -e "$swap_file" ]; then
+    log "WARNING: $swap_file already exists but active swap is ${current_gb}GB; leaving it untouched."
+    return 0
+  fi
+
+  log "Creating best-effort ${target_gb}GB swap file for Wan2GP offload stability..."
+  local created=0
+  if command -v fallocate >/dev/null 2>&1; then
+    fallocate -l "${target_gb}G" "$swap_file" && created=1
+  fi
+  if [ "$created" != "1" ]; then
+    dd if=/dev/zero of="$swap_file" bs=1G count="$target_gb" status=none && created=1
+  fi
+  if [ "$created" != "1" ]; then
+    log "WARNING: Could not allocate swap file; continuing without extra swap."
+    rm -f "$swap_file" 2>/dev/null || true
+    return 0
+  fi
+
+  chmod 600 "$swap_file" || true
+  if mkswap "$swap_file" >/dev/null 2>&1 && swapon "$swap_file" >/dev/null 2>&1; then
+    log "Enabled Wan2GP swap file: $(swapon --show --bytes | tail -n +2 | awk '{sum += $3} END {printf \"%.1fGB\", sum/1024/1024/1024}')"
+  else
+    log "WARNING: Could not enable swap file inside this container; continuing without extra swap."
+    rm -f "$swap_file" 2>/dev/null || true
+  fi
+}
+
 # Ensure pip is installed for the given Python executable
 install_pip() {
   local py_exe="$1"
@@ -638,6 +683,7 @@ PY
   log "Repairing torch stack to ${torch_pkg}, ${vision_pkg}, ${audio_pkg}"
   "$PYTHON_EXE" -m pip install --quiet --no-cache-dir --force-reinstall \
     --index-url "$index_url" \
+    --extra-index-url "https://pypi.org/simple" \
     "$torch_pkg" "$vision_pkg" "$audio_pkg" || {
       log "WARNING: Torch stack repair failed."
       return 0
@@ -1218,6 +1264,21 @@ if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
     log "Wan2GP backend selected. Disabling ComfyUI to reserve VRAM for Wan2GP."
     START_COMFYUI="false"
+    export TORCHINDUCTOR_COMPILE_THREADS="${TORCHINDUCTOR_COMPILE_THREADS:-2}"
+    export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+    export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
+    export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-4}"
+    export TOKENIZERS_PARALLELISM="${TOKENIZERS_PARALLELISM:-false}"
+
+    if [ "${ENABLE_WAN2GP_SWAP:-true}" = "true" ]; then
+        if [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]]; then
+            ensure_swap_space "${WAN2GP_SWAP_GB:-64}"
+        elif [[ "${SERVICE_TYPE:-}" == *"24gb"* ]]; then
+            ensure_swap_space "${WAN2GP_SWAP_GB:-48}"
+        else
+            ensure_swap_space "${WAN2GP_SWAP_GB:-32}"
+        fi
+    fi
 
     if ! ensure_ffmpeg_fps_mode_support; then
         if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
@@ -1365,7 +1426,7 @@ except Exception as e:
         #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
         else
             LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
-            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
+            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-hdr:latest"
         fi
         # LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
         # LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-original:latest"
@@ -1374,10 +1435,22 @@ except Exception as e:
             log "ERROR: $SERVICE_TYPE requires $(basename "$LTX23_REQUIRED_TRANSFORMER"), but this image does not contain it."
             log "Use beschiak/openfork-ltx23-wan2gp-8gb:latest for the 8GB tier."
             log "Use beschiak/openfork-ltx23-wan2gp-12gb:latest for the 12GB tier."
-            log "Use beschiak/openfork-ltx23-wan2gp-original:latest for the 16GB and 24GB tiers."
+            log "Use beschiak/openfork-ltx23-wan2gp-hdr:latest for the 16GB and 24GB tiers."
             log "Use beschiak/openfork-ltx23-wan2gp:latest for the 32GB tier."
             log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
             WAN2GP_CHECK_FAILED=1
+        fi
+
+        if [[ "$LTX23_EXPECTED_IMAGE" == *"-hdr:"* ]]; then
+            LTX23_HDR_LORA="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors"
+            LTX23_HDR_SCENE_EMB="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors"
+            if [ ! -f "$LTX23_HDR_LORA" ] || [ ! -f "$LTX23_HDR_SCENE_EMB" ]; then
+                log "ERROR: $SERVICE_TYPE requires HDR IC-LoRA files, but this image does not contain them."
+                log "Missing HDR LoRA: $LTX23_HDR_LORA"
+                log "Missing HDR scene embedding: $LTX23_HDR_SCENE_EMB"
+                log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
+                WAN2GP_CHECK_FAILED=1
+            fi
         fi
     fi
 
@@ -1557,7 +1630,7 @@ except Exception as e:
     # The DGN client processor polls /health and waits up to 30 min for it.
     WAN2GP_SERVER="/opt/wan2gp/wan2gp_server.py"
     WAN2GP_LOG_FILE="/tmp/wan2gp_server.log"
-    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]] || [[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp-24gb"* ]]; then
         export WAN2GP_EXIT_AFTER_JOB="${WAN2GP_EXIT_AFTER_JOB:-1}"
         export WAN2GP_EXIT_DELAY_SECONDS="${WAN2GP_EXIT_DELAY_SECONDS:-1}"
     fi
@@ -1620,15 +1693,19 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       ;;
     *flux-kontext*16gb*)
       log "Applying FLUX Kontext 16GB GGUF optimizations"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-pinned-memory"
       ;;
     *flux-kontext*24gb*)
       log "Applying FLUX Kontext 24GB GGUF optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.5 --use-pytorch-cross-attention --preview-method none"
       ;;
-    qwen|qwen-8gb|qwen-turbo-8gb)
-      log "Applying Qwen Image VRAM optimizations"
-      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"
+    qwen-8gb|qwen-turbo-8gb)
+      log "Applying Qwen Image 8GB VRAM optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-async-offload --disable-pinned-memory"
+      ;;
+    qwen)
+      log "Applying Qwen Image 12GB VRAM optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-pinned-memory"
       ;;
     wan22|wan22-8gb)
       log "Applying WAN 2.2 8GB Q4 ComfyUI optimizations"
@@ -1640,7 +1717,7 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       ;;
     wan22-24gb)
       log "Applying WAN 2.2 24GB Q8 ComfyUI optimizations"
-      COMFY_FLAGS="$COMFY_FLAGS --normalvram --fp16-vae --reserve-vram 1.0 --cache-none --preview-method none --use-split-cross-attention"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --cache-none --preview-method none --use-split-cross-attention --disable-async-offload --disable-cuda-malloc --disable-pinned-memory"
       ;;
     *wan22*)
       log "Applying WAN 2.2 fallback ComfyUI optimizations"
@@ -1675,13 +1752,13 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       ;;
   esac
 
-  if [[ "$SERVICE_TYPE" == *"flux-kontext"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"flux-kontext"* ]] || [[ "$SERVICE_TYPE" == qwen* ]] || [[ "$SERVICE_TYPE" == *"wan22"* ]]; then
     mkdir -p /opt/ComfyUI/user/__manager
     cat > /opt/ComfyUI/user/__manager/config.ini <<'EOF'
 [default]
 network_mode = offline
 EOF
-    log "Configured ComfyUI-Manager network_mode=offline for FLUX Kontext runtime."
+    log "Configured ComfyUI-Manager network_mode=offline for ComfyUI runtime."
   fi
 
   # Check if ComfyUI is already starting (port 8188 bound)

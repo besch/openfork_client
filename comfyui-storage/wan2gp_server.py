@@ -27,6 +27,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import uvicorn
 
+os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("MKL_NUM_THREADS", "4")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "4")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -43,6 +49,12 @@ WAN2GP_EXIT_AFTER_JOB = os.environ.get("WAN2GP_EXIT_AFTER_JOB", "0").strip().low
     "on",
 }
 WAN2GP_EXIT_DELAY_SECONDS = float(os.environ.get("WAN2GP_EXIT_DELAY_SECONDS", "1"))
+WAN2GP_REQUIRE_HDR_LORA = os.environ.get("WAN2GP_REQUIRE_HDR_LORA", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 _HDR_LORA_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-0.9.safetensors")
 _HDR_SCENE_EMB_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors")
@@ -393,13 +405,28 @@ def _skip_eager_shared_asset_downloads() -> None:
 
 _skip_eager_shared_asset_downloads()
 
+
+def _hdr_files_missing() -> list[str]:
+    return [
+        path
+        for path in (_HDR_LORA_PATH, _HDR_SCENE_EMB_PATH)
+        if not os.path.isfile(os.path.normpath(path))
+    ]
+
+
 # Verify HDR IC-LoRA is present (if built into the image)
-if not os.path.isfile(os.path.normpath(_HDR_LORA_PATH)):
+_missing_hdr_files = _hdr_files_missing()
+if _missing_hdr_files:
     logging.warning(
-        "HDR IC-LoRA not found at %s — HDR jobs will fail. "
+        "HDR IC-LoRA files missing: %s — HDR jobs will fail. "
         "Rebuild the image to include Lightricks/LTX-2.3-22b-IC-LoRA-HDR.",
-        _HDR_LORA_PATH,
+        ", ".join(_missing_hdr_files),
     )
+    if WAN2GP_REQUIRE_HDR_LORA:
+        raise RuntimeError(
+            "WAN2GP_REQUIRE_HDR_LORA is enabled but HDR IC-LoRA files are missing: "
+            + ", ".join(_missing_hdr_files)
+        )
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -448,6 +475,17 @@ def _generate_sync(raw_settings: Dict[str, Any]) -> list[str]:
 
     # Inject HDR IC-LoRA if requested
     if settings.get("hdr"):
+        missing_hdr_files = _hdr_files_missing()
+        if missing_hdr_files:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "errors": [
+                        "HDR IC-LoRA requested but required files are missing: "
+                        + ", ".join(missing_hdr_files)
+                    ]
+                },
+            )
         settings["lora_filename"] = _HDR_LORA_PATH
         settings["lora_scene_emb_filename"] = _HDR_SCENE_EMB_PATH
         settings["lora_weight"] = settings.get("lora_weight", 1.0)

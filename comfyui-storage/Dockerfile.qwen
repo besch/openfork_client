@@ -52,6 +52,14 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && python -m pip install --no-cache-dir -r custom_nodes/was-node-suite-comfyui/requirements.txt \
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
+# ComfyUI/custom-node requirements can drift the torch stack. Re-pin after all
+# Python package installs so cloud startup does not spend minutes repairing it.
+RUN python -m pip install --no-cache-dir --force-reinstall \
+        --index-url https://download.pytorch.org/whl/cu128 \
+        --extra-index-url https://pypi.org/simple \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
+    && python -c "import torch, torchvision, torchaudio; print('torch=%s torchvision=%s torchaudio=%s' % (torch.__version__, torchvision.__version__, torchaudio.__version__))"
+
 # Create model directories and download models
 RUN mkdir -p models/text_encoders models/diffusion_models models/vae models/loras \
     && wget -q -O models/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
@@ -62,6 +70,9 @@ RUN mkdir -p models/text_encoders models/diffusion_models models/vae models/lora
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors" \
     && wget -q -O models/loras/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors \
         "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+
+RUN mkdir -p user/__manager \
+    && printf "[default]\nnetwork_mode = offline\n" > user/__manager/config.ini
 
 WORKDIR /opt/ComfyUI
 CMD ["sh", "-c", "export PYTHONPATH=$PYTHONPATH:/opt/ComfyUI/user/custom-packages; if [ ! -d /opt/ComfyUI/user/custom-packages/sageattention ]; then echo 'SageAttention not found in persistent volume, attempting installation...'; python -m pip install -v --target=/opt/ComfyUI/user/custom-packages /opt/sageattention || (echo 'ERROR: SageAttention installation failed. Please ensure GPU is accessible.' && exit 1); else echo 'SageAttention already installed in persistent volume.'; fi; cd /opt/ComfyUI && python main.py --listen"]

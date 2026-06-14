@@ -42,6 +42,12 @@ RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git /opt/Comfy
     && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-GGUF/requirements.txt \
     && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
+RUN python -m pip install --no-cache-dir --force-reinstall \
+        --index-url https://download.pytorch.org/whl/cu128 \
+        --extra-index-url https://pypi.org/simple \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
+    && python -c "import torch, torchvision, torchaudio; print('torch=%s torchvision=%s torchaudio=%s' % (torch.__version__, torchvision.__version__, torchaudio.__version__))"
+
 RUN mkdir -p models/text_encoders models/unet models/vae \
     && hf download comfyanonymous/flux_text_encoders \
         --include "clip_l.safetensors" \
@@ -59,4 +65,4 @@ RUN mkdir -p models/text_encoders models/unet models/vae \
 RUN mkdir -p user/__manager \
     && printf "[default]\nnetwork_mode = offline\n" > user/__manager/config.ini
 
-CMD ["sh", "-c", "cd /opt/ComfyUI && python main.py --listen 0.0.0.0 --port 8188 --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none"]
+CMD ["sh", "-c", "cd /opt/ComfyUI && python main.py --listen 0.0.0.0 --port 8188 --lowvram --cpu-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-pinned-memory"]

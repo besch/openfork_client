@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -27,16 +27,25 @@ class ImageConfig:
     direct_push: bool = False  # Stream layers directly to registry during build when push is requested.
 
 
-# Define the images to build and push
+# Default rebuild queue for the current character-consistency/workflow fixes.
+# Include images whose Dockerfile changed, plus production Wan2GP images that
+# COPY changed shared runtime files such as wan2gp_server.py / verify_wan2gp.py.
+# Runtime-only changes in start_cloud.sh do not require an image rebuild.
 IMAGES: List[ImageConfig] = [
-    # Current production audio rebuilds:
-    # - Qwen3 8GB/16GB pick up the matched torch/torchvision/torchaudio stack.
-    # - Scenema picks up torchvision and the CUDA 12.8 torch stack.
-    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb-v1:latest", build=True, push=True, direct_push=True, build_args={"MODEL_SIZE": "0.6B"}),
-    ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb-v1:latest", build=True, push=True, direct_push=True, build_args={"MODEL_SIZE": "1.7B"}),
-    ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp-12gb-hdr", "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-image-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True),
+    # Previous production audio rebuilds:
+    # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb-v1:latest", build=True, push=True, direct_push=True, build_args={"MODEL_SIZE": "0.6B"}),
+    # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-16gb-v1:latest", build=True, push=True, direct_push=True, build_args={"MODEL_SIZE": "1.7B"}),
+    # ImageConfig("Dockerfile.scenema-audio", "beschiak/openfork-scenema-audio-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.heartmula-16gb", "beschiak/openfork-heartmula-16gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.heartmula-24gb", "beschiak/openfork-heartmula-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.qwen3-tts", "beschiak/openfork-qwen3-tts-8gb-v1:latest", build=True, build_args={"MODEL_SIZE": "0.6B"}),
@@ -115,6 +124,95 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
 ]
+
+OPTIONAL_IMAGES: List[ImageConfig] = [
+    ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.flux-kontext-dev-24gb", "beschiak/openfork-flux-kontext-dev-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22", "beschiak/openfork-wan22-8gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22-16gb", "beschiak/openfork-wan22-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22-24gb", "beschiak/openfork-wan22-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp-12gb", "beschiak/openfork-ltx23-wan2gp-12gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp-12gb-hdr", "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.scail-wan2gp-16gb", "beschiak/openfork-scail-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-8gb", "beschiak/openfork-wan22-wan2gp-8gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-10gb", "beschiak/openfork-wan22-wan2gp-10gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-16gb", "beschiak/openfork-wan22-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.vista4d-wan2gp-24gb", "beschiak/openfork-vista4d-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.dreamid-omni-24gb", "beschiak/openfork-dreamid-omni-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-16gb", "beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True, direct_push=True),
+]
+
+BUILD_PRESETS: Dict[str, List[str]] = {
+    "current-rebuild": [
+        "openfork-qwen-12gb",
+        "openfork-qwen-8gb",
+        "openfork-qwen-image-turbo-8gb",
+        "flux-kontext-dev-16gb",
+        "openfork-ltx23-wan2gp-hdr",
+        "openfork-ltx23-wan2gp-12gb-hdr",
+        "scail-wan2gp-24gb",
+        "davinci-magihuman-wan2gp-24gb",
+    ],
+    "wan2gp-server-refresh": [
+        "openfork-ltx23-wan2gp-hdr",
+        "openfork-ltx23-wan2gp-12gb-hdr",
+        "beschiak/openfork-ltx23-wan2gp-12gb:latest",
+        "beschiak/openfork-ltx23-wan2gp:latest",
+        "scail-wan2gp-16gb",
+        "scail-wan2gp-24gb",
+        "davinci-magihuman-wan2gp-16gb",
+        "davinci-magihuman-wan2gp-24gb",
+        "davinci-magihuman-wan2gp-32gb",
+        "openfork-wan22-wan2gp-8gb",
+        "openfork-wan22-wan2gp-10gb",
+        "openfork-wan22-wan2gp-12gb",
+        "openfork-wan22-wan2gp-16gb",
+        "openfork-wan22-wan2gp-24gb",
+        "vista4d-wan2gp-24gb",
+    ],
+    "character-consistency": [
+        "openfork-qwen-12gb",
+        "openfork-qwen-8gb",
+        "flux-kontext-dev-16gb",
+        "flux-kontext-dev-24gb",
+        "openfork-wan22-16gb",
+        "openfork-wan22-24gb",
+        "openfork-ltx23-wan2gp-hdr",
+        "scail-wan2gp-24gb",
+        "dreamid-omni-24gb",
+        "davinci-magihuman-wan2gp-24gb",
+    ],
+    "character-consistency-full": [
+        "openfork-qwen-12gb",
+        "openfork-qwen-8gb",
+        "openfork-qwen-image-turbo-8gb",
+        "flux-kontext-dev-12gb",
+        "flux-kontext-dev-16gb",
+        "flux-kontext-dev-24gb",
+        "openfork-wan22-8gb",
+        "openfork-wan22-16gb",
+        "openfork-wan22-24gb",
+        "ltx23-wan2gp-12gb",
+        "openfork-ltx23-wan2gp-hdr",
+        "scail-wan2gp-16gb",
+        "scail-wan2gp-24gb",
+        "dreamid-omni-24gb",
+        "davinci-magihuman-wan2gp-16gb",
+        "davinci-magihuman-wan2gp-24gb",
+        "davinci-magihuman-wan2gp-32gb",
+    ],
+}
 
 PUSH_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 1200  # 20 minutes
@@ -481,7 +579,16 @@ def select_images(
             )
         ]
 
-    return selected
+    deduped: List[Tuple[int, ImageConfig]] = []
+    seen = set()
+    for index, config in selected:
+        key = (config.dockerfile, config.tag)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((index, config))
+
+    return deduped
 
 
 def parse_delay(delay_str: str) -> int:
@@ -616,6 +723,20 @@ def main():
         ),
     )
     parser.add_argument(
+        "--preset",
+        action="append",
+        choices=sorted(BUILD_PRESETS.keys()),
+        help=(
+            "Include an optional build preset. Example: "
+            "--preset character-consistency"
+        ),
+    )
+    parser.add_argument(
+        "--list-presets",
+        action="store_true",
+        help="Print optional build presets and exit.",
+    )
+    parser.add_argument(
         "--list-image-indexes",
         action="store_true",
         help="Print selected image indexes and exit. Used by wrapper scripts.",
@@ -635,8 +756,22 @@ def main():
             f"invalid action '{invalid_actions[0]}' (choose from 'build', 'push')"
         )
 
+    if args.list_presets:
+        for preset_name, filters in BUILD_PRESETS.items():
+            print(f"{preset_name}:")
+            for image_filter in filters:
+                print(f"  - {image_filter}")
+        sys.exit(0)
+
+    preset_filters: List[str] = []
+    for preset_name in args.preset or []:
+        preset_filters.extend(BUILD_PRESETS[preset_name])
+
+    image_filters = [*(args.image or []), *preset_filters]
+    image_pool = IMAGES if not image_filters else [*IMAGES, *OPTIONAL_IMAGES]
+
     try:
-        selected_images = select_images(IMAGES, args.image_index, args.image)
+        selected_images = select_images(image_pool, args.image_index, image_filters)
     except ValueError as exc:
         parser.error(str(exc))
 

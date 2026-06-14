@@ -17,6 +17,8 @@ from services.processors.video.ltx23_common import (
     clamp_ltx23_duration,
     clamp_ltx23_steps,
     get_ltx23_model_type,
+    ltx23_lora_weight,
+    should_use_ltx23_hdr,
 )
 from services.processors.video.last_frame import materialize_last_frame_start_image
 from utils.comfyui_workflow_utils import materialize_start_image
@@ -36,7 +38,7 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             self._fail_job("Job object is None.")
             return
 
-        inputs = self.job.get("inputs", {})
+        inputs = self.job.get("inputs") or {}
         service_type = self.job.get("service_type", "")
 
         duration = clamp_ltx23_duration(inputs.get("duration"), service_type)
@@ -74,6 +76,8 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             "video_length": video_length,
             "force_fps": _FPS,
             "seed": self.normalize_seed(inputs.get("seed")),
+            "hdr": should_use_ltx23_hdr(inputs, service_type),
+            "lora_weight": ltx23_lora_weight(inputs),
         }
 
         files = self._run_task(settings)
