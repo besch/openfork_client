@@ -175,6 +175,7 @@ def materialize_start_image(job: dict, input_dir: str) -> Union[str, None]:
             host_path = os.path.join(input_dir, fname)
             if not os.path.exists(host_path):
                 logging.warning(f"Expected start image not found in mounted input: {host_path}")
+                return None
             else:
                 # Validate the existing image
                 try:
