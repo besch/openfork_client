@@ -11,6 +11,7 @@ import os
 import uuid
 import logging
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
@@ -52,6 +53,8 @@ OUTPUT_DIR = Path("/app/output")
 INPUT_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+TOKENIZER_MODEL_NAME = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
+
 # Supported languages and speakers for CustomVoice model
 SUPPORTED_LANGUAGES = ["Auto", "Chinese", "English", "Japanese", "Korean", "German", 
                        "French", "Russian", "Portuguese", "Spanish", "Italian"]
@@ -68,6 +71,139 @@ SUPPORTED_SPEAKERS = [
     "ono_anna",    # Japanese female - Playful, light, nimble
     "sohee"        # Korean female - Warm, rich emotion
 ]
+
+
+def _is_truthy(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _unique_paths(paths):
+    seen = set()
+    unique = []
+    for path in paths:
+        if not path:
+            continue
+        candidate = Path(path)
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def _model_cache_roots():
+    roots = _unique_paths([
+        os.getenv("QWEN3_MODEL_CACHE_DIR"),
+        os.getenv("HUGGINGFACE_HUB_CACHE"),
+        os.getenv("TRANSFORMERS_CACHE"),
+        os.getenv("HF_HOME"),
+        "/app/models",
+    ])
+
+    expanded = []
+    for root in roots:
+        expanded.append(root)
+        if root.name != "hub":
+            expanded.append(root / "hub")
+    return _unique_paths(expanded)
+
+
+def _latest_snapshot(snapshot_root: Path) -> Optional[Path]:
+    if not snapshot_root.is_dir():
+        return None
+
+    snapshots = [path for path in snapshot_root.iterdir() if path.is_dir()]
+    if not snapshots:
+        return None
+
+    return max(snapshots, key=lambda path: path.stat().st_mtime)
+
+
+def _find_local_model_dir(model_name: str) -> Optional[str]:
+    """Find a baked HF snapshot or explicit local-dir download for a repo."""
+    org, repo = model_name.split("/", 1) if "/" in model_name else ("", model_name)
+    cache_dir_name = "models--" + model_name.replace("/", "--")
+
+    for root in _model_cache_roots():
+        direct_candidates = [
+            root / org / repo if org else None,
+            root / repo,
+            root / model_name.replace("/", "_"),
+            root / model_name.replace("/", "__"),
+        ]
+
+        for candidate in direct_candidates:
+            if candidate and candidate.is_dir() and any(candidate.iterdir()):
+                logger.info("Using local Qwen3 model directory for %s: %s", model_name, candidate)
+                return str(candidate)
+
+        snapshot = _latest_snapshot(root / cache_dir_name / "snapshots")
+        if snapshot is not None:
+            logger.info("Using local Qwen3 HF snapshot for %s: %s", model_name, snapshot)
+            return str(snapshot)
+
+    return None
+
+
+def _snapshot_download(model_name: str) -> str:
+    from huggingface_hub import snapshot_download
+
+    cache_dir = (
+        os.getenv("QWEN3_MODEL_CACHE_DIR")
+        or os.getenv("HUGGINGFACE_HUB_CACHE")
+        or os.getenv("HF_HOME")
+        or "/app/models"
+    )
+    offline = _is_truthy(os.getenv("HF_HUB_OFFLINE")) or _is_truthy(os.getenv("TRANSFORMERS_OFFLINE"))
+    allow_online_fallback = _is_truthy(os.getenv("QWEN3_ALLOW_ONLINE_FALLBACK"))
+    has_hf_token = bool(
+        os.getenv("HF_TOKEN")
+        or os.getenv("HUGGINGFACE_TOKEN")
+        or os.getenv("HUGGING_FACE_HUB_TOKEN")
+        or os.getenv("HUGGINGFACE_HUB_TOKEN")
+    )
+
+    try:
+        return snapshot_download(model_name, cache_dir=cache_dir, local_files_only=offline)
+    except Exception:
+        if not (offline and allow_online_fallback and has_hf_token):
+            raise
+
+        logger.warning(
+            "Cached Qwen3 snapshot for %s was not found; retrying with online fallback.",
+            model_name,
+        )
+        previous_env = {
+            "HF_HUB_OFFLINE": os.environ.get("HF_HUB_OFFLINE"),
+            "TRANSFORMERS_OFFLINE": os.environ.get("TRANSFORMERS_OFFLINE"),
+        }
+        os.environ["HF_HUB_OFFLINE"] = "0"
+        os.environ["TRANSFORMERS_OFFLINE"] = "0"
+        try:
+            return snapshot_download(model_name, cache_dir=cache_dir, local_files_only=False)
+        finally:
+            for key, value in previous_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def _link_or_copy(src: str, dst: str) -> None:
+    if os.path.lexists(dst):
+        if os.path.islink(dst) and not os.path.exists(dst):
+            os.unlink(dst)
+        else:
+            return
+
+    try:
+        os.symlink(src, dst)
+    except OSError:
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
 
 
 class TTSRequest(BaseModel):
@@ -99,12 +235,8 @@ class JobStatus(BaseModel):
 
 def prepare_model_dir(model_name: str) -> str:
     """Prepare a local directory with symlinks to model files and speech_tokenizer."""
-    from huggingface_hub import snapshot_download
-    import shutil
-    
-    # Download models (pulls from HF cache if already there)
-    model_path = snapshot_download(model_name)
-    tokenizer_path = snapshot_download("Qwen/Qwen3-TTS-Tokenizer-12Hz")
+    model_path = _find_local_model_dir(model_name) or _snapshot_download(model_name)
+    tokenizer_path = _find_local_model_dir(TOKENIZER_MODEL_NAME) or _snapshot_download(TOKENIZER_MODEL_NAME)
     
     # Create a local mutable directory to hold symlinks
     local_dir = f"/tmp/{model_name.replace('/', '_')}"
@@ -114,22 +246,11 @@ def prepare_model_dir(model_name: str) -> str:
     for item in os.listdir(model_path):
         src = os.path.join(model_path, item)
         dst = os.path.join(local_dir, item)
-        if not os.path.exists(dst):
-            try:
-                os.symlink(src, dst)
-            except OSError:
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(src, dst)
+        _link_or_copy(src, dst)
                     
     # Link tokenizer
     st_dst = os.path.join(local_dir, "speech_tokenizer")
-    if not os.path.exists(st_dst):
-        try:
-            os.symlink(tokenizer_path, st_dst)
-        except OSError:
-            shutil.copytree(tokenizer_path, st_dst, dirs_exist_ok=True)
+    _link_or_copy(tokenizer_path, st_dst)
             
     return local_dir
 

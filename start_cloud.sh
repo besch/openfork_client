@@ -1083,6 +1083,19 @@ if [ "$START_QWEN3TTS" = "true" ]; then
       export QWEN_MODEL_SIZE="0.6B"
       log "Selecting Qwen3-TTS 0.6B model for 8GB VRAM (Capacity: ${TOTAL_VRAM_MB}MB)"
   fi
+
+  export QWEN3_ALLOW_ONLINE_FALLBACK="${QWEN3_ALLOW_ONLINE_FALLBACK:-1}"
+  if [ "${QWEN3_STRICT_OFFLINE:-false}" = "true" ]; then
+      export HF_HUB_OFFLINE="1"
+      export TRANSFORMERS_OFFLINE="1"
+      log "Qwen3-TTS strict offline mode enabled."
+  elif [ -n "${HF_TOKEN:-}" ]; then
+      export HF_HUB_OFFLINE="0"
+      export TRANSFORMERS_OFFLINE="0"
+      log "Qwen3-TTS online cache repair enabled when baked model snapshots are missing."
+  else
+      log "Qwen3-TTS has no Hugging Face token; using baked cache only."
+  fi
 fi
 
 if [ "$START_F5TTS" = "true" ]; then

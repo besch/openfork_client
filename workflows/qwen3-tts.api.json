@@ -8,7 +8,7 @@
       "params": {
         "text": "string",
         "language": "Auto",
-        "speaker": "Vivian",
+        "speaker": "vivian",
         "instruct": "optional",
         "mode": "custom_voice"
       }
