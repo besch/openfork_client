@@ -2,6 +2,7 @@ cli.py
 comfyui-storage/audiox_api.py
 comfyui-storage/build_and_push.py
 comfyui-storage/diffrhythm_api.py
+comfyui-storage/dots_tts_api.py
 comfyui-storage/dramabox_api.py
 comfyui-storage/ernie_image_api.py
 comfyui-storage/f5_tts_api.py
@@ -47,6 +48,7 @@ services/processors/audio/acestep_cli.py
 services/processors/audio/audiox.py
 services/processors/audio/chatterbox.py
 services/processors/audio/diffrhythm_cli.py
+services/processors/audio/dots_tts.py
 services/processors/audio/dramabox.py
 services/processors/audio/f5_tts.py
 services/processors/audio/foley.py
@@ -106,6 +108,7 @@ workflows/anima-text-to-image-8gb.api.json
 workflows/chatterbox-tts.api.json
 workflows/chatterbox-voice-clone.api.json
 workflows/diagdistill-t2v.api.json
+workflows/dots-tts.api.json
 workflows/dreamid-omni-image-to-video-24gb.api.json
 workflows/f5-tts.api.json
 workflows/flux-kontext-dev-12gb-image-edit.api.json
