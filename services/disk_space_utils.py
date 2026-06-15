@@ -124,6 +124,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "chatterbox": 80,
         "f5-tts": 45,
         "wavtts": 60,
+        "dots-tts": 70,
         "ideogram4": 120,
         "stream-diffvsr": 80,
         "audiox": 120,

@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "backend": "rest",
+  "service": "dots-tts",
+  "endpoints": {
+    "health": "/health",
+    "generate": "/generate",
+    "voice_clone": "/generate/voice-clone",
+    "voice_clone_path": "/generate/voice-clone-path",
+    "status": "/status/{job_id}",
+    "download": "/download/{job_id}"
+  },
+  "model": "rednote-hilab/dots.tts-mf",
+  "modes": ["tts", "voice_clone"],
+  "inputs": {
+    "text": "string",
+    "prompt_audio": "file",
+    "prompt_text": "string",
+    "language": "string",
+    "seed": "integer",
+    "num_steps": "integer",
+    "guidance_scale": "number",
+    "normalize_text": "boolean"
+  },
+  "defaults": {
+    "model": "rednote-hilab/dots.tts-mf",
+    "num_steps": 4,
+    "guidance_scale": 1.2,
+    "language": "none",
+    "normalize_text": false
+  },
+  "outputs": {
+    "audio": "wav"
+  },
+  "notes": "Experimental disabled Dots TTS lane. Upstream recommends reference audio around 10s for cloning; random-voice TTS without a reference is mainly useful for smoke tests unless a single-speaker checkpoint is used."
+}

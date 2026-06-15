@@ -56,6 +56,7 @@ from .audio.qwen3_tts import (
 )
 from .audio.f5_tts import F5TTSJobProcessor, F5VoiceCloneJobProcessor
 from .audio.wavtts import WavTTSJobProcessor, WavTTSVoiceCloneJobProcessor
+from .audio.dots_tts import DotsTTSJobProcessor, DotsTTSVoiceCloneJobProcessor
 from .audio.scenema_audio import (
     ScenemaAudioTTSProcessor,
     ScenemaAudioVoiceCloneProcessor,
@@ -142,6 +143,8 @@ __all__ = [
     "F5VoiceCloneJobProcessor",
     "WavTTSJobProcessor",
     "WavTTSVoiceCloneJobProcessor",
+    "DotsTTSJobProcessor",
+    "DotsTTSVoiceCloneJobProcessor",
     "ScenemaAudioTTSProcessor",
     "ScenemaAudioVoiceCloneProcessor",
     "DramaboxTTSProcessor",

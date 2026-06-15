@@ -9,6 +9,7 @@ from .chatterbox import ChatterboxTTSJobProcessor, ChatterboxVoiceCloneJobProces
 from .qwen3_tts import Qwen3TTSJobProcessor, Qwen3VoiceDesignJobProcessor, Qwen3VoiceCloneJobProcessor
 from .f5_tts import F5TTSJobProcessor, F5VoiceCloneJobProcessor
 from .wavtts import WavTTSJobProcessor, WavTTSVoiceCloneJobProcessor
+from .dots_tts import DotsTTSJobProcessor, DotsTTSVoiceCloneJobProcessor
 from .scenema_audio import ScenemaAudioTTSProcessor, ScenemaAudioVoiceCloneProcessor
 from .dramabox import DramaboxTTSProcessor, DramaboxVoiceCloneProcessor
 from .mmaudio import MMAudioJobProcessor
@@ -30,6 +31,8 @@ __all__ = [
     "F5VoiceCloneJobProcessor",
     "WavTTSJobProcessor",
     "WavTTSVoiceCloneJobProcessor",
+    "DotsTTSJobProcessor",
+    "DotsTTSVoiceCloneJobProcessor",
     "ScenemaAudioTTSProcessor",
     "ScenemaAudioVoiceCloneProcessor",
     "DramaboxTTSProcessor",
