@@ -34,6 +34,7 @@ ARG HF_TOKEN
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ARG HF_TOKEN
+ARG OPENFORK_CLIENT_SCRIPT_REF=main
 
 # Supported GPU compute capabilities (via pre-built PyTorch cu128 wheel):
 #   7.5 = T4, RTX 20xx  |  8.0 = A100  |  8.6 = RTX 30xx, A10G
@@ -205,8 +206,17 @@ RUN pip3 install fastapi "uvicorn[standard]"
 #     TRANSFORMERS_OFFLINE=1 \
 #     HF_HUB_DISABLE_TELEMETRY=1
 
+# ── OpenFork runtime scripts from public repo ────────────────────────────────
+RUN OPENFORK_RAW_BASE="https://raw.githubusercontent.com/besch/openfork_client/${OPENFORK_CLIENT_SCRIPT_REF}" \
+    && curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 \
+        "${OPENFORK_RAW_BASE}/comfyui-storage/verify_wan2gp.py" \
+        -o /tmp/verify_wan2gp.py \
+    && curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 \
+        "${OPENFORK_RAW_BASE}/comfyui-storage/wan2gp_server.py" \
+        -o /opt/wan2gp/wan2gp_server.py \
+    && python3 -m py_compile /tmp/verify_wan2gp.py /opt/wan2gp/wan2gp_server.py
+
 # ── Verify critical files are present and shared.api is importable ─────────────
-COPY verify_wan2gp.py /tmp/verify_wan2gp.py
 RUN LTX23_REQUIRED_TRANSFORMER=ltx-2.3-22b-distilled-Q6_K_light.gguf \
     LTX23_REQUIRE_HDR=1 \
     python3 /tmp/verify_wan2gp.py
@@ -214,7 +224,6 @@ RUN LTX23_REQUIRED_TRANSFORMER=ltx-2.3-22b-distilled-Q6_K_light.gguf \
 WORKDIR /opt/wan2gp
 
 # ── HTTP server that wraps shared.api (port 8188) ─────────────────────────────
-COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
 ENV WAN2GP_REQUIRE_HDR_LORA=1
 
 CMD ["python3", "/opt/wan2gp/wan2gp_server.py"]

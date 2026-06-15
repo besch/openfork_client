@@ -51,6 +51,12 @@ ENVIRONMENT VARIABLES:
     ACCEPT_POLICY         Job acceptance policy: all, mine, users, project, monetize (default: all)
     SAVE_LOGS             Set to "true" to stream logs to webhook
     BUILD_JOB_ID          Build job ID for log association (uses provider ID if not set)
+    OPENFORK_CLIENT_SCRIPT_REF
+                          Git ref for runtime OpenFork scripts (default: main)
+    OPENFORK_REFRESH_WAN2GP_SERVER
+                          Set to "0" to skip direct GitHub refresh of wan2gp_server.py
+    OPENFORK_SYNC_WAN2GP_SERVER
+                          Set to "0" to use the image-baked wan2gp_server.py only
     OPENFORK_ALLOW_DISABLED_SERVICE_TEST
                           Set to "1" only for admin smoke tests of disabled services
     HF_TOKEN / HUGGINGFACE_TOKEN
@@ -406,6 +412,66 @@ verify_wan2gp_stable_thread_wrapper() {
     ! grep -q "run_in_executor" "$server_file"
 }
 
+env_flag_is_disabled() {
+  case "${1:-}" in
+    0|false|False|FALSE|no|No|NO|off|Off|OFF)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+log_wan2gp_server_wrapper_status() {
+  local server_file="$1"
+  local source_label="$2"
+
+  if verify_wan2gp_stable_thread_wrapper "$server_file"; then
+    log "Wan2GP stable main-thread recycle wrapper is installed from ${source_label}."
+  else
+    log "WARNING: wan2gp_server.py from ${source_label} does not contain the stable main-thread recycle wrapper."
+  fi
+}
+
+sync_wan2gp_server_file() {
+  local source_dir="${1:-}"
+  local wan2gp_root="${WAN2GP_ROOT:-/opt/wan2gp}"
+  local server_dest="$wan2gp_root/wan2gp_server.py"
+  local source_path="${OPENFORK_WAN2GP_SERVER_SOURCE_PATH:-comfyui-storage/wan2gp_server.py}"
+
+  [ -d "$wan2gp_root" ] || return 0
+
+  if env_flag_is_disabled "${OPENFORK_SYNC_WAN2GP_SERVER:-1}"; then
+    log "Wan2GP server sync disabled by OPENFORK_SYNC_WAN2GP_SERVER; using image copy."
+    return 0
+  fi
+
+  if ! env_flag_is_disabled "${OPENFORK_REFRESH_WAN2GP_SERVER:-1}"; then
+    log "Refreshing Wan2GP HTTP server from ${OPENFORK_CLIENT_SCRIPT_REF}:${source_path}..."
+    if refresh_openfork_file "$source_path" "$server_dest"; then
+      log_wan2gp_server_wrapper_status "$server_dest" "GitHub ${OPENFORK_CLIENT_SCRIPT_REF}:${source_path}"
+      return 0
+    fi
+  else
+    log "Direct GitHub refresh of wan2gp_server.py disabled by OPENFORK_REFRESH_WAN2GP_SERVER."
+  fi
+
+  if [ -n "$source_dir" ] && [ -f "$source_dir/wan2gp_server.py" ]; then
+    log "Syncing Wan2GP HTTP server from bootstrapped client source..."
+    cp -v "$source_dir/wan2gp_server.py" "$server_dest"
+    log_wan2gp_server_wrapper_status "$server_dest" "bootstrapped client source"
+    return 0
+  fi
+
+  if [ -f "$server_dest" ]; then
+    log "Using image-baked Wan2GP HTTP server at $server_dest."
+    log_wan2gp_server_wrapper_status "$server_dest" "image copy"
+  else
+    log "WARNING: wan2gp_server.py not found at $server_dest."
+  fi
+}
+
 start_wan2gp_server_supervisor() {
   local server_file="$1"
   local root_dir="$2"
@@ -605,20 +671,12 @@ fi
           cp -v "$DGN_SOURCE_DIR/turbodiffusion_api_server.py" /opt/TurboDiffusion/api_server.py
       fi
 
-      # 3. Wan2GP HTTP server (runs in /opt/wan2gp)
-      if [ -d "/opt/wan2gp" ] && [ -f "$DGN_SOURCE_DIR/wan2gp_server.py" ]; then
-          cp -v "$DGN_SOURCE_DIR/wan2gp_server.py" /opt/wan2gp/
-          if verify_wan2gp_stable_thread_wrapper "/opt/wan2gp/wan2gp_server.py"; then
-              log "Wan2GP stable main-thread recycle wrapper is installed."
-          else
-              log "WARNING: Synced wan2gp_server.py does not contain the stable main-thread recycle wrapper."
-          fi
-      fi
-
       log "✓ Dynamic file sync complete"
   else
       log "WARNING: Could not find comfyui-storage in DGN client. Skipping file sync."
   fi
+
+sync_wan2gp_server_file "$DGN_SOURCE_DIR" || true
 
 repair_torch_audio_stack() {
   if "$PYTHON_EXE" - <<'PY' >/tmp/torch_stack_check.log 2>&1
@@ -1638,7 +1696,7 @@ except Exception as e:
         log "Verified Wan2GP stable main-thread recycle wrapper."
     elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
         log "ERROR: SCAIL requires the stable main-thread recycle Wan2GP wrapper."
-        log "ERROR: $WAN2GP_SERVER is stale; update OPENFORK_CLIENT_SCRIPT_REF or rebuild the SCAIL image/client source before accepting SCAIL jobs."
+        log "ERROR: $WAN2GP_SERVER is stale; update OPENFORK_CLIENT_SCRIPT_REF or the public wan2gp_server.py source before accepting SCAIL jobs."
         exit 1
     else
         log "WARNING: Wan2GP stable main-thread recycle wrapper was not detected; continuing for non-SCAIL service ${SERVICE_TYPE:-auto}."

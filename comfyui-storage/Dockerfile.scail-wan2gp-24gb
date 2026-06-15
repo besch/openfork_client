@@ -17,6 +17,7 @@ ARG HF_TOKEN
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ARG HF_TOKEN
+ARG OPENFORK_CLIENT_SCRIPT_REF=main
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV WAN2GP_ROOT=/opt/wan2gp
@@ -117,7 +118,14 @@ RUN if [ -n "${HF_TOKEN}" ]; then HF_TOKEN_ARG="--token ${HF_TOKEN}"; else HF_TO
 
 RUN pip3 install fastapi "uvicorn[standard]"
 
-COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
+RUN OPENFORK_RAW_BASE="https://raw.githubusercontent.com/besch/openfork_client/${OPENFORK_CLIENT_SCRIPT_REF}" \
+    && curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 \
+        "${OPENFORK_RAW_BASE}/comfyui-storage/verify_wan2gp.py" \
+        -o /tmp/verify_wan2gp.py \
+    && curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 \
+        "${OPENFORK_RAW_BASE}/comfyui-storage/wan2gp_server.py" \
+        -o /opt/wan2gp/wan2gp_server.py \
+    && python3 -m py_compile /tmp/verify_wan2gp.py /opt/wan2gp/wan2gp_server.py
 
 RUN python3 -c "import os; root='/opt/wan2gp/ckpts'; any_transformer=any(os.path.isfile(os.path.join(root, p)) for p in ['wan2.1_scail_preview_14B_bf16.safetensors','wan2.1_scail_preview_14B_quanto_bf16_int8.safetensors','wan2.1_scail_preview_14B_quanto_fp16_int8.safetensors']); required=['Wan2.1_VAE.safetensors','umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors','xlm-roberta-large/models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors','pose/nlf_l_multi_0.3.2.eager.safetensors','pose/nlf_l_multi_0.3.2.eager.meta.json','scribble/netG_A_latest.pth','flow/raft-things.pth','depth/depth_anything_v2_vitl.pth','depth/depth_anything_v2_vitb.pth','wav2vec/config.json','wav2vec/feature_extractor_config.json','wav2vec/model.safetensors','wav2vec/preprocessor_config.json','wav2vec/special_tokens_map.json','wav2vec/tokenizer_config.json','wav2vec/vocab.json','chinese-wav2vec2-base/config.json','chinese-wav2vec2-base/pytorch_model.bin','chinese-wav2vec2-base/preprocessor_config.json','roformer/model_bs_roformer_ep_317_sdr_12.9755.ckpt','roformer/model_bs_roformer_ep_317_sdr_12.9755.yaml','roformer/download_checks.json','pyannote/pyannote_model_wespeaker-voxceleb-resnet34-LM.bin','pyannote/pytorch_model_segmentation-3.0.bin','det_align/detface.pt','mask/sam_vit_h_4b8939_fp16.safetensors','mask/matanyone.safetensors','mask/config.json','rife4.26.pkl']; missing=[p for p in required if not os.path.isfile(os.path.join(root, p))]; assert any_transformer, 'missing SCAIL transformer'; assert not missing, missing; print('SCAIL Wan2GP files: OK')"
 

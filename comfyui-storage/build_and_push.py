@@ -27,15 +27,15 @@ class ImageConfig:
     direct_push: bool = False  # Stream layers directly to registry during build when push is requested.
 
 
-# Default rebuild queue for the current character-consistency/workflow fixes.
-# Include images whose Dockerfile changed, plus production Wan2GP images that
-# COPY changed shared runtime files such as wan2gp_server.py / verify_wan2gp.py.
-# Runtime-only changes in start_cloud.sh do not require an image rebuild.
+# Default rebuild queue for image/content changes.
+# Wan2GP server-only changes do not belong here: start_cloud.sh refreshes
+# comfyui-storage/wan2gp_server.py from the public OpenFork client repo at
+# runtime, with the image-baked copy as a fallback.
 IMAGES: List[ImageConfig] = [
-    ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx23-wan2gp-12gb-hdr", "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
@@ -153,34 +153,37 @@ OPTIONAL_IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True, direct_push=True),
 ]
 
+WAN2GP_IMAGE_REFRESH_PRESET: List[str] = [
+    "openfork-ltx23-wan2gp-hdr",
+    "openfork-ltx23-wan2gp-12gb-hdr",
+    "beschiak/openfork-ltx23-wan2gp-12gb:latest",
+    "beschiak/openfork-ltx23-wan2gp:latest",
+    "scail-wan2gp-16gb",
+    "scail-wan2gp-24gb",
+    "davinci-magihuman-wan2gp-16gb",
+    "davinci-magihuman-wan2gp-24gb",
+    "davinci-magihuman-wan2gp-32gb",
+    "openfork-wan22-wan2gp-8gb",
+    "openfork-wan22-wan2gp-10gb",
+    "openfork-wan22-wan2gp-12gb",
+    "openfork-wan22-wan2gp-16gb",
+    "openfork-wan22-wan2gp-24gb",
+    "vista4d-wan2gp-24gb",
+]
+
 BUILD_PRESETS: Dict[str, List[str]] = {
     "current-rebuild": [
         "openfork-qwen-12gb",
         "openfork-qwen-8gb",
         "openfork-qwen-image-turbo-8gb",
         "flux-kontext-dev-16gb",
-        "openfork-ltx23-wan2gp-hdr",
-        "openfork-ltx23-wan2gp-12gb-hdr",
-        "scail-wan2gp-24gb",
-        "davinci-magihuman-wan2gp-24gb",
     ],
-    "wan2gp-server-refresh": [
-        "openfork-ltx23-wan2gp-hdr",
-        "openfork-ltx23-wan2gp-12gb-hdr",
-        "beschiak/openfork-ltx23-wan2gp-12gb:latest",
-        "beschiak/openfork-ltx23-wan2gp:latest",
-        "scail-wan2gp-16gb",
-        "scail-wan2gp-24gb",
-        "davinci-magihuman-wan2gp-16gb",
-        "davinci-magihuman-wan2gp-24gb",
-        "davinci-magihuman-wan2gp-32gb",
-        "openfork-wan22-wan2gp-8gb",
-        "openfork-wan22-wan2gp-10gb",
-        "openfork-wan22-wan2gp-12gb",
-        "openfork-wan22-wan2gp-16gb",
-        "openfork-wan22-wan2gp-24gb",
-        "vista4d-wan2gp-24gb",
-    ],
+    # Explicit image rebuild for Wan2GP Docker/model/runtime-fallback changes.
+    # Do not use this for wan2gp_server.py-only changes; start_cloud.sh pulls
+    # that file directly from GitHub at runtime.
+    "wan2gp-image-refresh": WAN2GP_IMAGE_REFRESH_PRESET,
+    # Legacy alias kept so older run commands still work.
+    "wan2gp-server-refresh": WAN2GP_IMAGE_REFRESH_PRESET,
     "character-consistency": [
         "openfork-qwen-12gb",
         "openfork-qwen-8gb",
@@ -247,6 +250,17 @@ def _dockerfile_declares_hf_arg(dockerfile: str) -> bool:
             return any(line.strip().startswith("ARG HF_TOKEN") for line in handle)
     except OSError:
         return True
+
+
+def _dockerfile_declares_arg(dockerfile: str, arg_name: str) -> bool:
+    try:
+        with open(dockerfile, "r", encoding="utf-8") as handle:
+            return any(
+                line.strip().startswith(f"ARG {arg_name}")
+                for line in handle
+            )
+    except OSError:
+        return False
 
 
 def _dockerfile_declares_hf_secret(dockerfile: str) -> bool:
@@ -395,6 +409,12 @@ def build_image(
             return False
     elif _dockerfile_declares_hf_arg(dockerfile):
         command.extend(["--build-arg", "HF_TOKEN"])
+
+    if (
+        os.environ.get("OPENFORK_CLIENT_SCRIPT_REF")
+        and _dockerfile_declares_arg(dockerfile, "OPENFORK_CLIENT_SCRIPT_REF")
+    ):
+        command.extend(["--build-arg", "OPENFORK_CLIENT_SCRIPT_REF"])
 
     if hf_token and direct_push and not uses_hf_secret:
         command.extend(["--secret", "id=hf_token,env=HF_TOKEN"])

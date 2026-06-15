@@ -17,6 +17,7 @@ ARG HF_TOKEN
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ARG HF_TOKEN
+ARG OPENFORK_CLIENT_SCRIPT_REF=main
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV WAN2GP_ROOT=/opt/wan2gp
@@ -91,7 +92,14 @@ RUN huggingface-cli download DeepBeepMeep/Wan2.2 \
 
 RUN pip3 install fastapi "uvicorn[standard]"
 
-COPY wan2gp_server.py /opt/wan2gp/wan2gp_server.py
+RUN OPENFORK_RAW_BASE="https://raw.githubusercontent.com/besch/openfork_client/${OPENFORK_CLIENT_SCRIPT_REF}" \
+    && curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 \
+        "${OPENFORK_RAW_BASE}/comfyui-storage/verify_wan2gp.py" \
+        -o /tmp/verify_wan2gp.py \
+    && curl --fail --location --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 \
+        "${OPENFORK_RAW_BASE}/comfyui-storage/wan2gp_server.py" \
+        -o /opt/wan2gp/wan2gp_server.py \
+    && python3 -m py_compile /tmp/verify_wan2gp.py /opt/wan2gp/wan2gp_server.py
 
 RUN python3 -c "import os, sys; sys.path.insert(0, '/opt/wan2gp'); from shared.api import init; required=['magi_human_quanto_bf16_int8.safetensors','magi_human_sr1080_quanto_bf16_int8.safetensors','Wan2.2_VAE.safetensors','t5gemma-9b-9b-ul2/t5gemma-9b-9b-ul2_quanto_bf16_int8.safetensors','stable-audio-open-1.0/model.safetensors','stable-audio-open-1.0/model_config.json','turbo_vae/TurboV3-Wan22-TinyShallow_7_7.json','turbo_vae/TurboV3-Wan22-TinyShallow_7_7.safetensors']; missing=[p for p in required if not os.path.isfile('/opt/wan2gp/ckpts/'+p)]; assert not missing, missing; print('MagiHuman Wan2GP 24GB files: OK')"
 
