@@ -155,6 +155,28 @@ def listen_for_ipc_commands(client: "DGNClient"):
                         )
 
                 SHUTDOWN_EVENT.set()
+            elif cmd_type == "DRAIN_AFTER_ACTIVE_JOB":
+                logging.info("Received DRAIN_AFTER_ACTIVE_JOB command from main process.")
+                client.drain_requested = True
+                download_manager = getattr(client, "download_manager", None)
+                if download_manager:
+                    download_manager.shutdown()
+
+                if client.current_job:
+                    job_id = client.current_job.get("id")
+                    logging.info(
+                        "Update install requested while job %s is in progress. "
+                        "The client will stop after this job completes.",
+                        job_id or "unknown",
+                    )
+                else:
+                    logging.info(
+                        "Update install requested while idle. Stopping client before installer starts."
+                    )
+                    SHUTDOWN_EVENT.set()
+
+                if hasattr(client, "job_wakeup_event"):
+                    client.job_wakeup_event.set()
             elif cmd_type == "CANCEL_DOWNLOAD":
                 service_type = payload.get("service_type") if isinstance(payload, dict) else None
                 if not isinstance(service_type, str) or not _SERVICE_ID_RE.match(service_type):

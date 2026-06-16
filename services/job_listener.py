@@ -91,6 +91,36 @@ class JobListener:
         while time.time() < deadline and not self.shutdown_event.is_set():
             time.sleep(min(0.5, deadline - time.time()))
 
+    def _is_update_drain_requested(self) -> bool:
+        return bool(getattr(self.client, "drain_requested", False))
+
+    def _stop_if_update_drain_complete(self, context: str) -> bool:
+        """Stop once an update install drain has no active job left."""
+        if not self._is_update_drain_requested():
+            return False
+        if getattr(self.client, "current_job", None):
+            return False
+
+        logging.info(
+            "Update install drain complete after %s; stopping DGN client.",
+            context,
+        )
+        self.shutdown_event.set()
+        return True
+
+    def _skip_new_work_for_update_install(self, context: str) -> bool:
+        if self.shutdown_event.is_set():
+            return True
+        if not self._is_update_drain_requested():
+            return False
+
+        logging.info(
+            "Skipping %s because an update install is waiting for the DGN client to drain.",
+            context,
+        )
+        self._stop_if_update_drain_complete(context)
+        return True
+
     @staticmethod
     def _should_keep_container_warm(service_config: Dict[str, Any]) -> bool:
         """Return whether this service explicitly opts into container reuse."""
@@ -1180,6 +1210,9 @@ class JobListener:
         """
         client = self.client
 
+        if self._skip_new_work_for_update_install("job reservation"):
+            return None
+
         if self._skip_new_work_for_compaction("job reservation"):
             return None
 
@@ -1234,6 +1267,9 @@ class JobListener:
         """Listen for jobs from the orchestrator (for dedicated providers)."""
         consecutive_empty_polls = 0
         while not self.shutdown_event.is_set():
+            if self._stop_if_update_drain_complete("dedicated loop idle"):
+                break
+
             # Clear wakeup event at start of loop
             if hasattr(self.client, "job_wakeup_event"):
                 self.client.job_wakeup_event.clear()
@@ -1246,6 +1282,9 @@ class JobListener:
                     logging.info(
                         f"Checking for new jobs for provider {self.provider_id}..."
                     )
+                    if self._skip_new_work_for_update_install("job fetch"):
+                        job = None
+                        continue
                     if self._skip_new_work_for_compaction("job fetch"):
                         job = None
                         continue
@@ -1278,6 +1317,9 @@ class JobListener:
 
                         # Process the job using the shared helper
                         self._process_job_safely(job)
+
+                        if self._stop_if_update_drain_complete("job completion"):
+                            break
 
                         if not self.shutdown_event.is_set():
                             self.orchestrator_service.update_provider_status(
@@ -1550,6 +1592,9 @@ class JobListener:
 
         try:
             while not self.shutdown_event.is_set():
+                if self._stop_if_update_drain_complete("auto loop idle"):
+                    break
+
                 # Clear wakeup event at start of loop
                 if hasattr(self.client, "job_wakeup_event"):
                     self.client.job_wakeup_event.clear()
@@ -1613,6 +1658,10 @@ class JobListener:
                     # Acquire the processing lock BEFORE fetching a job
                     with self.client.processing_lock:
                         logging.info("Auto mode: Peeking at available jobs...")
+                        if self._skip_new_work_for_update_install(
+                            "auto-mode job peek"
+                        ):
+                            continue
                         if self._skip_new_work_for_compaction("auto-mode job peek"):
                             compaction_requested = True
                             continue
@@ -1806,6 +1855,11 @@ class JobListener:
 
                                 if image_available:
                                     # Image is ready - reserve and process this job
+                                    if self._skip_new_work_for_update_install(
+                                        "auto-mode job reservation"
+                                    ):
+                                        break
+
                                     if self._skip_new_work_for_compaction(
                                         "auto-mode job reservation"
                                     ):
@@ -2395,6 +2449,12 @@ exec python main.py "$@"
                                             else:
                                                 self.client.active_service_type = None
                                             self.client.active_container_crash_event = None
+
+                                            if self._stop_if_update_drain_complete(
+                                                "auto-mode job completion"
+                                            ):
+                                                break
+
                                             self.orchestrator_service.update_provider_status(
                                                 self.provider_id, "available"
                                             )
@@ -2428,7 +2488,11 @@ exec python main.py "$@"
                                 and download_manager
                                 and not HEADLESS_MODE
                             ):
-                                if post_download_hold_active:
+                                if self._skip_new_work_for_update_install(
+                                    "background image download"
+                                ):
+                                    pass
+                                elif post_download_hold_active:
                                     logging.info(
                                         "Skipping missing-image downloads during the "
                                         "post-download settle window so the freshly "
@@ -2494,7 +2558,14 @@ exec python main.py "$@"
                         # This proactively downloads images for high-demand workflows
                         # NOTE: This does NOT affect credits - it's purely for network efficiency
                         if not found_processable_job and not compaction_requested:
-                            if self._skip_new_work_for_compaction(
+                            update_drain_requested = (
+                                self._skip_new_work_for_update_install(
+                                    "idle downloads and cleanup"
+                                )
+                            )
+                            if update_drain_requested:
+                                pass
+                            elif self._skip_new_work_for_compaction(
                                 "idle downloads and cleanup"
                             ):
                                 compaction_requested = True
@@ -2520,7 +2591,7 @@ exec python main.py "$@"
                             # Disk-pressure cleanup runs in the same idle window as
                             # prefetching. Cheap when at Healthy (one disk_usage call),
                             # only evicts at Pressure / Critical tiers.
-                            if download_manager:
+                            if download_manager and not update_drain_requested:
                                 try:
                                     if not compaction_requested:
                                         download_manager.check_and_evict_for_pressure()
