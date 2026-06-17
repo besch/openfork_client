@@ -56,8 +56,16 @@ WAN2GP_REQUIRE_HDR_LORA = os.environ.get("WAN2GP_REQUIRE_HDR_LORA", "0").strip()
     "on",
 }
 
-_HDR_LORA_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-0.9.safetensors")
-_HDR_SCENE_EMB_PATH = os.path.join(WAN2GP_ROOT, "ckpts", "ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors")
+_HDR_LORA_BASENAME = "ltx-2.3-22b-ic-lora-hdr-0.9.safetensors"
+_HDR_SCENE_EMB_BASENAME = "ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors"
+_HDR_LORA_CANDIDATE_PATHS = [
+    os.path.join(WAN2GP_ROOT, "ckpts", _HDR_LORA_BASENAME),
+    os.path.join(WAN2GP_ROOT, "loras", "ltx2", _HDR_LORA_BASENAME),
+]
+_HDR_SCENE_EMB_CANDIDATE_PATHS = [
+    os.path.join(WAN2GP_ROOT, "ckpts", _HDR_SCENE_EMB_BASENAME),
+    os.path.join(WAN2GP_ROOT, "loras", "ltx2", _HDR_SCENE_EMB_BASENAME),
+]
 
 os.makedirs(WAN2GP_OUTPUT, exist_ok=True)
 if WAN2GP_ROOT not in sys.path:
@@ -406,12 +414,29 @@ def _skip_eager_shared_asset_downloads() -> None:
 _skip_eager_shared_asset_downloads()
 
 
+def _resolve_existing_path(candidates: list[str]) -> str | None:
+    for path in candidates:
+        normalized = os.path.normpath(path)
+        if os.path.isfile(normalized):
+            return normalized
+    return None
+
+
+def _hdr_file_paths() -> tuple[str | None, str | None]:
+    return (
+        _resolve_existing_path(_HDR_LORA_CANDIDATE_PATHS),
+        _resolve_existing_path(_HDR_SCENE_EMB_CANDIDATE_PATHS),
+    )
+
+
 def _hdr_files_missing() -> list[str]:
-    return [
-        path
-        for path in (_HDR_LORA_PATH, _HDR_SCENE_EMB_PATH)
-        if not os.path.isfile(os.path.normpath(path))
-    ]
+    hdr_lora_path, hdr_scene_emb_path = _hdr_file_paths()
+    missing: list[str] = []
+    if not hdr_lora_path:
+        missing.append(_HDR_LORA_CANDIDATE_PATHS[0])
+    if not hdr_scene_emb_path:
+        missing.append(_HDR_SCENE_EMB_CANDIDATE_PATHS[0])
+    return missing
 
 
 # Verify HDR IC-LoRA is present (if built into the image)
@@ -475,6 +500,7 @@ def _generate_sync(raw_settings: Dict[str, Any]) -> list[str]:
 
     # Inject HDR IC-LoRA if requested
     if settings.get("hdr"):
+        hdr_lora_path, hdr_scene_emb_path = _hdr_file_paths()
         missing_hdr_files = _hdr_files_missing()
         if missing_hdr_files:
             raise HTTPException(
@@ -486,12 +512,12 @@ def _generate_sync(raw_settings: Dict[str, Any]) -> list[str]:
                     ]
                 },
             )
-        settings["lora_filename"] = _HDR_LORA_PATH
-        settings["lora_scene_emb_filename"] = _HDR_SCENE_EMB_PATH
+        settings["lora_filename"] = hdr_lora_path
+        settings["lora_scene_emb_filename"] = hdr_scene_emb_path
         settings["lora_weight"] = settings.get("lora_weight", 1.0)
         logging.info(
             "HDR IC-LoRA enabled: %s (weight=%.2f)",
-            _HDR_LORA_PATH,
+            hdr_lora_path,
             settings["lora_weight"],
         )
 

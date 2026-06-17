@@ -1,3 +1,4 @@
+from pathlib import Path
 import unittest
 
 from services.processors.video.ltx23_common import (
@@ -54,6 +55,19 @@ class LTX23ModelSelectionTests(unittest.TestCase):
         }
 
         self.assertTrue(Wan2GPProcessor._is_wan2gp_cuda_oom(detail))
+
+    def test_wan2gp_server_accepts_moved_hdr_lora_path(self):
+        server_path = (
+            Path(__file__).resolve().parents[1]
+            / "comfyui-storage"
+            / "wan2gp_server.py"
+        )
+        source = server_path.read_text(encoding="utf-8")
+
+        self.assertIn("_HDR_LORA_CANDIDATE_PATHS", source)
+        self.assertIn('"loras", "ltx2"', source)
+        self.assertIn("_resolve_existing_path", source)
+        self.assertIn('settings["lora_filename"] = hdr_lora_path', source)
 
 
 if __name__ == "__main__":
