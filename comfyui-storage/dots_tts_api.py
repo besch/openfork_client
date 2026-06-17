@@ -6,6 +6,7 @@ TTS and zero-shot voice cloning.
 """
 
 import asyncio
+import inspect
 import logging
 import os
 import threading
@@ -78,6 +79,7 @@ class JobStatus(BaseModel):
     output_path: Optional[str] = None
     model: Optional[str] = None
     seed: Optional[int] = None
+    requested_seed: Optional[int] = None
     num_steps: Optional[int] = None
     guidance_scale: Optional[float] = None
 
@@ -137,22 +139,34 @@ def _run_inference(job_id: str, request: DotsTTSGenerateRequest) -> tuple[str, D
         else DEFAULT_GUIDANCE_SCALE
     )
     seed = request.seed if request.seed is not None else DEFAULT_SEED
+    requested_seed = request.seed
 
     kwargs: Dict[str, Any] = {
         "text": text,
         "num_steps": num_steps,
         "guidance_scale": guidance_scale,
-        "seed": seed,
     }
     language = _normalized_language(request.language)
     if language:
         kwargs["language"] = language
     if request.normalize_text:
         kwargs["normalize_text"] = True
+    if seed is not None:
+        kwargs["seed"] = seed
     if request.prompt_audio_path:
         kwargs["prompt_audio_path"] = request.prompt_audio_path
     if request.prompt_text:
         kwargs["prompt_text"] = request.prompt_text
+
+    supported_kwargs = set(inspect.signature(loaded_runtime.generate).parameters)
+    unsupported_kwargs = sorted(key for key in kwargs if key not in supported_kwargs)
+    if unsupported_kwargs:
+        logger.info(
+            "Ignoring unsupported dots.tts runtime kwargs for job %s: %s",
+            job_id,
+            ", ".join(unsupported_kwargs),
+        )
+    kwargs = {key: value for key, value in kwargs.items() if key in supported_kwargs}
 
     logger.info(
         "Running dots.tts job %s with model=%s steps=%s guidance=%s language=%s reference=%s",
@@ -169,13 +183,18 @@ def _run_inference(job_id: str, request: DotsTTSGenerateRequest) -> tuple[str, D
     sample_rate = int(result.get("sample_rate") or loaded_runtime.sample_rate)
     sf.write(str(output_path), audio, sample_rate)
 
-    return str(output_path), {
+    metadata = {
         "model": DEFAULT_MODEL,
-        "seed": seed,
         "num_steps": num_steps,
         "guidance_scale": guidance_scale,
         "sample_rate": sample_rate,
     }
+    if "seed" in supported_kwargs:
+        metadata["seed"] = seed
+    elif requested_seed is not None:
+        metadata["requested_seed"] = requested_seed
+
+    return str(output_path), metadata
 
 
 async def _process_generation_job(job_id: str, request: DotsTTSGenerateRequest):
@@ -303,6 +322,7 @@ async def get_status(job_id: str):
         output_path=job.get("output_path"),
         model=job.get("model"),
         seed=job.get("seed"),
+        requested_seed=job.get("requested_seed"),
         num_steps=job.get("num_steps"),
         guidance_scale=job.get("guidance_scale"),
     )

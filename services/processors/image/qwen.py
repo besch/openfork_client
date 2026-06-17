@@ -619,6 +619,7 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
         
         # Calculate dimensions based on aspect ratio
         width, height = self._get_dimensions(aspect_ratio)
+        steps = inputs.get("steps", inputs.get("num_steps"))
 
         # Inject prompt and dimensions into workflow
         seed = inputs.get("seed")
@@ -628,6 +629,7 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
             width,
             height,
             seed=seed,
+            steps=steps,
         )
         payload = {"prompt": wf_ready}
         outputs = self._trigger_and_get_output(payload)
@@ -652,20 +654,26 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
     def _get_dimensions(self, aspect_ratio):
         """Calculate width and height based on aspect ratio."""
         ratio_map = {
-            "1:1": (1024, 1024),
-            "16:9": (1280, 720),
-            "9:16": (720, 1280),
-            "4:3": (1152, 864),
-            "3:4": (864, 1152),
-            "3:2": (1248, 832),
-            "2:3": (832, 1248),
-            "21:9": (1344, 576),
+            "1:1": (512, 512),
+            "16:9": (512, 288),
+            "9:16": (288, 512),
+            "4:3": (512, 384),
+            "3:4": (384, 512),
+            "3:2": (512, 336),
+            "2:3": (336, 512),
+            "21:9": (512, 224),
         }
-        return ratio_map.get(aspect_ratio, (1024, 1024))
+        return ratio_map.get(aspect_ratio, (512, 512))
 
-    def _inject_t2i_workflow(self, workflow_data, prompt, width, height, seed=None):
+    def _inject_t2i_workflow(self, workflow_data, prompt, width, height, seed=None, steps=None):
         """Inject prompt and dimensions into the text-to-image workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
+        try:
+            requested_steps = int(steps) if steps is not None else None
+        except (TypeError, ValueError):
+            requested_steps = None
+        if requested_steps is not None:
+            requested_steps = max(1, min(requested_steps, 10))
         
         for node_id, node in wf.items():
             if node.get("class_type") == "CLIPTextEncode":
@@ -680,6 +688,8 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
                     node["inputs"]["seed"] = seed
                 else:
                     node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
+                if requested_steps is not None:
+                    node["inputs"]["steps"] = requested_steps
         
         return wf
 

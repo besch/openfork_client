@@ -373,7 +373,8 @@ class DotsTTSJobProcessor(DotsTTSBaseProcessor):
                     "dots_tts_guidance_scale": result.get("guidance_scale")
                     or payload.get("guidance_scale"),
                     "language": payload.get("language"),
-                    "seed": result.get("seed") or payload.get("seed"),
+                    "seed": result.get("seed"),
+                    "requested_seed": payload.get("seed"),
                 },
             ):
                 return
@@ -471,7 +472,8 @@ class DotsTTSVoiceCloneJobProcessor(DotsTTSBaseProcessor):
                     "dots_tts_guidance_scale": result.get("guidance_scale")
                     or payload.get("guidance_scale"),
                     "language": payload.get("language"),
-                    "seed": result.get("seed") or payload.get("seed"),
+                    "seed": result.get("seed"),
+                    "requested_seed": payload.get("seed"),
                 },
             ):
                 return
