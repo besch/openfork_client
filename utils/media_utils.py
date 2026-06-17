@@ -82,6 +82,8 @@ def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = THUMBN
         "-i", video_path,
         "-vframes", "1",
         "-vf", f"scale={width}:-2:flags=lanczos",  # Scale to specified width, maintain aspect ratio, ensure even height, use high quality scaler
+        "-pix_fmt", "yuvj420p",
+        "-q:v", "3",
         "-nostdin",
         "-v", "error",
         thumbnail_path
