@@ -657,6 +657,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/audiox_api.py" ] && cp -v "$DGN_SOURCE_DIR/audiox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/mmaudio_api.py" ] && cp -v "$DGN_SOURCE_DIR/mmaudio_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/qwen3_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/qwen3_tts_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/dots_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/dots_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/f5_tts_api.py" ] && cp -v "$DGN_SOURCE_DIR/f5_tts_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/dramabox_api.py" ] && cp -v "$DGN_SOURCE_DIR/dramabox_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/diagdistill_api.py" ] && cp -v "$DGN_SOURCE_DIR/diagdistill_api.py" /app/
@@ -830,6 +831,7 @@ START_HEARTMULA="false"
 START_DIFFRHYTHM="false"
 START_AUDIOX="false"
 START_QWEN3TTS="false"
+START_DOTS_TTS="false"
 START_F5TTS="false"
 START_WAVTTS="false"
 START_SCENEMA_AUDIO="false"
@@ -890,6 +892,10 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Qwen3-TTS image. Selecting Qwen3-TTS service."
       START_QWEN3TTS="true"
       SERVICE_TYPE="qwen3-tts"
+  elif [ -f "/app/dots_tts_api.py" ]; then
+      log "Auto-mode: Detected dots.tts image. Selecting dots.tts service."
+      START_DOTS_TTS="true"
+      SERVICE_TYPE="dots-tts"
   elif [ -f "/app/f5_tts_api.py" ]; then
       log "Auto-mode: Detected F5-TTS image. Selecting F5-TTS service."
       START_F5TTS="true"
@@ -1093,6 +1099,7 @@ else
   if [[ "$SERVICE_TYPE" == *"diffrhythm"* ]]; then START_DIFFRHYTHM="true"; fi
   if [[ "$SERVICE_TYPE" == *"audiox"* ]]; then START_AUDIOX="true"; fi
   if [[ "$SERVICE_TYPE" == *"qwen3-tts"* ]]; then START_QWEN3TTS="true"; fi
+  if [[ "$SERVICE_TYPE" == *"dots-tts"* ]]; then START_DOTS_TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"f5-tts"* ]]; then START_F5TTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"wavtts"* ]]; then START_WAVTTS="true"; fi
   if [[ "$SERVICE_TYPE" == *"prismaudio"* ]]; then START_PRISMAUDIO="true"; fi
@@ -1863,6 +1870,13 @@ if [ "$START_QWEN3TTS" = "true" ] && [ -f "/app/qwen3_tts_api.py" ]; then
   log "Found Qwen3-TTS API script. Starting..."
   (cd /app && "$PYTHON_EXE" qwen3_tts_api.py > /tmp/qwen3_tts_api.log 2>&1) &
   wait_for_url "Qwen3-TTS API" "http://127.0.0.1:8000/health" 300 "/tmp/qwen3_tts_api.log"
+fi
+
+# Start dots.tts REST API
+if [ "$START_DOTS_TTS" = "true" ] && [ -f "/app/dots_tts_api.py" ]; then
+  log "Found dots.tts API script. Starting..."
+  (cd /app && "$PYTHON_EXE" dots_tts_api.py > /tmp/dots_tts_api.log 2>&1) &
+  wait_for_url "dots.tts API" "http://127.0.0.1:8000/health" 900 "/tmp/dots_tts_api.log"
 fi
 
 # Start F5-TTS REST API

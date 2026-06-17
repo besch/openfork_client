@@ -25,7 +25,7 @@ _RUNTIME_LIMITS = {
     },
     "24gb": {
         "duration_default": 4.0,
-        "duration_max": 5.0,
+        "duration_max": 7.0,
         "steps_default": 8,
         "steps_max": 12,
     },

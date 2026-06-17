@@ -30,7 +30,7 @@ class QwenImageT2IDimensionTests(unittest.TestCase):
                 },
                 "8": {
                     "class_type": "KSampler",
-                    "inputs": {"seed": 0},
+                    "inputs": {"seed": 0, "steps": 10},
                 },
             }
         }
@@ -41,11 +41,34 @@ class QwenImageT2IDimensionTests(unittest.TestCase):
             512,
             288,
             seed=123,
+            steps=4,
         )
 
         self.assertEqual((graph["4"]["inputs"]["width"], graph["4"]["inputs"]["height"]), (512, 288))
         self.assertEqual(graph["5"]["inputs"]["text"], "patched prompt")
         self.assertEqual(graph["8"]["inputs"]["seed"], 123)
+        self.assertEqual(graph["8"]["inputs"]["steps"], 4)
+
+    def test_t2i_clamps_injected_steps_to_workflow_limit(self):
+        workflow = {
+            "prompt": {
+                "8": {
+                    "class_type": "KSampler",
+                    "inputs": {"seed": 0, "steps": 10},
+                },
+            }
+        }
+
+        graph = self.processor._inject_t2i_workflow(
+            workflow,
+            "patched prompt",
+            512,
+            512,
+            seed=123,
+            steps=99,
+        )
+
+        self.assertEqual(graph["8"]["inputs"]["steps"], 10)
 
 
 if __name__ == "__main__":
