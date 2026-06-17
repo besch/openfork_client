@@ -75,23 +75,40 @@ def get_video_duration(file_path: str) -> float:
 
 def generate_thumbnail(video_path: str, thumbnail_path: str, width: int = THUMBNAIL_WIDTH) -> bool:
     """Generates a thumbnail for a video file with the configured width."""
-    command = [
-        "ffmpeg",
-        "-y",
-        "-ss", "00:00:01.000",
-        "-i", video_path,
-        "-vframes", "1",
-        "-vf", f"scale={width}:-2:flags=lanczos",  # Scale to specified width, maintain aspect ratio, ensure even height, use high quality scaler
-        "-pix_fmt", "yuvj420p",
-        "-q:v", "3",
-        "-nostdin",
-        "-v", "error",
-        thumbnail_path
-    ]
+    def _command(seek_time: str) -> list[str]:
+        return [
+            "ffmpeg",
+            "-y",
+            "-ss", seek_time,
+            "-i", video_path,
+            "-vframes", "1",
+            "-vf", f"scale={width}:-2:flags=lanczos",  # Scale to specified width, maintain aspect ratio, ensure even height, use high quality scaler
+            "-pix_fmt", "yuvj420p",
+            "-q:v", "3",
+            "-nostdin",
+            "-v", "error",
+            thumbnail_path
+        ]
+
+    def _has_thumbnail() -> bool:
+        return os.path.isfile(thumbnail_path) and os.path.getsize(thumbnail_path) > 0
+
+    seek_times = ("00:00:01.000", "00:00:00.000")
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=120, **get_subprocess_hidden_kwargs())
-        logging.info(f"Thumbnail generated at {thumbnail_path}")
-        return True
+        for index, seek_time in enumerate(seek_times):
+            if os.path.exists(thumbnail_path):
+                os.remove(thumbnail_path)
+            subprocess.run(_command(seek_time), check=True, capture_output=True, timeout=120, **get_subprocess_hidden_kwargs())
+            if _has_thumbnail():
+                logging.info(f"Thumbnail generated at {thumbnail_path}")
+                return True
+            if index == 0:
+                logging.warning(
+                    "Thumbnail generation produced no file at 1s for %s; retrying from the first frame.",
+                    video_path,
+                )
+        logging.error(f"Thumbnail generation produced no output for {video_path}")
+        return False
     except subprocess.TimeoutExpired:
         logging.error(f"Timeout generating thumbnail for {video_path}")
         return False
