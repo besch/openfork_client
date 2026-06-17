@@ -10,7 +10,12 @@ from services.processors.video.ltx23_common import (
     get_ltx23_runtime_limits,
     get_ltx23_model_type,
 )
+from services.processors.video.ltx23_image import (
+    LTX23ImageToVideoWan2GPProcessor,
+    _resolution_to_dimensions,
+)
 from services.processors.wan2gp_processor import Wan2GPProcessor
+from unittest.mock import Mock, patch
 
 
 class LTX23ModelSelectionTests(unittest.TestCase):
@@ -68,6 +73,34 @@ class LTX23ModelSelectionTests(unittest.TestCase):
         self.assertIn('"loras", "ltx2"', source)
         self.assertIn("_resolve_existing_path", source)
         self.assertIn('settings["lora_filename"] = hdr_lora_path', source)
+
+    def test_ltx23_last_frame_extraction_uses_generation_dimensions(self):
+        processor = Mock()
+        processor.job = {
+            "id": "ltx-job",
+            "workflow_type": "ltx23-image-to-video-from-last-frame-24gb",
+        }
+
+        with patch(
+            "services.processors.video.ltx23_image.materialize_last_frame_start_image",
+            return_value="/tmp/last-frame.jpg",
+        ) as materialize:
+            path = LTX23ImageToVideoWan2GPProcessor._resolve_start_image(
+                processor,
+                {"input_video_url": "https://assets.example/source.mp4"},
+                target_dimensions=(960, 544),
+            )
+
+        self.assertEqual(path, "/tmp/last-frame.jpg")
+        materialize.assert_called_once_with(
+            processor,
+            {"input_video_url": "https://assets.example/source.mp4"},
+            target_dimensions=(960, 544),
+        )
+
+    def test_ltx23_resolution_string_parses_to_dimensions(self):
+        self.assertEqual(_resolution_to_dimensions("960x544"), (960, 544))
+        self.assertIsNone(_resolution_to_dimensions("bad"))
 
 
 if __name__ == "__main__":

@@ -27,6 +27,14 @@ _DEFAULT_CFG = 3.0
 _FPS = 24
 
 
+def _resolution_to_dimensions(resolution: str) -> Optional[tuple[int, int]]:
+    try:
+        width, height = str(resolution).lower().split("x", 1)
+        return int(width), int(height)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
     """LTX-2.3 image-to-video via Wan2GP (Supports multiple tiers dynamically)."""
 
@@ -43,8 +51,14 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
 
         duration = clamp_ltx23_duration(inputs.get("duration"), service_type)
         video_length = int(duration * _FPS) + 1
+        resolution = self.aspect_to_resolution(
+            inputs.get("aspect_ratio", "16:9"), service_type
+        )
 
-        image_path = self._resolve_start_image(inputs)
+        image_path = self._resolve_start_image(
+            inputs,
+            target_dimensions=_resolution_to_dimensions(resolution),
+        )
         if not image_path:
             self._fail_job(f"Could not resolve start image for job {self.job_id}")
             return
@@ -66,9 +80,7 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             "negative_prompt": self.negative_prompt,
             "image_start": start_image,
             "image_prompt_type": image_prompt_type,
-            "resolution": self.aspect_to_resolution(
-                inputs.get("aspect_ratio", "16:9"), service_type
-            ),
+            "resolution": resolution,
             "num_inference_steps": clamp_ltx23_steps(
                 inputs.get("steps"), service_type
             ),
@@ -105,9 +117,18 @@ class LTX23ImageToVideoWan2GPProcessor(Wan2GPProcessor):
             prompt=self.positive_prompt,
         )
 
-    def _resolve_start_image(self, inputs: dict) -> Optional[str]:
+    def _resolve_start_image(
+        self,
+        inputs: dict,
+        *,
+        target_dimensions: Optional[tuple[int, int]] = None,
+    ) -> Optional[str]:
         """Return a local file path for the start image, trying multiple sources."""
-        last_frame_path = materialize_last_frame_start_image(self, inputs)
+        last_frame_path = materialize_last_frame_start_image(
+            self,
+            inputs,
+            target_dimensions=target_dimensions,
+        )
         if last_frame_path:
             return last_frame_path
 
