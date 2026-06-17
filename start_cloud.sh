@@ -533,6 +533,54 @@ ensure_swap_space() {
   fi
 }
 
+ensure_ltx23_hdr_lora_files() {
+  local wan2gp_root="${WAN2GP_ROOT:-/opt/wan2gp}"
+  local ckpt_dir="$wan2gp_root/ckpts"
+  local hdr_lora="$ckpt_dir/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors"
+  local hdr_scene_emb="$ckpt_dir/ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors"
+
+  [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]] || return 0
+
+  if [ -f "$hdr_lora" ] && [ -f "$hdr_scene_emb" ]; then
+    return 0
+  fi
+
+  if env_flag_is_disabled "${OPENFORK_LTX23_HDR_SELF_REPAIR:-1}"; then
+    log "LTX-2.3 HDR self-repair disabled by OPENFORK_LTX23_HDR_SELF_REPAIR."
+    return 1
+  fi
+
+  local token="${HF_TOKEN:-${HUGGINGFACE_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-${HUGGINGFACE_HUB_TOKEN:-}}}}"
+  if [ -z "$token" ]; then
+    log "ERROR: LTX-2.3 HDR IC-LoRA files are missing and no Hugging Face token is configured."
+    return 1
+  fi
+
+  log "LTX-2.3 HDR IC-LoRA files missing; downloading runtime repair assets."
+  mkdir -p "$ckpt_dir"
+
+  "$PYTHON_EXE" -m pip install -q "huggingface_hub[cli]" >/dev/null 2>&1 || true
+  if ! HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 \
+      huggingface-cli download Lightricks/LTX-2.3-22b-IC-LoRA-HDR \
+      ltx-2.3-22b-ic-lora-hdr-0.9.safetensors \
+      ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors \
+      --local-dir "$ckpt_dir" \
+      --token "$token"; then
+    log "ERROR: Failed to download LTX-2.3 HDR IC-LoRA repair files."
+    return 1
+  fi
+
+  if [ ! -f "$hdr_lora" ] || [ ! -f "$hdr_scene_emb" ]; then
+    log "ERROR: HDR IC-LoRA repair completed but required files are still missing."
+    log "Missing HDR LoRA: $hdr_lora"
+    log "Missing HDR scene embedding: $hdr_scene_emb"
+    return 1
+  fi
+
+  log "LTX-2.3 HDR IC-LoRA repair complete."
+  return 0
+}
+
 # Ensure pip is installed for the given Python executable
 install_pip() {
   local py_exe="$1"
@@ -1485,7 +1533,7 @@ except Exception as e:
             LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-8gb:latest"
         elif [[ "$SERVICE_TYPE" == *"12gb"* ]]; then
             LTX23_REQUIRED_TRANSFORMER="$LTX23_Q6_TRANSFORMER"
-            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-12gb:latest"
+            LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest"
         # elif [[ "$SERVICE_TYPE" == *"32gb"* ]]; then
         #     LTX23_REQUIRED_TRANSFORMER="$LTX23_Q8_TRANSFORMER"
         #     LTX23_EXPECTED_IMAGE="beschiak/openfork-ltx23-wan2gp:latest"
@@ -1499,14 +1547,15 @@ except Exception as e:
         if [ ! -f "$LTX23_REQUIRED_TRANSFORMER" ]; then
             log "ERROR: $SERVICE_TYPE requires $(basename "$LTX23_REQUIRED_TRANSFORMER"), but this image does not contain it."
             log "Use beschiak/openfork-ltx23-wan2gp-8gb:latest for the 8GB tier."
-            log "Use beschiak/openfork-ltx23-wan2gp-12gb:latest for the 12GB tier."
+            log "Use beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest for the 12GB tier."
             log "Use beschiak/openfork-ltx23-wan2gp-hdr:latest for the 16GB and 24GB tiers."
-            log "Use beschiak/openfork-ltx23-wan2gp:latest for the 32GB tier."
+            log "Use beschiak/openfork-ltx23-wan2gp-hdr:latest for the 32GB tier."
             log "Expected image for this service: $LTX23_EXPECTED_IMAGE"
             WAN2GP_CHECK_FAILED=1
         fi
 
         if [[ "$LTX23_EXPECTED_IMAGE" == *"-hdr:"* ]]; then
+            ensure_ltx23_hdr_lora_files || WAN2GP_CHECK_FAILED=1
             LTX23_HDR_LORA="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-ic-lora-hdr-0.9.safetensors"
             LTX23_HDR_SCENE_EMB="$WAN2GP_ROOT/ckpts/ltx-2.3-22b-ic-lora-hdr-scene-emb.safetensors"
             if [ ! -f "$LTX23_HDR_LORA" ] || [ ! -f "$LTX23_HDR_SCENE_EMB" ]; then
