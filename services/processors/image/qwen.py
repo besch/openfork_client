@@ -16,6 +16,16 @@ from services.processors.comfyui_processor import ComfyUIProcessor
 from services.processors.output_handlers import ImageOutputHandler
 
 
+def _clamp_qwen_steps(steps):
+    try:
+        requested_steps = int(steps) if steps is not None else None
+    except (TypeError, ValueError):
+        requested_steps = None
+    if requested_steps is None:
+        return None
+    return max(1, min(requested_steps, 10))
+
+
 class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
     """Processor for Qwen instruction-based image editing."""
 
@@ -31,6 +41,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
         inputs = self.job.get("inputs", {})
         denoise_strength = inputs.get("denoise_strength", 0.7)
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
+        steps = inputs.get("steps", inputs.get("num_steps"))
 
         # Get source image - either from base64 or storage path
         source_image_filename = self._get_source_image()
@@ -64,6 +75,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             second_image_filename=second_image_filename,
             aspect_ratio=aspect_ratio,
             seed=seed,
+            steps=steps,
             requested_long_edge=inputs.get("max_long_edge")
             or inputs.get("long_edge")
             or inputs.get("target_long_edge"),
@@ -269,7 +281,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
                 return [node_id, 0]
         return source_ref
 
-    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, second_image_filename=None, aspect_ratio="1:1", seed=None, requested_long_edge=None):
+    def _inject_edit_workflow(self, workflow_data, prompt, image_filename, denoise_strength, second_image_filename=None, aspect_ratio="1:1", seed=None, steps=None, requested_long_edge=None):
         """Inject prompt and image into the editing workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
@@ -284,6 +296,7 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
             node.get("class_type") in ("EmptySD3LatentImage", "EmptyQwenImageLayeredLatentImage")
             for node in wf.values()
         )
+        requested_steps = _clamp_qwen_steps(steps)
         load_image_ids = [
             node_id
             for node_id, node in wf.items()
@@ -344,6 +357,8 @@ class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
                     node["inputs"]["seed"] = seed
                 else:
                     node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
+                if requested_steps is not None:
+                    node["inputs"]["steps"] = requested_steps
         
         return wf
 
@@ -392,6 +407,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         inputs = self.job.get("inputs", {})
         denoise_strength = inputs.get("denoise_strength", 0.8)
         aspect_ratio = inputs.get("aspect_ratio", "1:1")
+        steps = inputs.get("steps", inputs.get("num_steps"))
         requested_long_edge = (
             inputs.get("max_long_edge")
             or inputs.get("long_edge")
@@ -425,6 +441,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             denoise_strength,
             aspect_ratio=aspect_ratio,
             seed=seed,
+            steps=steps,
             requested_long_edge=requested_long_edge,
         )
         payload = {"prompt": wf_ready}
@@ -547,7 +564,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
         except Exception as e:
             self._fail_job(f"Failed to copy images to container: {e}")
 
-    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength, aspect_ratio="1:1", seed=None, requested_long_edge=None):
+    def _inject_inpaint_workflow(self, workflow_data, prompt, image_filename, mask_filename, denoise_strength, aspect_ratio="1:1", seed=None, steps=None, requested_long_edge=None):
         """Inject prompt and images into the inpainting workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
         
@@ -557,6 +574,7 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
             requested_long_edge=requested_long_edge,
         )
         max_dim = max(width, height)
+        requested_steps = _clamp_qwen_steps(steps)
 
         image_node_count = 0
         for node_id, node in wf.items():
@@ -577,6 +595,8 @@ class QwenImageInpaintProcessor(ComfyUIProcessor, ImageOutputHandler):
                     node["inputs"]["seed"] = seed
                 else:
                     node["inputs"]["seed"] = random.randint(0, 2**63 - 1)
+                if requested_steps is not None:
+                    node["inputs"]["steps"] = requested_steps
         
         return wf
 
@@ -668,12 +688,7 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
     def _inject_t2i_workflow(self, workflow_data, prompt, width, height, seed=None, steps=None):
         """Inject prompt and dimensions into the text-to-image workflow."""
         wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
-        try:
-            requested_steps = int(steps) if steps is not None else None
-        except (TypeError, ValueError):
-            requested_steps = None
-        if requested_steps is not None:
-            requested_steps = max(1, min(requested_steps, 10))
+        requested_steps = _clamp_qwen_steps(steps)
         
         for node_id, node in wf.items():
             if node.get("class_type") == "CLIPTextEncode":
