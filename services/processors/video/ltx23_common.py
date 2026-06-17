@@ -49,7 +49,7 @@ def get_ltx23_model_type(service_type: str) -> str:
     service_type = (service_type or "").lower()
     if "8gb" in service_type:
         return MODEL_TYPE_Q4
-    if "12gb" in service_type:
+    if "12gb" in service_type or "24gb" in service_type:
         return MODEL_TYPE_Q6
     return MODEL_TYPE_Q8
 

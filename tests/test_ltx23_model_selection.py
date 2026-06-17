@@ -17,13 +17,13 @@ class LTX23ModelSelectionTests(unittest.TestCase):
     def test_8gb_tier_uses_q4_distilled_preset(self):
         self.assertEqual(get_ltx23_model_type("ltx23-video-8gb"), MODEL_TYPE_Q4)
 
-    def test_12gb_tier_uses_q6_distilled_preset(self):
+    def test_stability_constrained_tiers_use_q6_distilled_preset(self):
         self.assertEqual(get_ltx23_model_type("ltx23-video-12gb"), MODEL_TYPE_Q6)
+        self.assertEqual(get_ltx23_model_type("ltx23-video-24gb"), MODEL_TYPE_Q6)
 
     def test_standard_tiers_use_q8_distilled_preset(self):
         for service_type in (
             "ltx23-video-16gb",
-            "ltx23-video-24gb",
             "ltx23-video-32gb",
             "",
         ):
