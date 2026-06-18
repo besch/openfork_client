@@ -3,6 +3,8 @@ SCAIL image-to-video processor (Wan2GP backend).
 
 SCAIL animates a reference image from a driving video. Wan2GP handles the
 NLF pose extraction/preprocess internally when it receives video_guide.
+SCAIL-2 is also routed through WanGP, using its native scail2_14B model support
+and lower-VRAM int8 weights.
 """
 
 from __future__ import annotations
@@ -47,6 +49,26 @@ _SCAIL_RESOLUTIONS_16GB = {
     "2:1": "768x384",
 }
 
+_SCAIL2_RESOLUTIONS = {
+    "16:9": "832x480",
+    "9:16": "480x832",
+    "1:1": "640x640",
+    "4:3": "768x576",
+    "3:4": "576x768",
+    "21:9": "960x416",
+    "2:1": "896x448",
+}
+
+_SCAIL2_RESOLUTIONS_16GB = {
+    "16:9": "832x480",
+    "9:16": "480x832",
+    "1:1": "640x640",
+    "4:3": "768x576",
+    "3:4": "576x768",
+    "21:9": "896x384",
+    "2:1": "832x416",
+}
+
 
 def get_scail_vram_tier(service_type: str) -> str:
     return "16gb" if "16gb" in (service_type or "").lower() else "24gb"
@@ -78,6 +100,56 @@ def clamp_scail_steps(requested_steps) -> int:
     except (TypeError, ValueError):
         steps = 8
     return max(6, min(steps, 20))
+
+
+def scail2_resolution(aspect_ratio: str, vram_tier: str = "24gb") -> str:
+    if vram_tier == "16gb":
+        return _SCAIL2_RESOLUTIONS_16GB.get(aspect_ratio, "832x480")
+    return _SCAIL2_RESOLUTIONS.get(aspect_ratio, "832x480")
+
+
+def clamp_scail2_duration(requested_duration, vram_tier: str = "24gb") -> float:
+    default_duration = 5.0
+    max_duration = 5.0
+    try:
+        duration = float(requested_duration)
+    except (TypeError, ValueError):
+        duration = default_duration
+    return max(1.0, min(duration, max_duration))
+
+
+def clamp_scail2_steps(requested_steps) -> int:
+    try:
+        steps = int(requested_steps)
+    except (TypeError, ValueError):
+        steps = 40
+    return max(8, min(steps, 50))
+
+
+def clamp_scail2_float(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def clamp_scail2_int(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def parse_scail_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def duration_to_wangp_frames(duration_seconds: float) -> int:
@@ -309,4 +381,179 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
             thumbnail_storage_path=thumbnail_storage_path,
             duration_seconds=actual_duration,
             prompt=self.positive_prompt,
+        )
+
+
+class SCAIL2ImageToVideoProcessor(Wan2GPProcessor):
+    """SCAIL-2 reference-image + driving-video animation via WanGP."""
+
+    SERVICE_NAME = "SCAIL-2"
+    MAX_GENERATION_SECONDS = 10800
+
+    def _download_storage_path(self, storage_path: str) -> Optional[str]:
+        return SCAILImageToVideoProcessor._download_storage_path(self, storage_path)
+
+    def _resolve_reference_image(self, inputs: dict) -> Optional[str]:
+        return SCAILImageToVideoProcessor._resolve_reference_image(self, inputs)
+
+    def _resolve_pose_video(self, inputs: dict) -> Optional[str]:
+        return SCAILImageToVideoProcessor._resolve_pose_video(self, inputs)
+
+    def _prepare_pose_video_for_scail2(self, pose_video_path: str) -> Optional[str]:
+        filename = f"{self.job_id}_{os.path.basename(pose_video_path)}"
+        container_path = f"/opt/wan2gp/input/{filename}"
+
+        try:
+            if docker_manager:
+                service_type = (
+                    self.client.active_service_type or self.job.get("service_type")
+                )
+                if not service_type:
+                    raise RuntimeError("No active SCAIL-2 service type is available")
+                docker_manager.copy_file_to_container(
+                    service_type=service_type,
+                    source_on_host=pose_video_path,
+                    dest_in_container=container_path,
+                    shutdown_event=self.shutdown_event,
+                )
+                return container_path
+
+            os.makedirs(os.path.dirname(container_path), exist_ok=True)
+            if os.path.abspath(pose_video_path) != os.path.abspath(container_path):
+                shutil.copy2(pose_video_path, container_path)
+            return container_path
+        except Exception as exc:
+            self._fail_job(
+                f"Failed to prepare SCAIL-2 driving video for job {self.job_id}: {exc}"
+            )
+            return None
+
+    def _build_settings(
+        self,
+        inputs: dict,
+        start_image: Image.Image,
+        pose_video_path: str,
+    ) -> dict:
+        service_type = self.client.active_service_type or self.job.get("service_type")
+        vram_tier = get_scail_vram_tier(service_type or "")
+        duration = clamp_scail2_duration(inputs.get("duration"), vram_tier)
+        return {
+            "model_type": "scail2_14B",
+            "job_id": str(self.job_id),
+            "prompt": self.positive_prompt,
+            "negative_prompt": self.negative_prompt,
+            "image_start": start_image,
+            "video_guide": pose_video_path,
+            "video_prompt_type": inputs.get("video_prompt_type", "V1"),
+            "image_prompt_type": "S",
+            "audio_prompt_type": "R",
+            "resolution": scail2_resolution(
+                inputs.get("aspect_ratio", "16:9"), vram_tier
+            ),
+            "duration_seconds": duration,
+            "video_length": duration_to_wangp_frames(duration),
+            "force_fps": "control",
+            "num_inference_steps": clamp_scail2_steps(inputs.get("steps")),
+            "guidance_scale": clamp_scail2_float(
+                inputs.get("cfg_scale"), 5.0, 1.0, 12.0
+            ),
+            "flow_shift": clamp_scail2_float(inputs.get("flow_shift"), 3.0, 0.1, 20.0),
+            "sample_solver": inputs.get("sampler", "unipc"),
+            "sliding_window_size": clamp_scail2_int(
+                inputs.get("sliding_window_size"), 81, 17, 241
+            ),
+            "sliding_window_overlap": clamp_scail2_int(
+                inputs.get("sliding_window_overlap"), 5, 1, 80
+            ),
+            "sliding_window_color_correction_strength": 0,
+            "remove_background_images_ref": 0,
+            "max_persons": clamp_scail2_int(inputs.get("max_persons"), 2, 1, 6),
+            "sam_text": inputs.get("sam_text") or inputs.get("segmentation_text"),
+            "replace_flag": parse_scail_bool(inputs.get("replace_flag"), False),
+            "custom_settings": {
+                "scail2_animate_preprocessing": inputs.get(
+                    "scail2_animate_preprocessing", "raw"
+                ),
+                "image_ref_keyword_content": inputs.get(
+                    "image_ref_keyword_content", "human character"
+                ),
+            },
+            "seed": self.normalize_seed(inputs.get("seed", _DEFAULT_SEED)),
+        }
+
+    def process(self):
+        if DEV_MODE:
+            return
+
+        if not self.job:
+            self._fail_job("Job object is None.")
+            return
+
+        inputs = self.job.get("inputs") or {}
+        image_path = self._resolve_reference_image(inputs)
+        if not image_path:
+            self._fail_job(
+                "SCAIL-2 requires a reference image. Use the image-to-video workflow."
+            )
+            return
+
+        pose_video_path = self._resolve_pose_video(inputs)
+        if not pose_video_path:
+            self._fail_job(
+                "SCAIL-2 requires a driving video in pose_video/video_guide inputs."
+            )
+            return
+
+        scail2_pose_video_path = self._prepare_pose_video_for_scail2(pose_video_path)
+        if not scail2_pose_video_path:
+            return
+
+        try:
+            start_image = Image.open(image_path).convert("RGB")
+        except Exception as exc:
+            self._fail_job(
+                f"Failed to open SCAIL-2 reference image for job {self.job_id}: {exc}"
+            )
+            return
+
+        settings = self._build_settings(inputs, start_image, scail2_pose_video_path)
+        service_type = self.client.active_service_type or self.job.get("service_type")
+        vram_tier = get_scail_vram_tier(service_type or "")
+        logger.info(
+            "Processing SCAIL-2 job %s with tier=%s resolution=%s frames=%s pose_video=%s",
+            self.job_id,
+            vram_tier,
+            settings["resolution"],
+            settings["video_length"],
+            os.path.basename(pose_video_path),
+        )
+
+        files = self._run_task(settings)
+        if not files:
+            if not self.is_cancelled() and not self.infrastructure_interrupted:
+                self._fail_job(self._wan2gp_no_output_message("SCAIL-2"))
+            return
+
+        result = self._handle_video_output(files[0])
+        if not result:
+            if not self.is_cancelled():
+                self._fail_job(f"Failed to process video output for job {self.job_id}")
+            return
+
+        video_storage_path, thumbnail_storage_path, actual_duration = result
+        self.orchestrator_service.update_job_status(
+            self.job_id,
+            "completed",
+            storage_path=video_storage_path,
+            thumbnail_storage_path=thumbnail_storage_path,
+            duration_seconds=actual_duration,
+            prompt=self.positive_prompt,
+            completion_metadata={
+                "processor": "SCAIL2ImageToVideoProcessor",
+                "resolution": settings["resolution"],
+                "duration_requested_seconds": settings["duration_seconds"],
+                "num_inference_steps": settings["num_inference_steps"],
+                "guidance_scale": settings["guidance_scale"],
+                "flow_shift": settings["flow_shift"],
+            },
         )

@@ -989,6 +989,9 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       SCAIL_TRANSFORMER_BF16="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_bf16.safetensors"
       SCAIL_TRANSFORMER_INT8="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_quanto_bf16_int8.safetensors"
       SCAIL_TRANSFORMER_FP16_INT8="/opt/wan2gp/ckpts/wan2.1_scail_preview_14B_quanto_fp16_int8.safetensors"
+      SCAIL2_TRANSFORMER_MBF16="/opt/wan2gp/ckpts/scail2_14B_mbf16.safetensors"
+      SCAIL2_TRANSFORMER_MBF16_INT8="/opt/wan2gp/ckpts/scail2_14B_quanto_mbf16_int8.safetensors"
+      SCAIL2_TRANSFORMER_MFP16_INT8="/opt/wan2gp/ckpts/scail2_14B_quanto_mfp16_int8.safetensors"
       VISTA4D_TRANSFORMER_BF16="/opt/wan2gp/ckpts/wan2.1_vista4d_384p49_14B_bf16.safetensors"
       VISTA4D_TRANSFORMER_INT8="/opt/wan2gp/ckpts/wan2.1_vista4d_384p49_14B_quanto_bf16_int8.safetensors"
       LTX23_Q4_TRANSFORMER="/opt/wan2gp/ckpts/ltx-2.3-22b-distilled-Q4_K_M_light.gguf"
@@ -1023,6 +1026,14 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       elif { [ -f "$WAN22_T2V_HIGH_MBF16" ] && [ -f "$WAN22_T2V_LOW_MBF16" ]; } || { [ -f "$WAN22_I2V_HIGH_MBF16" ] && [ -f "$WAN22_I2V_LOW_MBF16" ]; }; then
           SERVICE_TYPE="wan22-wan2gp-24gb"
           log "Auto-selected WAN 2.2 Wan2GP 24GB tier (mbf16 image detected, VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ -f "$SCAIL2_TRANSFORMER_MBF16" ] || [ -f "$SCAIL2_TRANSFORMER_MBF16_INT8" ] || [ -f "$SCAIL2_TRANSFORMER_MFP16_INT8" ]; then
+          if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
+              SERVICE_TYPE="scail2-wan2gp-24gb"
+              log "Auto-selected SCAIL-2 WanGP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+          else
+              SERVICE_TYPE="scail2-wan2gp-16gb"
+              log "Auto-selected SCAIL-2 WanGP 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+          fi
       elif [ -f "$VISTA4D_TRANSFORMER_BF16" ] || [ -f "$VISTA4D_TRANSFORMER_INT8" ]; then
           SERVICE_TYPE="vista4d-wan2gp-24gb"
           log "Auto-selected Vista4D Wan2GP 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
@@ -1163,7 +1174,7 @@ else
   if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL, and Vista4D services.
-  if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"wan22-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"wan22-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"scail2-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
       START_WAN2GP="true"
       log "Wan2GP service requested for ${SERVICE_TYPE}."
   fi
@@ -1394,7 +1405,7 @@ if [ "$START_WAN2GP" = "true" ]; then
     fi
 
     if ! ensure_ffmpeg_fps_mode_support; then
-        if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
+        if [[ "${SERVICE_TYPE:-}" == *"scail-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"scail2-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
             log "ERROR: $SERVICE_TYPE requires FFmpeg with -fps_mode support for driving/source video decode."
             exit 1
         fi
@@ -1413,9 +1424,9 @@ if [ "$START_WAN2GP" = "true" ]; then
         else
             export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
         fi
-    elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]] && [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
+    elif { [[ "${SERVICE_TYPE:-}" == *"scail-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"scail2-wan2gp"* ]]; } && [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
         export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.35 --vram-safety-coefficient 0.60}"
-    elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
+    elif [[ "${SERVICE_TYPE:-}" == *"scail-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"scail2-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"vista4d"* ]]; then
         export WAN2GP_CLI_ARGS="${WAN2GP_CLI_ARGS:---profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45 --vram-safety-coefficient 0.70}"
     elif [[ "${SERVICE_TYPE:-}" == *"davinci"* ]]; then
         if [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
@@ -1639,7 +1650,46 @@ except Exception as e:
         done
     fi
 
-    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"scail2-wan2gp"* ]]; then
+        SCAIL2_TRANSFORMER_MBF16="$WAN2GP_ROOT/ckpts/scail2_14B_mbf16.safetensors"
+        SCAIL2_TRANSFORMER_MBF16_INT8="$WAN2GP_ROOT/ckpts/scail2_14B_quanto_mbf16_int8.safetensors"
+        SCAIL2_TRANSFORMER_MFP16_INT8="$WAN2GP_ROOT/ckpts/scail2_14B_quanto_mfp16_int8.safetensors"
+        SCAIL2_VAE="$WAN2GP_ROOT/ckpts/Wan2.1_VAE.safetensors"
+        SCAIL2_TEXT_ENCODER="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-bf16.safetensors"
+        SCAIL2_TEXT_ENCODER_INT8="$WAN2GP_ROOT/ckpts/umt5-xxl/models_t5_umt5-xxl-enc-quanto_int8.safetensors"
+        SCAIL2_CLIP="$WAN2GP_ROOT/ckpts/xlm-roberta-large/models_clip_open-clip-xlm-roberta-large-vit-huge-14-bf16.safetensors"
+        SCAIL2_POSE_MODEL="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.safetensors"
+        SCAIL2_POSE_META="$WAN2GP_ROOT/ckpts/pose/nlf_l_multi_0.3.2.eager.meta.json"
+        SCAIL2_SAM_MODEL="$WAN2GP_ROOT/ckpts/sam3/sam3.1_multiplex_bf16.safetensors"
+        SCAIL2_SAM_VOCAB="$WAN2GP_ROOT/ckpts/sam3/bpe_simple_vocab_16e6.txt.gz"
+        if [[ "$SERVICE_TYPE" == *"16gb"* ]]; then
+            SCAIL2_EXPECTED_IMAGE="beschiak/openfork-scail2-wan2gp-16gb:latest"
+        else
+            SCAIL2_EXPECTED_IMAGE="beschiak/openfork-scail2-wan2gp-24gb:latest"
+        fi
+
+        if [ ! -f "$SCAIL2_TRANSFORMER_MBF16" ] && [ ! -f "$SCAIL2_TRANSFORMER_MBF16_INT8" ] && [ ! -f "$SCAIL2_TRANSFORMER_MFP16_INT8" ]; then
+            log "ERROR: $SERVICE_TYPE requires a SCAIL-2 14B transformer, but this image does not contain one."
+            log "Expected image for this service: $SCAIL2_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
+
+        if [ ! -f "$SCAIL2_TEXT_ENCODER" ] && [ ! -f "$SCAIL2_TEXT_ENCODER_INT8" ]; then
+            log "ERROR: $SERVICE_TYPE requires a UMT5 text encoder, but this image does not contain one."
+            log "Expected image for this service: $SCAIL2_EXPECTED_IMAGE"
+            WAN2GP_CHECK_FAILED=1
+        fi
+
+        for required_file in "$SCAIL2_VAE" "$SCAIL2_CLIP" "$SCAIL2_POSE_MODEL" "$SCAIL2_POSE_META" "$SCAIL2_SAM_MODEL" "$SCAIL2_SAM_VOCAB"; do
+            if [ ! -f "$required_file" ]; then
+                log "ERROR: $SERVICE_TYPE requires $(basename "$required_file"), but this image does not contain it."
+                log "Expected image for this service: $SCAIL2_EXPECTED_IMAGE"
+                WAN2GP_CHECK_FAILED=1
+            fi
+        done
+    fi
+
+    if [[ "${SERVICE_TYPE:-}" == *"scail-wan2gp"* ]]; then
         SCAIL_TRANSFORMER_BF16="$WAN2GP_ROOT/ckpts/wan2.1_scail_preview_14B_bf16.safetensors"
         SCAIL_TRANSFORMER_INT8="$WAN2GP_ROOT/ckpts/wan2.1_scail_preview_14B_quanto_bf16_int8.safetensors"
         SCAIL_TRANSFORMER_FP16_INT8="$WAN2GP_ROOT/ckpts/wan2.1_scail_preview_14B_quanto_fp16_int8.safetensors"
@@ -1744,13 +1794,13 @@ except Exception as e:
     # The DGN client processor polls /health and waits up to 30 min for it.
     WAN2GP_SERVER="/opt/wan2gp/wan2gp_server.py"
     WAN2GP_LOG_FILE="/tmp/wan2gp_server.log"
-    if [[ "${SERVICE_TYPE:-}" == *"scail"* ]] || [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]] || [[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp-24gb"* ]]; then
+    if [[ "${SERVICE_TYPE:-}" == *"scail-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"scail2-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"ltx23"* ]] || [[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp-24gb"* ]]; then
         export WAN2GP_EXIT_AFTER_JOB="${WAN2GP_EXIT_AFTER_JOB:-1}"
         export WAN2GP_EXIT_DELAY_SECONDS="${WAN2GP_EXIT_DELAY_SECONDS:-1}"
     fi
     if verify_wan2gp_stable_thread_wrapper "$WAN2GP_SERVER"; then
         log "Verified Wan2GP stable main-thread recycle wrapper."
-    elif [[ "${SERVICE_TYPE:-}" == *"scail"* ]]; then
+    elif [[ "${SERVICE_TYPE:-}" == *"scail-wan2gp"* ]] || [[ "${SERVICE_TYPE:-}" == *"scail2-wan2gp"* ]]; then
         log "ERROR: SCAIL requires the stable main-thread recycle Wan2GP wrapper."
         log "ERROR: $WAN2GP_SERVER is stale; update OPENFORK_CLIENT_SCRIPT_REF or the public wan2gp_server.py source before accepting SCAIL jobs."
         exit 1
@@ -2538,6 +2588,7 @@ try:
     processor_allowlist = getattr(processors, '__all__', [])
     print(f'Processor allowlist count: {len(processor_allowlist)}')
     print(f'Processor allowlist has SCAILImageToVideoProcessor: {\"SCAILImageToVideoProcessor\" in processor_allowlist}')
+    print(f'Processor allowlist has SCAIL2ImageToVideoProcessor: {\"SCAIL2ImageToVideoProcessor\" in processor_allowlist}')
     print(f'Processor allowlist has Vista4DVideoToVideoProcessor: {\"Vista4DVideoToVideoProcessor\" in processor_allowlist}')
 except Exception as e:
     print(f'Import error: {e}')

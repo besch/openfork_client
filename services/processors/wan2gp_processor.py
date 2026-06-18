@@ -99,6 +99,7 @@ class Wan2GPProcessor(BaseJobProcessor):
     """Base class for processors that use the Wan2GP HTTP server."""
 
     MAX_GENERATION_SECONDS = 7200  # 2 hours
+    CONTAINER_OUTPUT_DIR = "/opt/wan2gp/outputs"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -399,7 +400,7 @@ class Wan2GPProcessor(BaseJobProcessor):
                     (bytes_written / (1024 * 1024)) / elapsed,
                 )
                 self._cleanup_container_file(
-                    f"/opt/wan2gp/outputs/{Path(name).name}",
+                    f"{self.CONTAINER_OUTPUT_DIR}/{Path(name).name}",
                     "Wan2GP video output",
                 )
             except Exception as e:
@@ -435,7 +436,7 @@ class Wan2GPProcessor(BaseJobProcessor):
             recovered = recover_output_from_clean_container_exit(
                 self,
                 tmp_path,
-                container_output_path="/opt/wan2gp/outputs",
+                container_output_path=self.CONTAINER_OUTPUT_DIR,
                 extensions=(".mp4", ".mov", ".webm", ".mkv"),
                 prefer_name=self.job_id,
             )
@@ -466,13 +467,13 @@ class Wan2GPProcessor(BaseJobProcessor):
             recovered = recover_output_from_clean_container_exit(
                 self,
                 tmp_path,
-                container_output_path=f"/opt/wan2gp/outputs/{Path(name).name}",
+                container_output_path=f"{self.CONTAINER_OUTPUT_DIR}/{Path(name).name}",
                 extensions=(".mp4", ".mov", ".webm", ".mkv"),
                 prefer_name=Path(name).stem,
             )
             if recovered:
                 self._cleanup_container_file(
-                    f"/opt/wan2gp/outputs/{Path(name).name}",
+                    f"{self.CONTAINER_OUTPUT_DIR}/{Path(name).name}",
                     "Wan2GP recovered video output",
                 )
             return recovered

@@ -38,9 +38,9 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-12gb-hdr", "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.dots-tts", "beschiak/openfork-dots-tts-6gb:latest", build=True, push=True, direct_push=True, build_args={"DOTS_TTS_MODEL": "rednote-hilab/dots.tts-mf"}),
-    ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.dots-tts", "beschiak/openfork-dots-tts-6gb:latest", build=True, push=True, direct_push=True, build_args={"DOTS_TTS_MODEL": "rednote-hilab/dots.tts-mf"}),
+    # ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-image-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True),
     # Previous production audio rebuilds:
@@ -124,6 +124,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.wan22-wan2gp-10gb", "beschiak/openfork-wan22-wan2gp-10gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
+    ImageConfig("Dockerfile.scail2-wan2gp-16gb", "beschiak/openfork-scail2-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.scail2-wan2gp-24gb", "beschiak/openfork-scail2-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
@@ -140,6 +142,8 @@ OPTIONAL_IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.ltx23-wan2gp-12gb-hdr", "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx23-wan2gp", "beschiak/openfork-ltx23-wan2gp:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.scail2-wan2gp-16gb", "beschiak/openfork-scail2-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.scail2-wan2gp-24gb", "beschiak/openfork-scail2-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.scail-wan2gp-16gb", "beschiak/openfork-scail-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.scail-wan2gp-24gb", "beschiak/openfork-scail-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.wan22-wan2gp-8gb", "beschiak/openfork-wan22-wan2gp-8gb:latest", build=True, push=True, direct_push=True),
@@ -161,6 +165,8 @@ WAN2GP_IMAGE_REFRESH_PRESET: List[str] = [
     "beschiak/openfork-ltx23-wan2gp:latest",
     "scail-wan2gp-16gb",
     "scail-wan2gp-24gb",
+    "scail2-wan2gp-16gb",
+    "scail2-wan2gp-24gb",
     "davinci-magihuman-wan2gp-16gb",
     "davinci-magihuman-wan2gp-24gb",
     "davinci-magihuman-wan2gp-32gb",
@@ -185,6 +191,10 @@ BUILD_PRESETS: Dict[str, List[str]] = {
     "wan2gp-image-refresh": WAN2GP_IMAGE_REFRESH_PRESET,
     # Legacy alias kept so older run commands still work.
     "wan2gp-server-refresh": WAN2GP_IMAGE_REFRESH_PRESET,
+    "scail2": [
+        "openfork-scail2-wan2gp-16gb",
+        "openfork-scail2-wan2gp-24gb",
+    ],
     "character-consistency": [
         "openfork-qwen-12gb",
         "openfork-qwen-8gb",
@@ -193,6 +203,7 @@ BUILD_PRESETS: Dict[str, List[str]] = {
         "openfork-wan22-16gb",
         "openfork-wan22-24gb",
         "openfork-ltx23-wan2gp-hdr",
+        "openfork-scail2-wan2gp-24gb",
         "scail-wan2gp-24gb",
         "dreamid-omni-24gb",
         "davinci-magihuman-wan2gp-24gb",
@@ -209,6 +220,8 @@ BUILD_PRESETS: Dict[str, List[str]] = {
         "openfork-wan22-24gb",
         "ltx23-wan2gp-12gb",
         "openfork-ltx23-wan2gp-hdr",
+        "openfork-scail2-wan2gp-16gb",
+        "openfork-scail2-wan2gp-24gb",
         "scail-wan2gp-16gb",
         "scail-wan2gp-24gb",
         "dreamid-omni-24gb",

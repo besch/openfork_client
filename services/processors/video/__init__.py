@@ -11,7 +11,7 @@ from .upscaler import VideoUpscalerJobProcessor
 from .sparkvsr import SparkVSRUpscalerJobProcessor
 from .turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
 from .dreamid_omni import DreamIDOmniImageToVideoProcessor
-from .scail import SCAILImageToVideoProcessor
+from .scail import SCAIL2ImageToVideoProcessor, SCAILImageToVideoProcessor
 from .vista4d import Vista4DVideoToVideoProcessor
 
 __all__ = [
@@ -25,6 +25,7 @@ __all__ = [
     "SparkVSRUpscalerJobProcessor",
     "DreamIDOmniImageToVideoProcessor",
     "SCAILImageToVideoProcessor",
+    "SCAIL2ImageToVideoProcessor",
     "Vista4DVideoToVideoProcessor",
     "TurboDiffusionI2VJobProcessor",
 ]

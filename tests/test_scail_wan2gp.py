@@ -2,11 +2,16 @@ import unittest
 
 from dgn_client import DGNClient
 from services.processors.video.scail import (
+    SCAIL2ImageToVideoProcessor,
     SCAILImageToVideoProcessor,
+    clamp_scail2_duration,
+    clamp_scail2_steps,
     clamp_scail_duration,
     clamp_scail_steps,
     duration_to_wangp_frames,
     get_scail_vram_tier,
+    parse_scail_bool,
+    scail2_resolution,
     scail_resolution,
 )
 
@@ -44,6 +49,30 @@ class SCAILWan2GPTests(unittest.TestCase):
     def test_service_type_selects_vram_tier(self):
         self.assertEqual(get_scail_vram_tier("scail-wan2gp-16gb"), "16gb")
         self.assertEqual(get_scail_vram_tier("scail-wan2gp-24gb"), "24gb")
+        self.assertEqual(get_scail_vram_tier("scail2-wan2gp-16gb"), "16gb")
+        self.assertEqual(get_scail_vram_tier("scail2-wan2gp-24gb"), "24gb")
+
+    def test_scail2_resolution_profiles_are_divisible_by_32(self):
+        self.assertEqual(scail2_resolution("16:9", "24gb"), "832x480")
+        self.assertEqual(scail2_resolution("9:16", "24gb"), "480x832")
+        self.assertEqual(scail2_resolution("unknown", "24gb"), "832x480")
+        width, height = [int(part) for part in scail2_resolution("16:9", "24gb").split("x")]
+        self.assertEqual(width % 32, 0)
+        self.assertEqual(height % 32, 0)
+
+    def test_scail2_duration_and_steps_use_wangp_defaults(self):
+        self.assertEqual(clamp_scail2_duration(None, "24gb"), 5.0)
+        self.assertEqual(clamp_scail2_duration(99, "24gb"), 5.0)
+        self.assertEqual(clamp_scail2_duration(0.5, "24gb"), 1.0)
+        self.assertEqual(clamp_scail2_steps(None), 40)
+        self.assertEqual(clamp_scail2_steps(2), 8)
+        self.assertEqual(clamp_scail2_steps(80), 50)
+
+    def test_scail_bool_parser_handles_string_flags(self):
+        self.assertFalse(parse_scail_bool("false"))
+        self.assertFalse(parse_scail_bool("0"))
+        self.assertTrue(parse_scail_bool("true"))
+        self.assertTrue(parse_scail_bool(1))
 
     def test_scail_workflows_are_registered_in_processor_map(self):
         client = DGNClient.__new__(DGNClient)
@@ -54,6 +83,9 @@ class SCAILWan2GPTests(unittest.TestCase):
             },
             "scail-image-to-video-24gb": {
                 "processor": "SCAILImageToVideoProcessor",
+            },
+            "scail2-image-to-video-24gb": {
+                "processor": "SCAIL2ImageToVideoProcessor",
             },
         }
 
@@ -66,6 +98,10 @@ class SCAILWan2GPTests(unittest.TestCase):
         self.assertIs(
             processor_map["scail-image-to-video-24gb"],
             SCAILImageToVideoProcessor,
+        )
+        self.assertIs(
+            processor_map["scail2-image-to-video-24gb"],
+            SCAIL2ImageToVideoProcessor,
         )
 
     def test_processable_services_excludes_workflows_without_processors(self):
@@ -80,13 +116,17 @@ class SCAILWan2GPTests(unittest.TestCase):
                 "service_name": "future-service",
                 "processor": "FutureProcessor",
             },
+            "scail2-image-to-video-24gb": {
+                "service_name": "scail2-wan2gp-24gb",
+                "processor": "SCAIL2ImageToVideoProcessor",
+            },
         }
 
         client.processor_map = DGNClient._build_processor_map(client)
 
         self.assertEqual(
             DGNClient._build_processable_services(client),
-            {"scail-wan2gp-24gb"},
+            {"scail-wan2gp-24gb", "scail2-wan2gp-24gb"},
         )
 
     def test_missing_processor_map_entry_refreshes_config_once(self):
