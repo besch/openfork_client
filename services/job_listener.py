@@ -29,6 +29,9 @@ JOB_POLL_BACKOFF_CAP_SECONDS = 300
 # was reset or reassigned.
 TERMINAL_JOB_STATUSES = ("completed", "failed", "cancelled", "deleted", "lease_lost")
 REMOTE_CANCELLATION_STATUSES = ("cancelled", "deleted", "lease_lost")
+PROVIDER_ERROR_TEXT_LIMIT = 8000
+PROVIDER_TRACEBACK_TEXT_LIMIT = 12000
+PROVIDER_CONTAINER_LOG_TEXT_LIMIT = 12000
 
 
 def _compute_poll_interval(base_seconds: int, consecutive_empty_polls: int) -> float:
@@ -45,6 +48,15 @@ def _compute_poll_interval(base_seconds: int, consecutive_empty_polls: int) -> f
     interval = base_seconds * multiplier
     jitter = interval * random.uniform(-0.2, 0.2)
     return max(float(base_seconds), min(interval + jitter, float(JOB_POLL_BACKOFF_CAP_SECONDS)))
+
+
+def _tail_text(value: Optional[str], max_chars: int) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
 
 
 class JobListener:
@@ -476,6 +488,41 @@ class JobListener:
             return "provider_service_startup_failed"
         return "provider_docker_unavailable"
 
+    def _build_provider_error_metadata(
+        self,
+        job: Dict[str, Any],
+        exc: Optional[Exception] = None,
+        reason: Optional[str] = None,
+        error_message: Optional[str] = None,
+        container_logs: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        service_type = self._get_service_type_for_job(job)
+        message = error_message or (str(exc) if exc else "")
+        metadata: Dict[str, Any] = {
+            "provider_recovery_reason": reason,
+            "provider_error": _tail_text(message, PROVIDER_ERROR_TEXT_LIMIT),
+            "job_id": job.get("id"),
+            "workflow_type": job.get("workflow_type"),
+            "service_type": service_type,
+            "provider_id": self.provider_id,
+            "headless_mode": HEADLESS_MODE,
+        }
+        if exc is not None:
+            metadata["provider_error_class"] = exc.__class__.__name__
+            try:
+                metadata["provider_traceback"] = _tail_text(
+                    "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+                    PROVIDER_TRACEBACK_TEXT_LIMIT,
+                )
+            except Exception as traceback_error:
+                metadata["provider_traceback_error"] = str(traceback_error)
+        if container_logs:
+            metadata["container_logs_tail"] = _tail_text(
+                container_logs,
+                PROVIDER_CONTAINER_LOG_TEXT_LIMIT,
+            )
+        return {key: value for key, value in metadata.items() if value is not None}
+
     def _job_was_interrupted_by_infrastructure(
         self,
         job_id: Optional[str],
@@ -642,6 +689,7 @@ class JobListener:
         job: Dict[str, Any],
         exc: Exception,
         reason: str = "provider_docker_unavailable",
+        container_logs: Optional[str] = None,
     ) -> None:
         job_id = job.get("id")
         error_message = f"Infrastructure error: {exc}"
@@ -678,6 +726,12 @@ class JobListener:
                 job_id,
                 execution_token=job.get("execution_token"),
                 reason=reason,
+                provider_error_metadata=self._build_provider_error_metadata(
+                    job,
+                    exc,
+                    reason=reason,
+                    container_logs=container_logs,
+                ),
             )
         except Exception as reset_error:
             logging.error(f"Failed to requeue job {job_id}: {reset_error}")
@@ -863,6 +917,11 @@ class JobListener:
                                 job.get("id"),
                                 execution_token=job.get("execution_token"),
                                 reason="provider_hardware_incompatible",
+                                provider_error_metadata=self._build_provider_error_metadata(
+                                    job,
+                                    reason="provider_hardware_incompatible",
+                                    error_message=error_msg,
+                                ),
                             )
                         except Exception:
                             logging.exception(
@@ -2309,6 +2368,7 @@ exec python main.py "$@"
                                                         job,
                                                         InfrastructureError(reason),
                                                         reason="provider_container_crash",
+                                                        container_logs=container_logs,
                                                     )
 
                                                 container_monitor = ContainerMonitor(

@@ -5,7 +5,7 @@ import sys
 import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from cli import SHUTDOWN_EVENT, cleanup, listen_for_ipc_commands
 from exceptions import InfrastructureError
@@ -104,7 +104,53 @@ class StopResetBehaviorTests(unittest.TestCase):
             "job-456",
             execution_token="token-456",
             reason="provider_shutdown",
+            provider_error_metadata=ANY,
         )
+        reset_metadata = orchestrator_service.reset_interrupted_job.call_args.kwargs[
+            "provider_error_metadata"
+        ]
+        self.assertEqual(reset_metadata["provider_recovery_reason"], "provider_shutdown")
+        self.assertIn("shutdown", reset_metadata["provider_error"])
+
+    def test_reset_interrupted_job_sends_sanitized_provider_error_metadata(self):
+        service = OrchestratorService(
+            "https://openfork.example",
+            dgn_api_key="provider-key",
+        )
+        service.provider_id = "provider-1"
+        response = Mock()
+        response.raise_for_status = Mock()
+
+        with (
+            patch.object(service, "_make_request", return_value=response) as make_request,
+            patch(
+                "services.orchestrator_service.get_recent_logs_tail",
+                return_value="recent provider log tail",
+            ),
+        ):
+            service.reset_interrupted_job(
+                "job-reset-metadata",
+                execution_token="execution-token",
+                reason="provider_gpu_oom",
+                provider_error_metadata={
+                    "provider_error": "CUDA out of memory while loading Qwen",
+                    "api_key": "should-not-be-stored",
+                },
+            )
+
+        make_request.assert_called_once()
+        _, url = make_request.call_args.args[:2]
+        self.assertEqual("put", make_request.call_args.args[0])
+        self.assertTrue(url.endswith("/api/dgn/job/reset"))
+        self.assertEqual(
+            make_request.call_args.kwargs["params"]["reason"],
+            "provider_gpu_oom",
+        )
+        metadata = make_request.call_args.kwargs["json"]["provider_error_metadata"]
+        self.assertEqual(metadata["provider_error"], "CUDA out of memory while loading Qwen")
+        self.assertEqual(metadata["api_key"], "[redacted]")
+        self.assertEqual(metadata["provider_recovery_reason"], "provider_gpu_oom")
+        self.assertEqual(metadata["provider_logs_tail"], "recent provider log tail")
 
     def test_job_listener_skips_job_complete_when_stop_interrupts_processing(self):
         shutdown_event = threading.Event()
@@ -381,7 +427,14 @@ class StopResetBehaviorTests(unittest.TestCase):
             "job-gpu-oom",
             execution_token="token-gpu-oom",
             reason="provider_gpu_oom",
+            provider_error_metadata=ANY,
         )
+        reset_metadata = orchestrator_service.reset_interrupted_job.call_args.kwargs[
+            "provider_error_metadata"
+        ]
+        self.assertEqual(reset_metadata["provider_recovery_reason"], "provider_gpu_oom")
+        self.assertEqual(reset_metadata["provider_error_class"], "InfrastructureError")
+        self.assertIn("out of memory", reset_metadata["provider_error"])
         orchestrator_service.update_job_status.assert_not_called()
         self.assertIn("JOB_FAILED", output.getvalue())
         self.assertIn("job requeued", output.getvalue())
@@ -444,7 +497,16 @@ class StopResetBehaviorTests(unittest.TestCase):
             "job-startup-timeout",
             execution_token="token-startup-timeout",
             reason="provider_service_startup_failed",
+            provider_error_metadata=ANY,
         )
+        reset_metadata = orchestrator_service.reset_interrupted_job.call_args.kwargs[
+            "provider_error_metadata"
+        ]
+        self.assertEqual(
+            reset_metadata["provider_recovery_reason"],
+            "provider_service_startup_failed",
+        )
+        self.assertIn("failed to start", reset_metadata["provider_error"])
         orchestrator_service.update_job_status.assert_not_called()
         self.assertEqual(client.interrupted_job_id, "job-startup-timeout")
         self.assertIsNone(client.current_job)
@@ -485,6 +547,7 @@ class StopResetBehaviorTests(unittest.TestCase):
             "job-startup-race",
             execution_token="token-startup-race",
             reason="provider_container_crash",
+            provider_error_metadata=ANY,
         )
         self.assertEqual(output.getvalue().count("JOB_FAILED"), 1)
         self.assertEqual(client.interrupted_job_id, "job-startup-race")
@@ -639,7 +702,12 @@ class StopResetBehaviorTests(unittest.TestCase):
             "job-comfy-unreachable",
             execution_token="token-comfy-unreachable",
             reason="provider_service_startup_failed",
+            provider_error_metadata=ANY,
         )
+        reset_metadata = orchestrator_service.reset_interrupted_job.call_args.kwargs[
+            "provider_error_metadata"
+        ]
+        self.assertIn("Cannot reach ComfyUI", reset_metadata["provider_error"])
         orchestrator_service.update_job_status.assert_not_called()
         self.assertIn("JOB_FAILED", output.getvalue())
         self.assertIn("job requeued", output.getvalue())

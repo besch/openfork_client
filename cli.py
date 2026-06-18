@@ -486,6 +486,11 @@ def cleanup(client, provider_id, service_mode):
                 interrupted_job_id,
                 execution_token=interrupted_job_execution_token,
                 reason="provider_shutdown",
+                provider_error_metadata={
+                    "provider_recovery_reason": "provider_shutdown",
+                    "provider_error": "DGN client shutdown interrupted an active processing job.",
+                    "job_id": interrupted_job_id,
+                },
             )
         except Exception as e:
             logging.error(f"Failed to reset job {interrupted_job_id}: {e}", exc_info=True)

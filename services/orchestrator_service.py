@@ -41,6 +41,21 @@ ProviderNotFoundError = ProviderError
 class OrchestratorService:
     # Debounce interval for AUTH_EXPIRED signals (seconds)
     AUTH_EXPIRED_DEBOUNCE_SECONDS = 5
+    RESET_METADATA_MAX_DEPTH = 5
+    RESET_METADATA_MAX_KEYS = 80
+    RESET_METADATA_MAX_ARRAY_ITEMS = 50
+    RESET_METADATA_MAX_STRING_LENGTH = 8000
+    RESET_METADATA_SENSITIVE_KEYS = (
+        "authorization",
+        "cookie",
+        "password",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "access_key",
+        "refresh_key",
+    )
     BLOCKED_ASSET_HOSTNAMES = {
         "localhost",
         "localhost.localdomain",
@@ -127,6 +142,71 @@ class OrchestratorService:
         if job_id is not None and self._active_job_id != job_id:
             return None
         return self._active_execution_token
+
+    @classmethod
+    def _truncate_metadata_text(cls, value: str) -> str:
+        if len(value) <= cls.RESET_METADATA_MAX_STRING_LENGTH:
+            return value
+        omitted = len(value) - cls.RESET_METADATA_MAX_STRING_LENGTH
+        return f"{value[:cls.RESET_METADATA_MAX_STRING_LENGTH]}...[truncated {omitted} chars]"
+
+    @classmethod
+    def _sanitize_metadata_value(
+        cls,
+        value: Any,
+        depth: int = 0,
+        key_hint: str = "",
+    ) -> Any:
+        normalized_key = key_hint.lower().replace("-", "_")
+        if any(marker in normalized_key for marker in cls.RESET_METADATA_SENSITIVE_KEYS):
+            return "[redacted]"
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            return cls._truncate_metadata_text(value)
+        if depth >= cls.RESET_METADATA_MAX_DEPTH:
+            return "[max_depth]"
+        if isinstance(value, (list, tuple)):
+            return [
+                cls._sanitize_metadata_value(item, depth + 1, key_hint)
+                for item in list(value)[: cls.RESET_METADATA_MAX_ARRAY_ITEMS]
+            ]
+        if isinstance(value, dict):
+            sanitized: Dict[str, Any] = {}
+            for nested_key, nested_value in list(value.items())[: cls.RESET_METADATA_MAX_KEYS]:
+                key = str(nested_key)
+                sanitized[key] = cls._sanitize_metadata_value(
+                    nested_value,
+                    depth + 1,
+                    key,
+                )
+            return sanitized
+        return cls._truncate_metadata_text(str(value))
+
+    def _build_provider_reset_metadata(
+        self,
+        reason: str,
+        provider_error_metadata: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        metadata = dict(provider_error_metadata or {})
+        metadata.setdefault("provider_recovery_reason", reason)
+        metadata.setdefault("client_kind", CLIENT_KIND)
+        metadata.setdefault("client_version", CLIENT_VERSION)
+        metadata.setdefault("dgn_protocol_version", DGN_PROTOCOL_VERSION)
+        if CLIENT_BUILD_SHA:
+            metadata.setdefault("client_build_sha", CLIENT_BUILD_SHA)
+        if DESKTOP_VERSION:
+            metadata.setdefault("desktop_version", DESKTOP_VERSION)
+        if self.cloud_provider:
+            metadata.setdefault("cloud_provider", self.cloud_provider)
+        if self.cloud_instance_id:
+            metadata.setdefault("cloud_instance_id", self.cloud_instance_id)
+        try:
+            metadata.setdefault("provider_logs_tail", get_recent_logs_tail(100))
+        except Exception as exc:
+            metadata.setdefault("provider_logs_tail_error", str(exc))
+        sanitized = self._sanitize_metadata_value(metadata)
+        return sanitized if isinstance(sanitized, dict) else {}
 
     def update_tokens(self, access_token: str, refresh_token: str):
         """Thread-safe method to update auth tokens."""
@@ -1286,7 +1366,13 @@ class OrchestratorService:
             if e.response is not None:
                 logging.error(f"OrchestratorService: Response content: {e.response.text}")
 
-    def reset_interrupted_job(self, job_id: str, execution_token: Optional[str] = None, reason: str = "provider_interrupted"):
+    def reset_interrupted_job(
+        self,
+        job_id: str,
+        execution_token: Optional[str] = None,
+        reason: str = "provider_interrupted",
+        provider_error_metadata: Optional[Dict[str, Any]] = None,
+    ):
         """Resets a job's status to 'pending' and clears its provider via a specific API endpoint."""
         try:
             logging.info(f"Requesting reset for job {job_id}")
@@ -1298,10 +1384,15 @@ class OrchestratorService:
                 params["executionToken"] = token
             if reason:
                 params["reason"] = reason
+            reset_metadata = self._build_provider_reset_metadata(
+                reason,
+                provider_error_metadata,
+            )
             response = self._make_request(
                 'put',
                 f"{self.orchestrator_url}/api/dgn/job/reset",
                 params=params,
+                json={"provider_error_metadata": reset_metadata},
             )
             response.raise_for_status()
             logging.info(f"Job {job_id} status reset successfully via API.")
