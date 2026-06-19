@@ -83,6 +83,50 @@ class LastFrameHelperTests(unittest.TestCase):
             self.assertIsNone(materialize_last_frame_start_image(processor, {}))
             processor.orchestrator_service.download_asset_by_url.assert_not_called()
 
+    def test_ignores_plain_image_input_video_url_for_normal_i2v(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processor = self._processor(
+                tmpdir,
+                {
+                    "id": "scail2-job",
+                    "workflow_type": "scail2-image-to-video-16gb",
+                },
+            )
+            inputs = {
+                "input_video_url": (
+                    "https://example.supabase.co/storage/v1/object/sign/"
+                    "projects_private/reference.jpg?token=signed"
+                )
+            }
+
+            self.assertIsNone(materialize_last_frame_start_image(processor, inputs))
+            processor.orchestrator_service.download_asset_by_url.assert_not_called()
+
+    def test_accepts_video_input_url_for_normal_i2v(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processor = self._processor(
+                tmpdir,
+                {
+                    "id": "video-job",
+                    "workflow_type": "scail2-image-to-video-16gb",
+                },
+            )
+            inputs = {
+                "input_video_url": (
+                    "https://example.supabase.co/storage/v1/object/sign/"
+                    "projects_private/source.mp4?token=signed"
+                )
+            }
+
+            with patch(
+                "services.processors.video.last_frame.extract_last_frame",
+                return_value=True,
+            ):
+                self.assertEqual(
+                    materialize_last_frame_start_image(processor, inputs),
+                    os.path.join(tmpdir, "video-job_last_frame.jpg"),
+                )
+
     def test_resolves_video_storage_path_to_public_url(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             processor = self._processor(

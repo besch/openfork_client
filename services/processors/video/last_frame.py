@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from config import SUPABASE_URL
 from utils.media_utils import VIDEO_EXTENSIONS, extract_last_frame
@@ -17,8 +18,14 @@ def workflow_uses_last_frame(job: dict, inputs: dict) -> bool:
     return "from-last-frame" in workflow_type
 
 
+def _looks_like_video_url(value: str) -> bool:
+    path = urlparse(value).path.lower()
+    return path.endswith(VIDEO_EXTENSIONS)
+
+
 def resolve_input_video_url(processor, inputs: dict) -> Optional[str]:
     job = processor.job or {}
+    uses_last_frame = workflow_uses_last_frame(job, inputs)
     url = (
         inputs.get("input_video_url")
         or job.get("input_video_url")
@@ -26,9 +33,12 @@ def resolve_input_video_url(processor, inputs: dict) -> Optional[str]:
         or inputs.get("video_url")
     )
     if url:
-        return str(url)
+        url = str(url)
+        if uses_last_frame or _looks_like_video_url(url):
+            return url
+        logger.debug("Ignoring non-video input URL for normal image-to-video workflow.")
 
-    if workflow_uses_last_frame(job, inputs):
+    if uses_last_frame:
         start_image_url = inputs.get("start_image_url")
         if start_image_url:
             logger.info(
@@ -47,7 +57,7 @@ def resolve_input_video_url(processor, inputs: dict) -> Optional[str]:
 
     storage_path_lower = storage_path.split("?", 1)[0].lower()
     if not (
-        workflow_uses_last_frame(job, inputs)
+        uses_last_frame
         or storage_path_lower.endswith(VIDEO_EXTENSIONS)
     ):
         return None
