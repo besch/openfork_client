@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from unittest.mock import Mock
 
 from dgn_client import DGNClient
 from services.processors.video.scail import (
@@ -73,6 +75,85 @@ class SCAILWan2GPTests(unittest.TestCase):
         self.assertFalse(parse_scail_bool("0"))
         self.assertTrue(parse_scail_bool("true"))
         self.assertTrue(parse_scail_bool(1))
+
+    def test_scail_pose_video_ignores_still_input_video_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processor = SCAIL2ImageToVideoProcessor.__new__(
+                SCAIL2ImageToVideoProcessor
+            )
+            processor.job = {
+                "id": "job-1",
+                "input_video_url": "https://example.test/storage/reference.jpg?token=x",
+            }
+            processor.input_dir = tmpdir
+            processor.orchestrator_service = Mock()
+
+            self.assertIsNone(processor._resolve_pose_video({}))
+            processor.orchestrator_service.download_asset_by_url.assert_not_called()
+            processor.orchestrator_service.download_storage_asset.assert_not_called()
+
+    def test_scail_pose_video_uses_signed_pose_video_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processor = SCAIL2ImageToVideoProcessor.__new__(
+                SCAIL2ImageToVideoProcessor
+            )
+            processor.job = {"id": "job-1"}
+            processor.input_dir = tmpdir
+            processor.orchestrator_service = Mock()
+            processor.orchestrator_service.download_asset_by_url.return_value = (
+                f"{tmpdir}/pose.mp4"
+            )
+
+            result = processor._resolve_pose_video(
+                {"pose_video_url": "https://example.test/storage/pose.mp4?token=x"}
+            )
+
+            self.assertEqual(result, f"{tmpdir}/pose.mp4")
+            processor.orchestrator_service.download_asset_by_url.assert_called_once_with(
+                "https://example.test/storage/pose.mp4?token=x",
+                tmpdir,
+            )
+
+    def test_scail_pose_video_downloads_video_storage_path_with_bucket_hint(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processor = SCAIL2ImageToVideoProcessor.__new__(
+                SCAIL2ImageToVideoProcessor
+            )
+            processor.job = {"id": "job-1", "bucket": "projects_private"}
+            processor.input_dir = tmpdir
+            processor.orchestrator_service = Mock()
+            processor.orchestrator_service.download_storage_asset.return_value = (
+                f"{tmpdir}/pose.mp4"
+            )
+
+            result = processor._resolve_pose_video(
+                {
+                    "pose_video": "project/video/pose.mp4",
+                    "pose_video_bucket": "projects_private",
+                }
+            )
+
+            self.assertEqual(result, f"{tmpdir}/pose.mp4")
+            processor.orchestrator_service.download_storage_asset.assert_called_once_with(
+                "projects_private",
+                "project/video/pose.mp4",
+                tmpdir,
+            )
+
+    def test_scail_pose_video_rejects_non_video_storage_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            processor = SCAIL2ImageToVideoProcessor.__new__(
+                SCAIL2ImageToVideoProcessor
+            )
+            processor.job = {"id": "job-1", "bucket": "projects_private"}
+            processor.input_dir = tmpdir
+            processor.orchestrator_service = Mock()
+
+            self.assertIsNone(
+                processor._resolve_pose_video({"pose_video": "project/reference.jpg"})
+            )
+            processor.orchestrator_service.download_asset_by_url.assert_not_called()
+            processor.orchestrator_service.download_storage_asset.assert_not_called()
 
     def test_scail_workflows_are_registered_in_processor_map(self):
         client = DGNClient.__new__(DGNClient)

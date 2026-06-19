@@ -16,11 +16,12 @@ from typing import Optional
 
 from PIL import Image
 
-from config import DEV_MODE, SUPABASE_URL
+from config import DEV_MODE
 from services.docker_manager import docker_manager
 from services.processors.wan2gp_processor import Wan2GPProcessor
 from services.processors.video.last_frame import materialize_last_frame_start_image
 from utils.comfyui_workflow_utils import materialize_start_image
+from utils.media_utils import VIDEO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -157,21 +158,31 @@ def duration_to_wangp_frames(duration_seconds: float) -> int:
     return max(17, ((frame_count - 1) // 4) * 4 + 1)
 
 
+def _storage_value_path(value: str) -> str:
+    return value.split("|", 1)[0].strip()
+
+
+def _looks_like_video_reference(value: str) -> bool:
+    path = _storage_value_path(value).split("?", 1)[0].lower()
+    return path.endswith(VIDEO_EXTENSIONS)
+
+
 class SCAILImageToVideoProcessor(Wan2GPProcessor):
     """SCAIL reference-image + driving-video animation via Wan2GP."""
 
     SERVICE_NAME = "SCAIL"
     MAX_GENERATION_SECONDS = 7200
 
-    def _download_storage_path(self, storage_path: str) -> Optional[str]:
-        supabase_url = os.environ.get("SUPABASE_URL", SUPABASE_URL)
-        if not supabase_url:
-            return None
-
-        bucket = self.job.get("bucket", "projects_public")
-        source_url = f"{supabase_url}/storage/v1/object/public/{bucket}/{storage_path}"
-        return self.orchestrator_service.download_asset_by_url(
-            source_url, self.input_dir
+    def _download_storage_path(
+        self,
+        storage_path: str,
+        bucket_hint: Optional[str] = None,
+    ) -> Optional[str]:
+        bucket = bucket_hint or self.job.get("bucket", "projects_public")
+        return self.orchestrator_service.download_storage_asset(
+            bucket,
+            _storage_value_path(storage_path),
+            self.input_dir,
         )
 
     def _resolve_reference_image(self, inputs: dict) -> Optional[str]:
@@ -228,22 +239,35 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
                     return path
                 continue
 
-            local_path = value.split("|", 1)[0]
+            local_path = _storage_value_path(value)
             if os.path.exists(local_path):
                 return local_path
 
-            if len(value) < 2048:
-                path = self._download_storage_path(value)
+            if len(value) < 2048 and _looks_like_video_reference(value):
+                bucket_hint = (
+                    inputs.get(f"{key}_bucket")
+                    or inputs.get("pose_video_bucket")
+                    or inputs.get("video_guide_bucket")
+                )
+                path = self._download_storage_path(value, bucket_hint)
                 if path:
                     return path
+            elif len(value) < 2048:
+                logger.warning(
+                    "Ignoring non-video SCAIL driving input %s=%s",
+                    key,
+                    value,
+                )
 
         input_video_url = self.job.get("input_video_url") or inputs.get(
             "input_video_url"
         )
-        if input_video_url:
+        if input_video_url and _looks_like_video_reference(str(input_video_url)):
             return self.orchestrator_service.download_asset_by_url(
                 input_video_url, self.input_dir
             )
+        if input_video_url:
+            logger.debug("Ignoring non-video input_video_url for SCAIL driving video.")
 
         return None
 
@@ -390,8 +414,16 @@ class SCAIL2ImageToVideoProcessor(Wan2GPProcessor):
     SERVICE_NAME = "SCAIL-2"
     MAX_GENERATION_SECONDS = 10800
 
-    def _download_storage_path(self, storage_path: str) -> Optional[str]:
-        return SCAILImageToVideoProcessor._download_storage_path(self, storage_path)
+    def _download_storage_path(
+        self,
+        storage_path: str,
+        bucket_hint: Optional[str] = None,
+    ) -> Optional[str]:
+        return SCAILImageToVideoProcessor._download_storage_path(
+            self,
+            storage_path,
+            bucket_hint,
+        )
 
     def _resolve_reference_image(self, inputs: dict) -> Optional[str]:
         return SCAILImageToVideoProcessor._resolve_reference_image(self, inputs)
