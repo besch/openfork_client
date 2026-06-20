@@ -123,6 +123,7 @@ workflows/flux-text-to-image.api.json
 workflows/hunyuan-video-foley.api.json
 workflows/ideogram4.api.json
 workflows/ltxv2-uncensored-workspace.json
+workflows/qwen-image-2512-lora-t2i.api.json
 workflows/qwen-image-edit-8gb-turbo_api.json
 workflows/qwen-image-edit-8gb.api.json
 workflows/qwen-image-edit.api.json
