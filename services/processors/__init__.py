@@ -74,6 +74,7 @@ from .image.zimage import (
     ZImageInpaintProcessor,
 )
 from .image.qwen import (
+    QwenImage2512LoraT2IProcessor,
     QwenImageEditProcessor,
     QwenImageInpaintProcessor,
     QwenImageT2IProcessor,
@@ -132,6 +133,7 @@ __all__ = [
     "QwenImageEditProcessor",
     "QwenImageInpaintProcessor",
     "QwenImageT2IProcessor",
+    "QwenImage2512LoraT2IProcessor",
     "LLMJobProcessor",
     "ChatterboxTTSJobProcessor",
     "ChatterboxVoiceCloneJobProcessor",

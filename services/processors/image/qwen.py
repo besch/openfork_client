@@ -26,6 +26,35 @@ def _clamp_qwen_steps(steps):
     return max(1, min(requested_steps, 10))
 
 
+def _clamp_qwen_2512_steps(steps):
+    try:
+        requested_steps = int(steps) if steps is not None else None
+    except (TypeError, ValueError):
+        requested_steps = None
+    if requested_steps is None:
+        return None
+    return max(1, min(requested_steps, 60))
+
+
+def _safe_model_filename(value):
+    if not value:
+        return None
+    filename = os.path.basename(str(value).replace("\\", "/")).strip()
+    if not filename or filename in (".", ".."):
+        return None
+    if not filename.lower().endswith(".safetensors"):
+        return None
+    return filename
+
+
+def _host_path_for_download(input_dir, downloaded_path):
+    if not downloaded_path:
+        return None
+    if os.path.isabs(downloaded_path):
+        return downloaded_path
+    return os.path.join(input_dir, downloaded_path)
+
+
 class QwenImageEditProcessor(ComfyUIProcessor, ImageOutputHandler):
     """Processor for Qwen instruction-based image editing."""
 
@@ -706,5 +735,259 @@ class QwenImageT2IProcessor(ComfyUIProcessor, ImageOutputHandler):
                 if requested_steps is not None:
                     node["inputs"]["steps"] = requested_steps
         
+        return wf
+
+
+class QwenImage2512LoraT2IProcessor(QwenImageT2IProcessor):
+    """Processor for Qwen-Image-2512 text-to-image with a trained character LoRA."""
+
+    def process(self):
+        if not self.job:
+            self._fail_job("Job object is None for QwenImage2512LoraT2IProcessor. Cannot proceed.")
+            return
+
+        workflow_data = self._get_workflow_payload()
+        if not workflow_data:
+            return
+
+        inputs = self.job.get("inputs", {})
+        aspect_ratio = inputs.get("aspect_ratio", "1:1")
+        requested_long_edge = (
+            inputs.get("max_long_edge")
+            or inputs.get("long_edge")
+            or inputs.get("target_long_edge")
+        )
+        width, height = self._get_dimensions(
+            aspect_ratio,
+            requested_long_edge=requested_long_edge,
+        )
+
+        lora_filename = self._get_lora_filename(inputs)
+        if not lora_filename:
+            return
+
+        seed = inputs.get("seed")
+        steps = inputs.get("steps", inputs.get("num_steps"))
+        lora_strength = self._get_lora_strength(inputs)
+        wf_ready = self._inject_lora_t2i_workflow(
+            workflow_data,
+            self.positive_prompt,
+            width,
+            height,
+            lora_filename,
+            lora_strength,
+            seed=seed,
+            steps=steps,
+        )
+        if not wf_ready:
+            return
+
+        payload = {"prompt": wf_ready}
+        outputs = self._trigger_and_get_output(payload, timeout_sec=1800)
+        if not outputs:
+            return
+
+        image_storage_path = self.handle_image_output(
+            outputs,
+            target_dimensions=(width, height),
+        )
+        if not image_storage_path:
+            return
+
+        self.orchestrator_service.update_job_status(
+            self.job_id,
+            "completed",
+            storage_path=image_storage_path,
+            thumbnail_storage_path=image_storage_path,
+            prompt=self.positive_prompt,
+            completion_metadata={
+                "lora_name": lora_filename,
+                "lora_strength": lora_strength,
+                "base_model": "qwen_image_2512_fp8_e4m3fn.safetensors",
+            },
+        )
+
+    def _get_dimensions(self, aspect_ratio, requested_long_edge=None):
+        """Use the official Qwen-Image-2512 aspect buckets, with an optional cap."""
+        ratio_map = {
+            "1:1": (1328, 1328),
+            "16:9": (1664, 928),
+            "9:16": (928, 1664),
+            "4:3": (1472, 1104),
+            "3:4": (1104, 1472),
+            "3:2": (1584, 1056),
+            "2:3": (1056, 1584),
+        }
+        width, height = ratio_map.get(aspect_ratio, (1328, 1328))
+
+        if requested_long_edge is None:
+            return width, height
+
+        try:
+            long_edge = int(requested_long_edge)
+        except (TypeError, ValueError):
+            return width, height
+
+        long_edge = max(512, min(long_edge, 1664))
+        scale = long_edge / max(width, height)
+        if scale >= 1:
+            return width, height
+
+        width = max(16, round((width * scale) / 16) * 16)
+        height = max(16, round((height * scale) / 16) * 16)
+        return width, height
+
+    def _get_lora_strength(self, inputs):
+        value = 0.8
+        for key in ("lora_strength", "loraStrength", "lora_scale", "loraScale"):
+            if inputs.get(key) is not None:
+                value = inputs.get(key)
+                break
+        try:
+            return max(0.0, min(float(value), 1.5))
+        except (TypeError, ValueError):
+            return 0.8
+
+    def _get_lora_filename(self, inputs):
+        local_lora_path = self._download_lora(inputs)
+        if local_lora_path:
+            filename = _safe_model_filename(local_lora_path)
+            if not filename:
+                self._fail_job("Qwen 2512 LoRA file must use a .safetensors filename.")
+                return None
+            if not os.path.exists(local_lora_path):
+                self._fail_job(f"Downloaded LoRA file not found on host: {local_lora_path}")
+                return None
+            if not self._copy_lora_to_container(local_lora_path, filename):
+                return None
+            return filename
+
+        lora_name = (
+            inputs.get("lora_name")
+            or inputs.get("loraName")
+            or inputs.get("character_lora_name")
+            or inputs.get("characterLoraName")
+        )
+        filename = _safe_model_filename(lora_name)
+        if filename:
+            return filename
+
+        self._fail_job(
+            "No character LoRA provided. Pass lora_storage_path, lora_url, or preinstalled lora_name."
+        )
+        return None
+
+    def _download_lora(self, inputs):
+        storage_path = (
+            inputs.get("lora_storage_path")
+            or inputs.get("loraStoragePath")
+            or inputs.get("character_lora_storage_path")
+            or inputs.get("characterLoraStoragePath")
+            or inputs.get("adapter_storage_path")
+            or inputs.get("adapterStoragePath")
+        )
+        if storage_path:
+            bucket = (
+                inputs.get("lora_bucket")
+                or inputs.get("loraBucket")
+                or self.job.get("bucket")
+                or "projects_public"
+            )
+            downloaded_path = self.orchestrator_service.download_storage_asset(
+                bucket,
+                storage_path,
+                self.client.input_dir,
+            )
+            if not downloaded_path:
+                source_url = f"{os.environ.get('SUPABASE_URL', self.client.config.get('SUPABASE_URL', SUPABASE_URL))}/storage/v1/object/public/{bucket}/{storage_path}"
+                logging.info("Downloading Qwen 2512 LoRA from storage URL.")
+                downloaded_path = self.orchestrator_service.download_asset_by_url(
+                    source_url,
+                    self.client.input_dir,
+                )
+            return _host_path_for_download(self.client.input_dir, downloaded_path)
+
+        lora_url = (
+            inputs.get("lora_url")
+            or inputs.get("loraUrl")
+            or inputs.get("character_lora_url")
+            or inputs.get("characterLoraUrl")
+            or inputs.get("adapter_url")
+            or inputs.get("adapterUrl")
+        )
+        if lora_url:
+            logging.info("Downloading Qwen 2512 LoRA from signed URL.")
+            downloaded_path = self.orchestrator_service.download_asset_by_url(
+                lora_url,
+                self.client.input_dir,
+            )
+            return _host_path_for_download(self.client.input_dir, downloaded_path)
+
+        return None
+
+    def _copy_lora_to_container(self, local_lora_path, lora_filename):
+        try:
+            from services.docker_manager import docker_manager
+            from config import HEADLESS_MODE
+
+            container_lora_path = f"/opt/ComfyUI/models/loras/{lora_filename}"
+            if not HEADLESS_MODE:
+                docker_manager.copy_file_to_container(
+                    service_type=self.client.active_service_type,
+                    source_on_host=local_lora_path,
+                    dest_in_container=container_lora_path,
+                    shutdown_event=self.shutdown_event,
+                )
+            else:
+                import shutil
+
+                os.makedirs(os.path.dirname(container_lora_path), exist_ok=True)
+                shutil.copy2(local_lora_path, container_lora_path)
+                logging.info(f"Copied {lora_filename} to {container_lora_path} (Headless)")
+            return True
+        except Exception as e:
+            self._fail_job(f"Failed to copy LoRA to container: {e}")
+            return False
+
+    def _inject_lora_t2i_workflow(
+        self,
+        workflow_data,
+        prompt,
+        width,
+        height,
+        lora_filename,
+        lora_strength,
+        seed=None,
+        steps=None,
+    ):
+        wf = copy.deepcopy(workflow_data.get("prompt", workflow_data))
+        requested_steps = _clamp_qwen_2512_steps(steps)
+        found_lora_node = False
+
+        for node in wf.values():
+            class_type = node.get("class_type")
+            inputs = node.get("inputs", {})
+            if class_type == "CLIPTextEncode":
+                if inputs.get("text") not in ["", None]:
+                    inputs["text"] = prompt
+            elif class_type == "EmptySD3LatentImage":
+                inputs["width"] = width
+                inputs["height"] = height
+            elif class_type == "LoraLoaderModelOnly":
+                inputs["lora_name"] = lora_filename
+                inputs["strength_model"] = lora_strength
+                found_lora_node = True
+            elif class_type == "KSampler":
+                if seed is not None:
+                    inputs["seed"] = seed
+                else:
+                    inputs["seed"] = random.randint(0, 2**63 - 1)
+                if requested_steps is not None:
+                    inputs["steps"] = requested_steps
+
+        if not found_lora_node:
+            self._fail_job("Qwen 2512 LoRA workflow is missing a LoraLoaderModelOnly node.")
+            return None
+
         return wf
 

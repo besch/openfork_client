@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# Qwen Image Edit 2511 (12GB FP8 Mixed) Docker Image - OPTIMIZED
+# Qwen Image Edit 2511 + Qwen Image 2512 LoRA inference (12GB FP8 Mixed) Docker Image - OPTIMIZED
 # NOTE: Keeping devel for SageAttention compilation at runtime
 
 FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
@@ -64,6 +64,8 @@ RUN python -m pip install --no-cache-dir --force-reinstall \
 RUN mkdir -p models/text_encoders models/diffusion_models models/vae models/loras \
     && wget -q -O models/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors \
         "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors" \
+    && wget -q -O models/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors \
+        "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors" \
     && wget -q -O models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors \
         "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
     && wget -q -O models/vae/qwen_image_vae.safetensors \

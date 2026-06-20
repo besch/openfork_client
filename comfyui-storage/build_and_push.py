@@ -32,7 +32,7 @@ class ImageConfig:
 # comfyui-storage/wan2gp_server.py from the public OpenFork client repo at
 # runtime, with the image-baked copy as a fallback.
 IMAGES: List[ImageConfig] = [
-    # ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True, direct_push=True),
@@ -124,8 +124,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.wan22-wan2gp-10gb", "beschiak/openfork-wan22-wan2gp-10gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-12gb", "beschiak/openfork-wan22-wan2gp-12gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
-    ImageConfig("Dockerfile.scail2-wan2gp-16gb", "beschiak/openfork-scail2-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.scail2-wan2gp-24gb", "beschiak/openfork-scail2-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.scail2-wan2gp-16gb", "beschiak/openfork-scail2-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.scail2-wan2gp-24gb", "beschiak/openfork-scail2-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
