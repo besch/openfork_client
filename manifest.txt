@@ -18,6 +18,7 @@ comfyui-storage/setup_ckpts_symlinks.py
 comfyui-storage/sparkvsr_api.py
 comfyui-storage/stable_audio3_api.py
 comfyui-storage/stream_diffvsr_wrapper.py
+comfyui-storage/telestylev2_api.py
 comfyui-storage/temp_handler.py
 comfyui-storage/turbodiffusion_api_server.py
 comfyui-storage/verify_wan2gp.py
@@ -71,6 +72,7 @@ services/processors/image/ideogram4.py
 services/processors/image/pid.py
 services/processors/image/qwen.py
 services/processors/image/qwen_turbo.py
+services/processors/image/telestylev2.py
 services/processors/image/text_to_image.py
 services/processors/image/zimage.py
 services/processors/llm/__init__.py
@@ -123,6 +125,7 @@ workflows/flux-text-to-image.api.json
 workflows/hunyuan-video-foley.api.json
 workflows/ideogram4.api.json
 workflows/ltxv2-uncensored-workspace.json
+workflows/qwen-image-2512-lora-t2i-24gb.api.json
 workflows/qwen-image-2512-lora-t2i.api.json
 workflows/qwen-image-edit-8gb-turbo_api.json
 workflows/qwen-image-edit-8gb.api.json
