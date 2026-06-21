@@ -145,6 +145,20 @@ ensure_docker_service
 
 echo ""
 
+append_wslenv_var() {
+    local var_name="$1"
+    if [ -n "${!var_name:-}" ]; then
+        case ":${WSLENV:-}:" in
+            *":${var_name}/u:"*) ;;
+            *) export WSLENV="${WSLENV:+$WSLENV:}${var_name}/u" ;;
+        esac
+    fi
+}
+
+append_wslenv_var HF_TOKEN
+append_wslenv_var DOCKER_HUB_USERNAME
+append_wslenv_var DOCKER_HUB_TOKEN
+
 # Check if HF_TOKEN is set
 if [ -z "$HF_TOKEN" ]; then
     echo "⚠️  HF_TOKEN environment variable not set"
@@ -156,7 +170,7 @@ fi
 DOCKER_LOGIN_CMD=""
 if [ -n "$DOCKER_HUB_TOKEN" ] && [ -n "$DOCKER_HUB_USERNAME" ]; then
     echo "🔑 Docker Hub credentials detected, will log in..."
-    DOCKER_LOGIN_CMD="echo '$DOCKER_HUB_TOKEN' | docker login -u '$DOCKER_HUB_USERNAME' --password-stdin && "
+    DOCKER_LOGIN_CMD="printf '%s' \"\$DOCKER_HUB_TOKEN\" | docker login -u \"\$DOCKER_HUB_USERNAME\" --password-stdin && "
     echo "✅ Docker Hub username: $DOCKER_HUB_USERNAME"
 elif [ -n "$DOCKER_HUB_TOKEN" ]; then
     echo "⚠️  DOCKER_HUB_TOKEN set but DOCKER_HUB_USERNAME not set"
@@ -182,12 +196,8 @@ quote_args() {
 
 run_build_python() {
     local build_args
-    local env_prefix=""
     build_args=$(quote_args "$@")
-    if [ -n "$HF_TOKEN" ]; then
-        env_prefix="HF_TOKEN=$(printf '%q' "$HF_TOKEN") "
-    fi
-    wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && ${env_prefix}python3 build_and_push.py $build_args"
+    wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && python3 build_and_push.py $build_args"
 }
 
 list_image_indexes() {
