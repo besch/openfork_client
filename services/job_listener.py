@@ -2128,6 +2128,7 @@ exec python main.py "$@"
                                                 )
                                             elif actual_service_type in {
                                                 "qwen",
+                                                "qwen-2512-lora-24gb",
                                                 "qwen-8gb",
                                                 "qwen-turbo-8gb",
                                             }:
@@ -2142,7 +2143,21 @@ exec python main.py "$@"
                                                     ),
                                                     "MALLOC_ARENA_MAX": "2",
                                                 }
-                                                if "8gb" in actual_service_type:
+                                                if actual_service_type == "qwen-2512-lora-24gb":
+                                                    qwen_args.extend(
+                                                        [
+                                                            "--lowvram",
+                                                            "--fp16-vae",
+                                                            "--reserve-vram",
+                                                            "1.5",
+                                                            "--cache-none",
+                                                            "--preview-method",
+                                                            "none",
+                                                            "--use-pytorch-cross-attention",
+                                                            "--disable-pinned-memory",
+                                                        ]
+                                                    )
+                                                elif "8gb" in actual_service_type:
                                                     qwen_args.extend(
                                                         [
                                                             "--lowvram",

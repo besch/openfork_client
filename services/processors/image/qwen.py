@@ -803,7 +803,7 @@ class QwenImage2512LoraT2IProcessor(QwenImageT2IProcessor):
             completion_metadata={
                 "lora_name": lora_filename,
                 "lora_strength": lora_strength,
-                "base_model": "qwen_image_2512_fp8_e4m3fn.safetensors",
+                "base_model": self._get_base_model_name(wf_ready),
             },
         )
 
@@ -847,6 +847,25 @@ class QwenImage2512LoraT2IProcessor(QwenImageT2IProcessor):
             return max(0.0, min(float(value), 1.5))
         except (TypeError, ValueError):
             return 0.8
+
+    def _get_base_model_name(self, workflow):
+        for node in workflow.values():
+            class_type = node.get("class_type")
+            if class_type not in (
+                "UNETLoader",
+                "UnetLoaderGGUF",
+                "UnetLoaderGGUFAdvanced",
+                "LoadDiffusionModel",
+            ):
+                continue
+
+            inputs = node.get("inputs", {})
+            for key in ("unet_name", "model_name"):
+                value = inputs.get(key)
+                if value:
+                    return value
+
+        return "qwen_image_2512_fp8_e4m3fn.safetensors"
 
     def _get_lora_filename(self, inputs):
         local_lora_path = self._download_lora(inputs)

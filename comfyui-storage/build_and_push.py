@@ -130,6 +130,7 @@ IMAGES: List[ImageConfig] = [
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.qwen-2512-lora-24gb", "beschiak/openfork-qwen-2512-lora-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.flux-kontext-dev-12gb", "beschiak/openfork-flux-kontext-dev-12gb:latest", build=True, push=True, direct_push=True),
@@ -153,6 +154,7 @@ OPTIONAL_IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.vista4d-wan2gp-24gb", "beschiak/openfork-vista4d-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.dreamid-omni-24gb", "beschiak/openfork-dreamid-omni-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.telestylev2-80gb", "beschiak/openfork-telestylev2-80gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-16gb", "beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True, direct_push=True),
@@ -197,6 +199,7 @@ BUILD_PRESETS: Dict[str, List[str]] = {
     ],
     "character-consistency": [
         "openfork-qwen-12gb",
+        "openfork-qwen-2512-lora-24gb",
         "openfork-qwen-8gb",
         "flux-kontext-dev-16gb",
         "flux-kontext-dev-24gb",
@@ -210,6 +213,7 @@ BUILD_PRESETS: Dict[str, List[str]] = {
     ],
     "character-consistency-full": [
         "openfork-qwen-12gb",
+        "openfork-qwen-2512-lora-24gb",
         "openfork-qwen-8gb",
         "openfork-qwen-image-turbo-8gb",
         "flux-kontext-dev-12gb",
@@ -228,6 +232,9 @@ BUILD_PRESETS: Dict[str, List[str]] = {
         "davinci-magihuman-wan2gp-16gb",
         "davinci-magihuman-wan2gp-24gb",
         "davinci-magihuman-wan2gp-32gb",
+    ],
+    "telestylev2": [
+        "openfork-telestylev2-80gb",
     ],
 }
 

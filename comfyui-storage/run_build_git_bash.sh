@@ -12,9 +12,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WSL_DISTRO="${WSL_DISTRO:-OpenFork}"
 COMPACT_AFTER_EACH=false
 PASSTHROUGH_ARGS=()
+EXPECT_HF_TOKEN=false
 
 for arg in "$@"; do
+    if [ "$EXPECT_HF_TOKEN" = true ]; then
+        export HF_TOKEN="$arg"
+        EXPECT_HF_TOKEN=false
+        continue
+    fi
+
     case "$arg" in
+        --hf-token)
+            EXPECT_HF_TOKEN=true
+            ;;
+        --hf-token=*)
+            export HF_TOKEN="${arg#--hf-token=}"
+            ;;
         --compact-after-each)
             COMPACT_AFTER_EACH=true
             ;;
@@ -23,6 +36,11 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+if [ "$EXPECT_HF_TOKEN" = true ]; then
+    echo "❌ --hf-token was provided without a value."
+    exit 1
+fi
 
 has_arg() {
     local expected="$1"
@@ -158,22 +176,18 @@ echo ""
 echo "Running build_and_push.py with arguments: ${PASSTHROUGH_ARGS[*]}"
 echo ""
 
-quote_python_args() {
-    if [ -n "$HF_TOKEN" ]; then
-        printf '%q ' "--hf-token" "$HF_TOKEN" "$@"
-    else
-        printf '%q ' "$@"
-    fi
-}
-
 quote_args() {
     printf '%q ' "$@"
 }
 
 run_build_python() {
     local build_args
-    build_args=$(quote_python_args "$@")
-    wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && python3 build_and_push.py $build_args"
+    local env_prefix=""
+    build_args=$(quote_args "$@")
+    if [ -n "$HF_TOKEN" ]; then
+        env_prefix="HF_TOKEN=$(printf '%q' "$HF_TOKEN") "
+    fi
+    wsl.exe -d "$WSL_DISTRO" bash -c "${DOCKER_LOGIN_CMD}cd '$WSL_SCRIPT_PATH' && ${env_prefix}python3 build_and_push.py $build_args"
 }
 
 list_image_indexes() {

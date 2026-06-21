@@ -1,0 +1,92 @@
+# syntax=docker/dockerfile:1.4
+# TeleStyleV2 Qwen-Image-Edit style-transfer image.
+
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DEFAULT_TIMEOUT=180
+ENV HF_HOME=/app/models
+ENV HUGGINGFACE_HUB_CACHE=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ENV TELESTYLE_REPO_DIR=/opt/TeleStyleV2
+ENV TELESTYLE_MODEL_PATH=/app/models/Qwen-Image-Edit-2509
+ENV TELESTYLE_LORA_DIR=/app/models/TeleStyleV2
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-venv python3.12-dev \
+    curl git wget libgl1 libglib2.0-0 ffmpeg build-essential ca-certificates \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+RUN python -m pip install --no-cache-dir \
+    torch==2.9.1 \
+    --index-url https://download.pytorch.org/whl/cu128
+
+RUN python -m pip install --no-cache-dir \
+    git+https://github.com/modelscope/DiffSynth-Studio.git@11315d7 \
+    transformers==4.57.3 \
+    diffusers==0.38.0 \
+    qwen-vl-utils==0.0.14 \
+    accelerate \
+    fastapi \
+    "uvicorn[standard]" \
+    python-multipart \
+    pydantic \
+    pillow \
+    numpy \
+    requests \
+    safetensors \
+    sentencepiece \
+    protobuf \
+    huggingface_hub
+
+ARG TELESTYLEV2_REF=main
+RUN git clone --depth 1 --branch "${TELESTYLEV2_REF}" https://github.com/Tele-AI/TeleStyleV2.git /opt/TeleStyleV2 \
+    && rm -rf /opt/TeleStyleV2/.git
+
+RUN mkdir -p /app/input /app/output /app/models/Qwen-Image-Edit-2509 /app/models/TeleStyleV2
+
+RUN --mount=type=secret,id=hf_token,required=false \
+    HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null || true)" python - <<'PY'
+import os
+from huggingface_hub import hf_hub_download, snapshot_download
+
+token = os.environ.get("HF_TOKEN") or None
+snapshot_download(
+    "Qwen/Qwen-Image-Edit-2509",
+    local_dir="/app/models/Qwen-Image-Edit-2509",
+    token=token,
+)
+for filename in (
+    "diffusers-TeleStyleV2-QIE-2509-Lora-bf16.safetensors",
+    "QIE-2509-Lightning-4steps-V1.0-bf16.safetensors",
+):
+    hf_hub_download(
+        repo_id="Tele-AI/TeleStyleV2",
+        filename=filename,
+        local_dir="/app/models/TeleStyleV2",
+        token=token,
+    )
+PY
+
+COPY telestylev2_api.py /app/telestylev2_api.py
+
+EXPOSE 8000
+
+CMD ["python", "/app/telestylev2_api.py"]

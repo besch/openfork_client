@@ -92,6 +92,7 @@ from .image.anima import AnimaTextToImageProcessor
 from .image.ernie_image import ErnieImageProcessor
 from .image.ideogram4 import Ideogram4ImageProcessor
 from .image.pid import PiDImageUpscaleProcessor
+from .image.telestylev2 import TeleStyleV2Processor
 
 # Text processors
 from .llm.llm import LLMJobProcessor
@@ -161,6 +162,7 @@ __all__ = [
     "ErnieImageProcessor",
     "Ideogram4ImageProcessor",
     "PiDImageUpscaleProcessor",
+    "TeleStyleV2Processor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
     "PrismAudioJobProcessor",

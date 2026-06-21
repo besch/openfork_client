@@ -3,6 +3,7 @@ models
 comfyui-storage/models
 comfyui-storage/workflows
 comfyui-storage/storage
+comfyui-storage/build-logs/
 comfyui-storage/build_and_push.py
 
 

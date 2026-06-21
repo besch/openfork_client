@@ -90,6 +90,7 @@ from services.processors import (
     ErnieImageProcessor,
     Ideogram4ImageProcessor,
     PiDImageUpscaleProcessor,
+    TeleStyleV2Processor,
 )
 
 __all__ = [
@@ -160,4 +161,5 @@ __all__ = [
     "ErnieImageProcessor",
     "Ideogram4ImageProcessor",
     "PiDImageUpscaleProcessor",
+    "TeleStyleV2Processor",
 ]

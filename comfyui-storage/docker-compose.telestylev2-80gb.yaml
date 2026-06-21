@@ -1,0 +1,20 @@
+services:
+  telestylev2-80gb:
+    build:
+      context: .
+      dockerfile: Dockerfile.telestylev2-80gb
+    container_name: telestylev2-80gb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/telestylev2/input:/app/input
+      - ./storage/telestylev2/output:/app/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true

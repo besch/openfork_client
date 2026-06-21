@@ -712,6 +712,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" ] && cp -v "$DGN_SOURCE_DIR/stream_diffvsr_wrapper.py" /app/
           [ -f "$DGN_SOURCE_DIR/sparkvsr_api.py" ] && cp -v "$DGN_SOURCE_DIR/sparkvsr_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/ernie_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/ernie_image_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/telestylev2_api.py" ] && cp -v "$DGN_SOURCE_DIR/telestylev2_api.py" /app/
           [ -d "/app/PiD" ] && [ -f "$DGN_SOURCE_DIR/pid_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/pid_image_api.py" /app/PiD/
       fi
       
@@ -892,6 +893,7 @@ START_INSPATIO="false"
 START_ERNIE_IMAGE="false"
 START_IDEOGRAM4="false"
 START_PID_IMAGE="false"
+START_TELESTYLEV2="false"
 START_PRISMAUDIO="false"
 START_MMAUDIO="false"
 START_ACESTEP="false"
@@ -1097,6 +1099,14 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="flux-kontext-dev-8gb"
           log "Auto-selected FLUX Kontext 8GB tier (Q4_K_M, VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/opt/ComfyUI/models/unet/qwen-image-2512-Q4_K_M.gguf" ]; then
+      log "Auto-mode: Detected Qwen-Image-2512 GGUF LoRA ComfyUI image."
+      SERVICE_TYPE="qwen-2512-lora-24gb"
+      if [ "$TOTAL_VRAM_MB" -lt 22000 ]; then
+          log "WARNING: Qwen 2512 LoRA Q4 is configured as a 24GB tier; detected only ${TOTAL_VRAM_MB}MB VRAM."
+      else
+          log "Auto-selected Qwen 2512 LoRA 24GB tier (Q4_K_M, VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/opt/ComfyUI/models/DreamID-Omni/DreamID_Omni/dreamid_omni.fp8_e4m3fn.safetensors" ]; then
       log "Auto-mode: Detected DreamID-Omni FP8 ComfyUI image."
       SERVICE_TYPE="dreamid-omni-24gb"
@@ -1149,6 +1159,15 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ideogram4-16gb"
           log "Auto-selected Ideogram 4 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/app/telestylev2_api.py" ]; then
+      log "Auto-mode: Detected TeleStyleV2 image. Selecting TeleStyleV2 80GB service."
+      START_TELESTYLEV2="true"
+      SERVICE_TYPE="telestylev2-80gb"
+      if [ "$TOTAL_VRAM_MB" -lt 70000 ]; then
+          log "WARNING: TeleStyleV2 upstream is tested on H100 80GB; detected only ${TOTAL_VRAM_MB}MB VRAM."
+      else
+          log "Auto-selected TeleStyleV2 80GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   else
       log "Auto-mode: No specialized API found. Defaulting to ComfyUI only."
   fi
@@ -1172,6 +1191,7 @@ else
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"ideogram4"* ]]; then START_IDEOGRAM4="true"; fi
   if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
+  if [[ "$SERVICE_TYPE" == *"telestylev2"* ]]; then START_TELESTYLEV2="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL, and Vista4D services.
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"wan22-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"scail2-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
@@ -1280,6 +1300,11 @@ fi
 
 if [ "$START_IDEOGRAM4" = "true" ]; then
   log "Ideogram 4 selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+fi
+
+if [ "$START_TELESTYLEV2" = "true" ]; then
+  log "TeleStyleV2 selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
 fi
 
@@ -1867,6 +1892,10 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying Qwen Image 8GB VRAM optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-async-offload --disable-pinned-memory"
       ;;
+    qwen-2512-lora-24gb)
+      log "Applying Qwen 2512 LoRA 24GB GGUF optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.5 --use-pytorch-cross-attention --cache-none --preview-method none --disable-pinned-memory"
+      ;;
     qwen)
       log "Applying Qwen Image 12GB VRAM optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-pinned-memory"
@@ -2374,6 +2403,34 @@ if [ "$START_IDEOGRAM4" = "true" ]; then
     fi
   else
     log "ERROR: Ideogram 4 API not found at /app/ideogram4_api.py"
+    exit 1
+  fi
+fi
+
+# Start TeleStyleV2 REST API
+if [ "$START_TELESTYLEV2" = "true" ]; then
+  log "Starting TeleStyleV2 API service..."
+  if [ -f "/app/telestylev2_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/telestylev2_api.py" "/app/telestylev2_api.py" || true
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export TELESTYLE_MODEL_LOAD_TIMEOUT="${TELESTYLE_MODEL_LOAD_TIMEOUT:-3600}"
+    export TELESTYLE_API_WAIT_TIMEOUT="${TELESTYLE_API_WAIT_TIMEOUT:-3600}"
+    export TELESTYLE_ENABLE_CPU_OFFLOAD="${TELESTYLE_ENABLE_CPU_OFFLOAD:-0}"
+    export TELESTYLE_DEFAULT_STEPS="${TELESTYLE_DEFAULT_STEPS:-4}"
+    export TELESTYLE_DEFAULT_MIN_EDGE="${TELESTYLE_DEFAULT_MIN_EDGE:-1024}"
+    log "TeleStyleV2 config: cpu_offload=$TELESTYLE_ENABLE_CPU_OFFLOAD steps=$TELESTYLE_DEFAULT_STEPS min_edge=$TELESTYLE_DEFAULT_MIN_EDGE model_load_timeout=$TELESTYLE_MODEL_LOAD_TIMEOUT"
+    (cd /app && "$PYTHON_EXE" telestylev2_api.py > /tmp/telestylev2_api.log 2>&1) &
+    if ! wait_for_url "TeleStyleV2 API" "http://127.0.0.1:8000/health" 900 "/tmp/telestylev2_api.log"; then
+      log "ERROR: TeleStyleV2 API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "TeleStyleV2" "http://127.0.0.1:8000/health" "$TELESTYLE_MODEL_LOAD_TIMEOUT" "/tmp/telestylev2_api.log"; then
+      log "ERROR: TeleStyleV2 model did not become ready; not starting the DGN client."
+      exit 1
+    fi
+  else
+    log "ERROR: TeleStyleV2 API not found at /app/telestylev2_api.py"
     exit 1
   fi
 fi
