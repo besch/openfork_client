@@ -22,6 +22,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import torch
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from huggingface_hub import hf_hub_download, snapshot_download
 from PIL import Image
 from pydantic import BaseModel
 
@@ -38,10 +39,12 @@ INPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 TELESTYLE_REPO_DIR = Path(os.environ.get("TELESTYLE_REPO_DIR", "/opt/TeleStyleV2"))
-MODEL_PATH = os.environ.get(
+MODEL_REPO_ID = os.environ.get("TELESTYLE_MODEL_REPO_ID", "Qwen/Qwen-Image-Edit-2509")
+LORA_REPO_ID = os.environ.get("TELESTYLE_LORA_REPO_ID", "Tele-AI/TeleStyleV2")
+MODEL_PATH = Path(os.environ.get(
     "TELESTYLE_MODEL_PATH",
     "/app/models/Qwen-Image-Edit-2509",
-)
+))
 LORA_DIR = Path(os.environ.get("TELESTYLE_LORA_DIR", "/app/models/TeleStyleV2"))
 STYLE_LORA = os.environ.get(
     "TELESTYLE_STYLE_LORA",
@@ -51,6 +54,8 @@ DMD_LORA = os.environ.get(
     "TELESTYLE_DMD_LORA",
     str(LORA_DIR / "QIE-2509-Lightning-4steps-V1.0-bf16.safetensors"),
 )
+STYLE_LORA_FILENAME = Path(STYLE_LORA).name
+DMD_LORA_FILENAME = Path(DMD_LORA).name
 DEFAULT_PROMPT = os.environ.get(
     "TELESTYLE_DEFAULT_PROMPT",
     "Style Transfer the style of Figure 2 to Figure 1, and keep the content and characteristics of Figure 1.",
@@ -141,6 +146,49 @@ def _gpu_memory_snapshot() -> Optional[str]:
         return None
 
 
+def _hf_token() -> Optional[str]:
+    for name in (
+        "HF_TOKEN",
+        "HUGGINGFACE_TOKEN",
+        "HUGGING_FACE_HUB_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
+    ):
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def _ensure_model_assets() -> None:
+    token = _hf_token()
+    MODEL_PATH.mkdir(parents=True, exist_ok=True)
+    LORA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not (MODEL_PATH / "model_index.json").exists():
+        logger.info("Downloading %s to %s", MODEL_REPO_ID, MODEL_PATH)
+        snapshot_download(
+            MODEL_REPO_ID,
+            local_dir=str(MODEL_PATH),
+            token=token,
+        )
+        logger.info("Downloaded %s", MODEL_REPO_ID)
+
+    for target, filename in (
+        (Path(STYLE_LORA), STYLE_LORA_FILENAME),
+        (Path(DMD_LORA), DMD_LORA_FILENAME),
+    ):
+        if target.exists():
+            continue
+        logger.info("Downloading %s/%s to %s", LORA_REPO_ID, filename, target)
+        hf_hub_download(
+            repo_id=LORA_REPO_ID,
+            filename=filename,
+            local_dir=str(target.parent),
+            token=token,
+        )
+        logger.info("Downloaded %s", target)
+
+
 def _load_model():
     global pipe, model_loading, model_error
 
@@ -156,6 +204,7 @@ def _load_model():
         try:
             from pipeline_qwenimage_edit_plus import QwenImageEditPlusPipeline
 
+            _ensure_model_assets()
             device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(
                 "Loading TeleStyleV2 pipeline model=%s style_lora=%s dmd_lora=%s device=%s cpu_offload=%s",
@@ -166,7 +215,7 @@ def _load_model():
                 ENABLE_CPU_OFFLOAD,
             )
             model = QwenImageEditPlusPipeline.from_pretrained(
-                MODEL_PATH,
+                str(MODEL_PATH),
                 torch_dtype=torch.bfloat16,
             )
             if device == "cuda" and ENABLE_CPU_OFFLOAD:
