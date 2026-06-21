@@ -32,7 +32,7 @@ class ImageConfig:
 # comfyui-storage/wan2gp_server.py from the public OpenFork client repo at
 # runtime, with the image-baked copy as a fallback.
 IMAGES: List[ImageConfig] = [
-    ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.qwen-turbo-8gb", "beschiak/openfork-qwen-image-turbo-8gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.flux-kontext-dev-16gb", "beschiak/openfork-flux-kontext-dev-16gb:latest", build=True, push=True, direct_push=True),
@@ -789,6 +789,7 @@ def main():
     )
 
     args = parser.parse_args()
+    args.actions = [action for action in args.actions if action]
     invalid_actions = [
         action for action in args.actions if action not in {"build", "push"}
     ]

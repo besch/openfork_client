@@ -191,6 +191,9 @@ echo "Running build_and_push.py with arguments: ${PASSTHROUGH_ARGS[*]}"
 echo ""
 
 quote_args() {
+    if [ "$#" -eq 0 ]; then
+        return 0
+    fi
     printf '%q ' "$@"
 }
 
