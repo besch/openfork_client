@@ -15,4 +15,15 @@ def test_start_cloud_wan22_comfyui_tiers_keep_vae_on_gpu():
     assert "--cpu-vae" not in wan22_block
     assert "--lowvram --fp16-vae --reserve-vram 0.5" in wan22_block
     assert "--lowvram --fp16-vae --reserve-vram 0.75" in wan22_block
-    assert "--normalvram --fp16-vae --reserve-vram 1.0" in wan22_block
+    assert "--lowvram --fp16-vae --reserve-vram 1.0" in wan22_block
+
+
+def test_start_cloud_ltx23_wan2gp_tiers_have_explicit_runtime_flags():
+    text = SCRIPT.read_text(encoding="utf-8")
+    ltx_start = text.index('[[ "${SERVICE_TYPE:-}" == *"ltx23"* ]]')
+    ltx_end = text.index('[[ "${SERVICE_TYPE:-}" == *"wan22-wan2gp"* ]]', ltx_start)
+    ltx_block = text[ltx_start:ltx_end]
+
+    assert '--perc-reserved-mem-max 0.55 --vram-safety-coefficient 0.70' in ltx_block
+    assert '--profile 4 --attention sdpa --perc-reserved-mem-max 0.55' in ltx_block
+    assert '--profile 4.5 --attention sdpa --perc-reserved-mem-max 0.45' in ltx_block

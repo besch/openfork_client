@@ -12,6 +12,7 @@ import base64
 import io
 import logging
 import os
+import secrets
 import tempfile
 import threading
 import time
@@ -134,6 +135,34 @@ class Wan2GPProcessor(BaseJobProcessor):
         except (TypeError, ValueError):
             seed = int(default)
         return seed % (WAN2GP_MAX_SEED + 1)
+
+    @staticmethod
+    def has_explicit_seed(value) -> bool:
+        """Return true when a request supplied a parseable seed value."""
+        if value is None:
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        try:
+            int(value)
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    @classmethod
+    def resolve_seed(
+        cls,
+        value,
+        *,
+        default: int = 0,
+        randomize_missing: bool = False,
+    ) -> int:
+        """Resolve a seed, optionally randomizing absent or invalid values."""
+        if cls.has_explicit_seed(value):
+            return cls.normalize_seed(value, default)
+        if randomize_missing:
+            return secrets.randbelow(WAN2GP_MAX_SEED + 1)
+        return cls.normalize_seed(default)
 
     def _wait_for_server(self) -> bool:
         """Poll /health until the Wan2GP server responds or timeout is reached."""

@@ -174,6 +174,35 @@ class DockerProdManagerStopContainerTests(unittest.TestCase):
         self.assertEqual(manager.client.containers.run.call_count, 2)
         manager._force_remove_by_name.assert_called_once()
 
+    def test_ltx23_low_vram_container_uses_offload_runtime_flags(self):
+        manager = DockerProdManager.__new__(DockerProdManager)
+        manager.client = Mock()
+        manager.services_config = {"ltx23-video-12gb": {"port": 8188}}
+        manager.docker_image_map = {
+            "ltx23-video-12gb": "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest"
+        }
+        manager.pull_image = Mock()
+        manager._set_api_timeout = Mock(return_value=None)
+        manager._restore_api_timeout = Mock()
+
+        manager.client.containers.get.side_effect = docker.errors.NotFound("missing")
+        manager.client.containers.list.return_value = []
+        manager.client.containers.run.return_value = None
+
+        with (
+            patch("platform.system", return_value="Linux"),
+            patch("services.hardware_profiler.get_available_vram", return_value=12000),
+        ):
+            manager.run_container("ltx23-video-12gb")
+
+        run_kwargs = manager.client.containers.run.call_args.kwargs
+        self.assertEqual(run_kwargs["ipc_mode"], "host")
+        self.assertEqual(run_kwargs["shm_size"], "16g")
+        self.assertEqual(len(run_kwargs["ulimits"]), 1)
+        self.assertEqual(run_kwargs["ulimits"][0].name, "memlock")
+        self.assertEqual(run_kwargs["ulimits"][0].get("Soft"), -1)
+        self.assertEqual(run_kwargs["ulimits"][0].get("Hard"), -1)
+
 
 if __name__ == "__main__":
     unittest.main()

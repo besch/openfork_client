@@ -69,6 +69,31 @@ def build_wan2gp_environment(service_type: str) -> dict:
                 "--perc-reserved-mem-max 0.45 "
                 "--vram-safety-coefficient 0.70"
             )
+    elif "ltx23" in lowered_service_type:
+        if "8gb" in lowered_service_type:
+            env["WAN2GP_CLI_ARGS"] = (
+                "--profile 4.5 --attention sdpa "
+                "--perc-reserved-mem-max 0.45 "
+                "--vram-safety-coefficient 0.70"
+            )
+        elif "12gb" in lowered_service_type:
+            env["WAN2GP_CLI_ARGS"] = (
+                "--profile 4.5 --attention sdpa "
+                "--perc-reserved-mem-max 0.55 "
+                "--vram-safety-coefficient 0.70"
+            )
+        elif "32gb" in lowered_service_type:
+            env["WAN2GP_CLI_ARGS"] = (
+                "--profile 4 --attention sdpa "
+                "--perc-reserved-mem-max 0.55 "
+                "--vram-safety-coefficient 0.80"
+            )
+        else:
+            env["WAN2GP_CLI_ARGS"] = (
+                "--profile 4.5 --attention sdpa "
+                "--perc-reserved-mem-max 0.45 "
+                "--vram-safety-coefficient 0.70"
+            )
     elif "8gb" in lowered_service_type:
         env["WAN2GP_CLI_ARGS"] = (
             "--profile 4.5 --attention sdpa "

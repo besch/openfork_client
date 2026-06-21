@@ -80,7 +80,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig( "Dockerfile.ernie-image-16gb", "beschiak/openfork-ernie-image-16gb:latest", build=True, push=True, ),
     # ImageConfig( "Dockerfile.ideogram4", "beschiak/openfork-ideogram4-16gb:latest", build=True, push=True, build_args={"IDEOGRAM_QUANTIZATION": "nf4"} ),
     # ImageConfig( "Dockerfile.ideogram4", "beschiak/openfork-ideogram4-24gb:latest", build=True, push=True, build_args={"IDEOGRAM_QUANTIZATION": "fp8"} ),
-    # ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-12gb-hdr", "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-8gb", "beschiak/openfork-ltx23-wan2gp-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-original", "beschiak/openfork-ltx23-wan2gp-original:latest", build=True, push=True),

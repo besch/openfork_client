@@ -1257,6 +1257,22 @@ class DockerProdManager:
         container.start()
         return container
 
+    @staticmethod
+    def _extra_container_runtime_kwargs(service_type: str) -> dict:
+        """Return Docker runtime flags needed by specific large GPU backends."""
+        lowered_service_type = (service_type or "").lower()
+        if "ltx23" in lowered_service_type and any(
+            tier in lowered_service_type for tier in ("8gb", "12gb")
+        ):
+            return {
+                "ipc_mode": "host",
+                "shm_size": "16g",
+                "ulimits": [
+                    docker.types.Ulimit(name="memlock", soft=-1, hard=-1),
+                ],
+            }
+        return {}
+
     def run_container(
         self,
         service_type: str,
@@ -1375,6 +1391,7 @@ class DockerProdManager:
                 run_kwargs["environment"] = environment
             if volumes:
                 run_kwargs["volumes"] = volumes
+            run_kwargs.update(self._extra_container_runtime_kwargs(service_type))
             max_attempts = int(os.getenv("OPENFORK_DOCKER_START_MAX_ATTEMPTS", "8"))
             start_api_timeout = self.get_start_api_timeout(service_type)
             last_missing_conflict_id = None
