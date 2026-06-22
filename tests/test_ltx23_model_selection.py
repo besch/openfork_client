@@ -180,12 +180,12 @@ class LTX23ModelSelectionTests(unittest.TestCase):
         self.assertIn("--profile 4 ", thirty_two_args)
         self.assertIn("--vram-safety-coefficient 0.80", thirty_two_args)
 
-    def test_ltx23_hdr_image_disk_estimate_matches_v1_1_payload(self):
+    def test_ltx23_hdr_image_disk_estimate_matches_quantized_v1_1_payload(self):
         size_gb = estimate_image_size_bytes(
             "beschiak/openfork-ltx23-wan2gp-hdr:latest"
         ) // (1024**3)
 
-        self.assertEqual(size_gb, 230)
+        self.assertEqual(size_gb, 200)
 
 
 if __name__ == "__main__":

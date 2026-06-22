@@ -151,7 +151,7 @@ def estimate_image_size_bytes(image_name: str) -> int:
         "turbodiffusion": 160,
         "ltx23-wan2gp-8gb": 160,
         "ltx23-wan2gp-12gb-hdr": 165,
-        "ltx23-wan2gp-hdr": 230,
+        "ltx23-wan2gp-hdr": 200,
         "ltx23-wan2gp": 170,
         "ltx2-8gb": 180,
         "ltx2-16gb": 180,
