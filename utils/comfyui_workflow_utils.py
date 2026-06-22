@@ -48,7 +48,7 @@ def get_dimensions(
 
     if _has_vram_marker(vram_tier, 24):
         if aspect_ratio == "16:9":
-            return 960, 544
+            return 832, 480
 
     if aspect_ratio == "16:9":
         return 768, 432  # 432p
@@ -93,9 +93,16 @@ def resolve_wan22_dimensions(
     target_width: object = None,
     target_height: object = None,
 ) -> tuple[int, int]:
-    """Return WAN 2.2 dimensions, allowing explicit probe sizes above 8GB."""
+    """Return WAN 2.2 dimensions, keeping classic 24GB jobs in the safe 480p profile."""
     width = _coerce_dimension(target_width)
     height = _coerce_dimension(target_height)
+    if _has_vram_marker(vram_tier, 24) and aspect_ratio == "16:9":
+        safe_width, safe_height = get_dimensions(aspect_ratio, vram_tier=vram_tier)
+        if width is not None and height is not None:
+            if width <= safe_width and height <= safe_height:
+                return width, height
+            return safe_width, safe_height
+        return safe_width, safe_height
     if not _has_vram_marker(vram_tier, 8) and width is not None and height is not None:
         return width, height
     return get_dimensions(aspect_ratio, vram_tier=vram_tier)
