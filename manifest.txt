@@ -87,7 +87,7 @@ services/processors/video/last_frame.py
 services/processors/video/ltx23_common.py
 services/processors/video/ltx23_image.py
 services/processors/video/ltx23_text.py
-services/processors/video/scail.py
+services/processors/video/scail2.py
 services/processors/video/sparkvsr.py
 services/processors/video/turbodiffusion.py
 services/processors/video/upscaler.py

@@ -45,7 +45,7 @@ class DaVinciMagiHumanWan2GPTests(unittest.TestCase):
     def test_headless_wan2gp_services_tail_wan2gp_log(self):
         for service_type in (
             "davinci-magihuman-24gb",
-            "scail-wan2gp-24gb",
+            "scail2-wan2gp-24gb",
             "vista4d-wan2gp-24gb",
             "ltx23-video-12gb",
             "wan22-wan2gp-12gb",

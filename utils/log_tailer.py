@@ -8,7 +8,7 @@ def get_headless_log_paths(service_type: str):
     normalized = (service_type or "").lower()
     if (
         "davinci" in normalized
-        or "scail" in normalized
+        or "scail2" in normalized
         or "vista4d" in normalized
         or "ltx23" in normalized
         or "wan22-wan2gp" in normalized

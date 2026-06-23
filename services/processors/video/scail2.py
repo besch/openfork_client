@@ -1,10 +1,9 @@
 """
-SCAIL image-to-video processor (Wan2GP backend).
+SCAIL-2 image-to-video processor (WanGP backend).
 
-SCAIL animates a reference image from a driving video. Wan2GP handles the
-NLF pose extraction/preprocess internally when it receives video_guide.
-SCAIL-2 is also routed through WanGP, using its native scail2_14B model support
-and lower-VRAM int8 weights.
+SCAIL-2 animates a reference image from a driving video. WanGP handles the
+pose extraction/preprocess internally when it receives video_guide and uses its
+native scail2_14B model support with lower-VRAM int8 weights.
 """
 
 from __future__ import annotations
@@ -26,29 +25,7 @@ from utils.media_utils import VIDEO_EXTENSIONS
 logger = logging.getLogger(__name__)
 
 _FPS = 16
-_DEFAULT_DURATION_SECONDS = 5.0
-_DEFAULT_DURATION_SECONDS_16GB = 4.0
 _DEFAULT_SEED = -1
-
-_SCAIL_RESOLUTIONS = {
-    "16:9": "896x512",
-    "9:16": "512x896",
-    "1:1": "640x640",
-    "4:3": "768x576",
-    "3:4": "576x768",
-    "21:9": "1024x448",
-    "2:1": "896x448",
-}
-
-_SCAIL_RESOLUTIONS_16GB = {
-    "16:9": "768x432",
-    "9:16": "432x768",
-    "1:1": "544x544",
-    "4:3": "640x480",
-    "3:4": "480x640",
-    "21:9": "768x336",
-    "2:1": "768x384",
-}
 
 _SCAIL2_RESOLUTIONS = {
     "16:9": "832x480",
@@ -73,34 +50,6 @@ _SCAIL2_RESOLUTIONS_16GB = {
 
 def get_scail_vram_tier(service_type: str) -> str:
     return "16gb" if "16gb" in (service_type or "").lower() else "24gb"
-
-
-def scail_resolution(aspect_ratio: str, vram_tier: str = "24gb") -> str:
-    if vram_tier == "16gb":
-        return _SCAIL_RESOLUTIONS_16GB.get(aspect_ratio, "768x432")
-    return _SCAIL_RESOLUTIONS.get(aspect_ratio, "896x512")
-
-
-def clamp_scail_duration(requested_duration, vram_tier: str = "24gb") -> float:
-    default_duration = (
-        _DEFAULT_DURATION_SECONDS_16GB
-        if vram_tier == "16gb"
-        else _DEFAULT_DURATION_SECONDS
-    )
-    max_duration = 4.0 if vram_tier == "16gb" else 5.0
-    try:
-        duration = float(requested_duration)
-    except (TypeError, ValueError):
-        duration = default_duration
-    return max(1.0, min(duration, max_duration))
-
-
-def clamp_scail_steps(requested_steps) -> int:
-    try:
-        steps = int(requested_steps)
-    except (TypeError, ValueError):
-        steps = 8
-    return max(6, min(steps, 20))
 
 
 def scail2_resolution(aspect_ratio: str, vram_tier: str = "24gb") -> str:
@@ -167,11 +116,8 @@ def _looks_like_video_reference(value: str) -> bool:
     return path.endswith(VIDEO_EXTENSIONS)
 
 
-class SCAILImageToVideoProcessor(Wan2GPProcessor):
-    """SCAIL reference-image + driving-video animation via Wan2GP."""
-
-    SERVICE_NAME = "SCAIL"
-    MAX_GENERATION_SECONDS = 7200
+class _ScailInputResolver:
+    """Shared input resolution for SCAIL-2 reference-image + driving-video jobs."""
 
     def _download_storage_path(
         self,
@@ -254,7 +200,7 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
                     return path
             elif len(value) < 2048:
                 logger.warning(
-                    "Ignoring non-video SCAIL driving input %s=%s",
+                    "Ignoring non-video SCAIL-2 driving input %s=%s",
                     key,
                     value,
                 )
@@ -267,169 +213,16 @@ class SCAILImageToVideoProcessor(Wan2GPProcessor):
                 input_video_url, self.input_dir
             )
         if input_video_url:
-            logger.debug("Ignoring non-video input_video_url for SCAIL driving video.")
+            logger.debug("Ignoring non-video input_video_url for SCAIL-2 driving video.")
 
         return None
 
-    def _prepare_pose_video_for_wan2gp(self, pose_video_path: str) -> Optional[str]:
-        filename = f"{self.job_id}_{os.path.basename(pose_video_path)}"
-        container_path = f"/opt/wan2gp/input/{filename}"
 
-        try:
-            if docker_manager:
-                service_type = (
-                    self.client.active_service_type or self.job.get("service_type")
-                )
-                if not service_type:
-                    raise RuntimeError("No active Wan2GP service type is available")
-                docker_manager.copy_file_to_container(
-                    service_type=service_type,
-                    source_on_host=pose_video_path,
-                    dest_in_container=container_path,
-                    shutdown_event=self.shutdown_event,
-                )
-                return container_path
-
-            os.makedirs(os.path.dirname(container_path), exist_ok=True)
-            if os.path.abspath(pose_video_path) != os.path.abspath(container_path):
-                shutil.copy2(pose_video_path, container_path)
-            return container_path
-        except Exception as exc:
-            self._fail_job(
-                f"Failed to prepare SCAIL driving video for job {self.job_id}: {exc}"
-            )
-            return None
-
-    def _build_settings(
-        self,
-        inputs: dict,
-        start_image: Image.Image,
-        pose_video_path: str,
-    ) -> dict:
-        service_type = self.client.active_service_type or self.job.get("service_type")
-        vram_tier = get_scail_vram_tier(service_type or "")
-        duration = clamp_scail_duration(inputs.get("duration"), vram_tier)
-        return {
-            "model_type": "scail",
-            "prompt": self.positive_prompt,
-            "negative_prompt": self.negative_prompt,
-            "image_start": start_image,
-            "video_guide": pose_video_path,
-            "video_prompt_type": inputs.get("video_prompt_type", "V#1#"),
-            "image_prompt_type": "S",
-            "audio_prompt_type": "R",
-            "resolution": scail_resolution(
-                inputs.get("aspect_ratio", "16:9"), vram_tier
-            ),
-            "video_length": duration_to_wangp_frames(duration),
-            "force_fps": "control",
-            "num_inference_steps": clamp_scail_steps(inputs.get("steps")),
-            "guidance_scale": float(inputs.get("cfg_scale", 1.0)),
-            "flow_shift": float(inputs.get("flow_shift", 8.0)),
-            "sample_solver": inputs.get("sampler", "unipc"),
-            "sliding_window_size": 81,
-            "sliding_window_overlap": 1,
-            "sliding_window_color_correction_strength": 1,
-            "seed": self.normalize_seed(inputs.get("seed", _DEFAULT_SEED)),
-        }
-
-    def process(self):
-        if DEV_MODE:
-            return
-
-        if not self.job:
-            self._fail_job("Job object is None.")
-            return
-
-        inputs = self.job.get("inputs") or {}
-        image_path = self._resolve_reference_image(inputs)
-        if not image_path:
-            self._fail_job(
-                "SCAIL requires a reference image. Use the image-to-video workflow."
-            )
-            return
-
-        pose_video_path = self._resolve_pose_video(inputs)
-        if not pose_video_path:
-            self._fail_job(
-                "SCAIL requires a driving video in pose_video/video_guide inputs."
-            )
-            return
-
-        wan2gp_pose_video_path = self._prepare_pose_video_for_wan2gp(
-            pose_video_path
-        )
-        if not wan2gp_pose_video_path:
-            return
-
-        try:
-            start_image = Image.open(image_path).convert("RGB")
-        except Exception as exc:
-            self._fail_job(
-                f"Failed to open SCAIL reference image for job {self.job_id}: {exc}"
-            )
-            return
-
-        settings = self._build_settings(inputs, start_image, wan2gp_pose_video_path)
-        service_type = self.client.active_service_type or self.job.get("service_type")
-        vram_tier = get_scail_vram_tier(service_type or "")
-        logger.info(
-            "Processing SCAIL job %s with tier=%s resolution=%s frames=%s pose_video=%s",
-            self.job_id,
-            vram_tier,
-            settings["resolution"],
-            settings["video_length"],
-            os.path.basename(pose_video_path),
-        )
-
-        files = self._run_task(settings)
-        if not files:
-            if (
-                not self.is_cancelled()
-                and not self.infrastructure_interrupted
-            ):
-                self._fail_job(self._wan2gp_no_output_message("SCAIL/Wan2GP"))
-            return
-
-        result = self._handle_video_output(files[0])
-        if not result:
-            if not self.is_cancelled():
-                self._fail_job(f"Failed to process video output for job {self.job_id}")
-            return
-
-        video_storage_path, thumbnail_storage_path, actual_duration = result
-        self.orchestrator_service.update_job_status(
-            self.job_id,
-            "completed",
-            storage_path=video_storage_path,
-            thumbnail_storage_path=thumbnail_storage_path,
-            duration_seconds=actual_duration,
-            prompt=self.positive_prompt,
-        )
-
-
-class SCAIL2ImageToVideoProcessor(Wan2GPProcessor):
+class SCAIL2ImageToVideoProcessor(_ScailInputResolver, Wan2GPProcessor):
     """SCAIL-2 reference-image + driving-video animation via WanGP."""
 
     SERVICE_NAME = "SCAIL-2"
     MAX_GENERATION_SECONDS = 10800
-
-    def _download_storage_path(
-        self,
-        storage_path: str,
-        bucket_hint: Optional[str] = None,
-    ) -> Optional[str]:
-        return SCAILImageToVideoProcessor._download_storage_path(
-            self,
-            storage_path,
-            bucket_hint,
-        )
-
-    def _resolve_reference_image(self, inputs: dict) -> Optional[str]:
-        return SCAILImageToVideoProcessor._resolve_reference_image(self, inputs)
-
-    def _resolve_pose_video(self, inputs: dict) -> Optional[str]:
-        return SCAILImageToVideoProcessor._resolve_pose_video(self, inputs)
 
     def _prepare_pose_video_for_scail2(self, pose_video_path: str) -> Optional[str]:
         filename = f"{self.job_id}_{os.path.basename(pose_video_path)}"

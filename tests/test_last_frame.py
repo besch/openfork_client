@@ -74,8 +74,8 @@ class LastFrameHelperTests(unittest.TestCase):
             processor = self._processor(
                 tmpdir,
                 {
-                    "id": "scail-job",
-                    "workflow_type": "scail-image-to-video-16gb",
+                    "id": "scail2-job",
+                    "workflow_type": "scail2-image-to-video-16gb",
                     "input_storage_path": "images/reference.png",
                 },
             )

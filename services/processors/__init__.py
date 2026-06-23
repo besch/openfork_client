@@ -33,7 +33,7 @@ from .video.davinci_magihuman import (
     DaVinciMagiHumanT2VProcessor,
     DaVinciMagiHumanI2VProcessor,
 )
-from .video.scail import SCAIL2ImageToVideoProcessor, SCAILImageToVideoProcessor
+from .video.scail2 import SCAIL2ImageToVideoProcessor
 from .video.vista4d import Vista4DVideoToVideoProcessor
 from .video.inspatio_world import InSpatioWorldJobProcessor
 
@@ -118,7 +118,6 @@ __all__ = [
     "DreamIDOmniImageToVideoProcessor",
     "DaVinciMagiHumanT2VProcessor",
     "DaVinciMagiHumanI2VProcessor",
-    "SCAILImageToVideoProcessor",
     "SCAIL2ImageToVideoProcessor",
     "Vista4DVideoToVideoProcessor",
     "InSpatioWorldJobProcessor",

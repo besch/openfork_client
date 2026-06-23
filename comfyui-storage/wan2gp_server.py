@@ -343,9 +343,9 @@ def _init_session_sync():
         raise
 
 
-# Taichi/SCAIL binds parts of its runtime to the process main thread. Initialise
+# Taichi/SCAIL-2 binds parts of its runtime to the process main thread. Initialise
 # Wan2GP on the main thread and keep generation there; using FastAPI's sync
-# threadpool or a custom executor lets the first SCAIL request succeed but leaves
+# threadpool or a custom executor lets the first SCAIL-2 request succeed but leaves
 # later requests failing with Taichi main_thread_id_/FieldsBuilder errors.
 _session = _init_session_sync()
 logging.info("Wan2GP session ready.")
@@ -481,9 +481,9 @@ async def generate(req: GenerateRequest):
 def _generate_sync(raw_settings: Dict[str, Any]) -> list[str]:
     """Run Wan2GP on the process main thread for every request.
 
-    SCAIL/Taichi keeps process-main-thread state after the first generation.
+    SCAIL-2/Taichi keeps process-main-thread state after the first generation.
     FastAPI sync routes and custom executors run on worker threads, which lets
-    the first SCAIL job succeed and the next one fail with Taichi main-thread
+    the first SCAIL-2 job succeed and the next one fail with Taichi main-thread
     errors.
     """
     from PIL import Image
