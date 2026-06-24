@@ -69,6 +69,7 @@ services/processors/image/anima.py
 services/processors/image/ernie_image.py
 services/processors/image/flux_kontext.py
 services/processors/image/ideogram4.py
+services/processors/image/krea2.py
 services/processors/image/pid.py
 services/processors/image/qwen.py
 services/processors/image/qwen_turbo.py
@@ -124,6 +125,9 @@ workflows/flux-kontext-dev-8gb-text-to-image.api.json
 workflows/flux-text-to-image.api.json
 workflows/hunyuan-video-foley.api.json
 workflows/ideogram4.api.json
+workflows/krea2-turbo-text-to-image-16gb.api.json
+workflows/krea2-turbo-text-to-image-24gb.api.json
+workflows/krea2-turbo-text-to-image-8gb.api.json
 workflows/ltxv2-uncensored-workspace.json
 workflows/qwen-image-2512-lora-t2i-24gb.api.json
 workflows/qwen-image-2512-lora-t2i.api.json

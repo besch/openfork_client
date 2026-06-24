@@ -1096,6 +1096,27 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       else
           log "Auto-selected Qwen 2512 LoRA 24GB tier (Q4_K_M, VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/opt/ComfyUI/models/unet/krea2_turbo-Q3_K_M.gguf" ]; then
+      log "Auto-mode: Detected Krea 2 Turbo GGUF Q3 ComfyUI image."
+      SERVICE_TYPE="krea2-turbo-8gb"
+      if [ "$TOTAL_VRAM_MB" -lt 7500 ]; then
+          log "WARNING: Krea 2 Turbo 8GB tier detected only ${TOTAL_VRAM_MB}MB VRAM."
+      else
+          log "Auto-selected Krea 2 Turbo 8GB GGUF tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
+  elif [ -f "/opt/ComfyUI/models/diffusion_models/krea2_turbo_fp8_scaled.safetensors" ]; then
+      log "Auto-mode: Detected Krea 2 Turbo FP8 ComfyUI image."
+      if [ "$TOTAL_VRAM_MB" -lt 20000 ]; then
+          SERVICE_TYPE="krea2-turbo-16gb"
+          if [ "$TOTAL_VRAM_MB" -lt 14500 ]; then
+              log "WARNING: Krea 2 Turbo FP8 16GB tier detected only ${TOTAL_VRAM_MB}MB VRAM."
+          else
+              log "Auto-selected Krea 2 Turbo 16GB FP8 tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+          fi
+      else
+          SERVICE_TYPE="krea2-turbo-24gb"
+          log "Auto-selected Krea 2 Turbo 24GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/opt/ComfyUI/models/DreamID-Omni/DreamID_Omni/dreamid_omni.fp8_e4m3fn.safetensors" ]; then
       log "Auto-mode: Detected DreamID-Omni FP8 ComfyUI image."
       SERVICE_TYPE="dreamid-omni-24gb"
@@ -1855,6 +1876,18 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       log "Applying WAN 2.2 fallback ComfyUI optimizations"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 0.75 --cache-none --preview-method none --use-split-cross-attention --disable-async-offload --disable-cuda-malloc --disable-pinned-memory"
       ;;
+    *krea2*8gb*)
+      log "Applying Krea 2 Turbo 8GB GGUF optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.25 --cache-none --use-split-cross-attention --preview-method none --disable-pinned-memory"
+      ;;
+    *krea2*16gb*)
+      log "Applying Krea 2 Turbo 16GB FP8 optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.0 --use-split-cross-attention --cache-none --preview-method none --disable-pinned-memory"
+      ;;
+    *krea2*24gb*)
+      log "Applying Krea 2 Turbo 24GB FP8 optimizations"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp16-vae --reserve-vram 1.5 --use-pytorch-cross-attention --cache-none --preview-method none --disable-pinned-memory"
+      ;;
     *ltx2*-8gb*|*8gb*)
       log "Applying AGGRESSIVE 8GB VRAM optimizations for ComfyUI"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --fp32-vae --disable-smart-memory --reserve-vram 1.0 --cache-none --force-fp16 --use-split-cross-attention --preview-method none"
@@ -1884,7 +1917,7 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       ;;
   esac
 
-  if [[ "$SERVICE_TYPE" == *"flux-kontext"* ]] || [[ "$SERVICE_TYPE" == qwen* ]] || [[ "$SERVICE_TYPE" == *"wan22"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"flux-kontext"* ]] || [[ "$SERVICE_TYPE" == qwen* ]] || [[ "$SERVICE_TYPE" == *"wan22"* ]] || [[ "$SERVICE_TYPE" == *"krea2"* ]]; then
     mkdir -p /opt/ComfyUI/user/__manager
     cat > /opt/ComfyUI/user/__manager/config.ini <<'EOF'
 [default]

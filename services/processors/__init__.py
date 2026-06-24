@@ -88,6 +88,7 @@ from .image.flux_kontext import (
     FluxKontextEditProcessor,
     FluxKontextT2IProcessor,
 )
+from .image.krea2 import Krea2TextToImageProcessor
 from .image.anima import AnimaTextToImageProcessor
 from .image.ernie_image import ErnieImageProcessor
 from .image.ideogram4 import Ideogram4ImageProcessor
@@ -157,6 +158,7 @@ __all__ = [
     "QwenImageT2ITurboProcessor",
     "FluxKontextEditProcessor",
     "FluxKontextT2IProcessor",
+    "Krea2TextToImageProcessor",
     "AnimaTextToImageProcessor",
     "ErnieImageProcessor",
     "Ideogram4ImageProcessor",

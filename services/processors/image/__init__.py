@@ -9,6 +9,7 @@ from .qwen import (
     QwenImageT2IProcessor,
 )
 from .flux_kontext import FluxKontextEditProcessor, FluxKontextT2IProcessor
+from .krea2 import Krea2TextToImageProcessor
 from .ideogram4 import Ideogram4ImageProcessor
 from .pid import PiDImageUpscaleProcessor
 
@@ -23,6 +24,7 @@ __all__ = [
     "QwenImage2512LoraT2IProcessor",
     "FluxKontextEditProcessor",
     "FluxKontextT2IProcessor",
+    "Krea2TextToImageProcessor",
     "Ideogram4ImageProcessor",
     "PiDImageUpscaleProcessor",
 ]
