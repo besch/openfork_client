@@ -892,6 +892,8 @@ START_SPARKVSR="false"
 START_INSPATIO="false"
 START_ERNIE_IMAGE="false"
 START_IDEOGRAM4="false"
+START_LTX2_TRAINER="false"
+START_LTX2_PIPELINES="false"
 START_PID_IMAGE="false"
 START_TELESTYLEV2="false"
 START_PRISMAUDIO="false"
@@ -982,6 +984,30 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
       log "Auto-mode: Detected Scenema Audio image. Selecting Scenema Audio service."
       START_SCENEMA_AUDIO="true"
       SERVICE_TYPE="scenema-audio"
+  elif [ -f "/app/ltx2_trainer_api.py" ]; then
+      log "Auto-mode: Detected official LTX-2 Trainer image."
+      START_LTX2_TRAINER="true"
+      LTX2_TARGET_VRAM_GB="${LTX2_TARGET_VRAM_GB:-32}"
+      SERVICE_TYPE="${OPENFORK_DEFAULT_SERVICE_TYPE:-ltx2-trainer-${LTX2_TARGET_VRAM_GB}gb}"
+      if [ "$LTX2_TARGET_VRAM_GB" -lt 32 ]; then
+          log "Auto-selected experimental official LTX-2 Trainer ${LTX2_TARGET_VRAM_GB}GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -lt 30000 ]; then
+          log "WARNING: Official LTX-2 low-VRAM trainer is configured for 32GB GPUs; detected ${TOTAL_VRAM_MB}MB VRAM."
+      else
+          log "Auto-selected official LTX-2 Trainer 32GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
+  elif [ -f "/app/ltx2_pipelines_api.py" ]; then
+      log "Auto-mode: Detected official LTX-2 pipelines LoRA image."
+      START_LTX2_PIPELINES="true"
+      LTX2_TARGET_VRAM_GB="${LTX2_TARGET_VRAM_GB:-32}"
+      SERVICE_TYPE="${OPENFORK_DEFAULT_SERVICE_TYPE:-ltx2-pipelines-lora-${LTX2_TARGET_VRAM_GB}gb}"
+      if [ "$LTX2_TARGET_VRAM_GB" -lt 32 ]; then
+          log "Auto-selected experimental official LTX-2 pipelines LoRA ${LTX2_TARGET_VRAM_GB}GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      elif [ "$TOTAL_VRAM_MB" -lt 30000 ]; then
+          log "WARNING: Official LTX-2 pipelines LoRA image is configured as a 32GB tier; detected ${TOTAL_VRAM_MB}MB VRAM."
+      else
+          log "Auto-selected official LTX-2 pipelines LoRA 32GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -d "/opt/wan2gp" ]; then
       log "Auto-mode: Detected Wan2GP installation. Selecting Wan2GP backend."
       START_WAN2GP="true"
@@ -1200,6 +1226,8 @@ else
   if [[ "$SERVICE_TYPE" == *"inspatio"* ]]; then START_INSPATIO="true"; fi
   if [[ "$SERVICE_TYPE" == *"ernie-image"* ]]; then START_ERNIE_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"ideogram4"* ]]; then START_IDEOGRAM4="true"; fi
+  if [[ "$SERVICE_TYPE" == *"ltx2-trainer"* ]]; then START_LTX2_TRAINER="true"; fi
+  if [[ "$SERVICE_TYPE" == *"ltx2-pipelines"* ]]; then START_LTX2_PIPELINES="true"; fi
   if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"telestylev2"* ]]; then START_TELESTYLEV2="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
@@ -1311,6 +1339,29 @@ fi
 if [ "$START_IDEOGRAM4" = "true" ]; then
   log "Ideogram 4 selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
+fi
+
+if [ "$START_LTX2_TRAINER" = "true" ]; then
+  log "Official LTX-2 Trainer selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+  export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  export LTX2_TRAINER_API_WAIT_TIMEOUT="${LTX2_TRAINER_API_WAIT_TIMEOUT:-1800}"
+  export LTX2_TRAINER_TIMEOUT="${LTX2_TRAINER_TIMEOUT:-64800}"
+  export MAX_INPUT_ASSET_BYTES="${MAX_INPUT_ASSET_BYTES:-8589934592}"
+  if [ "${LTX2_TARGET_VRAM_GB:-32}" -lt 32 ]; then
+      log "WARNING: Official LTX-2 Trainer 24GB tier is experimental; upstream documents 32GB as the low-VRAM target."
+  elif [ "$TOTAL_VRAM_MB" -lt 30000 ]; then
+      log "WARNING: Official LTX-2 Trainer low-VRAM config targets 32GB VRAM; 24GB is not an official supported trainer target."
+  fi
+fi
+
+if [ "$START_LTX2_PIPELINES" = "true" ]; then
+  log "Official LTX-2 pipelines LoRA selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+  export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  export LTX2_PIPELINES_API_WAIT_TIMEOUT="${LTX2_PIPELINES_API_WAIT_TIMEOUT:-1800}"
+  export LTX2_PIPELINES_TIMEOUT="${LTX2_PIPELINES_TIMEOUT:-7200}"
+  export MAX_INPUT_ASSET_BYTES="${MAX_INPUT_ASSET_BYTES:-4294967296}"
 fi
 
 if [ "$START_TELESTYLEV2" = "true" ]; then
@@ -1947,6 +1998,66 @@ EOF
   fi
 else
   log "Info: /opt/ComfyUI not found."
+fi
+
+# Start official LTX-2 Trainer REST API
+if [ "$START_LTX2_TRAINER" = "true" ]; then
+  log "Starting official LTX-2 Trainer API service..."
+  if [ -f "/app/ltx2_trainer_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/ltx2_trainer_api.py" "/app/ltx2_trainer_api.py" || true
+    if [ -f "/app/services/processors/video/ltx2_official.py" ]; then
+      refresh_openfork_file "services/processors/video/ltx2_official.py" "/app/services/processors/video/ltx2_official.py" || true
+    fi
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export LTX2_TRAINER_DIR="${LTX2_TRAINER_DIR:-/opt/LTX-2/packages/ltx-trainer}"
+    export LTX2_MODEL_PATH="${LTX2_MODEL_PATH:-/models/ltx2/ltx-2.3-22b-dev.safetensors}"
+    export LTX2_TEXT_ENCODER_PATH="${LTX2_TEXT_ENCODER_PATH:-/models/gemma-3-12b-it-qat-q4_0-unquantized}"
+    log "LTX-2 Trainer config: trainer=$LTX2_TRAINER_DIR model=$LTX2_MODEL_PATH text_encoder=$LTX2_TEXT_ENCODER_PATH"
+    (cd /app && "$PYTHON_EXE" ltx2_trainer_api.py > /tmp/ltx2_trainer_api.log 2>&1) &
+    if ! wait_for_url "LTX-2 Trainer API" "http://127.0.0.1:8000/health" 900 "/tmp/ltx2_trainer_api.log"; then
+      log "ERROR: LTX-2 Trainer API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "LTX-2 Trainer" "http://127.0.0.1:8000/health" "$LTX2_TRAINER_API_WAIT_TIMEOUT" "/tmp/ltx2_trainer_api.log"; then
+      log "ERROR: LTX-2 Trainer model files are not ready; not starting the DGN client."
+      exit 1
+    fi
+  else
+    log "ERROR: LTX-2 Trainer API not found at /app/ltx2_trainer_api.py"
+    exit 1
+  fi
+fi
+
+# Start official LTX-2 pipelines LoRA REST API
+if [ "$START_LTX2_PIPELINES" = "true" ]; then
+  log "Starting official LTX-2 pipelines LoRA API service..."
+  if [ -f "/app/ltx2_pipelines_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/ltx2_pipelines_api.py" "/app/ltx2_pipelines_api.py" || true
+    if [ -f "/app/services/processors/video/ltx2_official.py" ]; then
+      refresh_openfork_file "services/processors/video/ltx2_official.py" "/app/services/processors/video/ltx2_official.py" || true
+    fi
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export LTX2_PIPELINES_DIR="${LTX2_PIPELINES_DIR:-/opt/LTX-2/packages/ltx-pipelines}"
+    export LTX2_MODEL_PATH="${LTX2_MODEL_PATH:-/models/ltx2/ltx-2.3-22b-dev.safetensors}"
+    export LTX2_GEMMA_ROOT="${LTX2_GEMMA_ROOT:-/models/gemma-3-12b-it-qat-q4_0-unquantized}"
+    export LTX2_DISTILLED_LORA_PATH="${LTX2_DISTILLED_LORA_PATH:-/models/ltx2/ltx-2.3-22b-distilled-lora-384-1.1.safetensors}"
+    export LTX2_SPATIAL_UPSAMPLER_PATH="${LTX2_SPATIAL_UPSAMPLER_PATH:-/models/ltx2/ltx-2.3-spatial-upscaler-x2-1.1.safetensors}"
+    log "LTX-2 pipelines config: pipelines=$LTX2_PIPELINES_DIR model=$LTX2_MODEL_PATH gemma=$LTX2_GEMMA_ROOT"
+    (cd /app && "$PYTHON_EXE" ltx2_pipelines_api.py > /tmp/ltx2_pipelines_api.log 2>&1) &
+    if ! wait_for_url "LTX-2 pipelines API" "http://127.0.0.1:8000/health" 900 "/tmp/ltx2_pipelines_api.log"; then
+      log "ERROR: LTX-2 pipelines API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "LTX-2 pipelines" "http://127.0.0.1:8000/health" "$LTX2_PIPELINES_API_WAIT_TIMEOUT" "/tmp/ltx2_pipelines_api.log"; then
+      log "ERROR: LTX-2 pipelines model files are not ready; not starting the DGN client."
+      exit 1
+    fi
+  else
+    log "ERROR: LTX-2 pipelines API not found at /app/ltx2_pipelines_api.py"
+    exit 1
+  fi
 fi
 
 # Start DiffRhythm REST API

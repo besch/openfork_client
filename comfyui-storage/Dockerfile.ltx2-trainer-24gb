@@ -1,0 +1,88 @@
+# syntax=docker/dockerfile:1.4
+# Experimental official LTX-2 Trainer image for OpenFork 24GB GPUs.
+# Requires BuildKit secret: --secret id=hf_token,env=HF_TOKEN
+#
+# Upstream documents 32GB as the low-VRAM trainer target. This tier keeps the
+# same official trainer package/checkpoint but uses more aggressive defaults.
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="/root/.local/bin:${CUDA_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DEFAULT_TIMEOUT=120
+ENV HF_HOME=/models/hf_cache
+ENV HUGGINGFACE_HUB_CACHE=/models/hf_cache
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ENV LTX2_REPO=/opt/LTX-2
+ENV LTX2_TRAINER_DIR=/opt/LTX-2/packages/ltx-trainer
+ENV LTX2_MODEL_PATH=/models/ltx2/ltx-2.3-22b-dev.safetensors
+ENV LTX2_TEXT_ENCODER_PATH=/models/gemma-3-12b-it-qat-q4_0-unquantized
+ENV LTX2_OUTPUT_DIR=/app/output
+ENV LTX2_JOBS_ROOT=/app/ltx2_jobs
+ENV LTX2_TARGET_VRAM_GB=24
+ENV LTX2_VRAM_PROFILE=24gb-experimental
+ENV LTX2_TRAINER_STEPS=2000
+ENV LTX2_TRAINER_RESOLUTION_BUCKETS=512x288x33
+ENV LTX2_TRAINER_RANK=8
+ENV LTX2_TRAINER_ALPHA=8
+ENV LTX2_TRAINER_QUANTIZATION=int2-quanto
+ENV OPENFORK_DEFAULT_SERVICE_TYPE=ltx2-trainer-24gb
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+ARG LTX2_REF=main
+ARG OPENFORK_CLIENT_REPO=besch/openfork_client
+ARG OPENFORK_CLIENT_SCRIPT_REF=main
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-pip python3-venv \
+    git git-lfs curl ca-certificates ffmpeg \
+    build-essential cmake ninja-build pkg-config \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && python3 -m pip install --break-system-packages --no-cache-dir --upgrade \
+      pip huggingface_hub hf_transfer fastapi "uvicorn[standard]" \
+      python-multipart pyyaml requests \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && git lfs install \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN git clone --depth 1 --branch "${LTX2_REF}" https://github.com/Lightricks/LTX-2.git /opt/LTX-2 \
+    && cd /opt/LTX-2 \
+    && uv sync --frozen
+
+RUN mkdir -p /models/ltx2 /models/gemma-3-12b-it-qat-q4_0-unquantized /app/output /app/ltx2_jobs
+
+RUN --mount=type=secret,id=hf_token,required=true python3 - <<'PY'
+from pathlib import Path
+from huggingface_hub import hf_hub_download, snapshot_download
+
+token = Path("/run/secrets/hf_token").read_text(encoding="utf-8").strip()
+hf_hub_download(
+    repo_id="Lightricks/LTX-2.3",
+    filename="ltx-2.3-22b-dev.safetensors",
+    local_dir="/models/ltx2",
+    token=token,
+)
+snapshot_download(
+    repo_id="google/gemma-3-12b-it-qat-q4_0-unquantized",
+    local_dir="/models/gemma-3-12b-it-qat-q4_0-unquantized",
+    token=token,
+)
+PY
+
+RUN curl -fsSL \
+    "https://raw.githubusercontent.com/${OPENFORK_CLIENT_REPO}/${OPENFORK_CLIENT_SCRIPT_REF}/comfyui-storage/ltx2_trainer_api.py" \
+    -o /app/ltx2_trainer_api.py
+
+WORKDIR /app
+EXPOSE 8000
+
+CMD ["python3", "/app/ltx2_trainer_api.py"]

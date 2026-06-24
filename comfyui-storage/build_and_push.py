@@ -79,7 +79,6 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig( "Dockerfile.ernie-image-16gb", "beschiak/openfork-ernie-image-16gb:latest", build=True, push=True, ),
     # ImageConfig( "Dockerfile.ideogram4", "beschiak/openfork-ideogram4-16gb:latest", build=True, push=True, build_args={"IDEOGRAM_QUANTIZATION": "nf4"} ),
     # ImageConfig( "Dockerfile.ideogram4", "beschiak/openfork-ideogram4-24gb:latest", build=True, push=True, build_args={"IDEOGRAM_QUANTIZATION": "fp8"} ),
-    ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-12gb-hdr", "beschiak/openfork-ltx23-wan2gp-12gb-hdr:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-8gb", "beschiak/openfork-ltx23-wan2gp-8gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-original", "beschiak/openfork-ltx23-wan2gp-original:latest", build=True, push=True),
@@ -123,6 +122,11 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.wan22-wan2gp-24gb", "beschiak/openfork-wan22-wan2gp-24gb:latest", build=True, push=True),
     # ImageConfig("Dockerfile.scail2-wan2gp-16gb", "beschiak/openfork-scail2-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.scail2-wan2gp-24gb", "beschiak/openfork-scail2-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True),
+    ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
@@ -156,6 +160,10 @@ OPTIONAL_IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-16gb", "beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-trainer-24gb", "beschiak/openfork-ltx2-trainer-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-pipelines-lora-24gb", "beschiak/openfork-ltx2-pipelines-lora-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
 ]
 
 WAN2GP_IMAGE_REFRESH_PRESET: List[str] = [
@@ -234,10 +242,29 @@ BUILD_PRESETS: Dict[str, List[str]] = {
         "openfork-krea2-turbo-16gb",
         "openfork-krea2-turbo-24gb",
     ],
+    "ltx2-official-24gb": [
+        "openfork-ltx2-trainer-24gb",
+        "openfork-ltx2-pipelines-lora-24gb",
+    ],
+    "ltx2-official-32gb": [
+        "openfork-ltx2-trainer-32gb",
+        "openfork-ltx2-pipelines-lora-32gb",
+    ],
+    "ltx2-official": [
+        "openfork-ltx2-trainer-24gb",
+        "openfork-ltx2-pipelines-lora-24gb",
+        "openfork-ltx2-trainer-32gb",
+        "openfork-ltx2-pipelines-lora-32gb",
+    ],
 }
 
 PUSH_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 1200  # 20 minutes
+ENV_BUILD_ARG_PASSTHROUGH = (
+    "LTX2_REF",
+    "OPENFORK_CLIENT_REPO",
+    "OPENFORK_CLIENT_SCRIPT_REF",
+)
 
 
 def _env_flag(name: str) -> bool:
@@ -429,11 +456,9 @@ def build_image(
     elif _dockerfile_declares_hf_arg(dockerfile):
         command.extend(["--build-arg", "HF_TOKEN"])
 
-    if (
-        os.environ.get("OPENFORK_CLIENT_SCRIPT_REF")
-        and _dockerfile_declares_arg(dockerfile, "OPENFORK_CLIENT_SCRIPT_REF")
-    ):
-        command.extend(["--build-arg", "OPENFORK_CLIENT_SCRIPT_REF"])
+    for arg_name in ENV_BUILD_ARG_PASSTHROUGH:
+        if os.environ.get(arg_name) and _dockerfile_declares_arg(dockerfile, arg_name):
+            command.extend(["--build-arg", arg_name])
 
     if hf_token and direct_push and not uses_hf_secret:
         command.extend(["--secret", "id=hf_token,env=HF_TOKEN"])

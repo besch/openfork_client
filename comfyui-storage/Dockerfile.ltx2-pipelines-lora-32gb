@@ -1,0 +1,93 @@
+# syntax=docker/dockerfile:1.4
+# Official LTX-2 pipelines image for OpenFork LoRA inference.
+# Requires BuildKit secret: --secret id=hf_token,env=HF_TOKEN
+
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="/root/.local/bin:${CUDA_HOME}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DEFAULT_TIMEOUT=120
+ENV HF_HOME=/models/hf_cache
+ENV HUGGINGFACE_HUB_CACHE=/models/hf_cache
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ENV LTX2_REPO=/opt/LTX-2
+ENV LTX2_PIPELINES_DIR=/opt/LTX-2/packages/ltx-pipelines
+ENV LTX2_MODEL_PATH=/models/ltx2/ltx-2.3-22b-dev.safetensors
+ENV LTX2_GEMMA_ROOT=/models/gemma-3-12b-it-qat-q4_0-unquantized
+ENV LTX2_TEXT_ENCODER_PATH=/models/gemma-3-12b-it-qat-q4_0-unquantized
+ENV LTX2_DISTILLED_LORA_PATH=/models/ltx2/ltx-2.3-22b-distilled-lora-384-1.1.safetensors
+ENV LTX2_SPATIAL_UPSAMPLER_PATH=/models/ltx2/ltx-2.3-spatial-upscaler-x2-1.1.safetensors
+ENV LTX2_OUTPUT_DIR=/app/output
+ENV LTX2_PIPELINES_JOBS_ROOT=/app/ltx2_pipeline_jobs
+ENV LTX2_TARGET_VRAM_GB=32
+ENV LTX2_VRAM_PROFILE=32gb-low-vram
+ENV LTX2_PIPELINES_DEFAULT_WIDTH=1024
+ENV LTX2_PIPELINES_DEFAULT_HEIGHT=576
+ENV LTX2_PIPELINES_DEFAULT_NUM_FRAMES=49
+ENV LTX2_PIPELINES_DEFAULT_STEPS=30
+ENV LTX2_PIPELINES_DEFAULT_OFFLOAD=cpu
+ENV LTX2_PIPELINES_DEFAULT_QUANTIZATION=fp8-cast
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+ARG LTX2_REF=main
+ARG OPENFORK_CLIENT_REPO=besch/openfork_client
+ARG OPENFORK_CLIENT_SCRIPT_REF=main
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-pip python3-venv \
+    git git-lfs curl ca-certificates ffmpeg \
+    build-essential cmake ninja-build pkg-config \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && python3 -m pip install --break-system-packages --no-cache-dir --upgrade \
+      pip huggingface_hub hf_transfer fastapi "uvicorn[standard]" \
+      python-multipart pyyaml requests \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && git lfs install \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN git clone --depth 1 --branch "${LTX2_REF}" https://github.com/Lightricks/LTX-2.git /opt/LTX-2 \
+    && cd /opt/LTX-2 \
+    && uv sync --frozen
+
+RUN mkdir -p /models/ltx2 /models/gemma-3-12b-it-qat-q4_0-unquantized /app/output /app/ltx2_pipeline_jobs
+
+RUN --mount=type=secret,id=hf_token,required=true python3 - <<'PY'
+from pathlib import Path
+from huggingface_hub import hf_hub_download, snapshot_download
+
+token = Path("/run/secrets/hf_token").read_text(encoding="utf-8").strip()
+for filename in [
+    "ltx-2.3-22b-dev.safetensors",
+    "ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
+    "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+]:
+    hf_hub_download(
+        repo_id="Lightricks/LTX-2.3",
+        filename=filename,
+        local_dir="/models/ltx2",
+        token=token,
+    )
+snapshot_download(
+    repo_id="google/gemma-3-12b-it-qat-q4_0-unquantized",
+    local_dir="/models/gemma-3-12b-it-qat-q4_0-unquantized",
+    token=token,
+)
+PY
+
+RUN curl -fsSL \
+    "https://raw.githubusercontent.com/${OPENFORK_CLIENT_REPO}/${OPENFORK_CLIENT_SCRIPT_REF}/comfyui-storage/ltx2_pipelines_api.py" \
+    -o /app/ltx2_pipelines_api.py
+
+WORKDIR /app
+EXPOSE 8000
+
+CMD ["python3", "/app/ltx2_pipelines_api.py"]
