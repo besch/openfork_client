@@ -54,6 +54,126 @@ SUPPORTED_TRAINER_QUANTIZATION = {
     "fp8uz-quanto",
 }
 
+SHORT_TARGET_MODULES = ["to_k", "to_q", "to_v", "to_out.0"]
+VIDEO_TARGET_MODULES = [
+    "attn1.to_k",
+    "attn1.to_q",
+    "attn1.to_v",
+    "attn1.to_out.0",
+    "attn2.to_k",
+    "attn2.to_q",
+    "attn2.to_v",
+    "attn2.to_out.0",
+]
+VIDEO_IC_TARGET_MODULES = [*VIDEO_TARGET_MODULES, "ff.net.0.proj", "ff.net.2"]
+AUDIO_TARGET_MODULES = [
+    "audio_attn1.to_k",
+    "audio_attn1.to_q",
+    "audio_attn1.to_v",
+    "audio_attn1.to_out.0",
+    "audio_attn2.to_k",
+    "audio_attn2.to_q",
+    "audio_attn2.to_v",
+    "audio_attn2.to_out.0",
+    "audio_ff.net.0.proj",
+    "audio_ff.net.2",
+]
+
+SUPPORTED_TRAINING_MODES = {
+    "t2v": "text-to-video",
+    "t2a": "text-to-audio",
+    "i2v": "image-to-video",
+    "video_extend": "video extension",
+    "audio_extend": "audio extension",
+    "video_inpainting": "video inpainting",
+    "audio_inpainting": "audio inpainting",
+    "video_outpainting": "video outpainting",
+    "v2v_ic_lora": "video IC-LoRA",
+    "a2a_ic_lora": "audio IC-LoRA",
+    "av2av_ic_lora": "joint audio-video IC-LoRA",
+    "a2v": "audio-to-video",
+    "v2a": "video-to-audio",
+}
+
+MODE_ALIASES = {
+    "text-to-video": "t2v",
+    "text_to_video": "t2v",
+    "txt2vid": "t2v",
+    "text-to-audio": "t2a",
+    "text_to_audio": "t2a",
+    "txt2audio": "t2a",
+    "image-to-video": "i2v",
+    "image_to_video": "i2v",
+    "img2vid": "i2v",
+    "video-extension": "video_extend",
+    "video_extension": "video_extend",
+    "video-extend": "video_extend",
+    "video_prefix": "video_extend",
+    "video_suffix": "video_extend",
+    "audio-extension": "audio_extend",
+    "audio_extension": "audio_extend",
+    "audio-extend": "audio_extend",
+    "audio_prefix": "audio_extend",
+    "audio_suffix": "audio_extend",
+    "video-inpainting": "video_inpainting",
+    "video_inpaint": "video_inpainting",
+    "audio-inpainting": "audio_inpainting",
+    "audio_inpaint": "audio_inpainting",
+    "video-outpainting": "video_outpainting",
+    "video_outpaint": "video_outpainting",
+    "video-ic-lora": "v2v_ic_lora",
+    "video_ic_lora": "v2v_ic_lora",
+    "v2v": "v2v_ic_lora",
+    "audio-ic-lora": "a2a_ic_lora",
+    "audio_ic_lora": "a2a_ic_lora",
+    "a2a": "a2a_ic_lora",
+    "av-ic-lora": "av2av_ic_lora",
+    "av_ic_lora": "av2av_ic_lora",
+    "audio-video-ic-lora": "av2av_ic_lora",
+    "joint_ic_lora": "av2av_ic_lora",
+    "audio-to-video": "a2v",
+    "audio_to_video": "a2v",
+    "video-to-audio": "v2a",
+    "video_to_audio": "v2a",
+    "foley": "v2a",
+}
+
+VIDEO_DATA_MODES = {
+    "t2v",
+    "i2v",
+    "video_extend",
+    "video_inpainting",
+    "video_outpainting",
+    "v2v_ic_lora",
+    "av2av_ic_lora",
+    "a2v",
+    "v2a",
+}
+AUDIO_DATA_MODES = {
+    "t2v",
+    "i2v",
+    "video_extend",
+    "t2a",
+    "audio_extend",
+    "audio_inpainting",
+    "a2a_ic_lora",
+    "av2av_ic_lora",
+    "a2v",
+    "v2a",
+}
+AUDIO_ONLY_MODES = {"t2a", "audio_extend", "audio_inpainting", "a2a_ic_lora"}
+OPTIONAL_AUDIO_MODES = {"t2v", "i2v", "video_extend"}
+AUDIO_REQUIRED_MODES = {
+    "t2a",
+    "audio_extend",
+    "audio_inpainting",
+    "a2a_ic_lora",
+    "av2av_ic_lora",
+    "a2v",
+    "v2a",
+}
+VIDEO_ONLY_MODES = {"video_inpainting", "video_outpainting", "v2v_ic_lora"}
+
 JOBS_ROOT.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -146,6 +266,250 @@ def _parse_video_dims(resolution_buckets: str) -> list[int]:
     return [width, height, frames]
 
 
+def _clamp_probability(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _normalize_training_mode(value: str | None) -> str:
+    raw = (value or "i2v").strip().lower().replace(" ", "_")
+    raw = MODE_ALIASES.get(raw, raw)
+    if raw not in SUPPORTED_TRAINING_MODES:
+        raise ValueError(
+            "Unsupported LTX-2 training mode. Expected one of: "
+            + ", ".join(sorted(SUPPORTED_TRAINING_MODES))
+        )
+    return raw
+
+
+def _normalize_condition_type(value: str | None, default: str = "prefix") -> str:
+    condition = (value or default).strip().lower().replace("_", "-")
+    if condition in {"suffix", "backward", "reverse"}:
+        return "suffix"
+    return "prefix"
+
+
+def _parse_spatial_region(value: str | None) -> list[int]:
+    if not value:
+        return [0, 0, 288, 576]
+    parsed: Any
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = [part for part in value.replace("x", ",").replace(" ", ",").split(",") if part]
+    if not isinstance(parsed, list) or len(parsed) != 4:
+        raise ValueError("spatial_region must be a JSON list or comma-separated y1,x1,y2,x2 value")
+    try:
+        region = [int(part) for part in parsed]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("spatial_region values must be integers") from exc
+    if region[2] <= region[0] or region[3] <= region[1]:
+        raise ValueError("spatial_region must be ordered as [y1, x1, y2, x2]")
+    return region
+
+
+def _mode_skip_audio(training_mode: str, skip_audio: bool) -> bool:
+    if training_mode in VIDEO_ONLY_MODES:
+        return True
+    if training_mode in AUDIO_REQUIRED_MODES:
+        return False
+    if training_mode in OPTIONAL_AUDIO_MODES:
+        return bool(skip_audio)
+    return bool(skip_audio)
+
+
+def _mode_uses_video(training_mode: str) -> bool:
+    return training_mode in VIDEO_DATA_MODES
+
+
+def _mode_uses_audio(training_mode: str, skip_audio: bool) -> bool:
+    if training_mode not in AUDIO_DATA_MODES:
+        return False
+    return not _mode_skip_audio(training_mode, skip_audio)
+
+
+def _target_modules_for_mode(training_mode: str, skip_audio: bool) -> list[str]:
+    if training_mode in AUDIO_ONLY_MODES:
+        return AUDIO_TARGET_MODULES
+    if training_mode == "v2v_ic_lora":
+        return VIDEO_IC_TARGET_MODULES
+    if training_mode in VIDEO_ONLY_MODES:
+        return VIDEO_TARGET_MODULES
+    if training_mode in OPTIONAL_AUDIO_MODES and _mode_skip_audio(training_mode, skip_audio):
+        return VIDEO_TARGET_MODULES
+    return SHORT_TARGET_MODULES
+
+
+def _build_mode_strategy(
+    training_mode: str,
+    *,
+    skip_audio: bool,
+    first_frame_probability: float,
+    condition_type: str | None,
+    condition_probability: float,
+    temporal_boundary: int,
+    spatial_region: str | None,
+    reference_probability: float,
+    mask_probability: float,
+) -> dict[str, Any]:
+    actual_skip_audio = _mode_skip_audio(training_mode, skip_audio)
+    condition_probability = _clamp_probability(condition_probability)
+    first_frame_probability = _clamp_probability(first_frame_probability)
+    reference_probability = _clamp_probability(reference_probability)
+    mask_probability = _clamp_probability(mask_probability)
+    temporal_boundary = max(1, int(temporal_boundary))
+    extension_condition = _normalize_condition_type(condition_type)
+
+    strategy: dict[str, Any] = {"name": "flexible"}
+
+    if training_mode == "t2v":
+        strategy["video"] = {"is_generated": True, "latents_dir": "latents"}
+        if not actual_skip_audio:
+            strategy["audio"] = {"is_generated": True, "latents_dir": "audio_latents"}
+    elif training_mode == "i2v":
+        strategy["video"] = {
+            "is_generated": True,
+            "latents_dir": "latents",
+            "conditions": [
+                {
+                    "type": "first_frame",
+                    "probability": first_frame_probability,
+                }
+            ],
+        }
+        if not actual_skip_audio:
+            strategy["audio"] = {"is_generated": True, "latents_dir": "audio_latents"}
+    elif training_mode == "video_extend":
+        strategy["video"] = {
+            "is_generated": True,
+            "latents_dir": "latents",
+            "conditions": [
+                {
+                    "type": extension_condition,
+                    "temporal_boundary": temporal_boundary,
+                    "probability": condition_probability,
+                }
+            ],
+        }
+        if not actual_skip_audio:
+            strategy["audio"] = {"is_generated": True, "latents_dir": "audio_latents"}
+    elif training_mode == "video_inpainting":
+        strategy["video"] = {
+            "is_generated": True,
+            "latents_dir": "latents",
+            "conditions": [
+                {
+                    "type": "mask",
+                    "mask_dir": "video_masks",
+                    "probability": mask_probability,
+                }
+            ],
+        }
+    elif training_mode == "video_outpainting":
+        strategy["video"] = {
+            "is_generated": True,
+            "latents_dir": "latents",
+            "conditions": [
+                {
+                    "type": "spatial_crop",
+                    "spatial_region": _parse_spatial_region(spatial_region),
+                    "probability": condition_probability,
+                }
+            ],
+        }
+    elif training_mode == "v2v_ic_lora":
+        conditions: list[dict[str, Any]] = [
+            {
+                "type": "reference",
+                "latents_dir": "reference_latents",
+                "probability": reference_probability,
+            }
+        ]
+        if first_frame_probability > 0:
+            conditions.append({"type": "first_frame", "probability": first_frame_probability})
+        strategy["video"] = {
+            "is_generated": True,
+            "latents_dir": "latents",
+            "conditions": conditions,
+        }
+    elif training_mode == "a2v":
+        strategy["video"] = {"is_generated": True, "latents_dir": "latents"}
+        strategy["audio"] = {"is_generated": False, "latents_dir": "audio_latents"}
+    elif training_mode == "v2a":
+        strategy["video"] = {"is_generated": False, "latents_dir": "latents"}
+        strategy["audio"] = {"is_generated": True, "latents_dir": "audio_latents"}
+    elif training_mode == "t2a":
+        strategy["audio"] = {"is_generated": True, "latents_dir": "audio_latents"}
+    elif training_mode == "audio_extend":
+        strategy["audio"] = {
+            "is_generated": True,
+            "latents_dir": "audio_latents",
+            "conditions": [
+                {
+                    "type": extension_condition,
+                    "temporal_boundary": temporal_boundary,
+                    "probability": condition_probability,
+                }
+            ],
+        }
+    elif training_mode == "audio_inpainting":
+        strategy["audio"] = {
+            "is_generated": True,
+            "latents_dir": "audio_latents",
+            "conditions": [
+                {
+                    "type": "mask",
+                    "mask_dir": "audio_masks",
+                    "probability": mask_probability,
+                }
+            ],
+        }
+    elif training_mode == "a2a_ic_lora":
+        strategy["audio"] = {
+            "is_generated": True,
+            "latents_dir": "audio_latents",
+            "conditions": [
+                {
+                    "type": "reference",
+                    "latents_dir": "reference_audio_latents",
+                    "probability": reference_probability,
+                }
+            ],
+        }
+    elif training_mode == "av2av_ic_lora":
+        strategy["video"] = {
+            "is_generated": True,
+            "latents_dir": "latents",
+            "conditions": [
+                {
+                    "type": "reference",
+                    "latents_dir": "reference_latents",
+                    "probability": reference_probability,
+                }
+            ],
+        }
+        strategy["audio"] = {
+            "is_generated": True,
+            "latents_dir": "audio_latents",
+            "conditions": [
+                {
+                    "type": "reference",
+                    "latents_dir": "reference_audio_latents",
+                    "probability": reference_probability,
+                }
+            ],
+        }
+    else:
+        raise ValueError(f"Unsupported training mode: {training_mode}")
+
+    return strategy
+
+
+def _generated_modalities(strategy: dict[str, Any]) -> tuple[bool, bool]:
+    video_generated = bool(strategy.get("video", {}).get("is_generated"))
+    audio_generated = bool(strategy.get("audio", {}).get("is_generated"))
+    return video_generated, audio_generated
+
+
 def _normalize_trainer_quantization(value: str | None) -> str | None:
     quantization = (value or "").strip()
     if quantization not in SUPPORTED_TRAINER_QUANTIZATION:
@@ -195,6 +559,7 @@ def _run_command(
 
 def _build_training_config(
     *,
+    training_mode: str,
     output_dir: Path,
     precomputed_dir: Path,
     resolution_buckets: str,
@@ -203,35 +568,52 @@ def _build_training_config(
     alpha: int,
     learning_rate: float,
     first_frame_probability: float,
+    condition_type: str | None,
+    condition_probability: float,
+    temporal_boundary: int,
+    spatial_region: str | None,
+    reference_probability: float,
+    mask_probability: float,
     gradient_accumulation_steps: int,
     quantization: str | None,
     validation_prompt: str | None,
     seed: int,
     skip_audio: bool,
 ) -> dict[str, Any]:
-    video_strategy: dict[str, Any] = {
-        "is_generated": True,
-        "latents_dir": "latents",
-        "conditions": [
-            {
-                "type": "first_frame",
-                "probability": max(0.0, min(1.0, first_frame_probability)),
-            }
-        ],
-    }
-    strategy: dict[str, Any] = {
-        "name": "flexible",
-        "video": video_strategy,
-    }
-    if not skip_audio:
-        strategy["audio"] = {
-            "is_generated": True,
-            "latents_dir": "audio_latents",
-        }
+    training_mode = _normalize_training_mode(training_mode)
+    actual_skip_audio = _mode_skip_audio(training_mode, skip_audio)
+    strategy = _build_mode_strategy(
+        training_mode,
+        skip_audio=actual_skip_audio,
+        first_frame_probability=first_frame_probability,
+        condition_type=condition_type,
+        condition_probability=condition_probability,
+        temporal_boundary=temporal_boundary,
+        spatial_region=spatial_region,
+        reference_probability=reference_probability,
+        mask_probability=mask_probability,
+    )
+    video_generated, audio_generated = _generated_modalities(strategy)
 
     validation_samples = []
     if validation_prompt:
         validation_samples.append({"prompt": validation_prompt})
+
+    validation: dict[str, Any] = {
+        "samples": validation_samples,
+        "negative_prompt": "worst quality, inconsistent motion, blurry, jittery, distorted",
+        "video_dims": _parse_video_dims(resolution_buckets),
+        "frame_rate": 25.0,
+        "seed": seed,
+        "inference_steps": 30,
+        "interval": None,
+        "guidance_scale": 4.0,
+        "stg_scale": 1.0,
+        "stg_blocks": [29],
+        "stg_mode": "stg_v" if video_generated and not audio_generated else "stg_av",
+        "generate_audio": audio_generated,
+        "skip_initial_validation": True,
+    }
 
     return {
         "model": {
@@ -244,7 +626,7 @@ def _build_training_config(
             "rank": rank,
             "alpha": alpha,
             "dropout": 0.0,
-            "target_modules": ["to_k", "to_q", "to_v", "to_out.0"],
+            "target_modules": _target_modules_for_mode(training_mode, actual_skip_audio),
         },
         "training_strategy": strategy,
         "optimization": {
@@ -268,21 +650,7 @@ def _build_training_config(
             "preprocessed_data_root": str(precomputed_dir),
             "num_dataloader_workers": 2,
         },
-        "validation": {
-            "samples": validation_samples,
-            "negative_prompt": "worst quality, inconsistent motion, blurry, jittery, distorted",
-            "video_dims": _parse_video_dims(resolution_buckets),
-            "frame_rate": 25.0,
-            "seed": seed,
-            "inference_steps": 30,
-            "interval": None,
-            "guidance_scale": 4.0,
-            "stg_scale": 1.0,
-            "stg_blocks": [29],
-            "stg_mode": "stg_v" if skip_audio else "stg_av",
-            "generate_audio": not skip_audio,
-            "skip_initial_validation": True,
-        },
+        "validation": validation,
         "checkpoints": {
             "interval": max(100, min(500, max(1, steps // 4))),
             "keep_last_n": 2,
@@ -297,7 +665,7 @@ def _build_training_config(
             "enabled": False,
             "project": "ltx-2-trainer",
             "entity": None,
-            "tags": ["openfork", "ltx2", "i2v-lora", "low-vram"],
+            "tags": ["openfork", "ltx2", f"{training_mode}-lora", "low-vram"],
             "log_validation_videos": False,
         },
         "seed": seed,
@@ -322,13 +690,23 @@ def _train_job(
     job_id: str,
     archive_path: Path,
     *,
+    training_mode: str,
     lora_trigger: str,
     resolution_buckets: str,
+    audio_durations: str | None,
     steps: int,
     rank: int,
     alpha: int,
     learning_rate: float,
     first_frame_probability: float,
+    condition_type: str | None,
+    condition_probability: float,
+    temporal_boundary: int,
+    spatial_region: str | None,
+    reference_probability: float,
+    mask_probability: float,
+    reference_downscale_factor: int,
+    reference_temporal_scale_factor: int,
     gradient_accumulation_steps: int,
     quantization: str | None,
     skip_audio: bool,
@@ -343,6 +721,8 @@ def _train_job(
     config_path = workspace / "config.yaml"
 
     try:
+        training_mode = _normalize_training_mode(training_mode)
+        actual_skip_audio = _mode_skip_audio(training_mode, skip_audio)
         workspace.mkdir(parents=True, exist_ok=True)
         dataset_dir.mkdir(parents=True, exist_ok=True)
         precomputed_dir.mkdir(parents=True, exist_ok=True)
@@ -358,8 +738,6 @@ def _train_job(
             "python",
             "scripts/process_dataset.py",
             str(dataset_file),
-            "--resolution-buckets",
-            resolution_buckets,
             "--model-path",
             str(MODEL_PATH),
             "--text-encoder-path",
@@ -371,13 +749,24 @@ def _train_job(
             "--load-text-encoder-in-8bit",
             "--overwrite",
         ]
+        if _mode_uses_video(training_mode):
+            preprocess_cmd.extend(["--resolution-buckets", resolution_buckets])
+        if audio_durations:
+            preprocess_cmd.extend(["--audio-durations", audio_durations])
+        if reference_downscale_factor > 1:
+            preprocess_cmd.extend(["--reference-downscale-factor", str(reference_downscale_factor)])
+        if reference_temporal_scale_factor > 1:
+            preprocess_cmd.extend(
+                ["--reference-temporal-scale-factor", str(reference_temporal_scale_factor)]
+            )
         if lora_trigger:
             preprocess_cmd.extend(["--lora-trigger", lora_trigger])
-        if skip_audio:
+        if actual_skip_audio:
             preprocess_cmd.append("--skip-audio")
         _run_command(job_id, preprocess_cmd, TRAINER_DIR, log_path, "preprocess")
 
         config = _build_training_config(
+            training_mode=training_mode,
             output_dir=run_dir,
             precomputed_dir=precomputed_dir,
             resolution_buckets=resolution_buckets,
@@ -386,11 +775,17 @@ def _train_job(
             alpha=alpha,
             learning_rate=learning_rate,
             first_frame_probability=first_frame_probability,
+            condition_type=condition_type,
+            condition_probability=condition_probability,
+            temporal_boundary=temporal_boundary,
+            spatial_region=spatial_region,
+            reference_probability=reference_probability,
+            mask_probability=mask_probability,
             gradient_accumulation_steps=gradient_accumulation_steps,
             quantization=quantization,
             validation_prompt=validation_prompt,
             seed=seed,
-            skip_audio=skip_audio,
+            skip_audio=actual_skip_audio,
         )
         with config_path.open("w", encoding="utf-8") as handle:
             yaml.safe_dump(config, handle, sort_keys=False)
@@ -418,14 +813,27 @@ def _train_job(
             output_size_bytes=output_archive.stat().st_size,
             lora_files=lora_files,
             settings={
+                "training_mode": training_mode,
+                "training_mode_name": SUPPORTED_TRAINING_MODES[training_mode],
                 "resolution_buckets": resolution_buckets,
+                "audio_durations": audio_durations,
                 "steps": steps,
                 "rank": rank,
                 "alpha": alpha,
                 "learning_rate": learning_rate,
                 "first_frame_probability": first_frame_probability,
+                "condition_type": condition_type,
+                "condition_probability": condition_probability,
+                "temporal_boundary": temporal_boundary,
+                "spatial_region": spatial_region,
+                "reference_probability": reference_probability,
+                "mask_probability": mask_probability,
+                "reference_downscale_factor": reference_downscale_factor,
+                "reference_temporal_scale_factor": reference_temporal_scale_factor,
                 "quantization": quantization,
-                "skip_audio": skip_audio,
+                "skip_audio": actual_skip_audio,
+                "uses_video": _mode_uses_video(training_mode),
+                "uses_audio": _mode_uses_audio(training_mode, actual_skip_audio),
                 "seed": seed,
             },
         )
@@ -451,6 +859,7 @@ def health() -> dict[str, Any]:
         "default_rank": DEFAULT_RANK,
         "default_alpha": DEFAULT_ALPHA,
         "default_quantization": DEFAULT_QUANTIZATION,
+        "supported_training_modes": SUPPORTED_TRAINING_MODES,
         "experimental": TARGET_VRAM_GB < 32,
         "notes": (
             "Official LTX-2 Trainer: 80GB+ standard config, 32GB low-VRAM INT8 config. "
@@ -459,22 +868,32 @@ def health() -> dict[str, Any]:
     }
 
 
-@app.post("/train/i2v-lora")
-async def train_i2v_lora(
+async def _queue_lora_training(
     background_tasks: BackgroundTasks,
-    dataset_archive: UploadFile = File(...),
-    lora_trigger: str = Form(""),
-    resolution_buckets: str = Form(DEFAULT_BUCKETS),
-    steps: int = Form(DEFAULT_STEPS),
-    rank: int = Form(DEFAULT_RANK),
-    alpha: int = Form(DEFAULT_ALPHA),
-    learning_rate: float = Form(1e-4),
-    first_frame_probability: float = Form(0.5),
-    gradient_accumulation_steps: int = Form(1),
-    quantization: str = Form(DEFAULT_QUANTIZATION),
-    skip_audio: bool = Form(True),
-    validation_prompt: str = Form(""),
-    seed: int = Form(42),
+    dataset_archive: UploadFile,
+    *,
+    training_mode: str,
+    lora_trigger: str,
+    resolution_buckets: str,
+    audio_durations: str,
+    steps: int,
+    rank: int,
+    alpha: int,
+    learning_rate: float,
+    first_frame_probability: float,
+    condition_type: str,
+    condition_probability: float,
+    temporal_boundary: int,
+    spatial_region: str,
+    reference_probability: float,
+    mask_probability: float,
+    reference_downscale_factor: int,
+    reference_temporal_scale_factor: int,
+    gradient_accumulation_steps: int,
+    quantization: str,
+    skip_audio: bool,
+    validation_prompt: str,
+    seed: int,
 ) -> dict[str, str]:
     if not MODEL_PATH.exists() or not TEXT_ENCODER_PATH.exists():
         raise HTTPException(
@@ -485,7 +904,9 @@ async def train_i2v_lora(
         raise HTTPException(status_code=503, detail="LTX-2 trainer directory is missing.")
 
     try:
+        normalized_mode = _normalize_training_mode(training_mode)
         normalized_quantization = _normalize_trainer_quantization(quantization)
+        _parse_spatial_region(spatial_region) if normalized_mode == "video_outpainting" else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -508,13 +929,23 @@ async def train_i2v_lora(
         _train_job,
         job_id,
         archive_path,
+        training_mode=normalized_mode,
         lora_trigger=lora_trigger.strip(),
         resolution_buckets=resolution_buckets.strip() or DEFAULT_BUCKETS,
+        audio_durations=audio_durations.strip() or None,
         steps=max(1, int(steps)),
         rank=max(1, int(rank)),
         alpha=max(1, int(alpha)),
         learning_rate=float(learning_rate),
         first_frame_probability=float(first_frame_probability),
+        condition_type=condition_type.strip() or None,
+        condition_probability=float(condition_probability),
+        temporal_boundary=max(1, int(temporal_boundary)),
+        spatial_region=spatial_region.strip() or None,
+        reference_probability=float(reference_probability),
+        mask_probability=float(mask_probability),
+        reference_downscale_factor=max(1, int(reference_downscale_factor)),
+        reference_temporal_scale_factor=max(1, int(reference_temporal_scale_factor)),
         gradient_accumulation_steps=max(1, int(gradient_accumulation_steps)),
         quantization=normalized_quantization,
         skip_audio=bool(skip_audio),
@@ -522,6 +953,106 @@ async def train_i2v_lora(
         seed=int(seed),
     )
     return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/train/lora")
+async def train_lora(
+    background_tasks: BackgroundTasks,
+    dataset_archive: UploadFile = File(...),
+    training_mode: str = Form("i2v"),
+    lora_trigger: str = Form(""),
+    resolution_buckets: str = Form(DEFAULT_BUCKETS),
+    audio_durations: str = Form(""),
+    steps: int = Form(DEFAULT_STEPS),
+    rank: int = Form(DEFAULT_RANK),
+    alpha: int = Form(DEFAULT_ALPHA),
+    learning_rate: float = Form(1e-4),
+    first_frame_probability: float = Form(0.5),
+    condition_type: str = Form("prefix"),
+    condition_probability: float = Form(1.0),
+    temporal_boundary: int = Form(8),
+    spatial_region: str = Form(""),
+    reference_probability: float = Form(1.0),
+    mask_probability: float = Form(1.0),
+    reference_downscale_factor: int = Form(1),
+    reference_temporal_scale_factor: int = Form(1),
+    gradient_accumulation_steps: int = Form(1),
+    quantization: str = Form(DEFAULT_QUANTIZATION),
+    skip_audio: bool = Form(False),
+    validation_prompt: str = Form(""),
+    seed: int = Form(42),
+) -> dict[str, str]:
+    return await _queue_lora_training(
+        background_tasks,
+        dataset_archive,
+        training_mode=training_mode,
+        lora_trigger=lora_trigger,
+        resolution_buckets=resolution_buckets,
+        audio_durations=audio_durations,
+        steps=steps,
+        rank=rank,
+        alpha=alpha,
+        learning_rate=learning_rate,
+        first_frame_probability=first_frame_probability,
+        condition_type=condition_type,
+        condition_probability=condition_probability,
+        temporal_boundary=temporal_boundary,
+        spatial_region=spatial_region,
+        reference_probability=reference_probability,
+        mask_probability=mask_probability,
+        reference_downscale_factor=reference_downscale_factor,
+        reference_temporal_scale_factor=reference_temporal_scale_factor,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        quantization=quantization,
+        skip_audio=skip_audio,
+        validation_prompt=validation_prompt,
+        seed=seed,
+    )
+
+
+@app.post("/train/i2v-lora")
+async def train_i2v_lora(
+    background_tasks: BackgroundTasks,
+    dataset_archive: UploadFile = File(...),
+    lora_trigger: str = Form(""),
+    resolution_buckets: str = Form(DEFAULT_BUCKETS),
+    steps: int = Form(DEFAULT_STEPS),
+    rank: int = Form(DEFAULT_RANK),
+    alpha: int = Form(DEFAULT_ALPHA),
+    learning_rate: float = Form(1e-4),
+    first_frame_probability: float = Form(0.5),
+    gradient_accumulation_steps: int = Form(1),
+    quantization: str = Form(DEFAULT_QUANTIZATION),
+    skip_audio: bool = Form(True),
+    validation_prompt: str = Form(""),
+    seed: int = Form(42),
+) -> dict[str, str]:
+    return await _queue_lora_training(
+        background_tasks,
+        dataset_archive,
+        training_mode="i2v",
+        lora_trigger=lora_trigger,
+        resolution_buckets=resolution_buckets,
+        audio_durations="",
+        steps=steps,
+        rank=rank,
+        alpha=alpha,
+        learning_rate=learning_rate,
+        first_frame_probability=first_frame_probability,
+        condition_type="prefix",
+        condition_probability=1.0,
+        temporal_boundary=8,
+        spatial_region="",
+        reference_probability=1.0,
+        mask_probability=1.0,
+        reference_downscale_factor=1,
+        reference_temporal_scale_factor=1,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        quantization=quantization,
+        skip_audio=skip_audio,
+        validation_prompt=validation_prompt,
+        seed=seed,
+    )
 
 
 @app.get("/status/{job_id}")

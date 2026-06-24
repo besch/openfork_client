@@ -76,6 +76,16 @@ def _as_float(
     return parsed
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _looks_like_url(value: str) -> bool:
     return value.startswith(("http://", "https://"))
 
@@ -170,7 +180,7 @@ class LTX2OfficialBaseProcessor(BaseJobProcessor):
 
 
 class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
-    """Train an official LTX-2 I2V LoRA and upload the trainer output package."""
+    """Train an official LTX-2 LoRA and upload the trainer output package."""
 
     MAX_WAIT_TIME = int(os.environ.get("LTX2_TRAINER_TIMEOUT", str(18 * 60 * 60)))
 
@@ -185,6 +195,7 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
             return
 
         inputs = self.job.get("inputs") or {}
+        training_mode = str(inputs.get("training_mode") or inputs.get("mode") or "i2v")
         archive_path = self._resolve_dataset_archive(inputs)
         if not archive_path:
             self._fail_job(
@@ -229,6 +240,8 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
                     "processor": "LTX2TrainerI2VLoraProcessor",
                     "model": "official-ltx-2.3-22b-dev",
                     "artifact_kind": "ltx2_lora_package",
+                    "training_mode": result.get("settings", {}).get("training_mode") or training_mode,
+                    "training_mode_name": result.get("settings", {}).get("training_mode_name"),
                     "ltx_lora_trigger": inputs.get("lora_trigger") or inputs.get("trigger"),
                     "training_steps": _as_int(inputs.get("steps"), DEFAULT_TRAINER_STEPS, 1),
                     "resolution_buckets": inputs.get("resolution_buckets") or DEFAULT_TRAINER_BUCKETS,
@@ -294,46 +307,63 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
             or inputs.get("dataset")
             or inputs.get("items")
         )
+        column_keys = {
+            "video": (
+                "video_storage_path",
+                "media_storage_path",
+                "storage_path",
+                "video_url",
+                "media_url",
+                "url",
+            ),
+            "audio": ("audio_storage_path", "audio_path", "audio_url"),
+            "reference_video": (
+                "reference_video_storage_path",
+                "reference_video_path",
+                "reference_video_url",
+                "ref_video_storage_path",
+                "ref_video_url",
+                "ref_media_path",
+            ),
+            "reference_audio": (
+                "reference_audio_storage_path",
+                "reference_audio_path",
+                "reference_audio_url",
+                "ref_audio_storage_path",
+                "ref_audio_url",
+            ),
+            "video_mask": ("video_mask_storage_path", "video_mask_path", "video_mask_url"),
+            "audio_mask": ("audio_mask_storage_path", "audio_mask_path", "audio_mask_url"),
+        }
+        column_dirs = {
+            "video": "videos",
+            "audio": "audio",
+            "reference_video": "reference_videos",
+            "reference_audio": "reference_audio",
+            "video_mask": "video_masks",
+            "audio_mask": "audio_masks",
+        }
+
         if not isinstance(clips, list):
-            single_ref = (
-                inputs.get("video_storage_path")
-                or inputs.get("media_storage_path")
-                or inputs.get("video_url")
-                or inputs.get("media_url")
-            )
-            clips = [{"video_storage_path": single_ref, "caption": self.positive_prompt}] if single_ref else []
+            single_item: dict[str, Any] = {"caption": inputs.get("caption") or self.positive_prompt}
+            for keys in column_keys.values():
+                for key in keys:
+                    if inputs.get(key):
+                        single_item[key] = inputs.get(key)
+                        break
+            clips = [single_item] if any(key in single_item for keys in column_keys.values() for key in keys) else []
         if not clips:
             return None
 
         staging_dir = Path(self.cache_dir) / f"{self.job_id}_ltx2_dataset"
-        media_dir = staging_dir / "videos"
-        media_dir.mkdir(parents=True, exist_ok=True)
+        for subdir in column_dirs.values():
+            (staging_dir / subdir).mkdir(parents=True, exist_ok=True)
         records: list[dict[str, str]] = []
 
         try:
             for index, clip in enumerate(clips):
                 if not isinstance(clip, dict):
                     continue
-                source = (
-                    clip.get("video_storage_path")
-                    or clip.get("media_storage_path")
-                    or clip.get("storage_path")
-                    or clip.get("video_url")
-                    or clip.get("media_url")
-                    or clip.get("url")
-                )
-                if not source:
-                    continue
-                downloaded = self._download_storage_or_url(
-                    str(source),
-                    self.input_dir,
-                    bucket=clip.get("bucket") or inputs.get("bucket"),
-                )
-                if not downloaded:
-                    raise RuntimeError(f"Could not download training clip {index + 1}: {source}")
-                safe = _safe_name(downloaded, f"clip_{index:04d}.mp4")
-                target = media_dir / f"{index:04d}_{safe}"
-                shutil.copy2(downloaded, target)
                 caption = (
                     clip.get("caption")
                     or clip.get("prompt")
@@ -342,7 +372,32 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
                     or self.positive_prompt
                     or "subject in consistent character animation"
                 )
-                records.append({"video": f"videos/{target.name}", "caption": str(caption)})
+                record: dict[str, str] = {"caption": str(caption)}
+                for column, keys in column_keys.items():
+                    source = next((clip.get(key) for key in keys if clip.get(key)), None)
+                    if not source:
+                        continue
+                    downloaded = self._download_storage_or_url(
+                        str(source),
+                        self.input_dir,
+                        bucket=(
+                            clip.get(f"{column}_bucket")
+                            or clip.get("bucket")
+                            or inputs.get(f"{column}_bucket")
+                            or inputs.get("bucket")
+                        ),
+                    )
+                    if not downloaded:
+                        raise RuntimeError(
+                            f"Could not download LTX-2 dataset {column} item {index + 1}: {source}"
+                        )
+                    safe = _safe_name(downloaded, f"{column}_{index:04d}")
+                    target = staging_dir / column_dirs[column] / f"{index:04d}_{safe}"
+                    shutil.copy2(downloaded, target)
+                    record[column] = f"{column_dirs[column]}/{target.name}"
+
+                if len(record) > 1:
+                    records.append(record)
 
             if not records:
                 return None
@@ -360,9 +415,12 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
             shutil.rmtree(staging_dir, ignore_errors=True)
 
     def _submit_training(self, archive_path: str, inputs: dict) -> Optional[str]:
+        training_mode = str(inputs.get("training_mode") or inputs.get("mode") or "i2v").strip() or "i2v"
         data = {
+            "training_mode": training_mode,
             "lora_trigger": str(inputs.get("lora_trigger") or inputs.get("trigger") or "").strip(),
             "resolution_buckets": str(inputs.get("resolution_buckets") or DEFAULT_TRAINER_BUCKETS),
+            "audio_durations": str(inputs.get("audio_durations") or ""),
             "steps": str(_as_int(inputs.get("steps"), DEFAULT_TRAINER_STEPS, 1)),
             "rank": str(_as_int(inputs.get("rank"), DEFAULT_TRAINER_RANK, 1, 128)),
             "alpha": str(
@@ -375,33 +433,55 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
             ),
             "learning_rate": str(_as_float(inputs.get("learning_rate"), 1e-4, 1e-7, 1e-2)),
             "first_frame_probability": str(_as_float(inputs.get("first_frame_probability"), 0.5, 0.0, 1.0)),
+            "condition_type": str(inputs.get("condition_type") or inputs.get("extension_direction") or "prefix"),
+            "condition_probability": str(_as_float(inputs.get("condition_probability"), 1.0, 0.0, 1.0)),
+            "temporal_boundary": str(_as_int(inputs.get("temporal_boundary"), 8, 1)),
+            "spatial_region": (
+                json.dumps(inputs.get("spatial_region"))
+                if isinstance(inputs.get("spatial_region"), list)
+                else str(inputs.get("spatial_region") or "")
+            ),
+            "reference_probability": str(_as_float(inputs.get("reference_probability"), 1.0, 0.0, 1.0)),
+            "mask_probability": str(_as_float(inputs.get("mask_probability"), 1.0, 0.0, 1.0)),
+            "reference_downscale_factor": str(_as_int(inputs.get("reference_downscale_factor"), 1, 1, 16)),
+            "reference_temporal_scale_factor": str(
+                _as_int(inputs.get("reference_temporal_scale_factor"), 1, 1, 16)
+            ),
             "gradient_accumulation_steps": str(_as_int(inputs.get("gradient_accumulation_steps"), 1, 1)),
             "quantization": str(inputs.get("quantization") or DEFAULT_TRAINER_QUANTIZATION),
-            "skip_audio": str(bool(inputs.get("skip_audio", True))).lower(),
+            "skip_audio": str(_as_bool(inputs.get("skip_audio"), True)).lower(),
             "validation_prompt": str(inputs.get("validation_prompt") or self.positive_prompt or ""),
             "seed": str(_as_int(inputs.get("seed"), 42)),
         }
         mime = mimetypes.guess_type(archive_path)[0] or "application/zip"
         try:
-            with open(archive_path, "rb") as handle:
-                files = {
-                    "dataset_archive": (
-                        os.path.basename(archive_path),
-                        handle,
-                        mime,
+            endpoints = ["/train/lora"]
+            if training_mode in {"i2v", "image-to-video", "image_to_video"}:
+                endpoints.append("/train/i2v-lora")
+
+            for endpoint in endpoints:
+                with open(archive_path, "rb") as handle:
+                    files = {
+                        "dataset_archive": (
+                            os.path.basename(archive_path),
+                            handle,
+                            mime,
+                        )
+                    }
+                    response = self.session.post(
+                        f"{self.api_base_url}{endpoint}",
+                        data=data,
+                        files=files,
+                        timeout=180,
                     )
-                }
-                response = self.session.post(
-                    f"{self.api_base_url}/train/i2v-lora",
-                    data=data,
-                    files=files,
-                    timeout=180,
-                )
-            if response.status_code == 200:
-                api_job_id = response.json().get("job_id")
-                logging.info("Submitted official LTX-2 trainer job %s", api_job_id)
-                return api_job_id
-            logging.error("LTX-2 trainer submit failed: %s %s", response.status_code, response.text)
+                if response.status_code == 200:
+                    api_job_id = response.json().get("job_id")
+                    logging.info("Submitted official LTX-2 trainer job %s via %s", api_job_id, endpoint)
+                    return api_job_id
+                if response.status_code == 404 and endpoint == "/train/lora":
+                    continue
+                logging.error("LTX-2 trainer submit failed: %s %s", response.status_code, response.text)
+                return None
             return None
         except requests.exceptions.RequestException as exc:
             logging.error("LTX-2 trainer submit error: %s", exc)

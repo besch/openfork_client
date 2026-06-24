@@ -125,8 +125,6 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True),
     ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [

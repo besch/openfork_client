@@ -47,7 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && python3 -m pip install --break-system-packages --no-cache-dir --upgrade \
-      pip huggingface_hub hf_transfer fastapi "uvicorn[standard]" \
+      huggingface_hub hf_transfer fastapi "uvicorn[standard]" \
       python-multipart pyyaml requests \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && git lfs install \
