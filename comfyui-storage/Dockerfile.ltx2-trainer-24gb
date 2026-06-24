@@ -33,8 +33,6 @@ ENV LTX2_TRAINER_RANK=8
 ENV LTX2_TRAINER_ALPHA=8
 ENV LTX2_TRAINER_QUANTIZATION=int2-quanto
 ENV OPENFORK_DEFAULT_SERVICE_TYPE=ltx2-trainer-24gb
-ENV HF_HUB_OFFLINE=1
-ENV TRANSFORMERS_OFFLINE=1
 
 ARG LTX2_REF=main
 ARG OPENFORK_CLIENT_REPO=besch/openfork_client
@@ -77,6 +75,9 @@ snapshot_download(
     token=token,
 )
 PY
+
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 
 RUN curl -fsSL \
     "https://raw.githubusercontent.com/${OPENFORK_CLIENT_REPO}/${OPENFORK_CLIENT_SCRIPT_REF}/comfyui-storage/ltx2_trainer_api.py" \
