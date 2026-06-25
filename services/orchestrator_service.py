@@ -1347,7 +1347,7 @@ class OrchestratorService:
             logging.error(f"Client update required before registration: {e}")
             return None
         except requests.exceptions.RequestException as e:
-            logging.error(f"Error registering with the Orchestrator: {e.response.text if e.response else e}")
+            logging.error(f"Error registering with the Orchestrator: {e.response.text if e.response is not None else e}")
             return None
 
     def deregister_from_orchestrator(self, provider_id: str) -> None:

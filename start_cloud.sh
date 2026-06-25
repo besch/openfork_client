@@ -660,7 +660,9 @@ fi
 
 # Install critical dependencies
 log "Installing base dependencies..."
-DEP_LIST="setuptools pyyaml requests python-dotenv websocket-client py-cpuinfo GPUtil psutil transformers Pillow typing_extensions aiohttp einops safetensors scipy tqdm tenacity"
+"$PYTHON_EXE" -m pip install --quiet --break-system-packages --ignore-installed PyJWT 2>/dev/null || \
+"$PYTHON_EXE" -m pip install --quiet --ignore-installed PyJWT || true
+DEP_LIST="setuptools pyyaml requests python-dotenv websocket-client websockets py-cpuinfo GPUtil psutil docker supabase supabase-auth httpx httpcore anyio sniffio ffmpeg-python transformers Pillow typing_extensions aiohttp einops safetensors scipy tqdm tenacity PyJWT"
 "$PYTHON_EXE" -m pip install --quiet --break-system-packages $DEP_LIST 2>/dev/null || \
 "$PYTHON_EXE" -m pip install --quiet $DEP_LIST || true
 

@@ -47,6 +47,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python3 -m pip install --break-system-packages --no-cache-dir --upgrade \
       huggingface_hub hf_transfer fastapi "uvicorn[standard]" \
       python-multipart pyyaml requests \
+      docker supabase supabase-auth websocket-client websockets \
+      py-cpuinfo GPUtil psutil python-dotenv ffmpeg-python aiohttp \
     && ln -sf /usr/bin/python3 /usr/bin/python \
     && git lfs install \
     && apt-get clean \

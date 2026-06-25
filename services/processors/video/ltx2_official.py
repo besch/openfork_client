@@ -287,10 +287,10 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
 
     def _resolve_dataset_archive(self, inputs: dict) -> Optional[str]:
         archive_ref = (
-            inputs.get("dataset_archive_storage_path")
-            or inputs.get("dataset_zip_storage_path")
-            or inputs.get("dataset_archive_url")
+            inputs.get("dataset_archive_url")
             or inputs.get("dataset_url")
+            or inputs.get("dataset_archive_storage_path")
+            or inputs.get("dataset_zip_storage_path")
         )
         if archive_ref:
             return self._download_storage_or_url(
