@@ -1364,6 +1364,14 @@ if [ "$START_LTX2_PIPELINES" = "true" ]; then
   export LTX2_PIPELINES_API_WAIT_TIMEOUT="${LTX2_PIPELINES_API_WAIT_TIMEOUT:-1800}"
   export LTX2_PIPELINES_TIMEOUT="${LTX2_PIPELINES_TIMEOUT:-7200}"
   export MAX_INPUT_ASSET_BYTES="${MAX_INPUT_ASSET_BYTES:-4294967296}"
+  if [[ "${SERVICE_TYPE:-}" == *"16gb"* ]]; then
+      export LTX2_PIPELINES_MODULE="${LTX2_PIPELINES_MODULE:-ltx_pipelines.distilled}"
+      export LTX2_DISTILLED_CHECKPOINT_PATH="${LTX2_DISTILLED_CHECKPOINT_PATH:-/models/ltx2/ltx-2.3-22b-distilled-1.1.safetensors}"
+      export LTX2_MODEL_PATH="${LTX2_MODEL_PATH:-$LTX2_DISTILLED_CHECKPOINT_PATH}"
+      log "LTX-2 pipelines 16GB profile selected: using distilled pipeline module ${LTX2_PIPELINES_MODULE}."
+  else
+      export LTX2_PIPELINES_MODULE="${LTX2_PIPELINES_MODULE:-ltx_pipelines.ti2vid_two_stages}"
+  fi
 fi
 
 if [ "$START_TELESTYLEV2" = "true" ]; then
@@ -2043,10 +2051,11 @@ if [ "$START_LTX2_PIPELINES" = "true" ]; then
     export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
     export LTX2_PIPELINES_DIR="${LTX2_PIPELINES_DIR:-/opt/LTX-2/packages/ltx-pipelines}"
     export LTX2_MODEL_PATH="${LTX2_MODEL_PATH:-/models/ltx2/ltx-2.3-22b-dev.safetensors}"
+    export LTX2_DISTILLED_CHECKPOINT_PATH="${LTX2_DISTILLED_CHECKPOINT_PATH:-/models/ltx2/ltx-2.3-22b-distilled-1.1.safetensors}"
     export LTX2_GEMMA_ROOT="${LTX2_GEMMA_ROOT:-/models/gemma-3-12b-it-qat-q4_0-unquantized}"
     export LTX2_DISTILLED_LORA_PATH="${LTX2_DISTILLED_LORA_PATH:-/models/ltx2/ltx-2.3-22b-distilled-lora-384-1.1.safetensors}"
     export LTX2_SPATIAL_UPSAMPLER_PATH="${LTX2_SPATIAL_UPSAMPLER_PATH:-/models/ltx2/ltx-2.3-spatial-upscaler-x2-1.1.safetensors}"
-    log "LTX-2 pipelines config: pipelines=$LTX2_PIPELINES_DIR model=$LTX2_MODEL_PATH gemma=$LTX2_GEMMA_ROOT"
+    log "LTX-2 pipelines config: pipelines=$LTX2_PIPELINES_DIR module=${LTX2_PIPELINES_MODULE:-ltx_pipelines.ti2vid_two_stages} model=$LTX2_MODEL_PATH distilled=$LTX2_DISTILLED_CHECKPOINT_PATH gemma=$LTX2_GEMMA_ROOT"
     (cd /app && "$PYTHON_EXE" ltx2_pipelines_api.py > /tmp/ltx2_pipelines_api.log 2>&1) &
     if ! wait_for_url "LTX-2 pipelines API" "http://127.0.0.1:8000/health" 900 "/tmp/ltx2_pipelines_api.log"; then
       log "ERROR: LTX-2 pipelines API did not expose /health; not starting the DGN client."

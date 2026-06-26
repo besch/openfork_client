@@ -123,8 +123,9 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.scail2-wan2gp-16gb", "beschiak/openfork-scail2-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.scail2-wan2gp-24gb", "beschiak/openfork-scail2-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx23-wan2gp-hdr", "beschiak/openfork-ltx23-wan2gp-hdr:latest", build=True, push=True),
-    ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.ltx2-pipelines-lora-16gb", "beschiak/openfork-ltx2-pipelines-lora-16gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
@@ -158,6 +159,7 @@ OPTIONAL_IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-16gb", "beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.ltx2-pipelines-lora-16gb", "beschiak/openfork-ltx2-pipelines-lora-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx2-trainer-24gb", "beschiak/openfork-ltx2-trainer-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx2-pipelines-lora-24gb", "beschiak/openfork-ltx2-pipelines-lora-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
@@ -240,6 +242,9 @@ BUILD_PRESETS: Dict[str, List[str]] = {
         "openfork-krea2-turbo-16gb",
         "openfork-krea2-turbo-24gb",
     ],
+    "ltx2-official-16gb": [
+        "openfork-ltx2-pipelines-lora-16gb",
+    ],
     "ltx2-official-24gb": [
         "openfork-ltx2-trainer-24gb",
         "openfork-ltx2-pipelines-lora-24gb",
@@ -249,6 +254,7 @@ BUILD_PRESETS: Dict[str, List[str]] = {
         "openfork-ltx2-pipelines-lora-32gb",
     ],
     "ltx2-official": [
+        "openfork-ltx2-pipelines-lora-16gb",
         "openfork-ltx2-trainer-24gb",
         "openfork-ltx2-pipelines-lora-24gb",
         "openfork-ltx2-trainer-32gb",

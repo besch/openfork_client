@@ -25,6 +25,12 @@ PIPELINES_DIR = Path(
 MODEL_PATH = Path(
     os.environ.get("LTX2_MODEL_PATH", "/models/ltx2/ltx-2.3-22b-dev.safetensors")
 )
+DISTILLED_CHECKPOINT_PATH = Path(
+    os.environ.get(
+        "LTX2_DISTILLED_CHECKPOINT_PATH",
+        "/models/ltx2/ltx-2.3-22b-distilled-1.1.safetensors",
+    )
+)
 GEMMA_ROOT = Path(
     os.environ.get(
         "LTX2_GEMMA_ROOT",
@@ -53,6 +59,12 @@ DEFAULT_NUM_FRAMES = int(os.environ.get("LTX2_PIPELINES_DEFAULT_NUM_FRAMES", "49
 DEFAULT_STEPS = int(os.environ.get("LTX2_PIPELINES_DEFAULT_STEPS", "30"))
 DEFAULT_OFFLOAD_MODE = os.environ.get("LTX2_PIPELINES_DEFAULT_OFFLOAD", "cpu")
 DEFAULT_QUANTIZATION = os.environ.get("LTX2_PIPELINES_DEFAULT_QUANTIZATION", "fp8-cast")
+PIPELINE_MODULE = os.environ.get("LTX2_PIPELINES_MODULE", "ltx_pipelines.ti2vid_two_stages")
+
+SUPPORTED_PIPELINE_MODULES = {
+    "ltx_pipelines.ti2vid_two_stages",
+    "ltx_pipelines.distilled",
+}
 
 JOBS_ROOT.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -109,6 +121,16 @@ def _extract_lora_if_needed(lora_path: Path, workspace: Path) -> Path:
     return candidates[0]
 
 
+def _is_distilled_pipeline() -> bool:
+    return PIPELINE_MODULE == "ltx_pipelines.distilled"
+
+
+def _required_model_paths() -> list[Path]:
+    if _is_distilled_pipeline():
+        return [DISTILLED_CHECKPOINT_PATH, GEMMA_ROOT, SPATIAL_UPSAMPLER_PATH]
+    return [MODEL_PATH, GEMMA_ROOT, DISTILLED_LORA_PATH, SPATIAL_UPSAMPLER_PATH]
+
+
 def _run_pipeline(
     job_id: str,
     *,
@@ -142,51 +164,66 @@ def _run_pipeline(
         num_frames = _snap_frames(num_frames)
         offload_mode = offload_mode if offload_mode in {"none", "cpu", "disk"} else "cpu"
 
+        if PIPELINE_MODULE not in SUPPORTED_PIPELINE_MODULES:
+            raise ValueError(f"Unsupported LTX-2 pipeline module: {PIPELINE_MODULE}")
+
         command = [
             "uv",
             "run",
             "python",
             "-m",
-            "ltx_pipelines.ti2vid_two_stages",
-            "--checkpoint-path",
-            str(MODEL_PATH),
-            "--gemma-root",
-            str(GEMMA_ROOT),
-            "--distilled-lora",
-            str(DISTILLED_LORA_PATH),
-            str(distilled_lora_strength),
-            "--spatial-upsampler-path",
-            str(SPATIAL_UPSAMPLER_PATH),
-            "--lora",
-            str(selected_lora),
-            str(lora_strength),
-            "--prompt",
-            final_prompt,
-            "--negative-prompt",
-            negative_prompt,
-            "--image",
-            str(image_path),
-            "0",
-            str(image_strength),
-            "--width",
-            str(width),
-            "--height",
-            str(height),
-            "--num-frames",
-            str(num_frames),
-            "--frame-rate",
-            str(frame_rate),
-            "--num-inference-steps",
-            str(max(1, steps)),
-            "--seed",
-            str(seed),
-            "--offload",
-            offload_mode,
-            "--max-batch-size",
-            "1",
-            "--output-path",
-            str(output_path),
+            PIPELINE_MODULE,
         ]
+        if _is_distilled_pipeline():
+            command.extend(["--distilled-checkpoint-path", str(DISTILLED_CHECKPOINT_PATH)])
+        else:
+            command.extend(
+                [
+                    "--checkpoint-path",
+                    str(MODEL_PATH),
+                    "--distilled-lora",
+                    str(DISTILLED_LORA_PATH),
+                    str(distilled_lora_strength),
+                ]
+            )
+
+        command.extend(
+            [
+                "--gemma-root",
+                str(GEMMA_ROOT),
+                "--spatial-upsampler-path",
+                str(SPATIAL_UPSAMPLER_PATH),
+                "--lora",
+                str(selected_lora),
+                str(lora_strength),
+                "--prompt",
+                final_prompt,
+                "--image",
+                str(image_path),
+                "0",
+                str(image_strength),
+                "--width",
+                str(width),
+                "--height",
+                str(height),
+                "--num-frames",
+                str(num_frames),
+                "--frame-rate",
+                str(frame_rate),
+                "--seed",
+                str(seed),
+                "--offload",
+                offload_mode,
+                "--max-batch-size",
+                "1",
+                "--output-path",
+                str(output_path),
+            ]
+        )
+        if not _is_distilled_pipeline():
+            command.extend(["--negative-prompt", negative_prompt])
+        if not _is_distilled_pipeline():
+            command.extend(["--num-inference-steps", str(max(1, steps))])
         if quantization:
             command.extend(["--quantization", quantization])
 
@@ -196,11 +233,12 @@ def _run_pipeline(
             phase="generate",
             command=" ".join(command),
             settings={
+                "pipeline_module": PIPELINE_MODULE,
                 "width": width,
                 "height": height,
                 "num_frames": num_frames,
                 "frame_rate": frame_rate,
-                "steps": steps,
+                "steps": "distilled-fixed" if _is_distilled_pipeline() else steps,
                 "seed": seed,
                 "lora_strength": lora_strength,
                 "image_strength": image_strength,
@@ -246,16 +284,22 @@ def _run_pipeline(
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    required = [MODEL_PATH, GEMMA_ROOT, DISTILLED_LORA_PATH, SPATIAL_UPSAMPLER_PATH]
+    required = _required_model_paths()
+    module_supported = PIPELINE_MODULE in SUPPORTED_PIPELINE_MODULES
     model_ready = all(path.exists() for path in required)
     return {
-        "status": "ok" if model_ready else "error",
-        "model_loaded": model_ready,
+        "status": "ok" if module_supported and model_ready else "error",
+        "model_loaded": module_supported and model_ready,
+        "models_present": model_ready,
+        "module_supported": module_supported,
+        "pipeline_module": PIPELINE_MODULE,
         "pipeline_dir": str(PIPELINES_DIR),
         "checkpoint": str(MODEL_PATH),
+        "distilled_checkpoint": str(DISTILLED_CHECKPOINT_PATH),
         "gemma_root": str(GEMMA_ROOT),
         "distilled_lora": str(DISTILLED_LORA_PATH),
         "spatial_upsampler": str(SPATIAL_UPSAMPLER_PATH),
+        "missing_paths": [str(path) for path in required if not path.exists()],
         "target_vram_gb": TARGET_VRAM_GB,
         "vram_profile": VRAM_PROFILE,
         "default_width": DEFAULT_WIDTH,
@@ -289,7 +333,9 @@ async def generate_i2v_lora(
     quantization: str = Form(DEFAULT_QUANTIZATION),
     distilled_lora_strength: float = Form(0.8),
 ) -> dict[str, str]:
-    if not all(path.exists() for path in [MODEL_PATH, GEMMA_ROOT, DISTILLED_LORA_PATH, SPATIAL_UPSAMPLER_PATH]):
+    if PIPELINE_MODULE not in SUPPORTED_PIPELINE_MODULES:
+        raise HTTPException(status_code=503, detail=f"Unsupported LTX-2 pipeline module: {PIPELINE_MODULE}")
+    if not all(path.exists() for path in _required_model_paths()):
         raise HTTPException(status_code=503, detail="One or more LTX-2 pipeline model files are missing.")
     if not PIPELINES_DIR.exists():
         raise HTTPException(status_code=503, detail="LTX-2 pipelines directory is missing.")
