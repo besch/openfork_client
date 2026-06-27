@@ -45,6 +45,7 @@ DEFAULT_PIPELINES_FRAMES = int(os.environ.get("LTX2_PIPELINES_DEFAULT_NUM_FRAMES
 DEFAULT_PIPELINES_STEPS = int(os.environ.get("LTX2_PIPELINES_DEFAULT_STEPS", "30"))
 DEFAULT_PIPELINES_OFFLOAD = os.environ.get("LTX2_PIPELINES_DEFAULT_OFFLOAD", "cpu")
 DEFAULT_PIPELINES_QUANTIZATION = os.environ.get("LTX2_PIPELINES_DEFAULT_QUANTIZATION", "fp8-cast")
+DEFAULT_PIPELINES_MODULE = os.environ.get("LTX2_PIPELINES_MODULE", "ltx_pipelines.ti2vid_two_stages")
 
 
 def _as_int(value: Any, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -622,20 +623,24 @@ class LTX2PipelinesI2VLoraProcessor(LTX2OfficialBaseProcessor, VideoOutputHandle
         return None
 
     def _resolve_lora(self, inputs: dict) -> Optional[str]:
-        lora_ref = (
-            inputs.get("ltx_lora_storage_path")
-            or inputs.get("lora_storage_path")
-            or inputs.get("lora_package_storage_path")
-            or inputs.get("lora_url")
-            or inputs.get("ltx_lora_url")
-        )
-        if not lora_ref:
-            return None
-        return self._download_storage_or_url(
-            str(lora_ref),
-            self.input_dir,
-            bucket=inputs.get("lora_bucket") or inputs.get("bucket"),
-        )
+        lora_refs = [
+            inputs.get("lora_url"),
+            inputs.get("ltx_lora_url"),
+            inputs.get("ltx_lora_storage_path"),
+            inputs.get("lora_storage_path"),
+            inputs.get("lora_package_storage_path"),
+        ]
+        for lora_ref in lora_refs:
+            if not lora_ref:
+                continue
+            downloaded = self._download_storage_or_url(
+                str(lora_ref),
+                self.input_dir,
+                bucket=inputs.get("lora_bucket") or inputs.get("bucket"),
+            )
+            if downloaded:
+                return downloaded
+        return None
 
     def _submit_generation(self, image_path: str, lora_path: str, inputs: dict) -> Optional[str]:
         width, height = self._resolve_dimensions(inputs)
@@ -729,8 +734,12 @@ class LTX2PipelinesI2VLoraProcessor(LTX2OfficialBaseProcessor, VideoOutputHandle
         metadata.update(
             {
                 "processor": "LTX2PipelinesI2VLoraProcessor",
-                "model": "official-ltx-2.3-22b-dev",
-                "inference": "ltx_pipelines.ti2vid_two_stages",
+                "model": (
+                    "official-ltx-2.3-22b-distilled"
+                    if DEFAULT_PIPELINES_MODULE == "ltx_pipelines.distilled"
+                    else "official-ltx-2.3-22b-dev"
+                ),
+                "inference": DEFAULT_PIPELINES_MODULE,
                 "lora_strength": _as_float(inputs.get("lora_strength"), 0.8),
                 "ltx_lora_trigger": inputs.get("lora_trigger") or inputs.get("trigger"),
                 "target_vram_gb": DEFAULT_TARGET_VRAM_GB,
