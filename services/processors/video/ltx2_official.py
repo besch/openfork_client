@@ -46,6 +46,10 @@ DEFAULT_PIPELINES_STEPS = int(os.environ.get("LTX2_PIPELINES_DEFAULT_STEPS", "30
 DEFAULT_PIPELINES_OFFLOAD = os.environ.get("LTX2_PIPELINES_DEFAULT_OFFLOAD", "cpu")
 DEFAULT_PIPELINES_QUANTIZATION = os.environ.get("LTX2_PIPELINES_DEFAULT_QUANTIZATION", "fp8-cast")
 DEFAULT_PIPELINES_MODULE = os.environ.get("LTX2_PIPELINES_MODULE", "ltx_pipelines.ti2vid_two_stages")
+DEFAULT_PIPELINES_NEGATIVE_PROMPT = (
+    "worst quality, low quality, blurry, jittery, distorted anatomy, text, subtitles, "
+    "captions, logos, watermarks, slow motion, frozen motion, reverse loop, ping-pong motion"
+)
 
 
 def _as_int(value: Any, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -518,6 +522,10 @@ class LTX2TrainerI2VLoraProcessor(LTX2OfficialBaseProcessor):
 class LTX2PipelinesI2VLoraProcessor(LTX2OfficialBaseProcessor, VideoOutputHandler):
     """Generate I2V with official ltx-pipelines and a trained LoRA."""
 
+    PROCESSOR_NAME = "LTX2PipelinesI2VLoraProcessor"
+    GENERATION_MODE = "image-to-video-lora"
+    NATIVE_T2V = False
+
     MAX_WAIT_TIME = int(
         os.environ.get(
             "LTX2_PIPELINES_TIMEOUT",
@@ -646,8 +654,7 @@ class LTX2PipelinesI2VLoraProcessor(LTX2OfficialBaseProcessor, VideoOutputHandle
         width, height = self._resolve_dimensions(inputs)
         data = {
             "prompt": self.positive_prompt,
-            "negative_prompt": self.negative_prompt
-            or "worst quality, inconsistent motion, blurry, jittery, distorted",
+            "negative_prompt": self.negative_prompt or DEFAULT_PIPELINES_NEGATIVE_PROMPT,
             "trigger": str(inputs.get("lora_trigger") or inputs.get("trigger") or ""),
             "lora_strength": str(_as_float(inputs.get("lora_strength"), 0.8, -4.0, 4.0)),
             "width": str(width),
@@ -733,15 +740,17 @@ class LTX2PipelinesI2VLoraProcessor(LTX2OfficialBaseProcessor, VideoOutputHandle
         metadata = self._video_completion_metadata()
         metadata.update(
             {
-                "processor": "LTX2PipelinesI2VLoraProcessor",
+                "processor": self.PROCESSOR_NAME,
                 "model": (
                     "official-ltx-2.3-22b-distilled"
                     if DEFAULT_PIPELINES_MODULE == "ltx_pipelines.distilled"
                     else "official-ltx-2.3-22b-dev"
                 ),
+                "generation_mode": self.GENERATION_MODE,
                 "inference": DEFAULT_PIPELINES_MODULE,
                 "lora_strength": _as_float(inputs.get("lora_strength"), 0.8),
                 "ltx_lora_trigger": inputs.get("lora_trigger") or inputs.get("trigger"),
+                "native_ltx2_t2v": self.NATIVE_T2V,
                 "target_vram_gb": DEFAULT_TARGET_VRAM_GB,
                 "experimental_vram_profile": DEFAULT_TARGET_VRAM_GB < 32,
                 "api_result": {
@@ -776,3 +785,103 @@ class LTX2PipelinesI2VLoraProcessor(LTX2OfficialBaseProcessor, VideoOutputHandle
         if aspect_ratio == "3:4":
             return max(288, int(round(DEFAULT_PIPELINES_HEIGHT * 3 / 4))), DEFAULT_PIPELINES_HEIGHT
         return DEFAULT_PIPELINES_WIDTH, DEFAULT_PIPELINES_HEIGHT
+
+
+class LTX2PipelinesTextToVideoProcessor(LTX2PipelinesI2VLoraProcessor):
+    """Generate native prompt-only video with official ltx-pipelines."""
+
+    PROCESSOR_NAME = "LTX2PipelinesTextToVideoProcessor"
+    GENERATION_MODE = "text-to-video"
+    NATIVE_T2V = True
+
+    def process(self):
+        if not self.job:
+            self._fail_job("Job object is None for LTX2PipelinesTextToVideoProcessor.")
+            return
+
+        logging.info("Processing official LTX-2 pipelines text-to-video job %s", self.job_id)
+        if not self._wait_for_api(int(os.environ.get("LTX2_PIPELINES_API_WAIT_TIMEOUT", "1800"))):
+            self._fail_job(self._api_startup_error or "LTX-2 pipelines API did not become ready")
+            return
+
+        inputs = self.job.get("inputs") or {}
+        lora_path = self._resolve_lora(inputs)
+        api_job_id = self._submit_text_generation(lora_path, inputs)
+        if not api_job_id:
+            self._fail_job("Failed to submit LTX-2 pipelines text-to-video job")
+            return
+
+        local_path: Optional[str] = None
+        try:
+            result = self._poll_for_completion(
+                api_job_id,
+                max_wait_time=self.MAX_WAIT_TIME,
+                label="LTX-2 pipelines",
+            )
+            if result.get("status") != "completed":
+                self._fail_job(f"LTX-2 pipelines generation failed: {result.get('error', 'Unknown error')}")
+                return
+            local_path = self._download_video(api_job_id)
+            if not local_path:
+                self._fail_job("Failed to download LTX-2 pipelines video output")
+                return
+            self._finalize_video(local_path, result, inputs)
+        except TokenExpiredError:
+            raise
+        except Exception as exc:
+            logging.error("Official LTX-2 pipelines text-to-video job failed: %s", exc, exc_info=True)
+            self._fail_job(f"Error processing LTX-2 pipelines text-to-video job: {exc}")
+        finally:
+            self._cleanup_remote_job(api_job_id)
+            self._cleanup_container_file(
+                f"/app/output/{api_job_id}.mp4",
+                "LTX-2 pipelines API output",
+            )
+            if local_path and os.path.exists(local_path):
+                self._cleanup_local_file(local_path, "LTX-2 pipelines video")
+
+    def _submit_text_generation(self, lora_path: Optional[str], inputs: dict) -> Optional[str]:
+        width, height = self._resolve_dimensions(inputs)
+        data = {
+            "prompt": self.positive_prompt,
+            "negative_prompt": self.negative_prompt or DEFAULT_PIPELINES_NEGATIVE_PROMPT,
+            "trigger": str(inputs.get("lora_trigger") or inputs.get("trigger") or ""),
+            "lora_strength": str(_as_float(inputs.get("lora_strength"), 0.8, -4.0, 4.0)),
+            "width": str(width),
+            "height": str(height),
+            "num_frames": str(_as_int(inputs.get("num_frames") or inputs.get("frames"), DEFAULT_PIPELINES_FRAMES, 1, 257)),
+            "frame_rate": str(_as_float(inputs.get("frame_rate"), 25.0, 1.0, 60.0)),
+            "steps": str(_as_int(inputs.get("steps") or inputs.get("num_inference_steps"), DEFAULT_PIPELINES_STEPS, 1, 80)),
+            "seed": str(_as_int(inputs.get("seed"), 42)),
+            "offload_mode": str(inputs.get("offload_mode") or inputs.get("offload") or DEFAULT_PIPELINES_OFFLOAD),
+            "quantization": str(inputs.get("quantization") or DEFAULT_PIPELINES_QUANTIZATION),
+            "distilled_lora_strength": str(_as_float(inputs.get("distilled_lora_strength"), 0.8, 0.0, 2.0)),
+        }
+        try:
+            if lora_path:
+                lora_mime = "application/zip" if lora_path.lower().endswith(".zip") else "application/octet-stream"
+                with open(lora_path, "rb") as lora_handle:
+                    files = {
+                        "lora": (os.path.basename(lora_path), lora_handle, lora_mime),
+                    }
+                    response = self.session.post(
+                        f"{self.api_base_url}/generate/t2v",
+                        data=data,
+                        files=files,
+                        timeout=180,
+                    )
+            else:
+                response = self.session.post(
+                    f"{self.api_base_url}/generate/t2v",
+                    data=data,
+                    timeout=180,
+                )
+            if response.status_code == 200:
+                api_job_id = response.json().get("job_id")
+                logging.info("Submitted official LTX-2 pipelines T2V job %s", api_job_id)
+                return api_job_id
+            logging.error("LTX-2 pipelines T2V submit failed: %s %s", response.status_code, response.text)
+            return None
+        except requests.exceptions.RequestException as exc:
+            logging.error("LTX-2 pipelines T2V submit error: %s", exc)
+            return None

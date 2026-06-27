@@ -25,6 +25,7 @@ from .video.ltx23_image import LTX23ImageToVideoWan2GPProcessor
 from .video.ltx2_official import (
     LTX2TrainerI2VLoraProcessor,
     LTX2PipelinesI2VLoraProcessor,
+    LTX2PipelinesTextToVideoProcessor,
 )
 from .video.upscaler import VideoUpscalerJobProcessor
 from .video.sparkvsr import SparkVSRUpscalerJobProcessor
@@ -118,6 +119,7 @@ __all__ = [
     "LTX23ImageToVideoWan2GPProcessor",
     "LTX2TrainerI2VLoraProcessor",
     "LTX2PipelinesI2VLoraProcessor",
+    "LTX2PipelinesTextToVideoProcessor",
     "VideoUpscalerJobProcessor",
     "SparkVSRUpscalerJobProcessor",
     "TurboDiffusionT2VJobProcessor",

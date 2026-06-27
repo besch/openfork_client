@@ -10,6 +10,11 @@ from .wan22_wan2gp import (
 from .upscaler import VideoUpscalerJobProcessor
 from .sparkvsr import SparkVSRUpscalerJobProcessor
 from .turbodiffusion import TurboDiffusionT2VJobProcessor, TurboDiffusionI2VJobProcessor
+from .ltx2_official import (
+    LTX2PipelinesI2VLoraProcessor,
+    LTX2PipelinesTextToVideoProcessor,
+    LTX2TrainerI2VLoraProcessor,
+)
 from .dreamid_omni import DreamIDOmniImageToVideoProcessor
 from .scail2 import SCAIL2ImageToVideoProcessor
 from .vista4d import Vista4DVideoToVideoProcessor
@@ -21,6 +26,9 @@ __all__ = [
     "WAN22TextToVideoWan2GPProcessor",
     "WAN22ImageToVideoWan2GPProcessor",
     "ImageToVideoFromLastFrameWan2GPProcessor",
+    "LTX2PipelinesI2VLoraProcessor",
+    "LTX2PipelinesTextToVideoProcessor",
+    "LTX2TrainerI2VLoraProcessor",
     "VideoUpscalerJobProcessor",
     "SparkVSRUpscalerJobProcessor",
     "DreamIDOmniImageToVideoProcessor",

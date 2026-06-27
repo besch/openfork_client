@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FastAPI wrapper for official LTX-2 pipelines LoRA inference."""
+"""FastAPI wrapper for official LTX-2 pipelines inference."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import time
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -134,8 +134,8 @@ def _required_model_paths() -> list[Path]:
 def _run_pipeline(
     job_id: str,
     *,
-    image_path: Path,
-    lora_path: Path,
+    image_path: Path | None,
+    lora_path: Path | None,
     prompt: str,
     negative_prompt: str,
     trigger: str,
@@ -157,7 +157,7 @@ def _run_pipeline(
 
     try:
         workspace.mkdir(parents=True, exist_ok=True)
-        selected_lora = _extract_lora_if_needed(lora_path, workspace)
+        selected_lora = _extract_lora_if_needed(lora_path, workspace) if lora_path else None
         final_prompt = " ".join(part for part in [trigger.strip(), prompt.strip()] if part)
         width = _snap_to_multiple(width, 64, 512)
         height = _snap_to_multiple(height, 64, 288)
@@ -193,15 +193,8 @@ def _run_pipeline(
                 str(GEMMA_ROOT),
                 "--spatial-upsampler-path",
                 str(SPATIAL_UPSAMPLER_PATH),
-                "--lora",
-                str(selected_lora),
-                str(lora_strength),
                 "--prompt",
                 final_prompt,
-                "--image",
-                str(image_path),
-                "0",
-                str(image_strength),
                 "--width",
                 str(width),
                 "--height",
@@ -220,6 +213,10 @@ def _run_pipeline(
                 str(output_path),
             ]
         )
+        if selected_lora:
+            command.extend(["--lora", str(selected_lora), str(lora_strength)])
+        if image_path:
+            command.extend(["--image", str(image_path), "0", str(image_strength)])
         if not _is_distilled_pipeline():
             command.extend(["--negative-prompt", negative_prompt])
         if not _is_distilled_pipeline():
@@ -233,6 +230,7 @@ def _run_pipeline(
             phase="generate",
             command=" ".join(command),
             settings={
+                "mode": "image-to-video-lora" if image_path else "text-to-video",
                 "pipeline_module": PIPELINE_MODULE,
                 "width": width,
                 "height": height,
@@ -240,8 +238,9 @@ def _run_pipeline(
                 "frame_rate": frame_rate,
                 "steps": "distilled-fixed" if _is_distilled_pipeline() else steps,
                 "seed": seed,
-                "lora_strength": lora_strength,
-                "image_strength": image_strength,
+                "has_lora": selected_lora is not None,
+                "lora_strength": lora_strength if selected_lora else None,
+                "image_strength": image_strength if image_path else None,
                 "offload_mode": offload_mode,
                 "quantization": quantization,
             },
@@ -309,8 +308,17 @@ def health() -> dict[str, Any]:
         "default_offload_mode": DEFAULT_OFFLOAD_MODE,
         "default_quantization": DEFAULT_QUANTIZATION,
         "experimental": TARGET_VRAM_GB < 32,
-        "notes": "Official LTX-2 ltx-pipelines two-stage I2V with LoRA support.",
+        "notes": "Official LTX-2 ltx-pipelines two-stage T2V plus I2V LoRA support.",
     }
+
+
+def _assert_generation_ready() -> None:
+    if PIPELINE_MODULE not in SUPPORTED_PIPELINE_MODULES:
+        raise HTTPException(status_code=503, detail=f"Unsupported LTX-2 pipeline module: {PIPELINE_MODULE}")
+    if not all(path.exists() for path in _required_model_paths()):
+        raise HTTPException(status_code=503, detail="One or more LTX-2 pipeline model files are missing.")
+    if not PIPELINES_DIR.exists():
+        raise HTTPException(status_code=503, detail="LTX-2 pipelines directory is missing.")
 
 
 @app.post("/generate/i2v-lora")
@@ -319,7 +327,10 @@ async def generate_i2v_lora(
     image: UploadFile = File(...),
     lora: UploadFile = File(...),
     prompt: str = Form(...),
-    negative_prompt: str = Form("worst quality, inconsistent motion, blurry, jittery, distorted"),
+    negative_prompt: str = Form(
+        "worst quality, low quality, blurry, jittery, distorted anatomy, text, subtitles, "
+        "captions, logos, watermarks, slow motion, frozen motion, reverse loop, ping-pong motion"
+    ),
     trigger: str = Form(""),
     lora_strength: float = Form(0.8),
     width: int = Form(DEFAULT_WIDTH),
@@ -333,12 +344,7 @@ async def generate_i2v_lora(
     quantization: str = Form(DEFAULT_QUANTIZATION),
     distilled_lora_strength: float = Form(0.8),
 ) -> dict[str, str]:
-    if PIPELINE_MODULE not in SUPPORTED_PIPELINE_MODULES:
-        raise HTTPException(status_code=503, detail=f"Unsupported LTX-2 pipeline module: {PIPELINE_MODULE}")
-    if not all(path.exists() for path in _required_model_paths()):
-        raise HTTPException(status_code=503, detail="One or more LTX-2 pipeline model files are missing.")
-    if not PIPELINES_DIR.exists():
-        raise HTTPException(status_code=503, detail="LTX-2 pipelines directory is missing.")
+    _assert_generation_ready()
 
     job_id = uuid.uuid4().hex
     workspace = JOBS_ROOT / job_id
@@ -374,6 +380,103 @@ async def generate_i2v_lora(
         distilled_lora_strength=float(distilled_lora_strength),
     )
     return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/generate/t2v")
+async def generate_t2v(
+    background_tasks: BackgroundTasks,
+    prompt: str = Form(...),
+    lora: Optional[UploadFile] = File(None),
+    negative_prompt: str = Form(
+        "worst quality, low quality, blurry, jittery, distorted anatomy, text, subtitles, "
+        "captions, logos, watermarks, slow motion, frozen motion, reverse loop, ping-pong motion"
+    ),
+    trigger: str = Form(""),
+    lora_strength: float = Form(0.8),
+    width: int = Form(DEFAULT_WIDTH),
+    height: int = Form(DEFAULT_HEIGHT),
+    num_frames: int = Form(DEFAULT_NUM_FRAMES),
+    frame_rate: float = Form(25.0),
+    steps: int = Form(DEFAULT_STEPS),
+    seed: int = Form(42),
+    offload_mode: str = Form(DEFAULT_OFFLOAD_MODE),
+    quantization: str = Form(DEFAULT_QUANTIZATION),
+    distilled_lora_strength: float = Form(0.8),
+) -> dict[str, str]:
+    _assert_generation_ready()
+
+    job_id = uuid.uuid4().hex
+    workspace = JOBS_ROOT / job_id
+    workspace.mkdir(parents=True, exist_ok=True)
+    lora_path: Path | None = None
+    if lora:
+        lora_suffix = Path(lora.filename or "lora.safetensors").suffix or ".safetensors"
+        lora_path = workspace / f"lora{lora_suffix}"
+        with lora_path.open("wb") as handle:
+            shutil.copyfileobj(lora.file, handle)
+
+    _set_job(job_id, status="queued", phase="queued", created_at=time.time())
+    background_tasks.add_task(
+        _run_pipeline,
+        job_id,
+        image_path=None,
+        lora_path=lora_path,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        trigger=trigger,
+        lora_strength=float(lora_strength),
+        width=int(width),
+        height=int(height),
+        num_frames=int(num_frames),
+        frame_rate=float(frame_rate),
+        steps=int(steps),
+        seed=int(seed),
+        image_strength=0.0,
+        offload_mode=offload_mode,
+        quantization=quantization,
+        distilled_lora_strength=float(distilled_lora_strength),
+    )
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/generate/text-to-video")
+async def generate_text_to_video(
+    background_tasks: BackgroundTasks,
+    prompt: str = Form(...),
+    lora: Optional[UploadFile] = File(None),
+    negative_prompt: str = Form(
+        "worst quality, low quality, blurry, jittery, distorted anatomy, text, subtitles, "
+        "captions, logos, watermarks, slow motion, frozen motion, reverse loop, ping-pong motion"
+    ),
+    trigger: str = Form(""),
+    lora_strength: float = Form(0.8),
+    width: int = Form(DEFAULT_WIDTH),
+    height: int = Form(DEFAULT_HEIGHT),
+    num_frames: int = Form(DEFAULT_NUM_FRAMES),
+    frame_rate: float = Form(25.0),
+    steps: int = Form(DEFAULT_STEPS),
+    seed: int = Form(42),
+    offload_mode: str = Form(DEFAULT_OFFLOAD_MODE),
+    quantization: str = Form(DEFAULT_QUANTIZATION),
+    distilled_lora_strength: float = Form(0.8),
+) -> dict[str, str]:
+    return await generate_t2v(
+        background_tasks,
+        prompt=prompt,
+        lora=lora,
+        negative_prompt=negative_prompt,
+        trigger=trigger,
+        lora_strength=lora_strength,
+        width=width,
+        height=height,
+        num_frames=num_frames,
+        frame_rate=frame_rate,
+        steps=steps,
+        seed=seed,
+        offload_mode=offload_mode,
+        quantization=quantization,
+        distilled_lora_strength=distilled_lora_strength,
+    )
 
 
 @app.get("/status/{job_id}")
