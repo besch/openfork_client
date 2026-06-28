@@ -1,0 +1,28 @@
+services:
+  domainshuttle-80gb:
+    build:
+      context: .
+      dockerfile: Dockerfile.domainshuttle-80gb
+      secrets:
+        - hf_token
+    container_name: domainshuttle-80gb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/domainshuttle/input:/app/input
+      - ./storage/domainshuttle/output:/app/output
+    environment:
+      DOMAINSHUTTLE_NPROC_PER_NODE: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

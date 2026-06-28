@@ -126,6 +126,7 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx2-pipelines-lora-16gb", "beschiak/openfork-ltx2-pipelines-lora-16gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.domainshuttle-80gb", "beschiak/openfork-domainshuttle-80gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
@@ -156,6 +157,7 @@ OPTIONAL_IMAGES: List[ImageConfig] = [
     ImageConfig("Dockerfile.vista4d-wan2gp-24gb", "beschiak/openfork-vista4d-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.dreamid-omni-24gb", "beschiak/openfork-dreamid-omni-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.telestylev2-80gb", "beschiak/openfork-telestylev2-80gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.domainshuttle-80gb", "beschiak/openfork-domainshuttle-80gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-16gb", "beschiak/openfork-davinci-magihuman-wan2gp-16gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-24gb", "beschiak/openfork-davinci-magihuman-wan2gp-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.davinci-magihuman-wan2gp-32gb", "beschiak/openfork-davinci-magihuman-wan2gp-32gb:latest", build=True, push=True, direct_push=True),
@@ -236,6 +238,9 @@ BUILD_PRESETS: Dict[str, List[str]] = {
     ],
     "telestylev2": [
         "openfork-telestylev2-80gb",
+    ],
+    "domainshuttle": [
+        "openfork-domainshuttle-80gb",
     ],
     "krea2": [
         "openfork-krea2-turbo-8gb",
@@ -659,6 +664,35 @@ def select_images(
     return deduped
 
 
+def print_no_image_match_diagnostics(
+    image_indexes: List[int] = None,
+    image_filters: List[str] = None,
+    image_pool: List[ImageConfig] = None,
+) -> None:
+    image_indexes = image_indexes or []
+    image_filters = image_filters or []
+    image_pool = image_pool or []
+
+    print("❌ No images matched the requested filters.")
+
+    if image_indexes:
+        print(f"Requested image indexes: {', '.join(str(index) for index in image_indexes)}")
+
+    if image_filters:
+        print("Requested image filters:")
+        for image_filter in image_filters:
+            print(f"   - {image_filter}")
+    elif not IMAGES:
+        print(
+            "Default IMAGES queue is empty. Uncomment/add an ImageConfig in IMAGES, "
+            "or pass --image/--preset to select from optional images."
+        )
+
+    print(f"Default IMAGES entries: {len(IMAGES)}")
+    print(f"Optional image entries: {len(OPTIONAL_IMAGES)}")
+    print(f"Search pool entries: {len(image_pool)}")
+
+
 def parse_delay(delay_str: str) -> int:
     """
     Parse a delay string into seconds.
@@ -849,7 +883,7 @@ def main():
         sys.exit(0)
 
     if not selected_images:
-        print("❌ No images matched the requested filters.")
+        print_no_image_match_diagnostics(args.image_index, image_filters, image_pool)
         sys.exit(1)
 
     if "build" in args.actions:

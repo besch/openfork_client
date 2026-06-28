@@ -18,6 +18,7 @@ from .ltx2_official import (
 from .dreamid_omni import DreamIDOmniImageToVideoProcessor
 from .scail2 import SCAIL2ImageToVideoProcessor
 from .vista4d import Vista4DVideoToVideoProcessor
+from .domainshuttle import DomainShuttleImageToVideoProcessor
 
 __all__ = [
     "WAN22TextToVideoJobProcessor",
@@ -34,5 +35,6 @@ __all__ = [
     "DreamIDOmniImageToVideoProcessor",
     "SCAIL2ImageToVideoProcessor",
     "Vista4DVideoToVideoProcessor",
+    "DomainShuttleImageToVideoProcessor",
     "TurboDiffusionI2VJobProcessor",
 ]

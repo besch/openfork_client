@@ -715,6 +715,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/sparkvsr_api.py" ] && cp -v "$DGN_SOURCE_DIR/sparkvsr_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/ernie_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/ernie_image_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/telestylev2_api.py" ] && cp -v "$DGN_SOURCE_DIR/telestylev2_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/domainshuttle_api.py" ] && cp -v "$DGN_SOURCE_DIR/domainshuttle_api.py" /app/
           [ -d "/app/PiD" ] && [ -f "$DGN_SOURCE_DIR/pid_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/pid_image_api.py" /app/PiD/
       fi
       
@@ -898,6 +899,7 @@ START_LTX2_TRAINER="false"
 START_LTX2_PIPELINES="false"
 START_PID_IMAGE="false"
 START_TELESTYLEV2="false"
+START_DOMAINSHUTTLE="false"
 START_PRISMAUDIO="false"
 START_MMAUDIO="false"
 START_ACESTEP="false"
@@ -1197,6 +1199,15 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ideogram4-16gb"
           log "Auto-selected Ideogram 4 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/app/domainshuttle_api.py" ]; then
+      log "Auto-mode: Detected DomainShuttle image. Selecting DomainShuttle 80GB service."
+      START_DOMAINSHUTTLE="true"
+      SERVICE_TYPE="domainshuttle-80gb"
+      if [ "$TOTAL_VRAM_MB" -lt 70000 ]; then
+          log "WARNING: DomainShuttle uses Wan2.2 A14B and is registered as an 80GB tier; detected only ${TOTAL_VRAM_MB}MB VRAM."
+      else
+          log "Auto-selected DomainShuttle 80GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
+      fi
   elif [ -f "/app/telestylev2_api.py" ]; then
       log "Auto-mode: Detected TeleStyleV2 image. Selecting TeleStyleV2 80GB service."
       START_TELESTYLEV2="true"
@@ -1232,6 +1243,7 @@ else
   if [[ "$SERVICE_TYPE" == *"ltx2-pipelines"* ]]; then START_LTX2_PIPELINES="true"; fi
   if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"telestylev2"* ]]; then START_TELESTYLEV2="true"; fi
+  if [[ "$SERVICE_TYPE" == *"domainshuttle"* ]]; then START_DOMAINSHUTTLE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL-2, and Vista4D services.
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"wan22-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail2-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
@@ -1377,6 +1389,15 @@ fi
 if [ "$START_TELESTYLEV2" = "true" ]; then
   log "TeleStyleV2 selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
+fi
+
+if [ "$START_DOMAINSHUTTLE" = "true" ]; then
+  log "DomainShuttle selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+  export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  export DOMAINSHUTTLE_API_WAIT_TIMEOUT="${DOMAINSHUTTLE_API_WAIT_TIMEOUT:-3600}"
+  export DOMAINSHUTTLE_GENERATION_TIMEOUT="${DOMAINSHUTTLE_GENERATION_TIMEOUT:-10800}"
+  export DOMAINSHUTTLE_NPROC_PER_NODE="${DOMAINSHUTTLE_NPROC_PER_NODE:-1}"
 fi
 
 if [ "$START_PRISMAUDIO" = "true" ]; then
@@ -2497,6 +2518,34 @@ if [ "$START_IDEOGRAM4" = "true" ]; then
     fi
   else
     log "ERROR: Ideogram 4 API not found at /app/ideogram4_api.py"
+    exit 1
+  fi
+fi
+
+# Start DomainShuttle REST API
+if [ "$START_DOMAINSHUTTLE" = "true" ]; then
+  log "Starting DomainShuttle API service..."
+  if [ -f "/app/domainshuttle_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/domainshuttle_api.py" "/app/domainshuttle_api.py" || true
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export DOMAINSHUTTLE_MODEL_LOAD_TIMEOUT="${DOMAINSHUTTLE_MODEL_LOAD_TIMEOUT:-3600}"
+    export DOMAINSHUTTLE_API_WAIT_TIMEOUT="${DOMAINSHUTTLE_API_WAIT_TIMEOUT:-3600}"
+    export DOMAINSHUTTLE_NPROC_PER_NODE="${DOMAINSHUTTLE_NPROC_PER_NODE:-1}"
+    export DOMAINSHUTTLE_DEFAULT_VIDEO_LENGTH="${DOMAINSHUTTLE_DEFAULT_VIDEO_LENGTH:-81}"
+    export DOMAINSHUTTLE_DEFAULT_FPS="${DOMAINSHUTTLE_DEFAULT_FPS:-24}"
+    log "DomainShuttle config: nproc=$DOMAINSHUTTLE_NPROC_PER_NODE frames=$DOMAINSHUTTLE_DEFAULT_VIDEO_LENGTH fps=$DOMAINSHUTTLE_DEFAULT_FPS model_load_timeout=$DOMAINSHUTTLE_MODEL_LOAD_TIMEOUT"
+    (cd /app && "$PYTHON_EXE" domainshuttle_api.py > /tmp/domainshuttle_api.log 2>&1) &
+    if ! wait_for_url "DomainShuttle API" "http://127.0.0.1:8000/health" 900 "/tmp/domainshuttle_api.log"; then
+      log "ERROR: DomainShuttle API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "DomainShuttle" "http://127.0.0.1:8000/health" "$DOMAINSHUTTLE_MODEL_LOAD_TIMEOUT" "/tmp/domainshuttle_api.log"; then
+      log "ERROR: DomainShuttle model did not become ready; not starting the DGN client."
+      exit 1
+    fi
+  else
+    log "ERROR: DomainShuttle API not found at /app/domainshuttle_api.py"
     exit 1
   fi
 fi

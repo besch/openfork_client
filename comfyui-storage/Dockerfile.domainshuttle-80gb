@@ -1,0 +1,140 @@
+# syntax=docker/dockerfile:1.4
+# DomainShuttle Wan2.2 A14B reference image-to-video image.
+
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=$CUDA_HOME/bin:$PATH
+ENV LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DEFAULT_TIMEOUT=180
+ENV HF_HOME=/models/huggingface
+ENV HUGGINGFACE_HUB_CACHE=/models/huggingface
+ENV TRANSFORMERS_CACHE=/models/huggingface
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+ENV HF_HUB_DISABLE_TELEMETRY=1
+ENV HF_HUB_ENABLE_HF_TRANSFER=1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ENV DOMAINSHUTTLE_REPO_DIR=/opt/DomainShuttle
+ENV DOMAINSHUTTLE_MODEL_PATH=/models/DomainShuttle/Wan2.2-DomainShuttle-A14B
+ENV DOMAINSHUTTLE_INPUT_DIR=/app/input
+ENV DOMAINSHUTTLE_OUTPUT_DIR=/app/output
+ENV DOMAINSHUTTLE_NPROC_PER_NODE=1
+ENV DOMAINSHUTTLE_DEFAULT_WIDTH=832
+ENV DOMAINSHUTTLE_DEFAULT_HEIGHT=480
+ENV DOMAINSHUTTLE_DEFAULT_VIDEO_LENGTH=81
+ENV DOMAINSHUTTLE_DEFAULT_FPS=24
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-venv python3-pip \
+    curl git git-lfs wget ffmpeg build-essential ninja-build ca-certificates \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
+    && git lfs install \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && python -m pip install --no-cache-dir --upgrade pip setuptools wheel packaging \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir \
+    torch==2.5.1 \
+    torchvision==0.20.1 \
+    torchaudio==2.5.1 \
+    --index-url https://download.pytorch.org/whl/cu124
+
+ARG DOMAINSHUTTLE_REF=main
+RUN git clone --depth 1 --branch "${DOMAINSHUTTLE_REF}" https://github.com/HKUST-C4G/DomainShuttle.git /opt/DomainShuttle \
+    && rm -rf /opt/DomainShuttle/.git
+
+RUN if [ -f /opt/DomainShuttle/requirements.txt ]; then \
+      grep -Evi '^(torch|torchvision|torchaudio|xformers)([<=> ]|$)' /opt/DomainShuttle/requirements.txt > /tmp/domainshuttle-requirements.txt || true; \
+      if [ -s /tmp/domainshuttle-requirements.txt ]; then python -m pip install --no-cache-dir -r /tmp/domainshuttle-requirements.txt; fi; \
+    fi \
+    && python -m pip install --no-cache-dir \
+      fastapi \
+      "uvicorn[standard]" \
+      python-multipart \
+      pydantic \
+      pillow \
+      requests \
+      huggingface_hub[hf_transfer] \
+      safetensors \
+      sentencepiece \
+      protobuf \
+      opencv-python-headless \
+      xfuser==0.4.2 \
+      yunchang==0.6.2 \
+    && python -m pip install --no-cache-dir flash-attn --no-build-isolation
+
+RUN mkdir -p /app/input /app/output /models/DomainShuttle
+
+RUN --mount=type=secret,id=hf_token,required=true python - <<'PY'
+import os
+import shutil
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+token_path = "/run/secrets/hf_token"
+with open(token_path, "r", encoding="utf-8") as handle:
+    token = handle.read().strip()
+if not token:
+    raise RuntimeError("HF token secret is empty")
+
+model_dir = Path(os.environ["DOMAINSHUTTLE_MODEL_PATH"])
+model_dir.mkdir(parents=True, exist_ok=True)
+
+snapshot_download(
+    "CNcreator0331/DomainShuttle_weight",
+    local_dir=str(model_dir),
+    token=token,
+)
+
+base_dir = Path("/tmp/Wan2.2-T2V-A14B")
+snapshot_download(
+    "Wan-AI/Wan2.2-T2V-A14B",
+    local_dir=str(base_dir),
+    token=token,
+    allow_patterns=[
+        "google/**",
+        "Wan2.1_VAE.pth",
+        "configuration.json",
+        "models_t5_umt5-xxl-enc-bf16.pth",
+    ],
+)
+
+for name in (
+    "Wan2.1_VAE.pth",
+    "configuration.json",
+    "models_t5_umt5-xxl-enc-bf16.pth",
+):
+    source = base_dir / name
+    if source.exists():
+        shutil.copy2(source, model_dir / name)
+
+google_source = base_dir / "google"
+google_dest = model_dir / "google"
+if google_source.exists():
+    if google_dest.exists():
+        shutil.rmtree(google_dest)
+    shutil.copytree(google_source, google_dest)
+
+shutil.rmtree(base_dir, ignore_errors=True)
+PY
+
+RUN cd /opt/DomainShuttle \
+    && if [ ! -f "$DOMAINSHUTTLE_MODEL_PATH/high_noise_model/diffusion_pytorch_model.safetensors" ] \
+       || [ ! -f "$DOMAINSHUTTLE_MODEL_PATH/low_noise_model/diffusion_pytorch_model.safetensors" ]; then \
+         python scripts/wan2.2_domainshuttle/convert_mindspeed_domainshuttle.py --output "$DOMAINSHUTTLE_MODEL_PATH" || true; \
+       fi
+
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+COPY domainshuttle_api.py /app/domainshuttle_api.py
+
+EXPOSE 8000
+
+CMD ["python", "/app/domainshuttle_api.py"]

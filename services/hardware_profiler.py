@@ -13,6 +13,8 @@ try:
 except ImportError:
     HEADLESS_MODE = False
 
+MAX_ORCHESTRATOR_CPU_CORES = 256
+
 
 def _parse_float(value: Any) -> Optional[float]:
     if value is None:
@@ -162,9 +164,10 @@ def get_hardware_profile():
     """Get hardware profile of the system."""
     # Get CPU information
     cpu_info = cpuinfo.get_cpu_info()
+    cpu_count = int(cpu_info.get("count") or 0)
     cpu = {
-        "brand": cpu_info["brand_raw"],
-        "cores": cpu_info["count"],
+        "brand": cpu_info.get("brand_raw") or cpu_info.get("brand") or "Unknown CPU",
+        "cores": min(cpu_count, MAX_ORCHESTRATOR_CPU_CORES) if cpu_count > 0 else 0,
     }
 
     # Get GPU information

@@ -64,19 +64,35 @@ RUN mkdir -p /models/ltx2 /models/gemma-3-12b-it-qat-q4_0-unquantized /app/outpu
 
 RUN --mount=type=secret,id=hf_token,required=true python3 - <<'PY'
 from pathlib import Path
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import hf_hub_download
 
 token = Path("/run/secrets/hf_token").read_text(encoding="utf-8").strip()
-for filename in [
-    "ltx-2.3-22b-distilled-1.1.safetensors",
-    "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
-]:
-    hf_hub_download(
-        repo_id="Lightricks/LTX-2.3",
-        filename=filename,
-        local_dir="/models/ltx2",
-        token=token,
-    )
+hf_hub_download(
+    repo_id="Lightricks/LTX-2.3",
+    filename="ltx-2.3-22b-distilled-1.1.safetensors",
+    local_dir="/models/ltx2",
+    token=token,
+)
+PY
+
+RUN --mount=type=secret,id=hf_token,required=true python3 - <<'PY'
+from pathlib import Path
+from huggingface_hub import hf_hub_download
+
+token = Path("/run/secrets/hf_token").read_text(encoding="utf-8").strip()
+hf_hub_download(
+    repo_id="Lightricks/LTX-2.3",
+    filename="ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+    local_dir="/models/ltx2",
+    token=token,
+)
+PY
+
+RUN --mount=type=secret,id=hf_token,required=true python3 - <<'PY'
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+token = Path("/run/secrets/hf_token").read_text(encoding="utf-8").strip()
 snapshot_download(
     repo_id="google/gemma-3-12b-it-qat-q4_0-unquantized",
     local_dir="/models/gemma-3-12b-it-qat-q4_0-unquantized",
