@@ -38,13 +38,25 @@ download_openfork_file() {
   local url="$1"
   local dest="$2"
   local tmp="${dest}.tmp.$$"
+  local attempt
+  local max_attempts="${OPENFORK_BOOTSTRAP_DOWNLOAD_ATTEMPTS:-5}"
+  local delay_seconds
 
   mkdir -p "$(dirname "$dest")"
 
-  if curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error "$url" -o "$tmp"; then
-    mv "$tmp" "$dest"
-    return 0
-  fi
+  for attempt in $(seq 1 "$max_attempts"); do
+    if curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error "$url" -o "$tmp"; then
+      mv "$tmp" "$dest"
+      return 0
+    fi
+
+    rm -f "$tmp"
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      delay_seconds=$((attempt * 2))
+      echo "Warning: download failed for $url (attempt $attempt/$max_attempts); retrying in ${delay_seconds}s..." >&2
+      sleep "$delay_seconds"
+    fi
+  done
 
   rm -f "$tmp"
   echo "$dest" >> "$DOWNLOAD_FAILURES"
@@ -58,6 +70,55 @@ wait_for_download_batch() {
     sed 's/^/  - /' "$DOWNLOAD_FAILURES"
     exit 1
   fi
+}
+
+copy_openfork_archive() {
+  local archive_file
+  local extract_dir
+  local source_root
+  local file
+  local failures=0
+  archive_file=$(mktemp)
+  extract_dir=$(mktemp -d)
+
+  echo "Downloading client archive from GitHub..."
+  if ! curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+    "https://codeload.github.com/$REPO/tar.gz/$RESOLVED_REF" -o "$archive_file"; then
+    rm -f "$archive_file"
+    rm -rf "$extract_dir"
+    return 1
+  fi
+
+  if ! tar -xzf "$archive_file" -C "$extract_dir"; then
+    rm -f "$archive_file"
+    rm -rf "$extract_dir"
+    return 1
+  fi
+
+  source_root=$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)
+  if [ ! -d "$source_root" ]; then
+    rm -f "$archive_file"
+    rm -rf "$extract_dir"
+    return 1
+  fi
+
+  while IFS= read -r file || [ -n "$file" ]; do
+    file=$(echo "$file" | tr -d '\r')
+    [ -z "$file" ] && continue
+
+    if [ -f "$source_root/$file" ]; then
+      mkdir -p "$(dirname "$STAGING_DIR/$file")"
+      cp -a "$source_root/$file" "$STAGING_DIR/$file"
+    else
+      echo "Warning: archive missing required client file: $file" >&2
+      failures=$((failures + 1))
+    fi
+  done < "$PATH_LIST"
+
+  rm -f "$archive_file"
+  rm -rf "$extract_dir"
+
+  [ "$failures" -eq 0 ]
 }
 
 resolve_ref() {
@@ -180,22 +241,27 @@ if [ "$FILE_COUNT" -le 0 ]; then
   exit 1
 fi
 
-echo "Downloading $FILE_COUNT client files..."
-count=0
-while IFS= read -r file || [ -n "$file" ]; do
-  file=$(echo "$file" | tr -d '\r')
-  [ -z "$file" ] && continue
+if [ "${OPENFORK_BOOTSTRAP_ARCHIVE:-true}" = "true" ] && copy_openfork_archive; then
+  echo "Copied $FILE_COUNT client files from GitHub archive."
+else
+  echo "Warning: archive bootstrap unavailable; falling back to individual raw file downloads."
+  echo "Downloading $FILE_COUNT client files..."
+  count=0
+  while IFS= read -r file || [ -n "$file" ]; do
+    file=$(echo "$file" | tr -d '\r')
+    [ -z "$file" ] && continue
 
-  echo "  -> Downloading $file"
-  download_openfork_file "$BASE_URL/$file" "$STAGING_DIR/$file" &
+    echo "  -> Downloading $file"
+    download_openfork_file "$BASE_URL/$file" "$STAGING_DIR/$file" &
 
-  count=$((count + 1))
-  if [ "$count" -ge 20 ]; then
-    wait_for_download_batch
-    count=0
-  fi
-done < "$PATH_LIST"
-wait_for_download_batch
+    count=$((count + 1))
+    if [ "$count" -ge 20 ]; then
+      wait_for_download_batch
+      count=0
+    fi
+  done < "$PATH_LIST"
+  wait_for_download_batch
+fi
 
 BOOTSTRAP_ROOT=$(pwd -P)
 SHOULD_PRUNE=false
