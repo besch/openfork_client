@@ -716,6 +716,7 @@ fi
           [ -f "$DGN_SOURCE_DIR/ernie_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/ernie_image_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/telestylev2_api.py" ] && cp -v "$DGN_SOURCE_DIR/telestylev2_api.py" /app/
           [ -f "$DGN_SOURCE_DIR/domainshuttle_api.py" ] && cp -v "$DGN_SOURCE_DIR/domainshuttle_api.py" /app/
+          [ -f "$DGN_SOURCE_DIR/abot_world_api.py" ] && cp -v "$DGN_SOURCE_DIR/abot_world_api.py" /app/
           [ -d "/app/PiD" ] && [ -f "$DGN_SOURCE_DIR/pid_image_api.py" ] && cp -v "$DGN_SOURCE_DIR/pid_image_api.py" /app/PiD/
       fi
       
@@ -900,6 +901,7 @@ START_LTX2_PIPELINES="false"
 START_PID_IMAGE="false"
 START_TELESTYLEV2="false"
 START_DOMAINSHUTTLE="false"
+START_ABOT_WORLD="false"
 START_PRISMAUDIO="false"
 START_MMAUDIO="false"
 START_ACESTEP="false"
@@ -1163,6 +1165,10 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
         log "Auto-mode: Detected SparkVSR image. Selecting SparkVSR 24GB service."
         START_SPARKVSR="true"
         SERVICE_TYPE="sparkvsr-upscaler-24gb"
+   elif [ -f "/app/abot_world_api.py" ] || [ -f "/opt/ABot-World/abot_world_api.py" ]; then
+       log "Auto-mode: Detected ABot-World image. Selecting ABot-World 24GB service."
+       START_ABOT_WORLD="true"
+       SERVICE_TYPE="abot-world-24gb"
    elif [ -f "/app/inspatio_api.py" ] || [ -f "/opt/inspatio-world/inspatio_api.py" ]; then
        log "Auto-mode: Detected InSpatio-World image."
        START_INSPATIO="true"
@@ -1244,6 +1250,7 @@ else
   if [[ "$SERVICE_TYPE" == *"pid-zimage"* ]]; then START_PID_IMAGE="true"; fi
   if [[ "$SERVICE_TYPE" == *"telestylev2"* ]]; then START_TELESTYLEV2="true"; fi
   if [[ "$SERVICE_TYPE" == *"domainshuttle"* ]]; then START_DOMAINSHUTTLE="true"; fi
+  if [[ "$SERVICE_TYPE" == *"abot-world"* ]]; then START_ABOT_WORLD="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL-2, and Vista4D services.
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"wan22-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail2-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
@@ -1303,6 +1310,11 @@ if [ "$START_INSPATIO" = "true" ]; then
       export INSPATIO_VRAM_GB=16
       log "InSpatio-World: INSPATIO_VRAM_GB=16 (CPU offloading enabled)"
   fi
+fi
+
+if [ "$START_ABOT_WORLD" = "true" ]; then
+  log "Dedicated world/image research service selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
 fi
 
 if [ "$START_ERNIE_IMAGE" = "true" ]; then
@@ -2404,6 +2416,22 @@ if [ "$START_SPARKVSR" = "true" ]; then
     wait_for_url "SparkVSR API" "http://127.0.0.1:8000/health" 600 "/tmp/sparkvsr_api.log"
   else
     log "ERROR: SparkVSR API not found at /app/sparkvsr_api.py or /opt/SparkVSR/sparkvsr_api.py"
+  fi
+fi
+
+# Start the action-conditioned world REST API.
+if [ "$START_ABOT_WORLD" = "true" ]; then
+  ABOT_API="/opt/ABot-World/abot_world_api.py"
+  [ -f "/app/abot_world_api.py" ] && ABOT_API="/app/abot_world_api.py"
+  if [ ! -f "$ABOT_API" ]; then
+    log "ERROR: ABot-World API wrapper not found."
+    exit 1
+  fi
+  refresh_openfork_file "comfyui-storage/abot_world_api.py" "$ABOT_API" || true
+  ABOT_CD="$(dirname "$ABOT_API")"
+  (cd "$ABOT_CD" && "$PYTHON_EXE" "$ABOT_API" > /tmp/abot_world_api.log 2>&1) &
+  if ! wait_for_url "ABot-World API" "http://127.0.0.1:8000/health" 1200 "/tmp/abot_world_api.log"; then
+    exit 1
   fi
 fi
 

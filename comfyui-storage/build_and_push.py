@@ -126,7 +126,8 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-trainer-32gb", "beschiak/openfork-ltx2-trainer-32gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx2-pipelines-lora-16gb", "beschiak/openfork-ltx2-pipelines-lora-16gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.domainshuttle-80gb", "beschiak/openfork-domainshuttle-80gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.domainshuttle-80gb", "beschiak/openfork-domainshuttle-80gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.abot-world-24gb", "beschiak/openfork-abot-world-24gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
@@ -241,6 +242,9 @@ BUILD_PRESETS: Dict[str, List[str]] = {
     ],
     "domainshuttle": [
         "openfork-domainshuttle-80gb",
+    ],
+    "interactive-worlds": [
+        "openfork-abot-world-24gb",
     ],
     "krea2": [
         "openfork-krea2-turbo-8gb",

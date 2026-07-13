@@ -42,6 +42,7 @@ from .video.scail2 import SCAIL2ImageToVideoProcessor
 from .video.vista4d import Vista4DVideoToVideoProcessor
 from .video.domainshuttle import DomainShuttleImageToVideoProcessor
 from .video.inspatio_world import InSpatioWorldJobProcessor
+from .video.interactive_world import InteractiveWorldJobProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -132,6 +133,7 @@ __all__ = [
     "Vista4DVideoToVideoProcessor",
     "DomainShuttleImageToVideoProcessor",
     "InSpatioWorldJobProcessor",
+    "InteractiveWorldJobProcessor",
     "StableAudioJobProcessor",
     "AudioXJobProcessor",
     "VibeVoiceJobProcessor",

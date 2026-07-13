@@ -95,6 +95,7 @@ from services.processors import (
     Ideogram4ImageProcessor,
     PiDImageUpscaleProcessor,
     TeleStyleV2Processor,
+    InteractiveWorldJobProcessor,
 )
 
 __all__ = [
@@ -170,4 +171,5 @@ __all__ = [
     "Ideogram4ImageProcessor",
     "PiDImageUpscaleProcessor",
     "TeleStyleV2Processor",
+    "InteractiveWorldJobProcessor",
 ]

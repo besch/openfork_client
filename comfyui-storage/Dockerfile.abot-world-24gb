@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1.7
+# OpenFork — ABot-World 0.5B LongForcing interactive rollout (RTX 5090 class)
+# ABot's SageAttention 2/3 pins require Python >=3.11. Ubuntu 24.04 provides
+# Python 3.12, matching the upstream-tested environment; Ubuntu 22.04's 3.10
+# can only see the legacy SageAttention 1.x releases on PyPI.
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:$PATH \
+    HF_HOME=/models/huggingface \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    ABOT_OUTPUT_DIR=/data/abot_tasks \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia*.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       python3 python3-dev python3-pip python3-venv git git-lfs ffmpeg build-essential ninja-build \
+       libgl1 libglib2.0-0 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && git lfs install --system \
+    && python3 -m venv /opt/venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# SageAttention 2.2 and SageAttn3 are not published on ordinary PyPI for this
+# stack. Comfy-Org provides source-attributed Linux wheels matching CPython
+# 3.12, CUDA 12.9, and Torch 2.8.
+# NOTE: psutil is required here because flash_attn's setup.py imports it
+# directly at build time; with --no-build-isolation below, pip builds
+# flash_attn's metadata using packages already in /opt/venv rather than an
+# isolated build env, so psutil must be pre-installed or metadata generation fails.
+RUN python -m pip install --upgrade pip setuptools wheel packaging ninja psutil \
+    && python -c "import sys; assert sys.version_info >= (3, 11), sys.version" \
+    && python -m pip install \
+       torch==2.8.0+cu129 \
+       torchvision==0.23.0+cu129 \
+       --index-url https://download.pytorch.org/whl/cu129 \
+    && git clone --depth 1 https://github.com/amap-cvlab/ABot-World.git /opt/ABot-World \
+    && grep -Evi '^(torch|torchvision)([<=> ]|$)' /opt/ABot-World/requirements.txt > /tmp/abot-requirements.txt \
+    && python -m pip install --no-build-isolation \
+       --extra-index-url https://comfy-org.github.io/wheels \
+       -r /tmp/abot-requirements.txt \
+    && python -m pip install fastapi "uvicorn[standard]" requests
+
+RUN --mount=type=secret,id=hf_token \
+    mkdir -p /opt/ABot-World/checkpoints/ABot-World-0-5B-LF /data/abot_tasks \
+    && python - <<'PY'
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+secret = Path("/run/secrets/hf_token")
+token = secret.read_text(encoding="utf-8").strip() if secret.exists() else None
+snapshot_download(
+    "acvlab/ABot-World-0-5B-LF",
+    local_dir="/opt/ABot-World/checkpoints/ABot-World-0-5B-LF",
+    token=token or None,
+)
+PY
+
+COPY abot_world_api.py /opt/ABot-World/abot_world_api.py
+WORKDIR /opt/ABot-World
+ENV PYTHONPATH=/opt/ABot-World
+EXPOSE 8000
+CMD ["python", "/opt/ABot-World/abot_world_api.py"]
