@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.7
+# ShotPlan on Wan2.2-T2V-A14B (80GB BF16 production lane).
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    PATH=/usr/local/cuda/bin:$PATH \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/models/hf-cache \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-dev git build-essential ffmpeg libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ARG SHOTPLAN_COMMIT=d131f37ac43c16c05579169e873c379f13d2495f
+RUN git clone https://github.com/Pensioner-11/ShotPlan.git /app/ShotPlan \
+    && git -C /app/ShotPlan checkout "$SHOTPLAN_COMMIT"
+
+RUN python3 -m pip install --upgrade pip \
+    && python3 -m pip install \
+      torch==2.5.1 torchvision==0.20.1 \
+      --index-url https://download.pytorch.org/whl/cu124 \
+    && python3 -m pip install -r /app/ShotPlan/requirements.txt \
+    && python3 -m pip install fastapi "uvicorn[standard]"
+
+RUN mkdir -p /app/models /app/output
+RUN --mount=type=secret,id=hf_token,required=false \
+    HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python3 - <<'PY'
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+token_path = Path("/run/secrets/hf_token")
+token = token_path.read_text().strip() if token_path.exists() else None
+snapshot_download(
+    "Wan-AI/Wan2.2-T2V-A14B",
+    local_dir="/app/models/Wan2.2-T2V-A14B",
+    token=token,
+)
+snapshot_download(
+    "Pensioner/ShotPlan-Wan2.2-T2V-A14B-HighNoise",
+    local_dir="/app/models/ShotPlan-Wan2.2-T2V-A14B-HighNoise",
+    token=token,
+)
+PY
+
+COPY shotplan_api.py /app/shotplan_api.py
+EXPOSE 8000
+CMD ["python3", "/app/shotplan_api.py"]

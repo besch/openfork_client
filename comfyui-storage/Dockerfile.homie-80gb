@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+# HOMIE subject-consistent video on Wan2.1-T2V-14B (80GB BF16 lane).
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    PATH=/usr/local/cuda/bin:$PATH \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/models/hf-cache \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-dev python3-pip git build-essential ninja-build ffmpeg libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ARG HOMIE_COMMIT=f93d8358d92e09889d61cab93542dda5a8459eca
+RUN git clone https://github.com/YIYANGCAI/HOMIE.git /app/HOMIE \
+    && git -C /app/HOMIE checkout "$HOMIE_COMMIT"
+
+RUN python3 -m pip install --upgrade pip setuptools wheel \
+    && python3 -m pip install \
+      torch==2.5.0 torchvision==0.20.0 \
+      --index-url https://download.pytorch.org/whl/cu124 \
+    && python3 -m pip install -r /app/HOMIE/requirements.txt \
+    && python3 -m pip install \
+      transformers==4.57.0 qwen_vl_utils \
+      fastapi "uvicorn[standard]" python-multipart \
+    && python3 -m pip install --no-build-isolation flash-attn==2.8.3.post1 \
+    && python3 -m pip uninstall -y opencv-python \
+    && python3 -m pip install opencv-python-headless==4.5.5.64
+
+RUN mkdir -p /app/models /app/input /app/output
+RUN --mount=type=secret,id=hf_token,required=false \
+    HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python3 - <<'PY'
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+token_path = Path("/run/secrets/hf_token")
+token = token_path.read_text().strip() if token_path.exists() else None
+for repo, target in (
+    ("Wan-AI/Wan2.1-T2V-14B-Diffusers", "Wan2.1-T2V-14B-Diffusers"),
+    ("yychai/homie-r2v-wan2.1", "HOMIE-Wan-Model"),
+    ("Qwen/Qwen3-VL-2B-Thinking", "Qwen3-VL-2B-Thinking"),
+):
+    snapshot_download(repo, local_dir=f"/app/models/{target}", token=token)
+PY
+
+COPY homie_api.py /app/homie_api.py
+EXPOSE 8000
+CMD ["python3", "/app/homie_api.py"]

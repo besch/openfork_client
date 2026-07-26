@@ -1,0 +1,24 @@
+services:
+  mage-flow-24gb:
+    build:
+      context: .
+      dockerfile: Dockerfile.mage-flow-24gb
+      secrets:
+        - hf_token
+    container_name: mage-flow-24gb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/mage-flow/input:/app/input
+      - ./storage/mage-flow/output:/app/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

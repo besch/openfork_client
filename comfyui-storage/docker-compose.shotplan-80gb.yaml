@@ -1,0 +1,23 @@
+services:
+  shotplan-80gb:
+    build:
+      context: .
+      dockerfile: Dockerfile.shotplan-80gb
+      secrets:
+        - hf_token
+    container_name: shotplan-80gb
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage/shotplan/output:/app/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+secrets:
+  hf_token:
+    environment: HF_TOKEN

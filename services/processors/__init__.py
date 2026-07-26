@@ -43,6 +43,8 @@ from .video.vista4d import Vista4DVideoToVideoProcessor
 from .video.domainshuttle import DomainShuttleImageToVideoProcessor
 from .video.inspatio_world import InSpatioWorldJobProcessor
 from .video.interactive_world import InteractiveWorldJobProcessor
+from .video.shotplan import ShotPlanVideoProcessor
+from .video.homie import HomieVideoProcessor
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -101,6 +103,7 @@ from .image.ernie_image import ErnieImageProcessor
 from .image.ideogram4 import Ideogram4ImageProcessor
 from .image.pid import PiDImageUpscaleProcessor
 from .image.telestylev2 import TeleStyleV2Processor
+from .image.mage_flow import MageFlowImageProcessor
 
 # Text processors
 from .llm.llm import LLMJobProcessor
@@ -134,6 +137,8 @@ __all__ = [
     "DomainShuttleImageToVideoProcessor",
     "InSpatioWorldJobProcessor",
     "InteractiveWorldJobProcessor",
+    "ShotPlanVideoProcessor",
+    "HomieVideoProcessor",
     "StableAudioJobProcessor",
     "AudioXJobProcessor",
     "VibeVoiceJobProcessor",
@@ -176,6 +181,7 @@ __all__ = [
     "Ideogram4ImageProcessor",
     "PiDImageUpscaleProcessor",
     "TeleStyleV2Processor",
+    "MageFlowImageProcessor",
     "MMAudioJobProcessor",
     "LavaSRJobProcessor",
     "PrismAudioJobProcessor",

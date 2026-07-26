@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1.7
+# Microsoft Mage-Flow 4B generation + editing (24GB, BF16).
+FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    PATH=/usr/local/cuda/bin:$PATH \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/app/models/hf-cache \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      software-properties-common git curl build-essential ninja-build ffmpeg libgl1 \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      python3.11 python3.11-dev python3.11-venv \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+ARG MAGE_COMMIT=1f6536d8da12766c25ba12b403c880fee52dddba
+RUN git clone https://github.com/microsoft/Mage.git /app/Mage \
+    && git -C /app/Mage checkout "$MAGE_COMMIT"
+
+RUN python -m pip install --upgrade pip setuptools wheel ninja \
+    && python -m pip install \
+      torch==2.13.0 torchvision==0.28.0 \
+      --index-url https://download.pytorch.org/whl/cu126 \
+    && python -m pip install -r /app/Mage/mage_flow/requirements.txt \
+    && python -m pip install -e /app/Mage/mage_flow --no-deps \
+    && python -m pip install --no-build-isolation flash-attn==2.8.3 \
+    && python -m pip install fastapi "uvicorn[standard]" python-multipart
+
+RUN mkdir -p /app/input /app/output /app/models
+RUN --mount=type=secret,id=hf_token,required=false \
+    HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python - <<'PY'
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+token_path = Path("/run/secrets/hf_token")
+token = token_path.read_text().strip() if token_path.exists() else None
+for repo in (
+    "microsoft/Mage-Flow",
+    "microsoft/Mage-Flow-Turbo",
+    "microsoft/Mage-Flow-Edit",
+    "microsoft/Mage-Flow-Edit-Turbo",
+):
+    snapshot_download(
+        repo,
+        local_dir=f"/app/models/{repo.split('/')[-1]}",
+        token=token,
+    )
+PY
+
+COPY mage_flow_api.py /app/mage_flow_api.py
+EXPOSE 8000
+CMD ["python", "/app/mage_flow_api.py"]
