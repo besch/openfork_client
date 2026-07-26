@@ -142,7 +142,7 @@ log_resource_snapshot() {
 
     echo "cpu_mem_processes:"
     ps -eo pid,ppid,pcpu,pmem,rss,vsz,etime,args --sort=-pcpu 2>/dev/null | \
-      grep -E 'PID|python.*(main.py|cli.py|wan2gp_server.py)|ComfyUI|wan2gp|server.py' | \
+      grep -E 'PID|python.*(main.py|cli.py|wan2gp_server.py|mage_flow_api.py|shotplan_api.py|homie_api.py)|ComfyUI|wan2gp|server.py' | \
       grep -v grep | \
       head -n 20 || true
     echo
@@ -902,6 +902,9 @@ START_PID_IMAGE="false"
 START_TELESTYLEV2="false"
 START_DOMAINSHUTTLE="false"
 START_ABOT_WORLD="false"
+START_MAGE_FLOW="false"
+START_SHOTPLAN="false"
+START_HOMIE="false"
 START_PRISMAUDIO="false"
 START_MMAUDIO="false"
 START_ACESTEP="false"
@@ -913,7 +916,19 @@ log "Detected Total VRAM: ${TOTAL_VRAM_MB} MB"
 # Determine which services to run
 if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
   # AUTO MODE: Strict Priority Selection
-  if [ -f "/app/heartmula_api.py" ]; then
+  if [ -f "/app/mage_flow_api.py" ] && [ -d "/app/Mage/mage_flow" ] && [ -d "/app/models/Mage-Flow" ]; then
+      log "Auto-mode: Detected baked Mage-Flow image. Selecting Mage-Flow 24GB service."
+      START_MAGE_FLOW="true"
+      SERVICE_TYPE="mage-flow-24gb"
+  elif [ -f "/app/shotplan_api.py" ] && [ -f "/app/ShotPlan/inference/infer_wan22.py" ] && [ -d "/app/models/ShotPlan-Wan2.2-T2V-A14B-HighNoise" ]; then
+      log "Auto-mode: Detected baked ShotPlan image. Selecting ShotPlan 80GB service."
+      START_SHOTPLAN="true"
+      SERVICE_TYPE="shotplan-80gb"
+  elif [ -f "/app/homie_api.py" ] && [ -f "/app/HOMIE/generate.py" ] && [ -d "/app/models/HOMIE-Wan-Model" ]; then
+      log "Auto-mode: Detected baked HOMIE image. Selecting HOMIE 80GB service."
+      START_HOMIE="true"
+      SERVICE_TYPE="homie-80gb"
+  elif [ -f "/app/heartmula_api.py" ]; then
       log "Auto-mode: Detected HeartMuLa image. Selecting HeartMuLa service."
       START_HEARTMULA="true"
       if [ "$TOTAL_VRAM_MB" -gt 22000 ]; then
@@ -1251,6 +1266,9 @@ else
   if [[ "$SERVICE_TYPE" == *"telestylev2"* ]]; then START_TELESTYLEV2="true"; fi
   if [[ "$SERVICE_TYPE" == *"domainshuttle"* ]]; then START_DOMAINSHUTTLE="true"; fi
   if [[ "$SERVICE_TYPE" == *"abot-world"* ]]; then START_ABOT_WORLD="true"; fi
+  if [[ "$SERVICE_TYPE" == *"mage-flow"* ]]; then START_MAGE_FLOW="true"; fi
+  if [[ "$SERVICE_TYPE" == *"shotplan"* ]]; then START_SHOTPLAN="true"; fi
+  if [[ "$SERVICE_TYPE" == *"homie"* ]]; then START_HOMIE="true"; fi
   if [[ "$SERVICE_TYPE" == *"anima"* ]]; then START_COMFYUI="true"; fi
   # Wan2GP backend for LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL-2, and Vista4D services.
   if [[ "$SERVICE_TYPE" == *"ltx23"* ]] || [[ "$SERVICE_TYPE" == *"wan22-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"davinci"* ]] || [[ "$SERVICE_TYPE" == *"scail2-wan2gp"* ]] || [[ "$SERVICE_TYPE" == *"vista4d"* ]]; then
@@ -1315,6 +1333,33 @@ fi
 if [ "$START_ABOT_WORLD" = "true" ]; then
   log "Dedicated world/image research service selected. Disabling ComfyUI to reserve VRAM."
   START_COMFYUI="false"
+fi
+
+if [ "$START_MAGE_FLOW" = "true" ]; then
+  log "Mage-Flow selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+  export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  if [ "$TOTAL_VRAM_MB" -lt 22000 ]; then
+      log "WARNING: Mage-Flow is registered as a 24GB tier; detected only ${TOTAL_VRAM_MB}MB VRAM."
+  fi
+fi
+
+if [ "$START_SHOTPLAN" = "true" ]; then
+  log "ShotPlan selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+  export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  if [ "$TOTAL_VRAM_MB" -lt 70000 ]; then
+      log "WARNING: ShotPlan's full Wan2.2 A14B runtime is registered as an 80GB tier; detected only ${TOTAL_VRAM_MB}MB VRAM."
+  fi
+fi
+
+if [ "$START_HOMIE" = "true" ]; then
+  log "HOMIE selected. Disabling ComfyUI to reserve VRAM."
+  START_COMFYUI="false"
+  export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+  if [ "$TOTAL_VRAM_MB" -lt 70000 ]; then
+      log "WARNING: HOMIE's Wan2.1 14B reference-to-video runtime is registered as an 80GB tier; detected only ${TOTAL_VRAM_MB}MB VRAM."
+  fi
 fi
 
 if [ "$START_ERNIE_IMAGE" = "true" ]; then
@@ -2435,6 +2480,100 @@ if [ "$START_ABOT_WORLD" = "true" ]; then
   fi
 fi
 
+# Start Mage-Flow generation/edit REST API.
+if [ "$START_MAGE_FLOW" = "true" ]; then
+  log "Starting Mage-Flow API service..."
+  if [ -f "/app/mage_flow_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/mage_flow_api.py" "/app/mage_flow_api.py" || true
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export MAGE_FLOW_MODEL_ROOT="${MAGE_FLOW_MODEL_ROOT:-/app/models}"
+    export MAGE_FLOW_INPUT_DIR="${MAGE_FLOW_INPUT_DIR:-/app/input}"
+    export MAGE_FLOW_OUTPUT_DIR="${MAGE_FLOW_OUTPUT_DIR:-/app/output}"
+    export MAGE_FLOW_API_WAIT_TIMEOUT="${MAGE_FLOW_API_WAIT_TIMEOUT:-600}"
+    log "Mage-Flow config: models=$MAGE_FLOW_MODEL_ROOT input=$MAGE_FLOW_INPUT_DIR output=$MAGE_FLOW_OUTPUT_DIR"
+    (cd /app && "$PYTHON_EXE" mage_flow_api.py > /tmp/mage_flow_api.log 2>&1) &
+    if ! wait_for_url "Mage-Flow API" "http://127.0.0.1:8000/health" "$MAGE_FLOW_API_WAIT_TIMEOUT" "/tmp/mage_flow_api.log"; then
+      log "ERROR: Mage-Flow API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "Mage-Flow" "http://127.0.0.1:8000/health" "$MAGE_FLOW_API_WAIT_TIMEOUT" "/tmp/mage_flow_api.log"; then
+      log "ERROR: Mage-Flow model assets are not ready; not starting the DGN client."
+      exit 1
+    fi
+  else
+    log "ERROR: Mage-Flow API not found at /app/mage_flow_api.py"
+    exit 1
+  fi
+fi
+
+# Start ShotPlan multi-shot text-to-video REST API.
+if [ "$START_SHOTPLAN" = "true" ]; then
+  log "Starting ShotPlan API service..."
+  if [ -f "/app/shotplan_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/shotplan_api.py" "/app/shotplan_api.py" || true
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export SHOTPLAN_ROOT="${SHOTPLAN_ROOT:-/app/ShotPlan}"
+    export SHOTPLAN_WAN22_ROOT="${SHOTPLAN_WAN22_ROOT:-/app/models/Wan2.2-T2V-A14B}"
+    export SHOTPLAN_CHECKPOINT_ROOT="${SHOTPLAN_CHECKPOINT_ROOT:-/app/models/ShotPlan-Wan2.2-T2V-A14B-HighNoise}"
+    export SHOTPLAN_OUTPUT_DIR="${SHOTPLAN_OUTPUT_DIR:-/app/output}"
+    export SHOTPLAN_GPUS="${SHOTPLAN_GPUS:-0}"
+    export SHOTPLAN_API_WAIT_TIMEOUT="${SHOTPLAN_API_WAIT_TIMEOUT:-900}"
+    if ! command -v python >/dev/null 2>&1; then
+      ln -sf "$PYTHON_EXE" /usr/local/bin/python
+      log "Created /usr/local/bin/python for ShotPlan's upstream inference command."
+    fi
+    log "ShotPlan config: root=$SHOTPLAN_ROOT wan22=$SHOTPLAN_WAN22_ROOT checkpoint_root=$SHOTPLAN_CHECKPOINT_ROOT gpus=$SHOTPLAN_GPUS"
+    (cd /app && "$PYTHON_EXE" shotplan_api.py > /tmp/shotplan_api.log 2>&1) &
+    if ! wait_for_url "ShotPlan API" "http://127.0.0.1:8000/health" "$SHOTPLAN_API_WAIT_TIMEOUT" "/tmp/shotplan_api.log"; then
+      log "ERROR: ShotPlan API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "ShotPlan" "http://127.0.0.1:8000/health" "$SHOTPLAN_API_WAIT_TIMEOUT" "/tmp/shotplan_api.log"; then
+      log "ERROR: ShotPlan model assets are not ready; not starting the DGN client."
+      exit 1
+    fi
+  else
+    log "ERROR: ShotPlan API not found at /app/shotplan_api.py"
+    exit 1
+  fi
+fi
+
+# Start HOMIE subject-consistent reference-to-video REST API.
+if [ "$START_HOMIE" = "true" ]; then
+  log "Starting HOMIE API service..."
+  if [ -f "/app/homie_api.py" ]; then
+    refresh_openfork_file "comfyui-storage/homie_api.py" "/app/homie_api.py" || true
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+    export HOMIE_ROOT="${HOMIE_ROOT:-/app/HOMIE}"
+    export HOMIE_WAN_ROOT="${HOMIE_WAN_ROOT:-/app/models/Wan2.1-T2V-14B-Diffusers}"
+    export HOMIE_CHECKPOINT="${HOMIE_CHECKPOINT:-/app/models/HOMIE-Wan-Model}"
+    export HOMIE_MLLM_CHECKPOINT="${HOMIE_MLLM_CHECKPOINT:-/app/models/Qwen3-VL-2B-Thinking}"
+    export HOMIE_INPUT_DIR="${HOMIE_INPUT_DIR:-/app/input}"
+    export HOMIE_OUTPUT_DIR="${HOMIE_OUTPUT_DIR:-/app/output}"
+    export HOMIE_API_WAIT_TIMEOUT="${HOMIE_API_WAIT_TIMEOUT:-900}"
+    if ! command -v python >/dev/null 2>&1; then
+      ln -sf "$PYTHON_EXE" /usr/local/bin/python
+      log "Created /usr/local/bin/python for HOMIE's upstream inference commands."
+    fi
+    log "HOMIE config: root=$HOMIE_ROOT wan=$HOMIE_WAN_ROOT checkpoint=$HOMIE_CHECKPOINT mllm=$HOMIE_MLLM_CHECKPOINT"
+    (cd /app && "$PYTHON_EXE" homie_api.py > /tmp/homie_api.log 2>&1) &
+    if ! wait_for_url "HOMIE API" "http://127.0.0.1:8000/health" "$HOMIE_API_WAIT_TIMEOUT" "/tmp/homie_api.log"; then
+      log "ERROR: HOMIE API did not expose /health; not starting the DGN client."
+      exit 1
+    fi
+    if ! wait_for_model_loaded "HOMIE" "http://127.0.0.1:8000/health" "$HOMIE_API_WAIT_TIMEOUT" "/tmp/homie_api.log"; then
+      log "ERROR: HOMIE model assets are not ready; not starting the DGN client."
+      exit 1
+    fi
+  else
+    log "ERROR: HOMIE API not found at /app/homie_api.py"
+    exit 1
+  fi
+fi
+
 # Start InSpatio-World REST API
 if [ "$START_INSPATIO" = "true" ]; then
   log "Starting InSpatio-World API service..."
@@ -2817,6 +2956,9 @@ try:
     print(f'Processor allowlist count: {len(processor_allowlist)}')
     print(f'Processor allowlist has SCAIL2ImageToVideoProcessor: {\"SCAIL2ImageToVideoProcessor\" in processor_allowlist}')
     print(f'Processor allowlist has Vista4DVideoToVideoProcessor: {\"Vista4DVideoToVideoProcessor\" in processor_allowlist}')
+    print(f'Processor allowlist has MageFlowImageProcessor: {\"MageFlowImageProcessor\" in processor_allowlist}')
+    print(f'Processor allowlist has ShotPlanVideoProcessor: {\"ShotPlanVideoProcessor\" in processor_allowlist}')
+    print(f'Processor allowlist has HomieVideoProcessor: {\"HomieVideoProcessor\" in processor_allowlist}')
 except Exception as e:
     print(f'Import error: {e}')
     import traceback

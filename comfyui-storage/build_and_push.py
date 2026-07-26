@@ -128,6 +128,9 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-pipelines-lora-16gb", "beschiak/openfork-ltx2-pipelines-lora-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.domainshuttle-80gb", "beschiak/openfork-domainshuttle-80gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.abot-world-24gb", "beschiak/openfork-abot-world-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.mage-flow-24gb", "beschiak/openfork-mage-flow-24gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.shotplan-80gb", "beschiak/openfork-shotplan-80gb:latest", build=True, push=True, direct_push=True),
+    ImageConfig("Dockerfile.homie-80gb", "beschiak/openfork-homie-80gb:latest", build=True, push=True, direct_push=True),
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
