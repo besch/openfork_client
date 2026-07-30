@@ -127,9 +127,10 @@ IMAGES: List[ImageConfig] = [
     # ImageConfig("Dockerfile.ltx2-pipelines-lora-32gb", "beschiak/openfork-ltx2-pipelines-lora-32gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.ltx2-pipelines-lora-16gb", "beschiak/openfork-ltx2-pipelines-lora-16gb:latest", build=True, push=True, direct_push=True),
     # ImageConfig("Dockerfile.domainshuttle-80gb", "beschiak/openfork-domainshuttle-80gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.abot-world-24gb", "beschiak/openfork-abot-world-24gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.mage-flow-24gb", "beschiak/openfork-mage-flow-24gb:latest", build=True, push=True, direct_push=True),
-    ImageConfig("Dockerfile.shotplan-80gb", "beschiak/openfork-shotplan-80gb:latest", build=True, push=True, direct_push=True),
+
+    # ImageConfig("Dockerfile.abot-world-24gb", "beschiak/openfork-abot-world-24gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.mage-flow-24gb", "beschiak/openfork-mage-flow-24gb:latest", build=True, push=True, direct_push=True),
+    # ImageConfig("Dockerfile.shotplan-80gb", "beschiak/openfork-shotplan-80gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.homie-80gb", "beschiak/openfork-homie-80gb:latest", build=True, push=True, direct_push=True),
 ]
 
@@ -276,6 +277,8 @@ BUILD_PRESETS: Dict[str, List[str]] = {
 
 PUSH_ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 1200  # 20 minutes
+DIRECT_PUSH_BUILD_ATTEMPTS = 2
+DIRECT_PUSH_RETRY_DELAY_SECONDS = 30
 ENV_BUILD_ARG_PASSTHROUGH = (
     "LTX2_REF",
     "OPENFORK_CLIENT_REPO",
@@ -440,16 +443,21 @@ def build_image(
     direct_push: bool = False,
 ) -> bool:
     """
-    Build a Docker image. No retry logic for builds - failure is ignored.
+    Build a Docker image.
 
     direct_push=True uses --output type=registry to stream layers directly to
-    the registry during the build step, completely bypassing the local containerd
-    image store export.  This avoids the BuildKit lease-expiry crash that occurs
-    when exporting very large images (≥100 GB) on Docker Desktop for Windows.
+    the registry during the build step, bypassing the local image-store load.
+    Registry compression defaults to fast gzip level 1 because model checkpoint
+    layers are already dense and higher gzip levels can spend an hour exporting
+    a large image without materially reducing its size.
     When direct_push is used the separate push step must be skipped (the image
     is already in the registry).
     """
-    command = ["docker", "build"]
+    command = (
+        ["docker", "buildx", "build"]
+        if (direct_push or _dockerfile_declares_hf_secret(dockerfile))
+        else ["docker", "build"]
+    )
 
     if rebuild:
         command.append("--no-cache")
@@ -491,8 +499,33 @@ def build_image(
     if direct_push:
         # Stream layers straight to the registry — no local export needed.
         # Requires `docker login` to have been run beforehand.
-        command.extend(["--output", f"type=registry", "--tag", tag])
-        print(f"\n📦 Building {tag} with direct registry push (--output type=registry)")
+        compression = os.environ.get(
+            "OPENFORK_REGISTRY_COMPRESSION", "gzip"
+        ).strip().lower()
+        if compression not in {"gzip", "estargz", "zstd"}:
+            print(
+                "❌ OPENFORK_REGISTRY_COMPRESSION must be gzip, estargz, or zstd; "
+                f"got {compression!r}."
+            )
+            return False
+        compression_level = os.environ.get(
+            "OPENFORK_REGISTRY_COMPRESSION_LEVEL", "1"
+        ).strip()
+        if not compression_level.isdigit():
+            print(
+                "❌ OPENFORK_REGISTRY_COMPRESSION_LEVEL must be a non-negative "
+                f"integer; got {compression_level!r}."
+            )
+            return False
+        output = (
+            "type=registry,"
+            f"compression={compression},compression-level={compression_level}"
+        )
+        command.extend(["--output", output, "--tag", tag])
+        print(
+            f"\n📦 Building {tag} with direct registry push "
+            f"({compression} level {compression_level})"
+        )
     else:
         command.extend(["-t", tag])
         print(f"\n📦 Building {tag} (single attempt)")
@@ -576,17 +609,42 @@ def build_and_push_image(
     elif direct_push_requested and should_push and not should_build:
         print("ℹ️  direct_push only applies when build and push are both requested.")
 
-    # Build the image if configured (per-image or global)
+    # Build the image if configured (per-image or global). A direct registry
+    # export gets one cache-preserving retry: if a long first build loses its
+    # BuildKit lease during final export, committed RUN layers (including model
+    # downloads) can be reused instead of downloading the checkpoints again.
     if should_build:
-        if not build_image(
-            config.dockerfile,
-            config.tag,
-            hf_token,
-            rebuild,
-            config.build_args,
-            fresh_clone,
-            direct_push=use_direct_push,
-        ):
+        build_succeeded = False
+        build_attempts = DIRECT_PUSH_BUILD_ATTEMPTS if use_direct_push else 1
+        for build_attempt in range(1, build_attempts + 1):
+            if build_attempt > 1:
+                print(
+                    f"\n🔁 Direct-push build retry {build_attempt}/{build_attempts} "
+                    f"for {config.tag}"
+                )
+                print(
+                    "   Reusing BuildKit cache and disabling --no-cache so completed "
+                    "model-download layers are not repeated."
+                )
+            build_succeeded = build_image(
+                config.dockerfile,
+                config.tag,
+                hf_token,
+                rebuild if build_attempt == 1 else False,
+                config.build_args,
+                fresh_clone if build_attempt == 1 else False,
+                direct_push=use_direct_push,
+            )
+            if build_succeeded:
+                break
+            if build_attempt < build_attempts:
+                print(
+                    f"⏳ Waiting {DIRECT_PUSH_RETRY_DELAY_SECONDS} seconds before "
+                    "the cache-preserving direct-push retry..."
+                )
+                time.sleep(DIRECT_PUSH_RETRY_DELAY_SECONDS)
+
+        if not build_succeeded:
             print(
                 f"\n⚠️ FAILED to build {config.tag}. Ignoring build failure as requested."
             )
@@ -783,9 +841,9 @@ def main():
         action="store_true",
         help=(
             "Stream layers directly to the registry during build using "
-            "'--output type=registry'. Bypasses the local containerd image store "
-            "export step, which fixes the BuildKit lease-expiry crash on Docker "
-            "Desktop for Windows when building very large images (≥100 GB). "
+            "'--output type=registry'. Bypasses loading the result into the local "
+            "image store, uses fast configurable registry compression, and retries "
+            "a failed final export once using the completed BuildKit cache. "
             "Requires prior `docker login`. Overrides per-image direct_push setting."
         ),
     )
@@ -925,7 +983,14 @@ def main():
             sys.exit(1)
 
     print(f"Images to process: {len(selected_images)}")
-    print(f"Push attempts: {PUSH_ATTEMPTS} (1 initial + 1 retry)")
+    print(
+        f"Push attempts: {PUSH_ATTEMPTS} "
+        f"(1 initial + {PUSH_ATTEMPTS - 1} retries)"
+    )
+    print(
+        "Direct-push build attempts: "
+        f"{DIRECT_PUSH_BUILD_ATTEMPTS} (cache-preserving retry enabled)"
+    )
     print(f"Retry delay: {RETRY_DELAY_SECONDS} seconds")
     if args.cleanup_after_each:
         print("Cleanup after each success: enabled")
