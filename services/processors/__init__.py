@@ -45,6 +45,10 @@ from .video.inspatio_world import InSpatioWorldJobProcessor
 from .video.interactive_world import InteractiveWorldJobProcessor
 from .video.shotplan import ShotPlanVideoProcessor
 from .video.homie import HomieVideoProcessor
+from .video.minimax_h3 import (
+    MiniMaxH3ImageToVideoProcessor,
+    MiniMaxH3TextToVideoProcessor,
+)
 
 # Audio processors
 from .audio.stable_audio import StableAudioJobProcessor
@@ -139,6 +143,8 @@ __all__ = [
     "InteractiveWorldJobProcessor",
     "ShotPlanVideoProcessor",
     "HomieVideoProcessor",
+    "MiniMaxH3TextToVideoProcessor",
+    "MiniMaxH3ImageToVideoProcessor",
     "StableAudioJobProcessor",
     "AudioXJobProcessor",
     "VibeVoiceJobProcessor",

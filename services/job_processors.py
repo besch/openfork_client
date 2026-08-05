@@ -96,6 +96,8 @@ from services.processors import (
     PiDImageUpscaleProcessor,
     TeleStyleV2Processor,
     InteractiveWorldJobProcessor,
+    MiniMaxH3TextToVideoProcessor,
+    MiniMaxH3ImageToVideoProcessor,
 )
 
 __all__ = [
@@ -172,4 +174,6 @@ __all__ = [
     "PiDImageUpscaleProcessor",
     "TeleStyleV2Processor",
     "InteractiveWorldJobProcessor",
+    "MiniMaxH3TextToVideoProcessor",
+    "MiniMaxH3ImageToVideoProcessor",
 ]

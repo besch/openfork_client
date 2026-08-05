@@ -10,11 +10,15 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
+
+
+def env_flag_enabled(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -135,6 +139,18 @@ IMAGES: List[ImageConfig] = [
 ]
 
 OPTIONAL_IMAGES: List[ImageConfig] = [
+    ImageConfig(
+        "Dockerfile.minimax-h3",
+        "beschiak/openfork-minimax-h3:latest",
+        build=True,
+        push=True,
+        direct_push=True,
+        build_args={
+            "MINIMAX_H3_LICENSE_ACKNOWLEDGED": os.environ.get(
+                "OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED", ""
+            )
+        },
+    ),
     ImageConfig("Dockerfile.qwen", "beschiak/openfork-qwen-12gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.qwen-2512-lora-24gb", "beschiak/openfork-qwen-2512-lora-24gb:latest", build=True, push=True, direct_push=True),
     ImageConfig("Dockerfile.qwen-8gb", "beschiak/openfork-qwen-8gb:latest", build=True, push=True, direct_push=True),
@@ -192,6 +208,9 @@ WAN2GP_IMAGE_REFRESH_PRESET: List[str] = [
 ]
 
 BUILD_PRESETS: Dict[str, List[str]] = {
+    "minimax-h3": [
+        "openfork-minimax-h3",
+    ],
     "current-rebuild": [
         "openfork-qwen-12gb",
         "openfork-qwen-8gb",
@@ -950,6 +969,19 @@ def main():
     if not selected_images:
         print_no_image_match_diagnostics(args.image_index, image_filters, image_pool)
         sys.exit(1)
+
+    if any(
+        config.dockerfile == "Dockerfile.minimax-h3"
+        for _index, config in selected_images
+    ) and not env_flag_enabled(
+        os.environ.get("OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED")
+    ):
+        parser.error(
+            "MiniMax-H3 is license-gated and excludes the EU, UK, South Korea, "
+            "and USA under its community license. Obtain applicable authorization, "
+            "then set OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED=true before building "
+            "or pushing this weight-bearing image."
+        )
 
     if "build" in args.actions:
         args.build = True

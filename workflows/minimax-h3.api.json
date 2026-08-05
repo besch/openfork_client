@@ -1,0 +1,121 @@
+{
+  "prompt": {
+    "1": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "weight_dtype": "default"
+      },
+      "_meta": { "title": "Load MiniMax-H3 diffusion model" }
+    },
+    "2": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "type": "minimax",
+        "device": "default"
+      },
+      "_meta": { "title": "Load MiniMax-H3 Qwen3-VL encoder" }
+    },
+    "3": {
+      "class_type": "VAELoader",
+      "inputs": { "vae_name": "minimax_h3_video_vae_fp16.safetensors" },
+      "_meta": { "title": "Load video VAE" }
+    },
+    "4": {
+      "class_type": "VAELoader",
+      "inputs": { "vae_name": "minimax_h3_audio_vae_fp32.safetensors" },
+      "_meta": { "title": "Load stereo audio VAE" }
+    },
+    "5": {
+      "class_type": "MiniMaxH3SigmaShift",
+      "inputs": {
+        "model": ["1", 0],
+        "shift_video": 12.0,
+        "shift_audio": 3.0
+      },
+      "_meta": { "title": "MiniMax-H3 sigma shift" }
+    },
+    "6": {
+      "class_type": "MiniMaxH3ImageToVideo",
+      "inputs": {
+        "clip": ["2", 0],
+        "vae": ["3", 0],
+        "prompt": "A cinematic shot with synchronized environmental audio.",
+        "width": 608,
+        "height": 352,
+        "length": 124
+      },
+      "_meta": { "title": "MiniMax-H3 conditioning" }
+    },
+    "7": {
+      "class_type": "RandomNoise",
+      "inputs": { "noise_seed": 42 },
+      "_meta": { "title": "Noise" }
+    },
+    "8": {
+      "class_type": "KSamplerSelect",
+      "inputs": { "sampler_name": "res_multistep" },
+      "_meta": { "title": "Sampler" }
+    },
+    "9": {
+      "class_type": "BasicScheduler",
+      "inputs": {
+        "model": ["5", 0],
+        "scheduler": "simple",
+        "steps": 20,
+        "denoise": 1.0
+      },
+      "_meta": { "title": "Scheduler" }
+    },
+    "10": {
+      "class_type": "BasicGuider",
+      "inputs": {
+        "model": ["5", 0],
+        "conditioning": ["6", 0]
+      },
+      "_meta": { "title": "Guider" }
+    },
+    "11": {
+      "class_type": "SamplerCustomAdvanced",
+      "inputs": {
+        "noise": ["7", 0],
+        "guider": ["10", 0],
+        "sampler": ["8", 0],
+        "sigmas": ["9", 0],
+        "latent_image": ["6", 1]
+      },
+      "_meta": { "title": "Sample joint video and audio" }
+    },
+    "12": {
+      "class_type": "VAEDecode",
+      "inputs": { "samples": ["11", 0], "vae": ["3", 0] },
+      "_meta": { "title": "Decode video" }
+    },
+    "13": {
+      "class_type": "VAEDecodeAudio",
+      "inputs": { "samples": ["11", 0], "vae": ["4", 0] },
+      "_meta": { "title": "Decode stereo audio" }
+    },
+    "14": {
+      "class_type": "CreateVideo",
+      "inputs": {
+        "images": ["12", 0],
+        "audio": ["13", 0],
+        "fps": 24.0,
+        "bit_depth": 8
+      },
+      "_meta": { "title": "Mux synchronized audio-video" }
+    },
+    "15": {
+      "class_type": "SaveVideo",
+      "inputs": {
+        "video": ["14", 0],
+        "filename_prefix": "video/minimax-h3/OpenFork",
+        "format": "auto",
+        "codec": "auto"
+      },
+      "_meta": { "title": "Save MiniMax-H3 video" }
+    }
+  }
+}

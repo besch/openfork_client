@@ -19,6 +19,10 @@ from .dreamid_omni import DreamIDOmniImageToVideoProcessor
 from .scail2 import SCAIL2ImageToVideoProcessor
 from .vista4d import Vista4DVideoToVideoProcessor
 from .domainshuttle import DomainShuttleImageToVideoProcessor
+from .minimax_h3 import (
+    MiniMaxH3ImageToVideoProcessor,
+    MiniMaxH3TextToVideoProcessor,
+)
 
 __all__ = [
     "WAN22TextToVideoJobProcessor",
@@ -36,5 +40,7 @@ __all__ = [
     "SCAIL2ImageToVideoProcessor",
     "Vista4DVideoToVideoProcessor",
     "DomainShuttleImageToVideoProcessor",
+    "MiniMaxH3TextToVideoProcessor",
+    "MiniMaxH3ImageToVideoProcessor",
     "TurboDiffusionI2VJobProcessor",
 ]

@@ -1,0 +1,89 @@
+# syntax=docker/dockerfile:1.4
+# MiniMax-H3 native synchronized audio-video image.
+# One immutable model image is shared by the 6/8/12/16/24/32/48/80GB
+# service profiles; start_cloud.sh selects the matching ComfyUI offload flags.
+
+FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+
+ARG COMFYUI_COMMIT=e377e263049f9338b4d12a3dd417b36ae62948ff
+ARG SPECTRUM_COMMIT=fcf23325233dd4ffef17bc0b946cd7ce6b5e34bd
+ARG SAGEATTENTION_COMMIT=d1a57a870700031082df95297783645e1589cf81
+ARG MINIMAX_H3_LICENSE_ACKNOWLEDGED
+
+RUN case "${MINIMAX_H3_LICENSE_ACKNOWLEDGED:-}" in \
+      1|true|True|TRUE|yes|Yes|YES|on|On|ON) ;; \
+      *) echo >&2 "MiniMax-H3 build blocked: obtain applicable authorization and pass --build-arg MINIMAX_H3_LICENSE_ACKNOWLEDGED=true"; exit 78 ;; \
+    esac
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    PATH=/usr/local/cuda/bin:$PATH \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
+    PIP_NO_CACHE_DIR=1 \
+    PYTORCH_JIT=0 \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common build-essential ninja-build \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv python3.11-distutils python3.11-dev \
+    curl git wget ffmpeg libgl1-mesa-glx libgl1-mesa-dri \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir \
+        torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 \
+        --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && python -m pip install --no-cache-dir \
+        gitpython PyYAML opencv-python imageio-ffmpeg ninja uv hf_transfer \
+        "huggingface_hub[cli]>=0.32"
+
+RUN git clone https://github.com/thu-ml/SageAttention.git /opt/sageattention \
+    && git -C /opt/sageattention checkout "${SAGEATTENTION_COMMIT}" \
+    && rm -rf /opt/sageattention/.git
+
+WORKDIR /opt/ComfyUI
+
+# Spectrum currently targets this exact native-H3 ComfyUI commit. Keeping both
+# pins makes the optional approximate graph deterministic and avoids node drift.
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && git -C /opt/ComfyUI checkout "${COMFYUI_COMMIT}" \
+    && rm -rf /opt/ComfyUI/.git \
+    && python -m pip install --no-cache-dir -r requirements.txt \
+    && git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager.git custom_nodes/ComfyUI-Manager \
+    && rm -rf custom_nodes/ComfyUI-Manager/.git \
+    && python -m pip install --no-cache-dir -r custom_nodes/ComfyUI-Manager/requirements.txt \
+    && git clone https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3.git custom_nodes/ComfyUI-Spectrum-MiniMax-H3 \
+    && git -C custom_nodes/ComfyUI-Spectrum-MiniMax-H3 checkout "${SPECTRUM_COMMIT}" \
+    && rm -rf custom_nodes/ComfyUI-Spectrum-MiniMax-H3/.git \
+    && find /opt/ComfyUI -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Official compressed runtime: ~42.5GB on disk before container-layer overhead.
+# The license and NOTICE are included for authorized redistributions. The
+# license excludes the EU, UK, South Korea, and USA absent separate permission.
+RUN mkdir -p models/diffusion_models models/text_encoders models/vae /tmp/minimax-h3 /opt/licenses \
+    && curl -fL https://huggingface.co/MiniMaxAI/MiniMax-H3/resolve/main/LICENSE \
+        -o /opt/licenses/MiniMax-H3-LICENSE \
+    && printf '%s\n' 'MiniMax H3 is licensed under the MiniMax H3 Community License Agreement, Copyright © 2026 MiniMax. All Rights Reserved.' \
+        > /opt/licenses/MiniMax-H3-NOTICE \
+    && hf download Comfy-Org/MiniMax-H3 \
+        --include "split_files/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" \
+        --include "split_files/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" \
+        --include "split_files/vae/minimax_h3_video_vae_fp16.safetensors" \
+        --include "split_files/vae/minimax_h3_audio_vae_fp32.safetensors" \
+        --local-dir /tmp/minimax-h3 \
+    && mv /tmp/minimax-h3/split_files/diffusion_models/*.safetensors models/diffusion_models/ \
+    && mv /tmp/minimax-h3/split_files/text_encoders/*.safetensors models/text_encoders/ \
+    && mv /tmp/minimax-h3/split_files/vae/*.safetensors models/vae/ \
+    && rm -rf /tmp/minimax-h3
+
+RUN mkdir -p user/__manager user/custom-packages \
+    && printf "[default]\nnetwork_mode = offline\n" > user/__manager/config.ini
+
+# SageAttention is compiled at runtime where the target GPU is visible. The
+# cloud bootstrap falls back to native PyTorch attention if compilation fails.
+CMD ["bash", "-lc", "case \"${OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED:-}\" in 1|true|True|TRUE|yes|Yes|YES|on|On|ON) exec python main.py --listen 0.0.0.0 --port 8188 ;; *) echo >&2 'MiniMax-H3 runtime blocked: set OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED=true after obtaining applicable authorization'; exit 78 ;; esac"]

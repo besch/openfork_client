@@ -57,6 +57,12 @@ ENVIRONMENT VARIABLES:
                           Set to "0" to skip direct GitHub refresh of wan2gp_server.py
     OPENFORK_SYNC_WAN2GP_SERVER
                           Set to "0" to use the image-baked wan2gp_server.py only
+    OPENFORK_MINIMAX_H3_ENABLE_SAGE
+                          Set to "0" to keep MiniMax-H3 on native PyTorch attention
+    OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED
+                          Required "true" after obtaining applicable MiniMax authorization
+    OPENFORK_MINIMAX_H3_SWAP_GB
+                          Override best-effort swap for H3 model offload (tier defaults vary)
     OPENFORK_ALLOW_DISABLED_SERVICE_TEST
                           Set to "1" only for admin smoke tests of disabled services
     HF_TOKEN / HUGGINGFACE_TOKEN
@@ -423,6 +429,17 @@ env_flag_is_disabled() {
   esac
 }
 
+env_flag_is_enabled() {
+  case "${1:-}" in
+    1|true|True|TRUE|yes|Yes|YES|on|On|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 log_wan2gp_server_wrapper_status() {
   local server_file="$1"
   local source_label="$2"
@@ -492,7 +509,7 @@ ensure_swap_space() {
   local target_gb="${1:-0}"
   [ "$target_gb" -gt 0 ] 2>/dev/null || return 0
   command -v swapon >/dev/null 2>&1 || {
-    log "WARNING: swapon not available; cannot create swap for Wan2GP."
+    log "WARNING: swapon not available; cannot create swap for model offload."
     return 0
   }
 
@@ -500,17 +517,17 @@ ensure_swap_space() {
   current_gb=$(free -g | awk '/Swap/ {print $2}')
   current_gb="${current_gb:-0}"
   if [ "$current_gb" -ge "$target_gb" ] 2>/dev/null; then
-    log "Swap already sufficient for Wan2GP: ${current_gb}GB >= ${target_gb}GB"
+    log "Swap already sufficient for model offload: ${current_gb}GB >= ${target_gb}GB"
     return 0
   fi
 
-  local swap_file="${WAN2GP_SWAP_FILE:-/swapfile}"
+  local swap_file="${OPENFORK_SWAP_FILE:-${WAN2GP_SWAP_FILE:-/swapfile}}"
   if [ -e "$swap_file" ]; then
     log "WARNING: $swap_file already exists but active swap is ${current_gb}GB; leaving it untouched."
     return 0
   fi
 
-  log "Creating best-effort ${target_gb}GB swap file for Wan2GP offload stability..."
+  log "Creating best-effort ${target_gb}GB swap file for model offload stability..."
   local created=0
   if command -v fallocate >/dev/null 2>&1; then
     fallocate -l "${target_gb}G" "$swap_file" && created=1
@@ -526,10 +543,45 @@ ensure_swap_space() {
 
   chmod 600 "$swap_file" || true
   if mkswap "$swap_file" >/dev/null 2>&1 && swapon "$swap_file" >/dev/null 2>&1; then
-    log "Enabled Wan2GP swap file: $(swapon --show --bytes | tail -n +2 | awk '{sum += $3} END {printf \"%.1fGB\", sum/1024/1024/1024}')"
+    log "Enabled model-offload swap file: $(swapon --show --bytes | tail -n +2 | awk '{sum += $3} END {printf \"%.1fGB\", sum/1024/1024/1024}')"
   else
     log "WARNING: Could not enable swap file inside this container; continuing without extra swap."
     rm -f "$swap_file" 2>/dev/null || true
+  fi
+}
+
+ensure_minimax_h3_sageattention() {
+  MINIMAX_H3_SAGE_FLAG=""
+  [[ "${SERVICE_TYPE:-}" == *"minimax-h3"* ]] || return 0
+
+  if env_flag_is_disabled "${OPENFORK_MINIMAX_H3_ENABLE_SAGE:-1}"; then
+    log "MiniMax-H3 SageAttention disabled; using native PyTorch attention."
+    return 0
+  fi
+
+  local package_root="/opt/ComfyUI/user/custom-packages"
+  mkdir -p "$package_root"
+  export PYTHONPATH="${PYTHONPATH:-}:$package_root"
+  if "$PYTHON_EXE" -c "import sageattention" >/dev/null 2>&1; then
+    MINIMAX_H3_SAGE_FLAG="--use-sage-attention"
+    log "MiniMax-H3 SageAttention is available."
+    return 0
+  fi
+
+  if [ ! -d "/opt/sageattention" ]; then
+    log "WARNING: SageAttention source is not present; using native PyTorch attention."
+    return 0
+  fi
+
+  log "Compiling the pinned SageAttention source for this GPU (best effort)..."
+  if MAX_JOBS="${SAGEATTENTION_MAX_JOBS:-2}" "$PYTHON_EXE" -m pip install \
+      --no-build-isolation --target="$package_root" /opt/sageattention >/tmp/sageattention-install.log 2>&1 \
+      && "$PYTHON_EXE" -c "import sageattention" >/dev/null 2>&1; then
+    MINIMAX_H3_SAGE_FLAG="--use-sage-attention"
+    log "MiniMax-H3 SageAttention compiled successfully."
+  else
+    log "WARNING: SageAttention compilation failed; H3 will use native PyTorch attention."
+    tail -n 30 /tmp/sageattention-install.log 2>/dev/null || true
   fi
 }
 
@@ -1116,6 +1168,26 @@ if [[ "${SERVICE_TYPE:-auto}" == "auto" ]]; then
           SERVICE_TYPE="ltx23-video-16gb"
           log "Auto-selected LTX-2.3 16GB tier (VRAM: ${TOTAL_VRAM_MB}MB)"
       fi
+  elif [ -f "/opt/ComfyUI/models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" ]; then
+      log "Auto-mode: Detected native MiniMax-H3 synchronized audio-video image."
+      if [ "$TOTAL_VRAM_MB" -lt 7500 ]; then
+          SERVICE_TYPE="minimax-h3-video-6gb"
+      elif [ "$TOTAL_VRAM_MB" -lt 10000 ]; then
+          SERVICE_TYPE="minimax-h3-video-8gb"
+      elif [ "$TOTAL_VRAM_MB" -lt 14000 ]; then
+          SERVICE_TYPE="minimax-h3-video-12gb"
+      elif [ "$TOTAL_VRAM_MB" -lt 20000 ]; then
+          SERVICE_TYPE="minimax-h3-video-16gb"
+      elif [ "$TOTAL_VRAM_MB" -lt 28000 ]; then
+          SERVICE_TYPE="minimax-h3-video-24gb"
+      elif [ "$TOTAL_VRAM_MB" -lt 40000 ]; then
+          SERVICE_TYPE="minimax-h3-video-32gb"
+      elif [ "$TOTAL_VRAM_MB" -lt 70000 ]; then
+          SERVICE_TYPE="minimax-h3-video-48gb"
+      else
+          SERVICE_TYPE="minimax-h3-video-80gb"
+      fi
+      log "Auto-selected ${SERVICE_TYPE} (VRAM: ${TOTAL_VRAM_MB}MB)."
   elif ls /opt/ComfyUI/models/unet/flux1-kontext-dev-*.gguf >/dev/null 2>&1; then
       log "Auto-mode: Detected FLUX.1 Kontext [dev] GGUF ComfyUI image."
       if [ -f "/opt/ComfyUI/models/unet/flux1-kontext-dev-Q8_0.gguf" ]; then
@@ -1557,6 +1629,26 @@ if [[ "${SERVICE_TYPE:-}" == *"zimage-full-"* ]]; then
   fi
 fi
 
+# MiniMax-H3's compressed official assets total about 42.5GB. Low-VRAM
+# profiles depend on system RAM and swap in addition to ComfyUI dynamic offload.
+if [[ "${SERVICE_TYPE:-}" == *"minimax-h3"* ]]; then
+  if ! env_flag_is_enabled "${OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED:-}"; then
+    log "ERROR: MiniMax-H3 is license-gated and its community license excludes the EU, UK, South Korea, and USA."
+    log "Obtain applicable MiniMax authorization, then set OPENFORK_MINIMAX_H3_LICENSE_ACKNOWLEDGED=true."
+    exit 78
+  fi
+  START_COMFYUI="true"
+  if ! env_flag_is_disabled "${OPENFORK_MINIMAX_H3_ENABLE_SWAP:-1}"; then
+    if [[ "$SERVICE_TYPE" == *"-6gb"* ]] || [[ "$SERVICE_TYPE" == *"-8gb"* ]]; then
+      ensure_swap_space "${OPENFORK_MINIMAX_H3_SWAP_GB:-64}"
+    elif [[ "$SERVICE_TYPE" == *"-12gb"* ]] || [[ "$SERVICE_TYPE" == *"-16gb"* ]]; then
+      ensure_swap_space "${OPENFORK_MINIMAX_H3_SWAP_GB:-48}"
+    elif [[ "$SERVICE_TYPE" == *"-24gb"* ]] || [[ "$SERVICE_TYPE" == *"-32gb"* ]]; then
+      ensure_swap_space "${OPENFORK_MINIMAX_H3_SWAP_GB:-32}"
+    fi
+  fi
+fi
+
 # Wan2GP backend (LTX-2.3 Audio-Video, WAN 2.2, daVinci-MagiHuman, SCAIL-2, and Vista4D)
 if [ "$START_WAN2GP" = "true" ]; then
     # Wan2GP replaces ComfyUI for this service type
@@ -1965,8 +2057,41 @@ fi
 if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
   # Determine ComfyUI launch flags based on SERVICE_TYPE
   COMFY_FLAGS="--listen 0.0.0.0 --port 8188"
+  ensure_minimax_h3_sageattention
   
   case "$SERVICE_TYPE" in
+    *minimax-h3*6gb*)
+      log "Applying experimental 6GB MiniMax-H3 offload profile (352px short edge, 5s)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.25 --cache-none --preview-method none --disable-pinned-memory $MINIMAX_H3_SAGE_FLAG"
+      ;;
+    *minimax-h3*8gb*)
+      log "Applying experimental 8GB MiniMax-H3 offload profile (384px short edge, 5s)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.5 --cache-none --preview-method none --disable-pinned-memory $MINIMAX_H3_SAGE_FLAG"
+      ;;
+    *minimax-h3*12gb*)
+      log "Applying 12GB MiniMax-H3 offload profile (480px short edge, 5s)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 0.75 --cache-none --preview-method none --disable-pinned-memory $MINIMAX_H3_SAGE_FLAG"
+      ;;
+    *minimax-h3*16gb*)
+      log "Applying 16GB MiniMax-H3 offload profile (544px short edge, up to 8s)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 1.0 --cache-none --preview-method none --disable-pinned-memory $MINIMAX_H3_SAGE_FLAG"
+      ;;
+    *minimax-h3*24gb*)
+      log "Applying 24GB MiniMax-H3 production offload profile (608px short edge, up to 10s)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --cpu-vae --reserve-vram 1.0 --cache-none --preview-method none $MINIMAX_H3_SAGE_FLAG"
+      ;;
+    *minimax-h3*32gb*)
+      log "Applying 32GB MiniMax-H3 production offload profile (672px short edge, up to 12s)"
+      COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.5 --cache-none --preview-method none $MINIMAX_H3_SAGE_FLAG"
+      ;;
+    *minimax-h3*48gb*)
+      log "Applying 48GB MiniMax-H3 native-resolution profile (768px short edge, up to 15s)"
+      COMFY_FLAGS="$COMFY_FLAGS --normalvram --reserve-vram 2.0 --cache-none --preview-method none $MINIMAX_H3_SAGE_FLAG"
+      ;;
+    *minimax-h3*80gb*)
+      log "Applying 80GB MiniMax-H3 native-resolution high-VRAM profile (up to 768x1344, 15s)"
+      COMFY_FLAGS="$COMFY_FLAGS --highvram --reserve-vram 2.0 --preview-method none $MINIMAX_H3_SAGE_FLAG"
+      ;;
     *dreamid*omni*|*dreamid-omni*)
       log "Applying 24GB optimizations for DreamID-Omni FP8"
       COMFY_FLAGS="$COMFY_FLAGS --lowvram --reserve-vram 1.0 --use-pytorch-cross-attention --cache-none"
@@ -2056,7 +2181,7 @@ if [ -d "/opt/ComfyUI" ] && [ "$START_COMFYUI" = "true" ]; then
       ;;
   esac
 
-  if [[ "$SERVICE_TYPE" == *"flux-kontext"* ]] || [[ "$SERVICE_TYPE" == qwen* ]] || [[ "$SERVICE_TYPE" == *"wan22"* ]] || [[ "$SERVICE_TYPE" == *"krea2"* ]]; then
+  if [[ "$SERVICE_TYPE" == *"flux-kontext"* ]] || [[ "$SERVICE_TYPE" == qwen* ]] || [[ "$SERVICE_TYPE" == *"wan22"* ]] || [[ "$SERVICE_TYPE" == *"krea2"* ]] || [[ "$SERVICE_TYPE" == *"minimax-h3"* ]]; then
     mkdir -p /opt/ComfyUI/user/__manager
     cat > /opt/ComfyUI/user/__manager/config.ini <<'EOF'
 [default]
